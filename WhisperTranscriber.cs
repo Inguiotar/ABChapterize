@@ -46,7 +46,7 @@ public static class ModelCatalog
 /// Wraps a Whisper.net processor for a single model, using the best available
 /// hardware acceleration (CUDA, then Vulkan GPU, then CPU with AVX).
 /// </summary>
-public sealed class WhisperTranscriber : IDisposable
+public sealed class WhisperTranscriber : IAsyncDisposable
 {
     private readonly WhisperFactory _factory;
     private readonly WhisperProcessor _processor;
@@ -94,10 +94,14 @@ public sealed class WhisperTranscriber : IDisposable
         return result;
     }
 
-    /// <summary>Releases the native processor and model.</summary>
-    public void Dispose()
+    /// <summary>
+    /// Releases the native processor and model. Waits for an in-flight transcription to
+    /// wind down first (after a cancellation the processor may still be processing, and
+    /// its synchronous Dispose would throw).
+    /// </summary>
+    public async ValueTask DisposeAsync()
     {
-        _processor.Dispose();
+        await _processor.DisposeAsync();
         _factory.Dispose();
     }
 }
