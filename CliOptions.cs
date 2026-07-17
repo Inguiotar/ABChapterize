@@ -52,6 +52,14 @@ public sealed class CliOptions
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter").</summary>
     public string Title { get; private set; } = "Chapter";
 
+    /// <summary>
+    /// Title of the synthetic chapter covering the audio before the first detected chapter
+    /// (--intro-title / -i, default "Intro"). Audiobooks usually start with a prelude, so the
+    /// first detected chapter must not be moved to 0:00; instead this intro chapter is
+    /// prepended at 0:00 when the first chapter starts later.
+    /// </summary>
+    public string IntroTitle { get; private set; } = "Intro";
+
     /// <summary>The file or directory to process (last command line argument).</summary>
     public string TargetPath { get; private set; } = "";
 
@@ -81,7 +89,7 @@ public sealed class CliOptions
     public static CliOptions? Parse(string[] args)
     {
         var o = new CliOptions();
-        bool langSet = false, phraseSet = false, modelSet = false, maxSet = false, titleSet = false;
+        bool langSet = false, phraseSet = false, modelSet = false, maxSet = false, titleSet = false, introSet = false;
         var i = 0;
 
         string NextParam(string optName)
@@ -111,6 +119,7 @@ public sealed class CliOptions
                     case "--model": o.Model = NextParam(arg); modelSet = true; break;
                     case "--max-chapters": o.MaxChapters = ParseMax(NextParam(arg)); maxSet = true; break;
                     case "--title": o.Title = NextParam(arg); titleSet = true; break;
+                    case "--intro-title": o.IntroTitle = NextParam(arg); introSet = true; break;
                     default: throw new CliError($"Unknown option: {arg}");
                 }
             }
@@ -134,6 +143,7 @@ public sealed class CliOptions
                         case 'm':
                         case 'x':
                         case 't':
+                        case 'i':
                             if (!isLast)
                                 throw new CliError($"Option -{c} takes a parameter and cannot be collapsed with other options ({arg}).");
                             switch (c)
@@ -143,6 +153,7 @@ public sealed class CliOptions
                                 case 'm': o.Model = NextParam($"-{c}"); modelSet = true; break;
                                 case 'x': o.MaxChapters = ParseMax(NextParam($"-{c}")); maxSet = true; break;
                                 case 't': o.Title = NextParam($"-{c}"); titleSet = true; break;
+                                case 'i': o.IntroTitle = NextParam($"-{c}"); introSet = true; break;
                             }
                             break;
                         default: throw new CliError($"Unknown option: -{c}");
@@ -162,7 +173,7 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet))
+        if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet || introSet))
             throw new CliError("--revert can only be combined with --recurse.");
 
         if (!Regex.IsMatch(o.Language, "^[a-zA-Z]{2}$"))
@@ -268,6 +279,8 @@ public sealed class CliOptions
                                     are placed 0.5 seconds before the jingle.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter).
+          -i, --intro-title <word>  Title of the chapter mark covering the audio before the
+                                    first detected chapter, e.g. a prelude (default: Intro).
           -?, --help                Show this help.
 
         Short options without parameters may be collapsed, e.g. "-rb" equals "-r -b".

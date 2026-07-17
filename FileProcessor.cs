@@ -131,12 +131,21 @@ public sealed class FileProcessor
             var chapters = result.Chapters
                 .Select(c => new Chapter(c.TimeSeconds, $"{_options.Title} {c.Number}"))
                 .ToList();
+            // Audiobooks usually start with a prelude, and the mp4 muxer silently moves the
+            // first chapter mark to 0:00. Prepend an intro chapter so the first detected
+            // chapter keeps its real start time.
+            var introNote = "";
+            if (chapters[0].StartSeconds > 1.0)
+            {
+                chapters.Insert(0, new Chapter(0, _options.IntroTitle));
+                introNote = " + intro";
+            }
             await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
 
             var backupNote = _options.Backup ? ", backup kept" : "";
             _progress.FinishWithSummary(
-                $"{name}: {chapters.Count} chapter(s) written " +
-                $"({result.Chapters[0].Number}-{result.Chapters[^1].Number}){discardNote}{backupNote}");
+                $"{name}: {result.Chapters.Count} chapter(s) written " +
+                $"({result.Chapters[0].Number}-{result.Chapters[^1].Number}){introNote}{discardNote}{backupNote}");
         }
         catch (OperationCanceledException)
         {
