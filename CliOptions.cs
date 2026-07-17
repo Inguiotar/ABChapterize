@@ -50,7 +50,7 @@ public sealed class CliOptions
     public bool Jingle { get; private set; }
 
     /// <summary>
-    /// Maximum expected jingle duration in seconds (--max-jingle-length, default 45).
+    /// Maximum expected jingle duration in seconds (--max-jingle-length / -X, default 45).
     /// With --jingle, the probe window after each silence spans this duration plus a flat
     /// 5-second margin for the chapter phrase itself.
     /// </summary>
@@ -151,6 +151,7 @@ public sealed class CliOptions
                         case 'c':
                         case 'm':
                         case 'x':
+                        case 'X':
                         case 't':
                         case 'i':
                             if (!isLast)
@@ -161,6 +162,7 @@ public sealed class CliOptions
                                 case 'c': o.ChapterPhrase = NextParam($"-{c}"); phraseSet = true; break;
                                 case 'm': o.Model = NextParam($"-{c}"); modelSet = true; break;
                                 case 'x': o.MaxChapters = ParseMax(NextParam($"-{c}")); maxSet = true; break;
+                                case 'X': o.MaxJingleSeconds = ParseJingleLength(NextParam($"-{c}")); jingleLenSet = true; break;
                                 case 't': o.Title = NextParam($"-{c}"); titleSet = true; break;
                                 case 'i': o.IntroTitle = NextParam($"-{c}"); introSet = true; break;
                             }
@@ -300,7 +302,7 @@ public sealed class CliOptions
                                     they are considered bogus and are discarded.
           -j, --jingle              A short jingle may precede the chapter phrase; chapter marks
                                     are placed 0.5 seconds before the jingle.
-              --max-jingle-length <seconds>
+          -X, --max-jingle-length <seconds>
                                     Maximum expected jingle duration (default: 45). Audio is
                                     probed for this duration plus 5 seconds (for the phrase
                                     itself) after each silence. Lower values speed up probing.
