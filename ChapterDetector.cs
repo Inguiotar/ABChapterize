@@ -78,24 +78,20 @@ public sealed class ChapterDetector
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var probeSeconds = _options.Jingle ? ProbeSecondsJingle : ProbeSecondsPlain;
 
-        // Phase 1: silence scan (one full pass over the file). A second full pass is
-        // reserved up front as the estimate for the probing phase, so the bar does not
-        // prematurely show ~100 % while probes are still pending; the reserve is
-        // replaced by the real probe workload once the number of probes is known.
-        work.AddTotal(info.SizeBytes * 2);
+        // Pass 1: silence scan (one full pass over the file).
+        work.BeginPhase("Pass 1", info.SizeBytes);
         var silences = await _ffmpeg.DetectSilencesAsync(
             file, info.DurationSeconds, MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), ct);
-        work.CompletePhase(info.SizeBytes);
 
-        // Phase 2: probe the beginning of the file and the end of every silence.
+        // Pass 2: probe the beginning of the file and the end of every silence.
         var probeStarts = new List<double> { 0 };
         probeStarts.AddRange(silences
             .Where(s => s.EndSeconds < info.DurationSeconds - 1)
             .Select(s => s.EndSeconds));
 
         var probeBytes = (long)(probeSeconds * bytesPerSecond);
-        work.AddTotal(probeBytes * probeStarts.Count - info.SizeBytes);
+        work.BeginPhase("Pass 2", probeBytes * probeStarts.Count);
 
         var found = new List<DetectedChapter>();
         foreach (var start in probeStarts)
@@ -119,14 +115,19 @@ public sealed class ChapterDetector
                 work.ChaptersFound = CountDistinct(found);
                 break; // one chapter per probe window
             }
-            work.CompletePhase(probeBytes);
+            work.Advance(probeBytes);
         }
 
         var chapters = Normalize(found);
 
-        // Phase 3: resolve sequence gaps by fully transcribing the regions between
-        // mismatched markings (and before the first marking, if it is not chapter 1).
+        // Pass 3 (only when needed): resolve sequence gaps by fully transcribing the regions
+        // between mismatched markings (and before the first marking, if it is not chapter 1).
         var gaps = FindGaps(chapters, info.DurationSeconds);
+        if (gaps.Count > 0)
+        {
+            work.BeginPhase("Pass 3",
+                (long)(gaps.Sum(g => g.ToSeconds - g.FromSeconds) * bytesPerSecond));
+        }
         foreach (var gap in gaps)
         {
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
@@ -254,9 +255,6 @@ public sealed class ChapterDetector
         List<Silence> silences, double bytesPerSecond, WorkTracker work, CancellationToken ct)
     {
         var found = new List<DetectedChapter>();
-        var regionBytes = (long)((toSeconds - fromSeconds) * bytesPerSecond);
-        work.AddTotal(regionBytes);
-
         for (var chunkStart = fromSeconds; chunkStart < toSeconds; chunkStart += GapChunkSeconds - GapChunkOverlapSeconds)
         {
             ct.ThrowIfCancellationRequested();
@@ -284,7 +282,7 @@ public sealed class ChapterDetector
                 }
                 found.Add(new DetectedChapter(match.Number, time));
             }
-            work.CompletePhase((long)(chunkLen * bytesPerSecond));
+            work.Advance((long)(chunkLen * bytesPerSecond));
         }
         return found;
     }

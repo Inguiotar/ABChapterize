@@ -3,54 +3,56 @@ using System.Text;
 namespace Chapterize;
 
 /// <summary>
-/// Tracks the byte-based work of processing one file. Work is measured in processed bytes
-/// (file size for full passes, proportional amounts for partial decodes), never in play time.
-/// Thread-safe enough for the single-producer/single-renderer usage in this tool.
+/// Tracks the byte-based work of the current processing phase of one file. Each phase
+/// (e.g. silence scan, probing) has its own bar running from 0 to 100 %. Work is measured
+/// in processed bytes (file size for full passes, proportional amounts for partial decodes),
+/// never in play time. Thread-safe enough for the single-producer/single-renderer usage
+/// in this tool.
 /// </summary>
 public sealed class WorkTracker
 {
-    private long _totalBytes;
-    private long _doneBytes;
-    private long _phaseBytes;
+    private long _phaseTotalBytes;
+    private long _phaseDoneBytes;
+    private long _phaseCurrentBytes;
+
+    /// <summary>Short name of the current phase (e.g. "Pass 1"); shown directly after the bar.</summary>
+    public string PhaseLabel { get; private set; } = "";
 
     /// <summary>Number of chapters discovered so far; shown next to the progress bar.</summary>
     public int ChaptersFound { get; set; }
 
-    /// <summary>
-    /// Adds expected work to the total, e.g. when a new processing phase is scheduled.
-    /// A negative amount corrects an earlier estimate downwards; the total never drops
-    /// below the work already done.
-    /// </summary>
-    /// <param name="bytes">Estimated number of bytes the new work will process (may be negative).</param>
-    public void AddTotal(long bytes)
+    /// <summary>Starts a new phase: resets the bar to 0 % and sets its label and total work.</summary>
+    /// <param name="label">Phase name shown after the bar.</param>
+    /// <param name="totalBytes">Total number of bytes this phase will process.</param>
+    public void BeginPhase(string label, long totalBytes)
     {
-        var total = Interlocked.Add(ref _totalBytes, bytes);
-        var done = Interlocked.Read(ref _doneBytes);
-        if (total < done)
-            Interlocked.Exchange(ref _totalBytes, done);
+        PhaseLabel = label;
+        Interlocked.Exchange(ref _phaseTotalBytes, Math.Max(0, totalBytes));
+        Interlocked.Exchange(ref _phaseDoneBytes, 0);
+        Interlocked.Exchange(ref _phaseCurrentBytes, 0);
     }
 
-    /// <summary>Reports progress within the current phase (absolute bytes within that phase).</summary>
-    /// <param name="bytes">Bytes processed so far in the current phase.</param>
-    public void SetPhaseProgress(long bytes) => Interlocked.Exchange(ref _phaseBytes, Math.Max(0, bytes));
+    /// <summary>Reports transient progress of the work item currently running within the phase.</summary>
+    /// <param name="bytes">Bytes processed so far by the current work item.</param>
+    public void SetPhaseProgress(long bytes) => Interlocked.Exchange(ref _phaseCurrentBytes, Math.Max(0, bytes));
 
-    /// <summary>Marks the current phase as finished and books its bytes as done.</summary>
-    /// <param name="bytes">The full byte size of the finished phase.</param>
-    public void CompletePhase(long bytes)
+    /// <summary>Books finished work within the current phase and clears the transient progress.</summary>
+    /// <param name="bytes">The full byte size of the finished work item.</param>
+    public void Advance(long bytes)
     {
-        Interlocked.Add(ref _doneBytes, Math.Max(0, bytes));
-        Interlocked.Exchange(ref _phaseBytes, 0);
+        Interlocked.Add(ref _phaseDoneBytes, Math.Max(0, bytes));
+        Interlocked.Exchange(ref _phaseCurrentBytes, 0);
     }
 
-    /// <summary>Current completion as a fraction between 0 and 1.</summary>
+    /// <summary>Completion of the current phase as a fraction between 0 and 1.</summary>
     public double Fraction
     {
         get
         {
-            var total = Interlocked.Read(ref _totalBytes);
+            var total = Interlocked.Read(ref _phaseTotalBytes);
             if (total <= 0)
                 return 0;
-            var done = Interlocked.Read(ref _doneBytes) + Interlocked.Read(ref _phaseBytes);
+            var done = Interlocked.Read(ref _phaseDoneBytes) + Interlocked.Read(ref _phaseCurrentBytes);
             return Math.Clamp((double)done / total, 0, 1);
         }
     }
@@ -114,14 +116,13 @@ public sealed class ProgressRenderer : IDisposable
                 return;
             var fraction = tracker.Fraction;
             var percent = (int)Math.Floor(fraction * 100);
-            if (percent >= 100)
-                percent = 99; // 100 % is only reached when the summary replaces the bar
 
             const int barWidth = 24;
             var filled = (int)Math.Round(fraction * barWidth);
             var bar = new string('#', filled).PadRight(barWidth, '-');
 
-            var line = $"[{bar}] {percent,3}% | {tracker.ChaptersFound} ch | {_label}";
+            var phase = tracker.PhaseLabel is { Length: > 0 } label ? $" {label}" : "";
+            var line = $"[{bar}]{phase} {percent,3}% | {tracker.ChaptersFound} ch | {_label}";
             var max = SafeWindowWidth() - 1;
             if (max > 10 && line.Length > max)
                 line = line[..max];
