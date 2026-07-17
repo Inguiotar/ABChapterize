@@ -51,8 +51,8 @@ public sealed class CliOptions
 
     /// <summary>
     /// Maximum expected jingle duration in seconds (--max-jingle-length, default 45).
-    /// With --jingle, the probe window after each silence spans this many seconds, so the
-    /// chapter phrase must have been spoken within it.
+    /// With --jingle, the probe window after each silence spans this duration plus a flat
+    /// 5-second margin for the chapter phrase itself.
     /// </summary>
     public double MaxJingleSeconds { get; private set; } = 45;
 
@@ -301,9 +301,10 @@ public sealed class CliOptions
           -j, --jingle              A short jingle may precede the chapter phrase; chapter marks
                                     are placed 0.5 seconds before the jingle.
               --max-jingle-length <seconds>
-                                    Maximum expected jingle duration (default: 45). The chapter
-                                    phrase must have been spoken within this many seconds after a
-                                    silence. Lower values speed up probing. Requires --jingle.
+                                    Maximum expected jingle duration (default: 45). Audio is
+                                    probed for this duration plus 5 seconds (for the phrase
+                                    itself) after each silence. Lower values speed up probing.
+                                    Requires --jingle.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the

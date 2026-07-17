@@ -35,6 +35,10 @@ public sealed class ChapterDetector
     /// <summary>Without a jingle the phrase must start within this many seconds after the silence.</summary>
     private const double PhraseLatestStart = 5.0;
 
+    /// <summary>Flat margin added to --max-jingle-length so the phrase after the jingle
+    /// still fits into the probe window.</summary>
+    private const double PhraseMarginSeconds = 5.0;
+
     /// <summary>Chapter marks are placed this many seconds before a jingle (per specification).</summary>
     private const double JingleLeadSeconds = 0.5;
 
@@ -74,7 +78,9 @@ public sealed class ChapterDetector
         string file, MediaInfo info, WorkTracker work, CancellationToken ct)
     {
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
-        var probeSeconds = _options.Jingle ? _options.MaxJingleSeconds : ProbeSecondsPlain;
+        var probeSeconds = _options.Jingle
+            ? _options.MaxJingleSeconds + PhraseMarginSeconds
+            : ProbeSecondsPlain;
 
         // Pass 1: silence scan (one full pass over the file).
         work.BeginPhase("Pass 1", info.SizeBytes);
@@ -269,7 +275,8 @@ public sealed class ChapterDetector
                     // The jingle sits between the preceding silence and the phrase; place the
                     // mark 0.5 s before the jingle, i.e. before the end of that silence.
                     var silence = silences.LastOrDefault(s =>
-                        s.EndSeconds <= phraseAbs && s.EndSeconds >= phraseAbs - _options.MaxJingleSeconds);
+                        s.EndSeconds <= phraseAbs &&
+                        s.EndSeconds >= phraseAbs - (_options.MaxJingleSeconds + PhraseMarginSeconds));
                     time = silence == default
                         ? Math.Max(0, phraseAbs - JingleLeadSeconds)
                         : Math.Max(0, silence.EndSeconds - JingleLeadSeconds);
