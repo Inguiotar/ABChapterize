@@ -15,6 +15,8 @@
          in the "runtimes" folder next to the exe: Whisper.net probes that folder structure
          at run time to pick the best backend (CUDA/Vulkan/CPU variants even share file
          names, so they cannot be embedded into the bundle). -->
+    <!-- Publish straight into the deployed location, where the "models" folder lives. -->
+    <PublishDir>bin\publish\</PublishDir>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
