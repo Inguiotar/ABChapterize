@@ -75,7 +75,7 @@ public sealed class FfmpegClient
     /// <param name="ct">Cancellation token.</param>
     /// <returns>All detected silence periods in chronological order.</returns>
     public async Task<List<Silence>> DetectSilencesAsync(
-        string file, double minSilenceSeconds, int noiseDb,
+        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
         Action<double>? progress, CancellationToken ct)
     {
         var silences = new List<Silence>();
@@ -84,11 +84,16 @@ public sealed class FfmpegClient
         var startRe = new Regex(@"silence_start:\s*(-?[\d.]+)");
         var endRe = new Regex(@"silence_end:\s*(-?[\d.]+)");
         var timeRe = new Regex(@"out_time_us=(\d+)");
+        double processedSeconds = 0;
 
         var (_, _, exit) = await RunAsync(_ffmpeg,
             [
                 "-hide_banner", "-nostats", "-nostdin",
                 "-i", file,
+                // Audio only: an embedded cover art is a one-frame video stream whose
+                // immediate EOF would otherwise end the whole run after a fraction of
+                // a second, silently skipping the rest of the file.
+                "-vn", "-sn", "-dn",
                 "-af", $"silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}",
                 "-progress", "pipe:1",
                 "-f", "null", "-"
@@ -110,12 +115,25 @@ public sealed class FfmpegClient
                     return;
                 }
                 m = timeRe.Match(line);
-                if (m.Success && progress != null)
-                    progress(long.Parse(m.Groups[1].Value) / 1_000_000.0);
+                if (m.Success)
+                {
+                    processedSeconds = long.Parse(m.Groups[1].Value) / 1_000_000.0;
+                    progress?.Invoke(processedSeconds);
+                }
             }, ct);
 
         if (exit != 0)
             throw new AppError($"ffmpeg silence detection failed for \"{file}\".");
+
+        // Guard against silent early termination: the scan must have covered the whole file.
+        if (processedSeconds < durationSeconds - Math.Max(30, durationSeconds * 0.02))
+            throw new AppError(
+                $"Silence scan of \"{file}\" ended prematurely after {processedSeconds:0.#} of " +
+                $"{durationSeconds:0.#} seconds.");
+
+        // A silence still open at the end of the file gets closed at the file's duration.
+        if (pendingStart is { } open)
+            silences.Add(new Silence(Math.Max(0, open), durationSeconds));
         return silences;
     }
 

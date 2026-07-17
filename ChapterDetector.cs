@@ -78,10 +78,13 @@ public sealed class ChapterDetector
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var probeSeconds = _options.Jingle ? ProbeSecondsJingle : ProbeSecondsPlain;
 
-        // Phase 1: silence scan (one full pass over the file).
-        work.AddTotal(info.SizeBytes);
+        // Phase 1: silence scan (one full pass over the file). A second full pass is
+        // reserved up front as the estimate for the probing phase, so the bar does not
+        // prematurely show ~100 % while probes are still pending; the reserve is
+        // replaced by the real probe workload once the number of probes is known.
+        work.AddTotal(info.SizeBytes * 2);
         var silences = await _ffmpeg.DetectSilencesAsync(
-            file, MinSilenceSeconds, SilenceNoiseDb,
+            file, info.DurationSeconds, MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), ct);
         work.CompletePhase(info.SizeBytes);
 
@@ -92,7 +95,7 @@ public sealed class ChapterDetector
             .Select(s => s.EndSeconds));
 
         var probeBytes = (long)(probeSeconds * bytesPerSecond);
-        work.AddTotal(probeBytes * probeStarts.Count);
+        work.AddTotal(probeBytes * probeStarts.Count - info.SizeBytes);
 
         var found = new List<DetectedChapter>();
         foreach (var start in probeStarts)

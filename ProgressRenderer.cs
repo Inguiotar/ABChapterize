@@ -16,9 +16,19 @@ public sealed class WorkTracker
     /// <summary>Number of chapters discovered so far; shown next to the progress bar.</summary>
     public int ChaptersFound { get; set; }
 
-    /// <summary>Adds expected work to the total, e.g. when a new processing phase is scheduled.</summary>
-    /// <param name="bytes">Estimated number of bytes the new work will process.</param>
-    public void AddTotal(long bytes) => Interlocked.Add(ref _totalBytes, Math.Max(0, bytes));
+    /// <summary>
+    /// Adds expected work to the total, e.g. when a new processing phase is scheduled.
+    /// A negative amount corrects an earlier estimate downwards; the total never drops
+    /// below the work already done.
+    /// </summary>
+    /// <param name="bytes">Estimated number of bytes the new work will process (may be negative).</param>
+    public void AddTotal(long bytes)
+    {
+        var total = Interlocked.Add(ref _totalBytes, bytes);
+        var done = Interlocked.Read(ref _doneBytes);
+        if (total < done)
+            Interlocked.Exchange(ref _totalBytes, done);
+    }
 
     /// <summary>Reports progress within the current phase (absolute bytes within that phase).</summary>
     /// <param name="bytes">Bytes processed so far in the current phase.</param>
