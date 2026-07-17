@@ -28,11 +28,9 @@ public sealed class ChapterDetector
     /// <summary>Noise floor in dBFS for silence detection.</summary>
     private const int SilenceNoiseDb = -35;
 
-    /// <summary>Probe window length in seconds when no jingle is expected.</summary>
+    /// <summary>Probe window length in seconds when no jingle is expected.
+    /// With --jingle the window is --max-jingle-length seconds instead.</summary>
     private const double ProbeSecondsPlain = 12;
-
-    /// <summary>Probe window length in seconds when a jingle may precede the phrase.</summary>
-    private const double ProbeSecondsJingle = 45;
 
     /// <summary>Without a jingle the phrase must start within this many seconds after the silence.</summary>
     private const double PhraseLatestStart = 5.0;
@@ -76,7 +74,7 @@ public sealed class ChapterDetector
         string file, MediaInfo info, WorkTracker work, CancellationToken ct)
     {
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
-        var probeSeconds = _options.Jingle ? ProbeSecondsJingle : ProbeSecondsPlain;
+        var probeSeconds = _options.Jingle ? _options.MaxJingleSeconds : ProbeSecondsPlain;
 
         // Pass 1: silence scan (one full pass over the file).
         work.BeginPhase("Pass 1", info.SizeBytes);
@@ -271,7 +269,7 @@ public sealed class ChapterDetector
                     // The jingle sits between the preceding silence and the phrase; place the
                     // mark 0.5 s before the jingle, i.e. before the end of that silence.
                     var silence = silences.LastOrDefault(s =>
-                        s.EndSeconds <= phraseAbs && s.EndSeconds >= phraseAbs - ProbeSecondsJingle);
+                        s.EndSeconds <= phraseAbs && s.EndSeconds >= phraseAbs - _options.MaxJingleSeconds);
                     time = silence == default
                         ? Math.Max(0, phraseAbs - JingleLeadSeconds)
                         : Math.Max(0, silence.EndSeconds - JingleLeadSeconds);

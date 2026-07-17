@@ -49,6 +49,13 @@ public sealed class CliOptions
     /// <summary>A jingle may precede the chapter phrase; mark chapters 0.5 s before it (--jingle / -j).</summary>
     public bool Jingle { get; private set; }
 
+    /// <summary>
+    /// Maximum expected jingle duration in seconds (--max-jingle-length, default 45).
+    /// With --jingle, the probe window after each silence spans this many seconds, so the
+    /// chapter phrase must have been spoken within it.
+    /// </summary>
+    public double MaxJingleSeconds { get; private set; } = 45;
+
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter").</summary>
     public string Title { get; private set; } = "Chapter";
 
@@ -90,6 +97,7 @@ public sealed class CliOptions
     {
         var o = new CliOptions();
         bool langSet = false, phraseSet = false, modelSet = false, maxSet = false, titleSet = false, introSet = false;
+        var jingleLenSet = false;
         var i = 0;
 
         string NextParam(string optName)
@@ -120,6 +128,7 @@ public sealed class CliOptions
                     case "--max-chapters": o.MaxChapters = ParseMax(NextParam(arg)); maxSet = true; break;
                     case "--title": o.Title = NextParam(arg); titleSet = true; break;
                     case "--intro-title": o.IntroTitle = NextParam(arg); introSet = true; break;
+                    case "--max-jingle-length": o.MaxJingleSeconds = ParseJingleLength(NextParam(arg)); jingleLenSet = true; break;
                     default: throw new CliError($"Unknown option: {arg}");
                 }
             }
@@ -173,8 +182,11 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet || introSet))
+        if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet || introSet || jingleLenSet))
             throw new CliError("--revert can only be combined with --recurse.");
+
+        if (jingleLenSet && !o.Jingle)
+            throw new CliError("--max-jingle-length requires --jingle.");
 
         if (!Regex.IsMatch(o.Language, "^[a-zA-Z]{2}$"))
             throw new CliError($"Invalid language code \"{o.Language}\": expected a two-letter code like \"en\".");
@@ -213,6 +225,14 @@ public sealed class CliOptions
 
         o.BuildPhraseRegex();
         return o;
+    }
+
+    /// <summary>Parses the --max-jingle-length parameter into a positive number of seconds.</summary>
+    private static double ParseJingleLength(string value)
+    {
+        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s <= 0 || s > 600)
+            throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected seconds between 1 and 600.");
+        return s;
     }
 
     /// <summary>Parses the --max-chapters parameter into a positive integer.</summary>
@@ -280,6 +300,10 @@ public sealed class CliOptions
                                     they are considered bogus and are discarded.
           -j, --jingle              A short jingle may precede the chapter phrase; chapter marks
                                     are placed 0.5 seconds before the jingle.
+              --max-jingle-length <seconds>
+                                    Maximum expected jingle duration (default: 45). The chapter
+                                    phrase must have been spoken within this many seconds after a
+                                    silence. Lower values speed up probing. Requires --jingle.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
