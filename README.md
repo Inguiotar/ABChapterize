@@ -39,7 +39,7 @@ chapterize --revert [--recurse] <file-or-directory>
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing markings as bogus and discard them. |
 | `-j`, `--jingle` | A short jingle may precede the phrase; marks are placed 0.5 s before it. |
 | `-t`, `--title <word>` | Chapter title word; the number is appended (default `Chapter`). |
-| `-i`, `--intro-title <word>` | Title of the mark covering the audio before the first detected chapter (default `Intro`). |
+| `-i`, `--intro-title <word>` | Title of the mark covering the audio before the first detected chapter (default: the `--title` word followed by `0`, e.g. `Chapter 0`). |
 | `-?`, `--help` | Usage info. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`).

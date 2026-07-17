@@ -54,11 +54,11 @@ public sealed class CliOptions
 
     /// <summary>
     /// Title of the synthetic chapter covering the audio before the first detected chapter
-    /// (--intro-title / -i, default "Intro"). Audiobooks usually start with a prelude, so the
-    /// first detected chapter must not be moved to 0:00; instead this intro chapter is
-    /// prepended at 0:00 when the first chapter starts later.
+    /// (--intro-title / -i). Audiobooks usually start with a prelude, so the first detected
+    /// chapter must not be moved to 0:00; instead this intro chapter is prepended at 0:00
+    /// when the first chapter starts later. Defaults to the title word followed by "0".
     /// </summary>
-    public string IntroTitle { get; private set; } = "Intro";
+    public string IntroTitle { get; private set; } = "";
 
     /// <summary>The file or directory to process (last command line argument).</summary>
     public string TargetPath { get; private set; } = "";
@@ -208,6 +208,9 @@ public sealed class CliOptions
             throw new CliError($"File or directory not found: {o.TargetPath}");
         }
 
+        if (!introSet)
+            o.IntroTitle = $"{o.Title} 0";
+
         o.BuildPhraseRegex();
         return o;
     }
@@ -280,7 +283,8 @@ public sealed class CliOptions
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
-                                    first detected chapter, e.g. a prelude (default: Intro).
+                                    first detected chapter, e.g. a prelude (default: the
+                                    --title word followed by "0", e.g. "Chapter 0").
           -?, --help                Show this help.
 
         Short options without parameters may be collapsed, e.g. "-rb" equals "-r -b".
