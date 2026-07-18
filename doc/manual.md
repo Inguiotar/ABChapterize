@@ -113,13 +113,18 @@ Rules applied to the matches:
 ### Pass 3 — gap filling (only when needed)
 
 If the detected chapter numbers have sequence gaps (…7, 9…), or the first
-detected chapter is not chapter 1, the regions where the missing chapters must
-be hiding are transcribed *completely* (in 10-minute chunks with 10-second
-overlap, so no phrase is cut in half). This catches announcements that were
-not preceded by a long-enough silence.
+detected chapter is not chapter 1 even though it starts more than 30 seconds
+into the file, the regions where the missing chapters must be hiding are
+transcribed *completely* (in 10-minute chunks with 10-second overlap, so no
+phrase is cut in half). This catches announcements that were not preceded by
+a long-enough silence.
 
-If a gap still remains after pass 3, the file is left **unchanged** and a
-warning is printed — a partially wrong chapter list is worse than none.
+If a gap *between* detected chapters still remains after pass 3, the file is
+left **unchanged** and a warning is printed — a partially wrong chapter list
+is worse than none. A first chapter number above 1 that cannot be pushed down
+further is tolerated, though: some books simply start mid-series (which is
+also why a first chapter within the first 30 seconds is taken as-is), and the
+intro chapter covers the leading audio either way.
 
 ### The intro chapter
 
@@ -140,8 +145,8 @@ without `--backup`, even on a crash or power failure mid-write:
 
 1. The chapter list is written to a temporary FFMETADATA file.
 2. ffmpeg remuxes the original into a temporary file next to it
-   (`<name>.chapterize.tmp<ext>`), stream-copying the audio and cover art —
-   no re-encoding, no quality loss.
+   (`<name>.<ext>.chapterize.tmp<ext>`, e.g. `book.m4b.chapterize.tmp.m4b`),
+   stream-copying the audio and cover art — no re-encoding, no quality loss.
 3. The temporary file is **verified** with ffprobe: its duration must match
    the original (within 2 seconds) and it must contain exactly the expected
    number of chapters. If verification fails, the original is untouched.
@@ -159,9 +164,10 @@ temporary file.
 
 `chapterize --revert <target>` undoes a `--backup` run: for every supported
 audio file with an added `.bak` suffix, the current file is deleted and the
-backup renamed back. `--revert` can be combined with `--recurse` and
-`--filter` (the filter then selects which backups are restored), but with no
-other options.
+backup renamed back. `--revert` can be combined with `--recurse`, with
+`--filter` (the filter then selects which backups are restored) and with the
+output options (`--quiet`, `--summary`), but with no detection or safety
+options.
 
 ## 5. What is kept and what is stripped
 
@@ -303,9 +309,11 @@ skipped (reported as "skipped").
 `--revert`
 : Restore backups instead of processing: for every supported audio file with
   an added `.bak` suffix under the target, the current file is deleted and
-  the backup renamed back. Combinable only with `--recurse` and `--filter`.
-  When a single audio file is given as the target, its `.bak` neighbour is
-  restored.
+  the backup renamed back. Combinable with `--recurse`, `--filter` and the
+  output options (`--quiet` and `--summary` take effect; `--verbose` and
+  `--no-bar` are accepted but change nothing here). All detection and safety
+  options are rejected. When a single audio file is given as the target, its
+  `.bak` neighbour is restored.
 
 ### Titles
 
@@ -446,7 +454,8 @@ writing. Search order:
 3. An `ffmpeg` folder (or `ffmpeg\bin`) next to the current directory, next
    to the executable, or in the user profile.
 4. OS-typical locations: Program Files (Windows); `/usr/bin`,
-   `/usr/local/bin`, `/opt/ffmpeg`, `/snap/bin` (Linux).
+   `/usr/local/bin`, `/opt/ffmpeg`, `/snap/bin`, `~/bin` and `~/.local/bin`
+   (Linux).
 
 Both executables must be found in the *same* directory. On Linux, install
 with `sudo apt install ffmpeg` or your distribution's equivalent; on Windows,

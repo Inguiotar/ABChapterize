@@ -232,6 +232,13 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void Revert_WithOutputOptions_IsAllowed()
+    {
+        var o = ParseDir("--revert", "--quiet", "--summary", "--verbose", "--no-bar")!;
+        Assert.True(o.Revert && o.Quiet && o.Summary);
+    }
+
+    [Fact]
     public void MaxJingleLength_WithoutJingle_IsAnError()
     {
         Assert.Throws<CliError>(() => ParseFile("--max-jingle-length", "30"));
@@ -247,6 +254,7 @@ public sealed class CliOptionsTests : IDisposable
 
     [Theory]
     [InlineData("0")]
+    [InlineData("0.5")]
     [InlineData("-3")]
     [InlineData("601")]
     [InlineData("abc")]

@@ -374,10 +374,10 @@ public sealed class CliOptions
         FilterExtensions = extensions;
     }
 
-    /// <summary>Parses the --max-jingle-length parameter into a positive number of seconds.</summary>
+    /// <summary>Parses the --max-jingle-length parameter into a number of seconds between 1 and 600.</summary>
     private static double ParseJingleLength(string value)
     {
-        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s <= 0 || s > 600)
+        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 1 || s > 600)
             throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected seconds between 1 and 600.");
         return s;
     }
@@ -430,13 +430,15 @@ public sealed class CliOptions
     private static string FfmpegNote => OperatingSystem.IsWindows()
         ? """
           ffmpeg/ffprobe are required. They are searched in %FFMPEG_DIR%\bin (highest priority,
-          FFMPEG_DIR points to ffmpeg's base directory), PATH, .\ffmpeg\bin,
-          %USERPROFILE%\ffmpeg\bin and common Program Files locations.
+          FFMPEG_DIR points to ffmpeg's base directory), PATH, an "ffmpeg" folder in the current
+          directory, next to chapterize.exe or in the user profile, and common Program Files
+          locations.
           """
         : """
           ffmpeg/ffprobe are required. They are searched in $FFMPEG_DIR (highest priority,
           FFMPEG_DIR points to ffmpeg's base directory), PATH, ./ffmpeg, ~/ffmpeg, /usr/bin,
-          /usr/local/bin, /opt/ffmpeg and /snap/bin. Install e.g. with: sudo apt install ffmpeg
+          /usr/local/bin, /opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.
+          Install e.g. with: sudo apt install ffmpeg
           """;
 
     /// <summary>Comprehensive usage info printed on --help or on any command line error.</summary>
@@ -447,7 +449,7 @@ public sealed class CliOptions
 
         Usage:
           chapterize [options] <file-or-directory>
-          chapterize --revert [--recurse] <file-or-directory>
+          chapterize --revert [--recurse] [--filter <f>] <file-or-directory>
           chapterize --help | -?
 
         Options (must precede the file/directory argument):
@@ -455,8 +457,8 @@ public sealed class CliOptions
           -b, --backup              Keep the original file with the added suffix ".bak".
               --revert              Restore backups: for every supported audio file with an
                                     added ".bak" suffix, delete the corresponding original and
-                                    rename the .bak file back. Only combinable with --recurse
-                                    and --filter.
+                                    rename the .bak file back. Combinable with --recurse,
+                                    --filter and the output options, but nothing else.
           -l, --lang <code>         Two-letter language hint for Whisper (default: en).
                                     Chapter numbers transcribed as words - cardinals and
                                     ordinals, before or after the phrase ("chapter two",

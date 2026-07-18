@@ -35,12 +35,13 @@ public static class FfmpegLocator
         }
 
         throw new AppError(OperatingSystem.IsWindows()
-            ? "ffmpeg/ffprobe could not be found. Searched %FFMPEG_DIR%\\bin, PATH, " +
-              ".\\ffmpeg\\bin, %USERPROFILE%\\ffmpeg\\bin and Program Files.\n" +
+            ? "ffmpeg/ffprobe could not be found. Searched %FFMPEG_DIR%\\bin, PATH, an " +
+              "\"ffmpeg\" folder in the current directory, next to chapterize.exe and in " +
+              "%USERPROFILE%, and Program Files.\n" +
               "Hint: set the environment variable FFMPEG_DIR to ffmpeg's base directory " +
               "(the directory that contains the \"bin\" folder), e.g. set FFMPEG_DIR=C:\\Tools\\ffmpeg"
             : "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR, PATH, ./ffmpeg, " +
-              "~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg and /snap/bin.\n" +
+              "~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.\n" +
               "Hint: install ffmpeg with your package manager (e.g. sudo apt install ffmpeg) " +
               "or set the environment variable FFMPEG_DIR to the directory containing the binaries.");
     }
