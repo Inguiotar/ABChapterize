@@ -250,4 +250,111 @@ public static class Spellers
         var rest = n % 100;
         return hundreds[n / 100] + (rest > 0 ? " " + Sub100(rest) : "");
     }
+
+    /// <summary>Spells 1-999 as an English ordinal ("three hundred and twenty-first").</summary>
+    /// <param name="n">Number to spell.</param>
+    /// <param name="useAnd">Insert "and" after "hundred" (British style).</param>
+    /// <param name="hyphen">Join tens and units with a hyphen instead of a space.</param>
+    public static string EnglishOrdinal(int n, bool useAnd, bool hyphen)
+    {
+        var irregular = new Dictionary<string, string>
+        {
+            ["one"] = "first", ["two"] = "second", ["three"] = "third", ["five"] = "fifth",
+            ["eight"] = "eighth", ["nine"] = "ninth", ["twelve"] = "twelfth",
+            ["twenty"] = "twentieth", ["thirty"] = "thirtieth", ["forty"] = "fortieth",
+            ["fifty"] = "fiftieth", ["sixty"] = "sixtieth", ["seventy"] = "seventieth",
+            ["eighty"] = "eightieth", ["ninety"] = "ninetieth", ["hundred"] = "hundredth",
+        };
+        var s = English(n, useAnd, hyphen);
+        var cut = s.LastIndexOfAny([' ', '-']) + 1;
+        var last = s[cut..];
+        return s[..cut] + (irregular.TryGetValue(last, out var o) ? o : last + "th");
+    }
+
+    /// <summary>Spells 1-999 as a German ordinal in base form ("dreihundertdreiundzwanzigste").</summary>
+    /// <param name="n">Number to spell.</param>
+    /// <param name="einhundert">Spell 1xx as "einhundert..." instead of plain "hundert...".</param>
+    public static string GermanOrdinal(int n, bool einhundert)
+    {
+        var s = German(n, einhundert);
+        return (n % 100) switch
+        {
+            1 => s[..^4] + "erste",           // "eins" -> "erste"
+            3 => s[..^4] + "dritte",          // "drei" -> "dritte"
+            7 => s[..^6] + "siebte",          // "sieben" -> "siebte"
+            8 => s + "e",                     // "achte"
+            0 or >= 20 => s + "ste",          // "zwanzigste", "hundertste"
+            _ => s + "te",                    // "vierte", "siebzehnte"
+        };
+    }
+
+    /// <summary>Spells 1-999 as a Dutch ordinal ("driehonderddrieëntwintigste").</summary>
+    public static string DutchOrdinal(int n)
+    {
+        var s = Dutch(n);
+        return (n % 100) switch
+        {
+            1 => s[..^3] + "eerste",          // "een" -> "eerste"
+            3 => s[..^4] + "derde",           // "drie" -> "derde"
+            8 or 0 or >= 20 => s + "ste",     // "achtste", "twintigste", "honderdste"
+            _ => s + "de",                    // "tweede", "zevende"
+        };
+    }
+
+    /// <summary>Spells 1-999 as a French ordinal ("premier", "vingt et unième", "centième").</summary>
+    public static string FrenchOrdinal(int n)
+    {
+        if (n == 1)
+            return "premier";
+        var s = French(n);
+        var cut = s.LastIndexOfAny([' ', '-']) + 1;
+        var last = s[cut..] switch
+        {
+            "cinq" => "cinquième",
+            "neuf" => "neuvième",
+            "vingts" => "vingtième",   // "quatre-vingts" -> "quatre-vingtième"
+            "cents" => "centième",     // "deux cents" -> "deux centième"
+            var w when w.EndsWith('e') => w[..^1] + "ième",
+            var w => w + "ième",
+        };
+        return s[..cut] + last;
+    }
+
+    /// <summary>Spells 1-999 as an Italian ordinal ("primo", "ventunesimo", "centottesimo").</summary>
+    /// <param name="n">Number to spell.</param>
+    /// <param name="elideCento">Also elide after the hundreds, like the cardinal speller.</param>
+    public static string ItalianOrdinal(int n, bool elideCento)
+    {
+        string[] irregular =
+        [
+            "", "primo", "secondo", "terzo", "quarto", "quinto",
+            "sesto", "settimo", "ottavo", "nono", "decimo",
+        ];
+        if (n <= 10)
+            return irregular[n];
+        var s = Italian(n, elideCento);
+        if (s.EndsWith("tré", StringComparison.Ordinal))
+            return s[..^3] + "treesimo"; // "-tré" keeps its (unaccented) final e
+        if (s.EndsWith("sei", StringComparison.Ordinal))
+            return s + "esimo";          // "-sei" keeps its final i
+        return s[..^1] + "esimo";        // regular: drop the final vowel
+    }
+
+    /// <summary>Spells 1-999 as a Turkish ordinal ("birinci", "yirmi birinci", "yüzüncü").</summary>
+    public static string TurkishOrdinal(int n)
+    {
+        var irregular = new Dictionary<string, string>
+        {
+            ["bir"] = "birinci", ["iki"] = "ikinci", ["üç"] = "üçüncü",
+            ["dört"] = "dördüncü", ["beş"] = "beşinci", ["altı"] = "altıncı",
+            ["yedi"] = "yedinci", ["sekiz"] = "sekizinci", ["dokuz"] = "dokuzuncu",
+            ["on"] = "onuncu", ["yirmi"] = "yirminci", ["otuz"] = "otuzuncu",
+            ["kırk"] = "kırkıncı", ["elli"] = "ellinci", ["altmış"] = "altmışıncı",
+            ["yetmiş"] = "yetmişinci", ["seksen"] = "sekseninci",
+            ["doksan"] = "doksanıncı", ["yüz"] = "yüzüncü",
+        };
+        var s = Turkish(n);
+        var cut = s.LastIndexOf(' ') + 1;
+        return s[..cut] + irregular[s[cut..]];
+    }
 }

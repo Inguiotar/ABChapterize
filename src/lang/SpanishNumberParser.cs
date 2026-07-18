@@ -56,20 +56,22 @@ public sealed class SpanishNumberParser : INumberWordParser
     };
 
     /// <inheritdoc/>
-    public bool TryParse(IReadOnlyList<string> tokens, out int number)
+    public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {
         number = 0;
+        consumed = 0;
         var total = 0;
         var any = false;
         var stage = 0; // 0 = expect hundreds/anything, 1 = hundreds seen, 2 = tens seen, 3 = done
 
-        foreach (var raw in tokens)
+        for (var i = 0; i < tokens.Count; i++)
         {
-            var part = raw.ToLowerInvariant();
+            var part = tokens[i].ToLowerInvariant();
 
             if (part == "y" && stage == 2)
             {
-                // "treinta y uno" - the connector between tens and unit.
+                // "treinta y uno" - the connector between tens and unit; it only counts
+                // as consumed when a unit actually follows.
                 continue;
             }
             if (stage == 0 && Hundreds.TryGetValue(part, out var h))
@@ -77,6 +79,7 @@ public sealed class SpanishNumberParser : INumberWordParser
                 total = h;
                 any = true;
                 stage = 1;
+                consumed = i + 1;
                 continue;
             }
             if (stage <= 1 && Small.TryGetValue(part, out var v))
@@ -84,12 +87,14 @@ public sealed class SpanishNumberParser : INumberWordParser
                 total += v;
                 any = true;
                 stage = v is >= 30 and <= 90 ? 2 : 3; // only plain tens may take "y <unit>"
+                consumed = i + 1;
                 continue;
             }
             if (stage == 2 && Small.TryGetValue(part, out var u) && u is >= 1 and <= 9)
             {
                 total += u;
                 stage = 3;
+                consumed = i + 1;
                 continue;
             }
             if (!any && Ordinals.TryGetValue(part, out var o))
@@ -97,6 +102,7 @@ public sealed class SpanishNumberParser : INumberWordParser
                 total = o;
                 any = true;
                 stage = 3;
+                consumed = i + 1;
                 continue;
             }
             break; // first non-fitting word ends the number

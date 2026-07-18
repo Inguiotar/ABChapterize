@@ -218,7 +218,9 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
-    /// either from the regexp capturing group or from the words following the phrase.
+    /// either from the regexp capturing group or from the words following the phrase
+    /// ("Chapter Seven"); when neither yields a number, the words directly preceding the
+    /// phrase are tried ("Erstes Kapitel", "Birinci Bölüm").
     /// </summary>
     private IEnumerable<PhraseMatch> FindPhraseMatches(List<TranscriptSegment> segments)
     {
@@ -251,7 +253,15 @@ public sealed class ChapterDetector
                 if (tail.Length > 80)
                     tail = tail[..80];
                 if (!NumberWordParser.TryExtractNumber(tail, _options.Language, out number))
-                    continue;
+                {
+                    // No number after the phrase - try the ordinal-first announcement
+                    // order ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
+                    var head = text[..m.Index];
+                    if (head.Length > 80)
+                        head = head[^80..];
+                    if (!NumberWordParser.TryExtractNumberBefore(head, _options.Language, out number))
+                        continue;
+                }
             }
 
             // Map the match position back to the segment that contains it.

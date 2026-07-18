@@ -3,8 +3,9 @@ namespace Chapterize.Lang;
 /// <summary>
 /// Parses French spoken numbers 0-999: "sept", "vingt et un", "soixante-dix",
 /// "quatre-vingt-dix-neuf", "deux cent trente-quatre". Hyphenated and space-separated
-/// transcriptions work equally, and "chapitre premier" style ordinals (1st-10th) are
-/// understood too, since French chapter one is customarily announced that way.
+/// transcriptions work equally. Ordinals are understood too — "chapitre premier" as well
+/// as every regular "-ième" form ("vingt et unième", "quatre-vingtième", "centième"),
+/// since French chapters may be announced either way.
 /// </summary>
 public sealed class FrenchNumberParser : INumberWordParser
 {
@@ -21,36 +22,45 @@ public sealed class FrenchNumberParser : INumberWordParser
         ["quarante"] = 40, ["cinquante"] = 50, ["soixante"] = 60,
     };
 
-    /// <summary>Ordinals 1st-10th, with and without accents ("chapitre premier").</summary>
+    /// <summary>Irregular ordinals ("chapitre premier"), with and without accents.</summary>
     private static readonly Dictionary<string, int> Ordinals = new()
     {
         ["premier"] = 1, ["première"] = 1, ["premiere"] = 1,
-        ["deuxième"] = 2, ["deuxieme"] = 2, ["second"] = 2, ["seconde"] = 2,
-        ["troisième"] = 3, ["troisieme"] = 3, ["quatrième"] = 4, ["quatrieme"] = 4,
-        ["cinquième"] = 5, ["cinquieme"] = 5, ["sixième"] = 6, ["sixieme"] = 6,
-        ["septième"] = 7, ["septieme"] = 7, ["huitième"] = 8, ["huitieme"] = 8,
-        ["neuvième"] = 9, ["neuvieme"] = 9, ["dixième"] = 10, ["dixieme"] = 10,
+        ["second"] = 2, ["seconde"] = 2,
     };
 
     /// <inheritdoc/>
-    public bool TryParse(IReadOnlyList<string> tokens, out int number)
+    public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {
         number = 0;
+        consumed = 0;
         var total = 0;
         var last = -1;    // value of the previous numeric word, for vingt/cent multiplication
         var any = false;
+        var done = false; // an ordinal part ends the number
 
-        foreach (var token in tokens)
+        for (var i = 0; i < tokens.Count && !done; i++)
         {
             // "quatre-vingt-dix-neuf" arrives as one token; process its parts in order.
-            var parts = token.ToLowerInvariant().Split('-', StringSplitOptions.RemoveEmptyEntries);
-            var consumed = false;
-            foreach (var part in parts)
+            var parts = tokens[i].ToLowerInvariant().Split('-', StringSplitOptions.RemoveEmptyEntries);
+            var numeric = false; // did this token contribute to the value?
+            var ok = parts.Length > 0;
+            foreach (var raw in parts)
             {
-                if (part is "et" && any)
+                var part = raw;
+
+                // A regular "-ième" ordinal is its cardinal plus the suffix; reduce it and
+                // let the normal cardinal logic below handle it, then end the number. This
+                // covers "vingt et unième" (21st) and "quatre-vingtième" (80th) alike.
+                if (TryReduceOrdinal(part, out var cardinalPart))
+                {
+                    part = cardinalPart;
+                    done = true;
+                }
+
+                if (part is "et" && any && !done)
                 {
                     // "vingt et un", "soixante et onze" - only valid inside a number.
-                    consumed = true;
                 }
                 else if (part is "vingt" or "vingts")
                 {
@@ -60,7 +70,7 @@ public sealed class FrenchNumberParser : INumberWordParser
                     else
                         total += 20;
                     last = 20;
-                    consumed = any = true;
+                    numeric = any = true;
                 }
                 else if (part is "cent" or "cents")
                 {
@@ -70,27 +80,31 @@ public sealed class FrenchNumberParser : INumberWordParser
                     else
                         total += 100;
                     last = 100;
-                    consumed = any = true;
+                    numeric = any = true;
                 }
                 else if (Values.TryGetValue(part, out var v))
                 {
                     total += v;
                     last = v;
-                    consumed = any = true;
+                    numeric = any = true;
                 }
                 else if (!any && Ordinals.TryGetValue(part, out var o))
                 {
                     total = o;
-                    consumed = any = true;
+                    numeric = any = done = true;
                 }
                 else
                 {
-                    consumed = false;
+                    ok = false;
                     break;
                 }
+                if (done)
+                    break;
             }
-            if (!consumed)
+            if (!ok)
                 break; // first non-number word ends the number
+            if (numeric)
+                consumed = i + 1; // connector-only tokens don't extend the number by themselves
         }
 
         if (!any || total > 999)
@@ -98,4 +112,41 @@ public sealed class FrenchNumberParser : INumberWordParser
         number = total;
         return true;
     }
+
+    /// <summary>
+    /// Reduces a regular "-ième" ordinal part to its cardinal part: "unième" -> "un",
+    /// "quatrième" -> "quatre", "cinquième" -> "cinq", "neuvième" -> "neuf",
+    /// "vingtième" -> "vingt", "centième" -> "cent". Accented and unaccented suffix
+    /// spellings both work.
+    /// </summary>
+    /// <param name="part">Lowercased word part, possibly an ordinal.</param>
+    /// <param name="cardinal">Receives the cardinal part on success.</param>
+    private static bool TryReduceOrdinal(string part, out string cardinal)
+    {
+        cardinal = "";
+        var normalized = part.Replace('è', 'e').Replace('é', 'e');
+        if (!normalized.EndsWith("ieme", StringComparison.Ordinal))
+            return false;
+        var stem = normalized[..^4];
+        if (stem.Length == 0)
+            return false;
+
+        // The cardinal is the stem itself ("sept-"), the stem plus a dropped final "e"
+        // ("quatr-" -> "quatre"), or one of the two irregular stems cinqu-/neuv-.
+        foreach (var candidate in new[] { stem, stem + "e" })
+        {
+            if (IsCardinalPart(candidate))
+            {
+                cardinal = candidate;
+                return true;
+            }
+        }
+        if (stem == "cinqu") { cardinal = "cinq"; return true; }
+        if (stem == "neuv") { cardinal = "neuf"; return true; }
+        return false;
+    }
+
+    /// <summary>Tells whether a word part is a known cardinal building block.</summary>
+    private static bool IsCardinalPart(string part) =>
+        part is "vingt" or "cent" || Values.ContainsKey(part);
 }

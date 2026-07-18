@@ -3,7 +3,9 @@ namespace Chapterize.Lang;
 /// <summary>
 /// Parses German spoken numbers 0-999, which are written as a single compound word:
 /// "sieben", "einundzwanzig", "hundertdreiundvierzig", "zweihundertfünf". Both umlaut
-/// spellings and their ue/oe/ss transliterations are accepted, since Whisper may emit either.
+/// spellings and their ue/oe/ss transliterations are accepted, since Whisper may emit
+/// either. Ordinals in all declensions are understood too ("Erstes Kapitel",
+/// "dreiundzwanzigste"), since German chapters are often announced ordinal-first.
 /// </summary>
 public sealed class GermanNumberParser : INumberWordParser
 {
@@ -32,14 +34,26 @@ public sealed class GermanNumberParser : INumberWordParser
     ];
 
     /// <inheritdoc/>
-    public bool TryParse(IReadOnlyList<string> tokens, out int number)
+    public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {
         // German numbers are one compound word; only the first token matters.
         number = 0;
+        consumed = 0;
         if (tokens.Count == 0)
             return false;
         var s = tokens[0].ToLowerInvariant();
 
+        if (TryParseCardinal(s, out number) || TryParseOrdinal(s, out number))
+        {
+            consumed = 1;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Parses a single cardinal compound word ("dreiundvierzig", "zweihundertfünf").</summary>
+    private static bool TryParseCardinal(string s, out int number)
+    {
         if (Simple.TryGetValue(s, out number))
             return true;
 
@@ -80,6 +94,46 @@ public sealed class GermanNumberParser : INumberWordParser
                 }
             }
         }
+
+        number = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Parses an ordinal in any declension ("erste", "erstes", "dreiundzwanzigster",
+    /// "hundertdritte") by stripping the declension ending, undoing the irregular ordinal
+    /// stems (erst-, dritt-, siebt-) and reducing the regular -t/-st suffix back to the
+    /// cardinal, which is then parsed normally.
+    /// </summary>
+    private static bool TryParseOrdinal(string s, out int number)
+    {
+        number = 0;
+
+        // Strip the declension: "erster/erstes/ersten/erstem" -> "erste" -> "erst".
+        if (s.Length > 2 && s[^1] is 'r' or 's' or 'n' or 'm' && s[^2] == 'e')
+            s = s[..^1];
+        if (!s.EndsWith('e'))
+            return false;
+        var stem = s[..^1];
+
+        // Irregular ordinal stems map onto their cardinal directly.
+        if (stem.EndsWith("erst", StringComparison.Ordinal))
+            return TryParseCardinal(stem[..^4] + "eins", out number);
+        if (stem.EndsWith("dritt", StringComparison.Ordinal))
+            return TryParseCardinal(stem[..^5] + "drei", out number);
+        if (stem.EndsWith("siebent", StringComparison.Ordinal))
+            return TryParseCardinal(stem[..^7] + "sieben", out number);
+        if (stem.EndsWith("siebt", StringComparison.Ordinal))
+            return TryParseCardinal(stem[..^5] + "sieben", out number);
+
+        // Regular formation: "achte" -> "acht", "vierte" -> "viert" -> "vier",
+        // "zwanzigste" -> "zwanzigst" -> "zwanzig".
+        if (TryParseCardinal(stem, out number) && number != 1) // "eine" must not become 1st
+            return true;
+        if (stem.EndsWith('t') && TryParseCardinal(stem[..^1], out number))
+            return true;
+        if (stem.EndsWith("st", StringComparison.Ordinal) && TryParseCardinal(stem[..^2], out number))
+            return true;
 
         number = 0;
         return false;

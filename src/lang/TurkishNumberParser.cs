@@ -6,7 +6,8 @@ namespace Chapterize.Lang;
 /// letters (dotless i, u/o with diaeresis, s/c with cedilla, soft g) are normalized to
 /// plain ASCII, so both proper Turkish and ASCII-ified transcriptions parse - and the
 /// notorious dotted/dotless-I casing rules cannot bite under invariant globalization.
-/// Ordinals 1st-10th ("birinci") are understood too.
+/// Ordinals are understood too - "Birinci Bolum" as well as every regular -inci/-uncu
+/// form ("yirmi birinci", "yuzuncu") - since Turkish chapters are announced ordinal-first.
 /// (This source file is deliberately ASCII-only; Turkish letters appear as \uXXXX escapes.)
 /// </summary>
 public sealed class TurkishNumberParser : INumberWordParser
@@ -29,25 +30,31 @@ public sealed class TurkishNumberParser : INumberWordParser
         ["altmis"] = 60, ["yetmis"] = 70, ["seksen"] = 80, ["doksan"] = 90,
     };
 
-    /// <summary>Ordinals 1st-10th, keyed in normalized ASCII form ("birinci").</summary>
-    private static readonly Dictionary<string, int> Ordinals = new()
-    {
-        ["birinci"] = 1, ["ikinci"] = 2, ["ucuncu"] = 3, ["dorduncu"] = 4,
-        ["besinci"] = 5, ["altinci"] = 6, ["yedinci"] = 7, ["sekizinci"] = 8,
-        ["dokuzuncu"] = 9, ["onuncu"] = 10,
-    };
+    /// <summary>
+    /// The vowel-harmony variants of the ordinal suffix, in normalized ASCII form and
+    /// longest-first, so "birinci" strips "inci" before "nci" could leave "biri".
+    /// </summary>
+    private static readonly string[] OrdinalSuffixes = ["inci", "uncu", "nci", "ncu"];
 
     /// <inheritdoc/>
-    public bool TryParse(IReadOnlyList<string> tokens, out int number)
+    public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {
         number = 0;
+        consumed = 0;
         var total = 0;
         var last = -1;    // value of the previous numeric word, for "yuz" multiplication
         var any = false;
 
-        foreach (var token in tokens)
+        for (var i = 0; i < tokens.Count; i++)
         {
-            var part = Normalize(token);
+            var part = Normalize(tokens[i]);
+
+            // An ordinal is its cardinal plus a suffix; reduce it and let the normal
+            // logic below handle it, then end the number. This covers "birinci" (1st)
+            // as well as "yirmi birinci" (21st) and "iki yuzuncu" (200th).
+            var ordinal = TryReduceOrdinal(part, out var cardinalPart);
+            if (ordinal)
+                part = cardinalPart;
 
             if (part == "yuz")
             {
@@ -71,16 +78,14 @@ public sealed class TurkishNumberParser : INumberWordParser
                 last = u;
                 any = true;
             }
-            else if (!any && Ordinals.TryGetValue(part, out var o))
-            {
-                total = o;
-                any = true;
-                break;
-            }
             else
             {
                 break; // first non-number word ends the number
             }
+
+            consumed = i + 1;
+            if (ordinal)
+                break; // the ordinal suffix marks the end of the number
         }
 
         if (!any || total > 999)
@@ -88,6 +93,40 @@ public sealed class TurkishNumberParser : INumberWordParser
         number = total;
         return true;
     }
+
+    /// <summary>
+    /// Reduces a regular ordinal to its cardinal word: "birinci" -> "bir", "ikinci" ->
+    /// "iki", "dorduncu" -> "dort", "yuzuncu" -> "yuz". All four vowel-harmony suffix
+    /// variants are tried, and the consonant softening d -> t is undone.
+    /// </summary>
+    /// <param name="part">Normalized ASCII word, possibly an ordinal.</param>
+    /// <param name="cardinal">Receives the cardinal word on success.</param>
+    private static bool TryReduceOrdinal(string part, out string cardinal)
+    {
+        foreach (var suffix in OrdinalSuffixes)
+        {
+            if (part.Length <= suffix.Length || !part.EndsWith(suffix, StringComparison.Ordinal))
+                continue;
+            var stem = part[..^suffix.Length];
+            if (IsCardinalWord(stem))
+            {
+                cardinal = stem;
+                return true;
+            }
+            // "dorduncu": the final t of "dort" softens to d before the vowel suffix.
+            if (stem.EndsWith('d') && IsCardinalWord(stem[..^1] + "t"))
+            {
+                cardinal = stem[..^1] + "t";
+                return true;
+            }
+        }
+        cardinal = "";
+        return false;
+    }
+
+    /// <summary>Tells whether a normalized word is a known cardinal building block.</summary>
+    private static bool IsCardinalWord(string word) =>
+        word == "yuz" || Units.ContainsKey(word) || Tens.ContainsKey(word);
 
     /// <summary>
     /// Lowercases and maps the Turkish letters to plain ASCII: dotless i (U+0131) to i,

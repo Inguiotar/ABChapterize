@@ -5,7 +5,9 @@ namespace Chapterize.Lang;
 /// "sette", "ventuno", "trecentoventidue", "centottantotto". The mandatory vowel elision
 /// of the tens ("ventuno", "ventotto") and the optional elision after the hundreds
 /// ("centotto"/"centootto") are both handled, as is the accent on "ventitré". Ordinals
-/// 1st-10th are understood too, since "capitolo primo" is the customary announcement.
+/// are understood too — the irregular 1st-10th ("capitolo primo") and every regular
+/// "-esimo" form ("ventunesimo", "centesimo"), since Italian chapters are customarily
+/// announced that way.
 /// </summary>
 public sealed class ItalianNumberParser : INumberWordParser
 {
@@ -44,7 +46,7 @@ public sealed class ItalianNumberParser : INumberWordParser
         ("ottocento", 800), ("novecento", 900),
     ];
 
-    /// <summary>Ordinals 1st-10th, masculine and feminine ("capitolo primo").</summary>
+    /// <summary>Irregular ordinals 1st-10th, masculine and feminine ("capitolo primo").</summary>
     private static readonly Dictionary<string, int> Ordinals = new()
     {
         ["primo"] = 1, ["prima"] = 1, ["secondo"] = 2, ["seconda"] = 2,
@@ -55,16 +57,28 @@ public sealed class ItalianNumberParser : INumberWordParser
     };
 
     /// <inheritdoc/>
-    public bool TryParse(IReadOnlyList<string> tokens, out int number)
+    public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {
         // Italian numbers are one compound word; only the first token matters.
         number = 0;
+        consumed = 0;
         if (tokens.Count == 0)
             return false;
         var s = tokens[0].ToLowerInvariant().Replace('é', 'e').Replace('è', 'e');
 
-        if (Ordinals.TryGetValue(s, out number))
+        if (Ordinals.TryGetValue(s, out number)
+            || TryParseCardinal(s, out number)
+            || TryParseRegularOrdinal(s, out number))
+        {
+            consumed = 1;
             return true;
+        }
+        return false;
+    }
+
+    /// <summary>Parses a single cardinal compound word ("trecentoventidue", "centottanta").</summary>
+    private static bool TryParseCardinal(string s, out int number)
+    {
         if (TrySub100(s, out number))
             return true;
 
@@ -98,6 +112,30 @@ public sealed class ItalianNumberParser : INumberWordParser
             }
         }
 
+        number = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Parses a regular "-esimo/-esima" ordinal ("undicesimo", "ventunesimo", "centesimo")
+    /// by stripping the suffix and restoring the final vowel the formation elides, then
+    /// parsing the resulting cardinal normally.
+    /// </summary>
+    private static bool TryParseRegularOrdinal(string s, out int number)
+    {
+        number = 0;
+        if (s.Length <= 5 || !(s.EndsWith("esimo", StringComparison.Ordinal)
+                               || s.EndsWith("esima", StringComparison.Ordinal)))
+            return false;
+        var stem = s[..^5];
+
+        // "trentatreesimo"/"ventiseiesimo" keep the cardinal intact; otherwise the elided
+        // final vowel must be restored ("ventun-" -> "ventuno", "ventes-" ... "vent-" -> "venti").
+        foreach (var candidate in new[] { stem, stem + "o", stem + "i", stem + "e", stem + "a" })
+        {
+            if (TryParseCardinal(candidate, out number))
+                return true;
+        }
         return false;
     }
 

@@ -31,7 +31,7 @@ public sealed class CliOptions
     /// <summary>Two-letter ISO 639-1 language hint for Whisper (--lang / -l, default "en").</summary>
     public string Language { get; private set; } = "en";
 
-    /// <summary>Raw chapter phrase or "/regexp/" as given on the command line (--chapter-phrase / -c).</summary>
+    /// <summary>Raw chapter phrase or "/regexp/" as given on the command line (--chapter-phrase / -c); the default is localized by --lang.</summary>
     public string ChapterPhrase { get; private set; } = "chapter";
 
     /// <summary>Whisper model selector (--model / -m): tiny, base, small, medium, turbo or large.</summary>
@@ -69,7 +69,7 @@ public sealed class CliOptions
     /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
     public bool Summary { get; private set; }
 
-    /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter").</summary>
+    /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter", localized by --lang).</summary>
     public string Title { get; private set; } = "Chapter";
 
     /// <summary>
@@ -99,6 +99,22 @@ public sealed class CliOptions
     public bool PhraseHasNumberGroup { get; private set; }
 
     private static readonly string[] ModelNames = ["tiny", "base", "small", "medium", "turbo", "large"];
+
+    /// <summary>
+    /// Per-language defaults for the chapter phrase and the title word, applied when --lang
+    /// is given but --chapter-phrase/--title are not. "chapterize -l de buch.m4b" thus looks
+    /// for "Kapitel" and writes "Kapitel 1", "Kapitel 2", ... without further options.
+    /// </summary>
+    private static readonly Dictionary<string, (string Phrase, string Title)> LanguageDefaults = new()
+    {
+        ["en"] = ("chapter", "Chapter"),
+        ["de"] = ("Kapitel", "Kapitel"),
+        ["fr"] = ("chapitre", "Chapitre"),
+        ["es"] = ("capítulo", "Capítulo"),
+        ["it"] = ("capitolo", "Capitolo"),
+        ["nl"] = ("hoofdstuk", "Hoofdstuk"),
+        ["tr"] = ("bölüm", "Bölüm"),
+    };
 
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
     public static string ExeName => OperatingSystem.IsWindows() ? "chapterize.exe" : "chapterize";
@@ -246,6 +262,15 @@ public sealed class CliOptions
             throw new CliError($"File or directory not found: {o.TargetPath}");
         }
 
+        // Localize the chapter phrase and title word from --lang unless given explicitly;
+        // the intro title then follows the (possibly localized) title word.
+        if (LanguageDefaults.TryGetValue(o.Language, out var defaults))
+        {
+            if (!phraseSet)
+                o.ChapterPhrase = defaults.Phrase;
+            if (!titleSet)
+                o.Title = defaults.Title;
+        }
         if (!introSet)
             o.IntroTitle = $"{o.Title} 0";
 
@@ -334,9 +359,14 @@ public sealed class CliOptions
                                     corresponding *.m4a / *.m4b and rename the .bak file back.
                                     Only combinable with --recurse.
           -l, --lang <code>         Two-letter language hint for Whisper (default: en).
-                                    Spoken chapter numbers are understood in {string.Join(", ", NumberWordParser.SupportedLanguages)};
-                                    digits work in every language.
-          -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default: chapter).
+                                    Spoken chapter numbers - cardinals and ordinals, before or
+                                    after the phrase ("chapter two", "Erstes Kapitel") - are
+                                    understood in {string.Join(", ", NumberWordParser.SupportedLanguages)}; digits
+                                    ("2.", "2nd", "2e") work in every language. For these
+                                    languages, --lang also localizes the defaults of
+                                    --chapter-phrase and --title (and thus --intro-title).
+          -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
+                                    chapter, localized by --lang).
                                     Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
                                     The regexp may contain one capturing group "(\d+)" in place of
                                     the chapter number; otherwise the number is expected to follow
@@ -363,10 +393,11 @@ public sealed class CliOptions
           -s, --summary             Print a summary at the end: file counts, total and average
                                     processing time.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
-                                    (default: Chapter).
+                                    (default: Chapter, localized by --lang).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
                                     first detected chapter, e.g. a prelude (default: the
-                                    --title word followed by "0", e.g. "Chapter 0").
+                                    --title word followed by "0", e.g. "Chapter 0" or,
+                                    with --lang de, "Kapitel 0").
           -?, --help                Show this help.
               --version             Show version information.
 

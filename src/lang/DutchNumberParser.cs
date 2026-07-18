@@ -4,6 +4,8 @@ namespace Chapterize.Lang;
 /// Parses Dutch spoken numbers 0-999, which are written as a single compound word like
 /// German: "zeven", "eenentwintig", "tweeëntwintig", "honderddrieënveertig". The trema
 /// forms (ë) and accented "één" are normalized away, since Whisper may emit either.
+/// Ordinals are understood too ("eerste hoofdstuk", "drieëntwintigste"), since Dutch
+/// chapters are often announced ordinal-first.
 /// </summary>
 public sealed class DutchNumberParser : INumberWordParser
 {
@@ -30,14 +32,26 @@ public sealed class DutchNumberParser : INumberWordParser
     ];
 
     /// <inheritdoc/>
-    public bool TryParse(IReadOnlyList<string> tokens, out int number)
+    public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {
         // Dutch numbers are one compound word; only the first token matters.
         number = 0;
+        consumed = 0;
         if (tokens.Count == 0)
             return false;
         var s = Normalize(tokens[0]);
 
+        if (TryParseCardinal(s, out number) || TryParseOrdinal(s, out number))
+        {
+            consumed = 1;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Parses a single cardinal compound word ("drieenveertig", "honderdvijf").</summary>
+    private static bool TryParseCardinal(string s, out int number)
+    {
         if (Simple.TryGetValue(s, out number))
             return true;
 
@@ -79,6 +93,32 @@ public sealed class DutchNumberParser : INumberWordParser
                 }
             }
         }
+
+        number = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Parses an ordinal ("eerste", "achtste", "drieentwintigste", "honderdderde") by
+    /// undoing the irregular stems (eerste-, derde-) and stripping the regular -ste/-de
+    /// suffix back to the cardinal, which is then parsed normally.
+    /// </summary>
+    private static bool TryParseOrdinal(string s, out int number)
+    {
+        number = 0;
+
+        // Irregular ordinals map onto their cardinal directly ("honderdeerste" = 101st).
+        if (s.EndsWith("eerste", StringComparison.Ordinal))
+            return TryParseCardinal(s[..^6] + "een", out number);
+        if (s.EndsWith("derde", StringComparison.Ordinal))
+            return TryParseCardinal(s[..^5] + "drie", out number);
+
+        // Regular formation: -ste after 8 and 20+ ("achtste", "twintigste"),
+        // -de otherwise ("tweede", "zevende").
+        if (s.EndsWith("ste", StringComparison.Ordinal) && TryParseCardinal(s[..^3], out number))
+            return true;
+        if (s.EndsWith("de", StringComparison.Ordinal) && TryParseCardinal(s[..^2], out number))
+            return true;
 
         number = 0;
         return false;

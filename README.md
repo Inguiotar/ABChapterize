@@ -28,7 +28,10 @@ or pure fantasy (looking at you, Audible), this tool is for you.
 - **Seven languages** of spoken chapter numbers out of the box — English, German,
   French, Spanish, Italian, Dutch and Turkish ("twenty-one", "einundzwanzig",
   "vingt et un", "veintiuno", "ventuno", "eenentwintig", "yirmi bir");
-  other languages work with a custom phrase/regexp.
+  other languages work with a custom phrase/regexp. Ordinal announcements are
+  understood too, before or after the phrase — "Erstes Kapitel", "2. Kapitel",
+  "chapitre premier", "Birinci Bölüm" — and `--lang` localizes the chapter
+  phrase and title defaults, so `--lang de` alone finds and writes "Kapitel".
 - **Windows and Linux**, single self-contained executable.
 
 ## Getting started
@@ -76,8 +79,9 @@ don't like the result.
 # A whole audiobook collection, subfolders included, keeping backups:
 chapterize --recurse --backup "D:\Audiobooks"
 
-# German audiobook ("Kapitel eins", "Kapitel zwei", ...):
-chapterize --lang de --chapter-phrase Kapitel --title Kapitel buch.m4b
+# German audiobook ("Kapitel eins", "Erstes Kapitel", ...) - the chapter
+# phrase and title default to "Kapitel" automatically with --lang de:
+chapterize --lang de buch.m4b
 
 # The publisher plays a jingle before each chapter announcement:
 chapterize --jingle hoerbuch.m4b
@@ -98,16 +102,16 @@ Run `chapterize --help` for the full reference. The most useful knobs:
 | `-r`, `--recurse` | Descend into subdirectories. |
 | `-b`, `--backup` | Keep the original file as `*.bak`. |
 | `--revert` | Restore all `*.bak` backups (undo). |
-| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Spoken numbers are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`; digits in every language. |
-| `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`). |
+| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Spoken numbers — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title`. |
+| `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 | `-j`, `--jingle` | A jingle precedes announcements; marks go before the jingle. |
 | `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45). |
 | `-n`, `--min-silence-length <s>` | Silence duration that counts as a potential chapter break (default: 1.5). |
-| `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`). |
-| `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Chapter 0`). |
+| `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
+| `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: the title word plus `0`, e.g. `Chapter 0`). |
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals at the end. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`).
@@ -118,8 +122,9 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    `--min-silence-length` (default 1.5 s below −35 dBFS) in one quick pass.
 2. **Pass 2 — probing:** a short stretch of audio after each silence is
    transcribed with Whisper and matched against the chapter phrase. The chapter
-   number is parsed from digits or spoken number words (0-999, including
-   ordinals like "chapitre premier" where customary).
+   number is parsed from digits or spoken number words (0-999, cardinals and
+   ordinals alike), whether it follows the phrase ("Chapter Seven") or precedes
+   it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely. If a gap still remains, the file is left
