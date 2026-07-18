@@ -50,7 +50,7 @@ public sealed class FileProcessor
     /// </summary>
     private void RunRevert(CancellationToken ct)
     {
-        var bakSuffixes = CliOptions.SupportedExtensions.Select(e => e + ".bak").ToArray();
+        var bakSuffixes = _options.EffectiveExtensions.Select(e => e + ".bak").ToArray();
         var backups = EnumerateTargets(bakSuffixes);
         // Convenience: when a single audio file is given, revert its backup.
         if (backups.Count == 0 && !_options.TargetIsDirectory && File.Exists(_options.TargetPath + ".bak"))
@@ -81,10 +81,12 @@ public sealed class FileProcessor
     /// <summary>Runs chapter detection and writing for all selected files.</summary>
     private async Task RunChapterizeAsync(CancellationToken ct)
     {
-        var files = EnumerateTargets(CliOptions.SupportedExtensions);
+        var files = EnumerateTargets(_options.EffectiveExtensions);
         if (files.Count == 0)
         {
-            Console.WriteLine($"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
+            Console.WriteLine(_options.FilterRegex != null || _options.FilterExtensions != null
+                ? "No audio files matching --filter found."
+                : $"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
             return;
         }
 
@@ -223,6 +225,7 @@ public sealed class FileProcessor
             .Where(f => suffixes.Any(s => f.EndsWith(s, StringComparison.OrdinalIgnoreCase)))
             .Where(f => !f.Contains(".chapterize.", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.Revert || !f.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
+            .Where(f => _options.FilterRegex == null || _options.FilterRegex.IsMatch(f))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }

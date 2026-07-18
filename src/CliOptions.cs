@@ -80,6 +80,21 @@ public sealed class CliOptions
     /// </summary>
     public string IntroTitle { get; private set; } = "";
 
+    /// <summary>
+    /// Regular expression from --filter "/regexp/", matched case-insensitively against the
+    /// whole file path of each candidate file. Null when no regexp filter is active.
+    /// </summary>
+    public Regex? FilterRegex { get; private set; }
+
+    /// <summary>
+    /// Extensions (with leading dots, lower-case) from --filter "ext1,ext2" that restrict
+    /// which of the supported file types are processed. Null when no extension filter is active.
+    /// </summary>
+    public string[]? FilterExtensions { get; private set; }
+
+    /// <summary>The file extensions to process: --filter's list, or all supported ones.</summary>
+    public string[] EffectiveExtensions => FilterExtensions ?? SupportedExtensions;
+
     /// <summary>The file or directory to process (last command line argument).</summary>
     public string TargetPath { get; private set; } = "";
 
@@ -173,6 +188,7 @@ public sealed class CliOptions
                     case "--max-chapters": o.MaxChapters = ParseMax(NextParam(arg)); maxSet = true; break;
                     case "--title": o.Title = NextParam(arg); titleSet = true; break;
                     case "--intro-title": o.IntroTitle = NextParam(arg); introSet = true; break;
+                    case "--filter": o.ParseFilter(NextParam(arg)); break;
                     case "--max-jingle-length": o.MaxJingleSeconds = ParseJingleLength(NextParam(arg)); jingleLenSet = true; break;
                     case "--min-silence-length": o.MinSilenceSeconds = ParseMinSilence(NextParam(arg)); minSilenceSet = true; break;
                     default: throw new CliError($"Unknown option: {arg}");
@@ -199,6 +215,7 @@ public sealed class CliOptions
                         case 'c':
                         case 'm':
                         case 'x':
+                        case 'F':
                         case 'X':
                         case 'n':
                         case 't':
@@ -211,6 +228,7 @@ public sealed class CliOptions
                                 case 'c': o.ChapterPhrase = NextParam($"-{c}"); phraseSet = true; break;
                                 case 'm': o.Model = NextParam($"-{c}"); modelSet = true; break;
                                 case 'x': o.MaxChapters = ParseMax(NextParam($"-{c}")); maxSet = true; break;
+                                case 'F': o.ParseFilter(NextParam($"-{c}")); break;
                                 case 'X': o.MaxJingleSeconds = ParseJingleLength(NextParam($"-{c}")); jingleLenSet = true; break;
                                 case 'n': o.MinSilenceSeconds = ParseMinSilence(NextParam($"-{c}")); minSilenceSet = true; break;
                                 case 't': o.Title = NextParam($"-{c}"); titleSet = true; break;
@@ -235,7 +253,7 @@ public sealed class CliOptions
 
         // Semantic validation.
         if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet || introSet || jingleLenSet || minSilenceSet))
-            throw new CliError("--revert can only be combined with --recurse.");
+            throw new CliError("--revert can only be combined with --recurse and --filter.");
 
         if (jingleLenSet && !o.Jingle)
             throw new CliError("--max-jingle-length requires --jingle.");
@@ -286,6 +304,46 @@ public sealed class CliOptions
 
         o.BuildPhraseRegex();
         return o;
+    }
+
+    /// <summary>
+    /// Parses a --filter parameter: either "/regexp/" (matched against the whole file path)
+    /// or a comma-separated list of permissible file extensions like "mp3,m4b".
+    /// </summary>
+    /// <param name="value">The raw --filter parameter.</param>
+    /// <exception cref="CliError">Thrown for an invalid regexp, an unsupported extension,
+    /// or when a filter of the same kind was already given.</exception>
+    private void ParseFilter(string value)
+    {
+        if (value.Length > 2 && value.StartsWith('/') && value.EndsWith('/'))
+        {
+            if (FilterRegex != null)
+                throw new CliError("Only one --filter regexp can be given.");
+            try
+            {
+                FilterRegex = new Regex(value[1..^1], RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new CliError($"Invalid --filter regexp: {ex.Message}");
+            }
+            return;
+        }
+
+        if (FilterExtensions != null)
+            throw new CliError("Only one --filter extension list can be given.");
+        var extensions = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(e => (e.StartsWith('.') ? e : "." + e).ToLowerInvariant())
+            .Distinct()
+            .ToArray();
+        if (extensions.Length == 0)
+            throw new CliError("The --filter extension list must not be empty.");
+        var unsupported = extensions.Where(e => !SupportedExtensions.Contains(e)).ToList();
+        if (unsupported.Count > 0)
+            throw new CliError(
+                $"Unsupported extension(s) in --filter: {string.Join(", ", unsupported)} " +
+                $"(supported: {SupportedExtensionsText}).");
+        FilterExtensions = extensions;
     }
 
     /// <summary>Parses the --max-jingle-length parameter into a positive number of seconds.</summary>
@@ -368,7 +426,8 @@ public sealed class CliOptions
           -b, --backup              Keep the original file with the added suffix ".bak".
               --revert              Restore backups: for every supported audio file with an
                                     added ".bak" suffix, delete the corresponding original and
-                                    rename the .bak file back. Only combinable with --recurse.
+                                    rename the .bak file back. Only combinable with --recurse
+                                    and --filter.
           -l, --lang <code>         Two-letter language hint for Whisper (default: en).
                                     Spoken chapter numbers - cardinals and ordinals, before or
                                     after the phrase ("chapter two", "Erstes Kapitel") - are
@@ -384,6 +443,11 @@ public sealed class CliOptions
                                     the phrase. Matching is always case-insensitive.
           -m, --model <name>        Whisper model: tiny, base, small, medium, turbo or large
                                     (default: turbo).
+          -F, --filter <filter>     Only process matching files. Either "/regexp/" - matched
+                                    case-insensitively against the whole path of each file -
+                                    or a comma-separated list of permissible file extensions,
+                                    e.g. "mp3,m4b". One filter of each kind may be given;
+                                    they also select which backups --revert restores.
           -f, --force               Discard pre-existing chapter markings. Without --force, files
                                     that already have chapter markings are skipped.
           -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter markings,
