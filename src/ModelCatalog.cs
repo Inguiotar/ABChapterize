@@ -83,7 +83,8 @@ public static class ModelCatalog
         using var http = new HttpClient();
         // The overall transfer may take arbitrarily long; stalls are detected per read instead.
         http.Timeout = Timeout.InfiniteTimeSpan;
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("chapterize/1.0");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(
+            $"chapterize/{typeof(ModelCatalog).Assembly.GetName().Version?.ToString(3) ?? "0"}");
 
         using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
