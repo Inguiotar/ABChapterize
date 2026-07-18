@@ -13,9 +13,9 @@ public static class FfmpegLocator
     private static string FfprobeName => OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe";
 
     /// <summary>
-    /// Searches for ffmpeg and ffprobe in PATH, an "ffmpeg" folder near the current
-    /// directory, the executable and the user profile, common OS-specific install
-    /// locations, and finally FFMPEG_DIR.
+    /// Searches for ffmpeg and ffprobe in FFMPEG_DIR (which, as the explicit user choice,
+    /// overrides everything else), PATH, an "ffmpeg" folder near the current directory,
+    /// the executable and the user profile, and common OS-specific install locations.
     /// </summary>
     /// <returns>Tuple with the full paths of the ffmpeg and ffprobe executables.</returns>
     /// <exception cref="AppError">Thrown when the tools cannot be found; the message
@@ -31,12 +31,12 @@ public static class FfmpegLocator
         }
 
         throw new AppError(OperatingSystem.IsWindows()
-            ? "ffmpeg/ffprobe could not be found. Searched PATH, .\\ffmpeg\\bin, " +
-              "%USERPROFILE%\\ffmpeg\\bin, Program Files and %FFMPEG_DIR%\\bin.\n" +
+            ? "ffmpeg/ffprobe could not be found. Searched %FFMPEG_DIR%\\bin, PATH, " +
+              ".\\ffmpeg\\bin, %USERPROFILE%\\ffmpeg\\bin and Program Files.\n" +
               "Hint: set the environment variable FFMPEG_DIR to ffmpeg's base directory " +
               "(the directory that contains the \"bin\" folder), e.g. set FFMPEG_DIR=C:\\Tools\\ffmpeg"
-            : "ffmpeg/ffprobe could not be found. Searched PATH, ./ffmpeg, ~/ffmpeg, /usr/bin, " +
-              "/usr/local/bin, /opt/ffmpeg, /snap/bin and $FFMPEG_DIR.\n" +
+            : "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR, PATH, ./ffmpeg, " +
+              "~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg and /snap/bin.\n" +
               "Hint: install ffmpeg with your package manager (e.g. sudo apt install ffmpeg) " +
               "or set the environment variable FFMPEG_DIR to the directory containing the binaries.");
     }
@@ -44,6 +44,16 @@ public static class FfmpegLocator
     /// <summary>Enumerates all candidate directories in search order (duplicates possible, harmless).</summary>
     private static IEnumerable<string> CandidateDirectories()
     {
+        // 0. FFMPEG_DIR points to ffmpeg's base directory (not the bin directory). As the
+        //    explicit user choice it has the highest priority, e.g. to select a custom
+        //    ffmpeg build over an installed one.
+        var ffmpegDir = Environment.GetEnvironmentVariable("FFMPEG_DIR");
+        if (!string.IsNullOrEmpty(ffmpegDir))
+        {
+            yield return Path.Combine(ffmpegDir, "bin");
+            yield return ffmpegDir; // tolerate FFMPEG_DIR pointing directly at bin
+        }
+
         // 1. PATH (';'-separated on Windows, ':'-separated on Linux).
         var path = Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach (var p in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -93,13 +103,6 @@ public static class FfmpegLocator
             }
         }
 
-        // 4. Fallback: FFMPEG_DIR points to ffmpeg's base directory (not the bin directory).
-        var ffmpegDir = Environment.GetEnvironmentVariable("FFMPEG_DIR");
-        if (!string.IsNullOrEmpty(ffmpegDir))
-        {
-            yield return Path.Combine(ffmpegDir, "bin");
-            yield return ffmpegDir; // tolerate FFMPEG_DIR pointing directly at bin
-        }
     }
 }
 

@@ -83,7 +83,7 @@ public sealed class ChapterDetector
         work.BeginPhase("Pass 1", info.SizeBytes);
         var silences = await _ffmpeg.DetectSilencesAsync(
             file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
-            seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), ct);
+            seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
 
         // Pass 2: probe the beginning of the file and the end of every silence.
         var probeStarts = new List<double> { 0 };
@@ -99,7 +99,7 @@ public sealed class ChapterDetector
         {
             ct.ThrowIfCancellationRequested();
             var samples = await _ffmpeg.DecodePcmAsync(file, start,
-                Math.Min(probeSeconds, info.DurationSeconds - start), ct);
+                Math.Min(probeSeconds, info.DurationSeconds - start), info.InputDecoder, ct);
             var segments = await _whisper.TranscribeAsync(samples, ct);
             if (Debug)
                 Console.Error.WriteLine($"[probe @{start:0.00}s, {samples.Length} samples] " +
@@ -290,7 +290,7 @@ public sealed class ChapterDetector
         {
             ct.ThrowIfCancellationRequested();
             var chunkLen = Math.Min(GapChunkSeconds, toSeconds - chunkStart);
-            var samples = await _ffmpeg.DecodePcmAsync(file, chunkStart, chunkLen, ct);
+            var samples = await _ffmpeg.DecodePcmAsync(file, chunkStart, chunkLen, info.InputDecoder, ct);
             var segments = await _whisper.TranscribeAsync(samples, ct);
 
             foreach (var match in FindPhraseMatches(segments))

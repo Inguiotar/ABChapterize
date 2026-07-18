@@ -20,7 +20,16 @@ public readonly record struct Silence(double StartSeconds, double EndSeconds);
 /// <param name="DurationSeconds">Total play time in seconds.</param>
 /// <param name="SizeBytes">File size in bytes.</param>
 /// <param name="ChapterCount">Number of pre-existing chapter markings.</param>
-public readonly record struct MediaInfo(double DurationSeconds, long SizeBytes, int ChapterCount);
+/// <param name="AudioCodec">Codec name of the first audio stream (e.g. "aac"), or "" if unknown.</param>
+/// <param name="AudioProfile">Codec profile of the first audio stream (e.g. "LC", "xHE-AAC"), or "" if unknown.</param>
+/// <param name="InputDecoder">Explicit ffmpeg input decoder to use for this file (e.g. "libfdk_aac"), or null for ffmpeg's default.</param>
+public readonly record struct MediaInfo(
+    double DurationSeconds, long SizeBytes, int ChapterCount,
+    string AudioCodec = "", string AudioProfile = "", string? InputDecoder = null)
+{
+    /// <summary>True when the audio stream uses the xHE-AAC (USAC) profile of AAC.</summary>
+    public bool IsXheAac => AudioProfile.Contains("xHE", StringComparison.OrdinalIgnoreCase);
+}
 
 /// <summary>
 /// Thin wrapper around the ffmpeg and ffprobe command line tools: media probing,
@@ -43,16 +52,28 @@ public sealed class FfmpegClient
         _ffprobe = ffprobePath;
     }
 
-    /// <summary>Reads duration, size and pre-existing chapter count of a media file.</summary>
+    /// <summary>
+    /// Reads duration, size, pre-existing chapter count, and the codec/profile of the
+    /// first audio stream of a media file.
+    /// </summary>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="ct">Cancellation token for graceful Ctrl+C handling.</param>
     public async Task<MediaInfo> ProbeAsync(string file, CancellationToken ct)
     {
-        var (stdout, _, exit) = await RunAsync(_ffprobe,
-            ["-v", "error", "-print_format", "json", "-show_format", "-show_chapters", file],
+        var (stdout, stderr, exit) = await RunAsync(_ffprobe,
+            ["-hide_banner", "-v", "warning", "-print_format", "json", "-show_format", "-show_chapters",
+             "-show_streams", "-select_streams", "a:0", file],
             null, ct);
         if (exit != 0)
+        {
+            // An ffmpeg build without a capable decoder cannot even probe xHE-AAC (USAC)
+            // files: it dies with "Failed to open codec" on an AAC stream reported with
+            // 0 channels. Return that diagnosis instead of a generic probe failure so the
+            // caller can print the libfdk_aac hint.
+            if (stderr.Contains("Failed to open codec") && stderr.Contains("Audio: aac"))
+                return new MediaInfo(0, new FileInfo(file).Length, 0, "aac", "xHE-AAC (suspected)");
             throw new AppError($"ffprobe failed for \"{file}\".");
+        }
 
         using var doc = JsonDocument.Parse(stdout);
         var root = doc.RootElement;
@@ -61,8 +82,35 @@ public sealed class FfmpegClient
             format.TryGetProperty("duration", out var dur))
             duration = double.Parse(dur.GetString()!, CultureInfo.InvariantCulture);
         var chapters = root.TryGetProperty("chapters", out var ch) ? ch.GetArrayLength() : 0;
+        string codec = "", profile = "";
+        if (root.TryGetProperty("streams", out var streams) && streams.GetArrayLength() > 0)
+        {
+            var stream = streams[0];
+            if (stream.TryGetProperty("codec_name", out var cn))
+                codec = cn.GetString() ?? "";
+            if (stream.TryGetProperty("profile", out var pr))
+                profile = pr.GetString() ?? "";
+        }
         var size = new FileInfo(file).Length;
-        return new MediaInfo(duration, size, chapters);
+        return new MediaInfo(duration, size, chapters, codec, profile);
+    }
+
+    /// <summary>Cached result of the libfdk_aac decoder availability check.</summary>
+    private bool? _hasLibFdkAac;
+
+    /// <summary>
+    /// Checks (once, then cached) whether the installed ffmpeg was built with the
+    /// libfdk_aac decoder, which is required to decode xHE-AAC (USAC) audio reliably.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<bool> SupportsLibFdkAacAsync(CancellationToken ct)
+    {
+        if (_hasLibFdkAac is { } cached)
+            return cached;
+        var (stdout, _, exit) = await RunAsync(_ffmpeg, ["-hide_banner", "-decoders"], null, ct);
+        var has = exit == 0 && Regex.IsMatch(stdout, @"\blibfdk_aac\b");
+        _hasLibFdkAac = has;
+        return has;
     }
 
     /// <summary>
@@ -72,11 +120,12 @@ public sealed class FfmpegClient
     /// <param name="minSilenceSeconds">Minimum silence duration to report.</param>
     /// <param name="noiseDb">Noise floor in dBFS below which audio counts as silence.</param>
     /// <param name="progress">Callback receiving the processed play time in seconds.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force (e.g. "libfdk_aac"), or null.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>All detected silence periods in chronological order.</returns>
     public async Task<List<Silence>> DetectSilencesAsync(
         string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
-        Action<double>? progress, CancellationToken ct)
+        Action<double>? progress, string? inputDecoder, CancellationToken ct)
     {
         var silences = new List<Silence>();
         double? pendingStart = null;
@@ -86,9 +135,11 @@ public sealed class FfmpegClient
         var timeRe = new Regex(@"out_time_us=(\d+)");
         double processedSeconds = 0;
 
-        var (_, _, exit) = await RunAsync(_ffmpeg,
+        List<string> args = ["-hide_banner", "-nostats", "-nostdin"];
+        if (inputDecoder != null)
+            args.AddRange(["-c:a", inputDecoder]);
+        args.AddRange(
             [
-                "-hide_banner", "-nostats", "-nostdin",
                 "-i", file,
                 // Audio only: an embedded cover art is a one-frame video stream whose
                 // immediate EOF would otherwise end the whole run after a fraction of
@@ -97,7 +148,8 @@ public sealed class FfmpegClient
                 "-af", $"silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}",
                 "-progress", "pipe:1",
                 "-f", "null", "-"
-            ],
+            ]);
+        var (_, _, exit) = await RunAsync(_ffmpeg, args,
             line =>
             {
                 var m = startRe.Match(line);
@@ -143,16 +195,19 @@ public sealed class FfmpegClient
     /// <param name="file">Path of the audio file.</param>
     /// <param name="startSeconds">Start position in seconds.</param>
     /// <param name="durationSeconds">Length in seconds, or null to decode to the end of the file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force (e.g. "libfdk_aac"), or null.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The decoded samples.</returns>
     public async Task<float[]> DecodePcmAsync(
-        string file, double startSeconds, double? durationSeconds, CancellationToken ct)
+        string file, double startSeconds, double? durationSeconds, string? inputDecoder, CancellationToken ct)
     {
         var args = new List<string>
         {
             "-hide_banner", "-v", "error", "-nostdin",
             "-ss", startSeconds.ToString("0.###", CultureInfo.InvariantCulture),
         };
+        if (inputDecoder != null)
+            args.AddRange(["-c:a", inputDecoder]);
         if (durationSeconds is { } d)
         {
             args.Add("-t");

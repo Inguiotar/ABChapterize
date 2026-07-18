@@ -120,6 +120,19 @@ public sealed class FileProcessor
         }
     }
 
+    /// <summary>
+    /// Explanation printed when an xHE-AAC file is encountered and the installed ffmpeg
+    /// has no libfdk_aac decoder to handle it.
+    /// </summary>
+    private const string XheAacHint =
+        "file skipped - it uses the xHE-AAC (USAC) codec, which ffmpeg's native AAC decoder " +
+        "cannot handle reliably, and the installed ffmpeg has no libfdk_aac decoder.\n" +
+        "  libfdk_aac is license-restricted (\"nonfree\"), so it is not included in official\n" +
+        "  ffmpeg downloads or distribution packages. To process this file you need a custom\n" +
+        "  ffmpeg built with --enable-libfdk-aac --enable-nonfree (e.g. via the media-autobuild\n" +
+        "  suite on Windows, https://github.com/m-ab-s/media-autobuild_suite, or a manual build\n" +
+        "  on Linux). Point the FFMPEG_DIR environment variable at that build to use it.";
+
     /// <summary>Formats a duration as h:mm:ss (or m:ss below one hour) for the summary.</summary>
     /// <param name="t">The duration to format.</param>
     private static string FormatTime(TimeSpan t)
@@ -136,6 +149,24 @@ public sealed class FileProcessor
         try
         {
             var info = await ffmpeg.ProbeAsync(file, ct);
+
+            // xHE-AAC (USAC) audio: ffmpeg's native AAC decoder cannot handle it reliably,
+            // so decode such files with libfdk_aac - or skip them when it is unavailable.
+            if (info.IsXheAac)
+            {
+                // A probe that could not even determine the duration means this ffmpeg
+                // build cannot handle the file regardless of the decoder list.
+                if (info.DurationSeconds > 0 && await ffmpeg.SupportsLibFdkAacAsync(ct))
+                {
+                    info = info with { InputDecoder = "libfdk_aac" };
+                }
+                else
+                {
+                    WarningCount++;
+                    _progress.FinishWithSummary($"{name}: WARNING - {XheAacHint}", important: true);
+                    return;
+                }
+            }
 
             // Policy for pre-existing chapter markings.
             var discardNote = "";

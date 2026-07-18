@@ -401,14 +401,14 @@ public sealed class CliOptions
     /// <summary>OS-specific note about where ffmpeg/ffprobe are searched (part of the usage info).</summary>
     private static string FfmpegNote => OperatingSystem.IsWindows()
         ? """
-          ffmpeg/ffprobe are required. They are searched in PATH, .\ffmpeg\bin,
-          %USERPROFILE%\ffmpeg\bin, common Program Files locations and finally %FFMPEG_DIR%\bin
-          (FFMPEG_DIR points to ffmpeg's base directory).
+          ffmpeg/ffprobe are required. They are searched in %FFMPEG_DIR%\bin (highest priority,
+          FFMPEG_DIR points to ffmpeg's base directory), PATH, .\ffmpeg\bin,
+          %USERPROFILE%\ffmpeg\bin and common Program Files locations.
           """
         : """
-          ffmpeg/ffprobe are required. They are searched in PATH, ./ffmpeg, ~/ffmpeg, /usr/bin,
-          /usr/local/bin, /opt/ffmpeg, /snap/bin and finally $FFMPEG_DIR (FFMPEG_DIR points to
-          ffmpeg's base directory). Install e.g. with: sudo apt install ffmpeg
+          ffmpeg/ffprobe are required. They are searched in $FFMPEG_DIR (highest priority,
+          FFMPEG_DIR points to ffmpeg's base directory), PATH, ./ffmpeg, ~/ffmpeg, /usr/bin,
+          /usr/local/bin, /opt/ffmpeg and /snap/bin. Install e.g. with: sudo apt install ffmpeg
           """;
 
     /// <summary>Comprehensive usage info printed on --help or on any command line error.</summary>
