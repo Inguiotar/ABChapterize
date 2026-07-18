@@ -45,18 +45,19 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Restores backups: for every *.m4a.bak / *.m4b.bak the corresponding original is
-    /// deleted and the backup renamed back to its original name.
+    /// Restores backups: for every supported audio file with an added ".bak" suffix the
+    /// corresponding original is deleted and the backup renamed back to its original name.
     /// </summary>
     private void RunRevert(CancellationToken ct)
     {
-        var backups = EnumerateTargets([".m4a.bak", ".m4b.bak"]);
-        // Convenience: when a single .m4a/.m4b file is given, revert its backup.
+        var bakSuffixes = CliOptions.SupportedExtensions.Select(e => e + ".bak").ToArray();
+        var backups = EnumerateTargets(bakSuffixes);
+        // Convenience: when a single audio file is given, revert its backup.
         if (backups.Count == 0 && !_options.TargetIsDirectory && File.Exists(_options.TargetPath + ".bak"))
             backups = [_options.TargetPath + ".bak"];
         if (backups.Count == 0)
         {
-            Console.WriteLine("No .m4a.bak/.m4b.bak files found; nothing to revert.");
+            Console.WriteLine("No .bak backups of supported audio files found; nothing to revert.");
             return;
         }
         var watch = Stopwatch.StartNew();
@@ -80,10 +81,10 @@ public sealed class FileProcessor
     /// <summary>Runs chapter detection and writing for all selected files.</summary>
     private async Task RunChapterizeAsync(CancellationToken ct)
     {
-        var files = EnumerateTargets([".m4a", ".m4b"]);
+        var files = EnumerateTargets(CliOptions.SupportedExtensions);
         if (files.Count == 0)
         {
-            Console.WriteLine("No .m4a/.m4b files found.");
+            Console.WriteLine($"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
             return;
         }
 

@@ -2,9 +2,10 @@
 
 **Correct chapter marks for your audiobooks — by actually listening to them.**
 
-Chapterize scans `.m4a`/`.m4b` audiobook files for spoken chapter announcements
-("Chapter Seven", "Kapitel 12", …) using [Whisper](https://github.com/ggerganov/whisper.cpp)
-speech recognition and writes proper chapter marks directly into the file.
+Chapterize scans audiobook files (`.m4a`, `.m4b`, `.mp3`, `.opus`, `.mka`) for
+spoken chapter announcements ("Chapter Seven", "Kapitel 12", …) using
+[Whisper](https://github.com/ggerganov/whisper.cpp) speech recognition and
+writes proper chapter marks directly into the file.
 No splitting, no sidecar files, no server — the audio itself stays untouched,
 only the chapter metadata is rewritten.
 
@@ -32,6 +33,9 @@ or pure fantasy (looking at you, Audible), this tool is for you.
   understood too, before or after the phrase — "Erstes Kapitel", "2. Kapitel",
   "chapitre premier", "Birinci Bölüm" — and `--lang` localizes the chapter
   phrase and title defaults, so `--lang de` alone finds and writes "Kapitel".
+- **All chapter-capable audio formats** — MP4 audiobooks (`.m4a`/`.m4b`), MP3,
+  Opus and Matroska audio (`.mka`). (`.ogg` and `.flac` are out, through no
+  fault of their own: ffmpeg cannot write chapter marks into those containers.)
 - **Windows and Linux**, single self-contained executable.
 
 ## Getting started

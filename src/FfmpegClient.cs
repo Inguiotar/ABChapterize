@@ -44,7 +44,7 @@ public sealed class FfmpegClient
     }
 
     /// <summary>Reads duration, size and pre-existing chapter count of a media file.</summary>
-    /// <param name="file">Path of the .m4a/.m4b file.</param>
+    /// <param name="file">Path of the audio file.</param>
     /// <param name="ct">Cancellation token for graceful Ctrl+C handling.</param>
     public async Task<MediaInfo> ProbeAsync(string file, CancellationToken ct)
     {
@@ -183,7 +183,7 @@ public sealed class FfmpegClient
     /// and atomically swapping it in. The original data is never deleted before the new file
     /// has been written and verified, so audiobooks cannot be lost even without --backup.
     /// </summary>
-    /// <param name="file">Path of the .m4a/.m4b file to modify.</param>
+    /// <param name="file">Path of the audio file to modify.</param>
     /// <param name="chapters">Chapter markings sorted by start time.</param>
     /// <param name="durationSeconds">Total duration; used as the end of the last chapter.</param>
     /// <param name="backup">True to keep the original file as "*.bak".</param>

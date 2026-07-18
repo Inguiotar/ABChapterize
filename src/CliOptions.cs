@@ -25,7 +25,7 @@ public sealed class CliOptions
     /// <summary>Keep the original file as "*.bak" (--backup / -b).</summary>
     public bool Backup { get; private set; }
 
-    /// <summary>Restore "*.m4a.bak" / "*.m4b.bak" files to their original names (--revert).</summary>
+    /// <summary>Restore "*.&lt;ext&gt;.bak" backup files to their original names (--revert).</summary>
     public bool Revert { get; private set; }
 
     /// <summary>Two-letter ISO 639-1 language hint for Whisper (--lang / -l, default "en").</summary>
@@ -99,6 +99,16 @@ public sealed class CliOptions
     public bool PhraseHasNumberGroup { get; private set; }
 
     private static readonly string[] ModelNames = ["tiny", "base", "small", "medium", "turbo", "large"];
+
+    /// <summary>
+    /// File extensions of the container formats that ffmpeg can both read and write chapter
+    /// marks for (verified empirically: mp4/ipod, ID3v2 mp3, Ogg Opus, Matroska). Notably
+    /// absent: .ogg (Vorbis) and .flac - ffmpeg's muxers silently drop chapters for those.
+    /// </summary>
+    public static readonly string[] SupportedExtensions = [".m4a", ".m4b", ".mp3", ".opus", ".mka"];
+
+    /// <summary>Human-readable list of the supported extensions, e.g. ".m4a/.m4b/.mp3/.opus/.mka".</summary>
+    public static string SupportedExtensionsText => string.Join("/", SupportedExtensions);
 
     /// <summary>
     /// Per-language defaults for the chapter phrase and the title word, applied when --lang
@@ -249,8 +259,8 @@ public sealed class CliOptions
             if (!o.Revert)
             {
                 var ext = Path.GetExtension(o.TargetPath).ToLowerInvariant();
-                if (ext is not (".m4a" or ".m4b"))
-                    throw new CliError($"Unsupported file type \"{ext}\": only .m4a and .m4b are supported.");
+                if (!SupportedExtensions.Contains(ext))
+                    throw new CliError($"Unsupported file type \"{ext}\": only {SupportedExtensionsText} are supported.");
             }
         }
         else if (Directory.Exists(o.TargetPath))
@@ -345,7 +355,8 @@ public sealed class CliOptions
 
     /// <summary>Comprehensive usage info printed on --help or on any command line error.</summary>
     public static string UsageText => $"""
-        chapterize - mark chapter starts in .m4a/.m4b audiobooks using Whisper speech recognition
+        chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+        Supported formats: {SupportedExtensionsText} (formats whose containers can hold chapter marks)
 
         Usage:
           chapterize [options] <file-or-directory>
@@ -355,9 +366,9 @@ public sealed class CliOptions
         Options (must precede the file/directory argument):
           -r, --recurse             Recursively descend into subdirectories (directories only).
           -b, --backup              Keep the original file with the added suffix ".bak".
-              --revert              Restore backups: for every *.m4a.bak / *.m4b.bak, delete the
-                                    corresponding *.m4a / *.m4b and rename the .bak file back.
-                                    Only combinable with --recurse.
+              --revert              Restore backups: for every supported audio file with an
+                                    added ".bak" suffix, delete the corresponding original and
+                                    rename the .bak file back. Only combinable with --recurse.
           -l, --lang <code>         Two-letter language hint for Whisper (default: en).
                                     Spoken chapter numbers - cardinals and ordinals, before or
                                     after the phrase ("chapter two", "Erstes Kapitel") - are
