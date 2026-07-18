@@ -50,21 +50,21 @@ public sealed class ChapterDetector
     private const double GapChunkOverlapSeconds = 10;
 
     private readonly CliOptions _options;
-    private readonly FfmpegClient _ffmpeg;
-    private readonly WhisperTranscriber _whisper;
+    private readonly IAudioSource _audio;
+    private readonly ITranscriber _transcriber;
 
     /// <summary>Per-file --verbose log sink set by <see cref="DetectAsync"/>; null when not verbose.</summary>
     private Action<string>? _log;
 
     /// <summary>Creates a detector bound to the given tools and options.</summary>
     /// <param name="options">Validated command line options.</param>
-    /// <param name="ffmpeg">ffmpeg wrapper used for silence detection and decoding.</param>
-    /// <param name="whisper">Loaded Whisper model.</param>
-    public ChapterDetector(CliOptions options, FfmpegClient ffmpeg, WhisperTranscriber whisper)
+    /// <param name="audio">Audio source used for silence detection and PCM decoding.</param>
+    /// <param name="transcriber">Loaded speech recognizer.</param>
+    public ChapterDetector(CliOptions options, IAudioSource audio, ITranscriber transcriber)
     {
         _options = options;
-        _ffmpeg = ffmpeg;
-        _whisper = whisper;
+        _audio = audio;
+        _transcriber = transcriber;
     }
 
     /// <summary>
@@ -86,7 +86,7 @@ public sealed class ChapterDetector
 
         // Pass 1: silence scan (one full pass over the file).
         work.BeginPhase("Pass 1", info.SizeBytes);
-        var silences = await _ffmpeg.DetectSilencesAsync(
+        var silences = await _audio.DetectSilencesAsync(
             file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
 
@@ -105,9 +105,9 @@ public sealed class ChapterDetector
         foreach (var start in probeStarts)
         {
             ct.ThrowIfCancellationRequested();
-            var samples = await _ffmpeg.DecodePcmAsync(file, start,
+            var samples = await _audio.DecodePcmAsync(file, start,
                 Math.Min(probeSeconds, info.DurationSeconds - start), info.InputDecoder, ct);
-            var segments = await _whisper.TranscribeAsync(samples, ct);
+            var segments = await _transcriber.TranscribeAsync(samples, ct);
             LogTranscript($"probe @{FormatTimestamp(start)}", segments);
 
             foreach (var match in FindPhraseMatches(segments))
@@ -157,14 +157,14 @@ public sealed class ChapterDetector
     /// <summary>A time region suspected to contain undetected chapter starts.</summary>
     /// <param name="FromSeconds">Region start.</param>
     /// <param name="ToSeconds">Region end.</param>
-    private readonly record struct GapRegion(double FromSeconds, double ToSeconds);
+    internal readonly record struct GapRegion(double FromSeconds, double ToSeconds);
 
     /// <summary>
     /// Determines the regions to fully transcribe: between every pair of consecutive detected
     /// chapters whose numbers are not consecutive, and before the first chapter when its
-    /// number is greater than 1.
+    /// number is greater than 1. Internal for unit testing.
     /// </summary>
-    private static List<GapRegion> FindGaps(List<DetectedChapter> chapters, double duration)
+    internal static List<GapRegion> FindGaps(List<DetectedChapter> chapters, double duration)
     {
         var gaps = new List<GapRegion>();
         if (chapters.Count == 0)
@@ -182,9 +182,9 @@ public sealed class ChapterDetector
     /// <summary>
     /// Sorts detections chronologically, removes duplicates of the same chapter number
     /// (keeping the earliest) and drops out-of-order regressions, which are typically
-    /// in-text mentions like "as seen in chapter three".
+    /// in-text mentions like "as seen in chapter three". Internal for unit testing.
     /// </summary>
-    private static List<DetectedChapter> Normalize(List<DetectedChapter> found)
+    internal static List<DetectedChapter> Normalize(List<DetectedChapter> found)
     {
         var result = new List<DetectedChapter>();
         foreach (var c in found.OrderBy(c => c.TimeSeconds).ThenBy(c => c.Number))
@@ -298,8 +298,8 @@ public sealed class ChapterDetector
         {
             ct.ThrowIfCancellationRequested();
             var chunkLen = Math.Min(GapChunkSeconds, toSeconds - chunkStart);
-            var samples = await _ffmpeg.DecodePcmAsync(file, chunkStart, chunkLen, info.InputDecoder, ct);
-            var segments = await _whisper.TranscribeAsync(samples, ct);
+            var samples = await _audio.DecodePcmAsync(file, chunkStart, chunkLen, info.InputDecoder, ct);
+            var segments = await _transcriber.TranscribeAsync(samples, ct);
             LogTranscript($"gap chunk @{FormatTimestamp(chunkStart)}", segments);
 
             foreach (var match in FindPhraseMatches(segments))

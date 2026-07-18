@@ -15,11 +15,6 @@ namespace Chapterize;
 /// <param name="Title">Chapter title as written into the file metadata.</param>
 public readonly record struct Chapter(double StartSeconds, string Title);
 
-/// <summary>A period of silence detected in the audio stream.</summary>
-/// <param name="StartSeconds">Start of the silence in seconds.</param>
-/// <param name="EndSeconds">End of the silence in seconds.</param>
-public readonly record struct Silence(double StartSeconds, double EndSeconds);
-
 /// <summary>Result of probing a media file with ffprobe.</summary>
 /// <param name="DurationSeconds">Total play time in seconds.</param>
 /// <param name="SizeBytes">File size in bytes.</param>
@@ -39,7 +34,7 @@ public readonly record struct MediaInfo(
 /// Thin wrapper around the ffmpeg and ffprobe command line tools: media probing,
 /// silence detection, PCM decoding for Whisper, and safe chapter writing.
 /// </summary>
-public sealed class FfmpegClient
+public sealed partial class FfmpegClient : IAudioSource
 {
     private readonly string _ffmpeg;
     private readonly string _ffprobe;
@@ -81,10 +76,12 @@ public sealed class FfmpegClient
 
         using var doc = JsonDocument.Parse(stdout);
         var root = doc.RootElement;
+        // ffprobe reports the duration as a string; some containers yield "N/A".
         double duration = 0;
         if (root.TryGetProperty("format", out var format) &&
-            format.TryGetProperty("duration", out var dur))
-            duration = double.Parse(dur.GetString()!, CultureInfo.InvariantCulture);
+            format.TryGetProperty("duration", out var dur) &&
+            double.TryParse(dur.GetString(), CultureInfo.InvariantCulture, out var d))
+            duration = d;
         var chapters = root.TryGetProperty("chapters", out var ch) ? ch.GetArrayLength() : 0;
         string codec = "", profile = "";
         if (root.TryGetProperty("streams", out var streams) && streams.GetArrayLength() > 0)
@@ -117,26 +114,26 @@ public sealed class FfmpegClient
         return has;
     }
 
-    /// <summary>
-    /// Scans the whole file for silence periods using ffmpeg's silencedetect filter.
-    /// </summary>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="minSilenceSeconds">Minimum silence duration to report.</param>
-    /// <param name="noiseDb">Noise floor in dBFS below which audio counts as silence.</param>
-    /// <param name="progress">Callback receiving the processed play time in seconds.</param>
-    /// <param name="inputDecoder">Explicit input decoder to force (e.g. "libfdk_aac"), or null.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>All detected silence periods in chronological order.</returns>
+    /// <summary>Matches the silence start lines of ffmpeg's silencedetect filter.</summary>
+    [GeneratedRegex(@"silence_start:\s*(-?[\d.]+)")]
+    private static partial Regex SilenceStartRegex();
+
+    /// <summary>Matches the silence end lines of ffmpeg's silencedetect filter.</summary>
+    [GeneratedRegex(@"silence_end:\s*(-?[\d.]+)")]
+    private static partial Regex SilenceEndRegex();
+
+    /// <summary>Matches the processed-time lines of ffmpeg's "-progress" output.</summary>
+    [GeneratedRegex(@"out_time_us=(\d+)")]
+    private static partial Regex ProgressTimeRegex();
+
+    /// <inheritdoc/>
+    /// <remarks>Uses ffmpeg's silencedetect filter in a full decode pass over the file.</remarks>
     public async Task<List<Silence>> DetectSilencesAsync(
         string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
         Action<double>? progress, string? inputDecoder, CancellationToken ct)
     {
         var silences = new List<Silence>();
         double? pendingStart = null;
-
-        var startRe = new Regex(@"silence_start:\s*(-?[\d.]+)");
-        var endRe = new Regex(@"silence_end:\s*(-?[\d.]+)");
-        var timeRe = new Regex(@"out_time_us=(\d+)");
         double processedSeconds = 0;
 
         List<string> args = ["-hide_banner", "-nostats", "-nostdin"];
@@ -156,13 +153,13 @@ public sealed class FfmpegClient
         var (_, _, exit) = await RunAsync(_ffmpeg, args,
             line =>
             {
-                var m = startRe.Match(line);
+                var m = SilenceStartRegex().Match(line);
                 if (m.Success)
                 {
                     pendingStart = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
                     return;
                 }
-                m = endRe.Match(line);
+                m = SilenceEndRegex().Match(line);
                 if (m.Success && pendingStart is { } s)
                 {
                     silences.Add(new Silence(Math.Max(0, s),
@@ -170,7 +167,7 @@ public sealed class FfmpegClient
                     pendingStart = null;
                     return;
                 }
-                m = timeRe.Match(line);
+                m = ProgressTimeRegex().Match(line);
                 if (m.Success)
                 {
                     processedSeconds = long.Parse(m.Groups[1].Value) / 1_000_000.0;
@@ -193,15 +190,7 @@ public sealed class FfmpegClient
         return silences;
     }
 
-    /// <summary>
-    /// Decodes a section of the file to 16 kHz mono 32-bit float PCM suitable for Whisper.
-    /// </summary>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="startSeconds">Start position in seconds.</param>
-    /// <param name="durationSeconds">Length in seconds, or null to decode to the end of the file.</param>
-    /// <param name="inputDecoder">Explicit input decoder to force (e.g. "libfdk_aac"), or null.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The decoded samples.</returns>
+    /// <inheritdoc/>
     public async Task<float[]> DecodePcmAsync(
         string file, double startSeconds, double? durationSeconds, string? inputDecoder, CancellationToken ct)
     {
@@ -325,10 +314,11 @@ public sealed class FfmpegClient
         }
     }
 
-    /// <summary>Builds an FFMETADATA1 document containing only the chapter list.</summary>
+    /// <summary>Builds an FFMETADATA1 document containing only the chapter list.
+    /// Internal for unit testing.</summary>
     /// <param name="chapters">Chapter markings sorted by start time.</param>
     /// <param name="durationSeconds">End time of the last chapter.</param>
-    private static string BuildFfMetadata(IReadOnlyList<Chapter> chapters, double durationSeconds)
+    internal static string BuildFfMetadata(IReadOnlyList<Chapter> chapters, double durationSeconds)
     {
         var sb = new StringBuilder(";FFMETADATA1\n");
         for (var i = 0; i < chapters.Count; i++)
@@ -345,8 +335,9 @@ public sealed class FfmpegClient
         return sb.ToString();
     }
 
-    /// <summary>Escapes the characters '=', ';', '#', '\' and newline for FFMETADATA files.</summary>
-    private static string EscapeMeta(string s)
+    /// <summary>Escapes the characters '=', ';', '#', '\' and newline for FFMETADATA files.
+    /// Internal for unit testing.</summary>
+    internal static string EscapeMeta(string s)
     {
         var sb = new StringBuilder(s.Length);
         foreach (var c in s)

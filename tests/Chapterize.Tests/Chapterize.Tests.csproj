@@ -12,14 +12,17 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" />
+    <!-- Compile-time only: WhisperTranscriber/FileProcessor reference Whisper.net types.
+         No runtime package is needed - the tests never load a model. -->
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
   </ItemGroup>
 
   <!-- The main project publishes as a self-contained single-file exe with a forced
-       RuntimeIdentifier, which does not mix well with a test host. The number parsers are
-       dependency-free, so the tests simply compile the relevant sources directly. -->
+       RuntimeIdentifier, which does not mix well with a test host. The tests therefore
+       compile the sources directly (which also makes internal members reachable);
+       only Program.cs stays out because the test host provides its own entry point. -->
   <ItemGroup>
-    <Compile Include="..\..\src\NumberWordParser.cs" Link="src\NumberWordParser.cs" />
-    <Compile Include="..\..\src\lang\*.cs" LinkBase="src\lang" />
+    <Compile Include="..\..\src\**\*.cs" Exclude="..\..\src\Program.cs" LinkBase="src" />
   </ItemGroup>
 
 </Project>

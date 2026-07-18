@@ -126,6 +126,20 @@ public sealed class CliOptions
 
     private static readonly string[] ModelNames = ["tiny", "base", "small", "medium", "turbo", "large"];
 
+    /// <summary>Maps every short option letter to its long option name.</summary>
+    private static readonly Dictionary<char, string> ShortOptions = new()
+    {
+        ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--jingle",
+        ['q'] = "--quiet", ['v'] = "--verbose", ['s'] = "--summary",
+        ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model",
+        ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
+        ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
+    };
+
+    // Tracks which value options were given explicitly, for semantic validation and
+    // for applying the --lang-dependent defaults only when the user did not choose.
+    private bool _langSet, _phraseSet, _modelSet, _maxSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet;
+
     /// <summary>
     /// File extensions of the container formats that ffmpeg can both read and write chapter
     /// marks for (verified empirically: mp4/ipod, ID3v2 mp3, Ogg Opus, Matroska). Notably
@@ -168,9 +182,6 @@ public sealed class CliOptions
     public static CliOptions? Parse(string[] args)
     {
         var o = new CliOptions();
-        bool langSet = false, phraseSet = false, modelSet = false, maxSet = false, titleSet = false, introSet = false;
-        var jingleLenSet = false;
-        var minSilenceSet = false;
         var i = 0;
 
         string NextParam(string optName)
@@ -188,28 +199,8 @@ public sealed class CliOptions
 
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
-                switch (arg)
-                {
-                    case "--recurse": o.Recurse = true; break;
-                    case "--backup": o.Backup = true; break;
-                    case "--revert": o.Revert = true; break;
-                    case "--force": o.Force = true; break;
-                    case "--jingle": o.Jingle = true; break;
-                    case "--quiet": o.Quiet = true; break;
-                    case "--verbose": o.Verbose = true; break;
-                    case "--no-bar": o.NoBar = true; break;
-                    case "--summary": o.Summary = true; break;
-                    case "--lang": o.Language = NextParam(arg); langSet = true; break;
-                    case "--chapter-phrase": o.ChapterPhrase = NextParam(arg); phraseSet = true; break;
-                    case "--model": o.Model = NextParam(arg); modelSet = true; break;
-                    case "--max-chapters": o.MaxChapters = ParseMax(NextParam(arg)); maxSet = true; break;
-                    case "--title": o.Title = NextParam(arg); titleSet = true; break;
-                    case "--intro-title": o.IntroTitle = NextParam(arg); introSet = true; break;
-                    case "--filter": o.ParseFilter(NextParam(arg)); break;
-                    case "--max-jingle-length": o.MaxJingleSeconds = ParseJingleLength(NextParam(arg)); jingleLenSet = true; break;
-                    case "--min-silence-length": o.MinSilenceSeconds = ParseMinSilence(NextParam(arg)); minSilenceSet = true; break;
-                    default: throw new CliError($"Unknown option: {arg}");
-                }
+                if (!o.TryApplyFlag(arg) && !o.TryApplyValueOption(arg, () => NextParam(arg)))
+                    throw new CliError($"Unknown option: {arg}");
             }
             else if (arg.StartsWith('-') && arg.Length > 1)
             {
@@ -218,43 +209,15 @@ public sealed class CliOptions
                 for (var k = 0; k < letters.Length; k++)
                 {
                     var c = letters[k];
-                    var isLast = k == letters.Length - 1;
-                    switch (c)
-                    {
-                        case 'r': o.Recurse = true; break;
-                        case 'b': o.Backup = true; break;
-                        case 'f': o.Force = true; break;
-                        case 'j': o.Jingle = true; break;
-                        case 'q': o.Quiet = true; break;
-                        case 'v': o.Verbose = true; break;
-                        case 's': o.Summary = true; break;
-                        case '?': return null;
-                        case 'l':
-                        case 'c':
-                        case 'm':
-                        case 'x':
-                        case 'F':
-                        case 'X':
-                        case 'n':
-                        case 't':
-                        case 'i':
-                            if (!isLast)
-                                throw new CliError($"Option -{c} takes a parameter and cannot be collapsed with other options ({arg}).");
-                            switch (c)
-                            {
-                                case 'l': o.Language = NextParam($"-{c}"); langSet = true; break;
-                                case 'c': o.ChapterPhrase = NextParam($"-{c}"); phraseSet = true; break;
-                                case 'm': o.Model = NextParam($"-{c}"); modelSet = true; break;
-                                case 'x': o.MaxChapters = ParseMax(NextParam($"-{c}")); maxSet = true; break;
-                                case 'F': o.ParseFilter(NextParam($"-{c}")); break;
-                                case 'X': o.MaxJingleSeconds = ParseJingleLength(NextParam($"-{c}")); jingleLenSet = true; break;
-                                case 'n': o.MinSilenceSeconds = ParseMinSilence(NextParam($"-{c}")); minSilenceSet = true; break;
-                                case 't': o.Title = NextParam($"-{c}"); titleSet = true; break;
-                                case 'i': o.IntroTitle = NextParam($"-{c}"); introSet = true; break;
-                            }
-                            break;
-                        default: throw new CliError($"Unknown option: -{c}");
-                    }
+                    if (c == '?')
+                        return null;
+                    if (!ShortOptions.TryGetValue(c, out var longName))
+                        throw new CliError($"Unknown option: -{c}");
+                    if (o.TryApplyFlag(longName))
+                        continue;
+                    if (k != letters.Length - 1)
+                        throw new CliError($"Option -{c} takes a parameter and cannot be collapsed with other options ({arg}).");
+                    o.TryApplyValueOption(longName, () => NextParam($"-{c}"));
                 }
             }
             else
@@ -270,10 +233,11 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet || introSet || jingleLenSet || minSilenceSet))
+        if (o.Revert && (o.Backup || o.Force || o.Jingle || o._langSet || o._phraseSet || o._modelSet
+                         || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
-        if (jingleLenSet && !o.Jingle)
+        if (o._jingleLenSet && !o.Jingle)
             throw new CliError("--max-jingle-length requires --jingle.");
 
         if (!Regex.IsMatch(o.Language, "^[a-zA-Z]{2}$"))
@@ -312,16 +276,62 @@ public sealed class CliOptions
         // the intro title then follows the (possibly localized) title word.
         if (LanguageDefaults.TryGetValue(o.Language, out var defaults))
         {
-            if (!phraseSet)
+            if (!o._phraseSet)
                 o.ChapterPhrase = defaults.Phrase;
-            if (!titleSet)
+            if (!o._titleSet)
                 o.Title = defaults.Title;
         }
-        if (!introSet)
+        if (!o._introSet)
             o.IntroTitle = $"{o.Title} 0";
 
         o.BuildPhraseRegex();
         return o;
+    }
+
+    /// <summary>
+    /// Applies a parameterless flag option given by its long name.
+    /// </summary>
+    /// <param name="name">Long option name, e.g. "--recurse".</param>
+    /// <returns>True when <paramref name="name"/> is a known flag; false otherwise.</returns>
+    private bool TryApplyFlag(string name)
+    {
+        switch (name)
+        {
+            case "--recurse": Recurse = true; return true;
+            case "--backup": Backup = true; return true;
+            case "--revert": Revert = true; return true;
+            case "--force": Force = true; return true;
+            case "--jingle": Jingle = true; return true;
+            case "--quiet": Quiet = true; return true;
+            case "--verbose": Verbose = true; return true;
+            case "--no-bar": NoBar = true; return true;
+            case "--summary": Summary = true; return true;
+            default: return false;
+        }
+    }
+
+    /// <summary>
+    /// Applies an option that takes a parameter, given by its long name.
+    /// </summary>
+    /// <param name="name">Long option name, e.g. "--lang".</param>
+    /// <param name="nextParam">Supplies the option's parameter; only invoked for known options.</param>
+    /// <returns>True when <paramref name="name"/> is a known value option; false otherwise.</returns>
+    /// <exception cref="CliError">Thrown when the parameter is missing or invalid.</exception>
+    private bool TryApplyValueOption(string name, Func<string> nextParam)
+    {
+        switch (name)
+        {
+            case "--lang": Language = nextParam(); _langSet = true; return true;
+            case "--chapter-phrase": ChapterPhrase = nextParam(); _phraseSet = true; return true;
+            case "--model": Model = nextParam(); _modelSet = true; return true;
+            case "--max-chapters": MaxChapters = ParseMax(nextParam()); _maxSet = true; return true;
+            case "--title": Title = nextParam(); _titleSet = true; return true;
+            case "--intro-title": IntroTitle = nextParam(); _introSet = true; return true;
+            case "--filter": ParseFilter(nextParam()); return true;
+            case "--max-jingle-length": MaxJingleSeconds = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
+            case "--min-silence-length": MinSilenceSeconds = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
+            default: return false;
+        }
     }
 
     /// <summary>

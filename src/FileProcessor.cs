@@ -16,7 +16,7 @@ public sealed class FileProcessor
     private readonly ProgressRenderer _progress;
 
     /// <summary>Number of files for which processing was aborted with a warning.</summary>
-    public int WarningCount { get; private set; }
+    private int _warnings;
 
     /// <summary>Number of files skipped because of pre-existing chapter markings.</summary>
     private int _skipped;
@@ -113,7 +113,7 @@ public sealed class FileProcessor
 
         if (_options.Summary)
         {
-            var warningNote = WarningCount > 0 ? $", {WarningCount} with warnings" : "";
+            var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
             Console.WriteLine(
                 $"Summary: {files.Count} file(s) encountered, {_processed} processed, " +
                 $"{_skipped} skipped{warningNote}");
@@ -173,7 +173,7 @@ public sealed class FileProcessor
                 }
                 else
                 {
-                    WarningCount++;
+                    _warnings++;
                     _progress.FinishWithSummary($"{name}: WARNING - {XheAacHint}", important: true);
                     return;
                 }
@@ -202,7 +202,7 @@ public sealed class FileProcessor
 
             if (result.GapRemains)
             {
-                WarningCount++;
+                _warnings++;
                 _progress.FinishWithSummary(
                     $"{name}: WARNING - unresolved chapter sequence gap (missing: " +
                     $"{string.Join(", ", result.MissingNumbers)}); file unchanged", important: true);
@@ -247,10 +247,10 @@ public sealed class FileProcessor
 
     /// <summary>
     /// Builds the ordered list of files to work on, honoring --recurse. Temporary files
-    /// created by this tool are always excluded.
+    /// created by this tool are always excluded. Internal for unit testing.
     /// </summary>
     /// <param name="suffixes">Case-insensitive file name suffixes to accept.</param>
-    private List<string> EnumerateTargets(string[] suffixes)
+    internal List<string> EnumerateTargets(string[] suffixes)
     {
         IEnumerable<string> candidates;
         if (_options.TargetIsDirectory)

@@ -7,17 +7,11 @@ using Whisper.net.LibraryLoader;
 
 namespace Chapterize;
 
-/// <summary>A transcribed text segment with absolute timing.</summary>
-/// <param name="StartSeconds">Segment start in seconds, relative to the decoded audio window.</param>
-/// <param name="EndSeconds">Segment end in seconds, relative to the decoded audio window.</param>
-/// <param name="Text">Recognized text.</param>
-public readonly record struct TranscriptSegment(double StartSeconds, double EndSeconds, string Text);
-
 /// <summary>
 /// Wraps a Whisper.net processor for a single model, using the best available
 /// hardware acceleration (CUDA, then Vulkan GPU, then CPU with AVX).
 /// </summary>
-public sealed class WhisperTranscriber : IAsyncDisposable
+public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
 {
     private readonly WhisperFactory _factory;
     private readonly WhisperProcessor _processor;
@@ -45,12 +39,7 @@ public sealed class WhisperTranscriber : IAsyncDisposable
         RuntimeName = RuntimeOptions.LoadedLibrary?.ToString() ?? "unknown";
     }
 
-    /// <summary>
-    /// Transcribes a chunk of 16 kHz mono float PCM audio.
-    /// </summary>
-    /// <param name="samples">The audio samples.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>Recognized segments in chronological order, timed relative to the chunk.</returns>
+    /// <inheritdoc/>
     public async Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct)
     {
         var result = new List<TranscriptSegment>();
