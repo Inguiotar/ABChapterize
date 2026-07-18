@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace Chapterize;
 
 /// <summary>
@@ -13,6 +15,15 @@ public static class Program
     /// <returns>0 on success (warnings included), 1 on fatal errors, 2 on usage errors, 130 on Ctrl+C.</returns>
     public static async Task<int> Main(string[] args)
     {
+        // --version wins over everything else on the command line and needs no target path.
+        if (args.Contains("--version"))
+        {
+            var version = typeof(Program).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
+            Console.WriteLine($"chapterize {version}");
+            return 0;
+        }
+
         CliOptions? options;
         try
         {

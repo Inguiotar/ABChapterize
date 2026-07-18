@@ -350,6 +350,7 @@ public sealed class CliOptions
                                     first detected chapter, e.g. a prelude (default: the
                                     --title word followed by "0", e.g. "Chapter 0").
           -?, --help                Show this help.
+              --version             Show version information.
 
         Short options without parameters may be collapsed, e.g. "-rb" equals "-r -b".
 
