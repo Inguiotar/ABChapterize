@@ -113,7 +113,7 @@ public sealed class ChapterDetector
                 if (!_options.Jingle && match.PhraseStartSeconds > PhraseLatestStart)
                     continue; // without a jingle the phrase must directly follow the silence
                 var time = _options.Jingle
-                    ? Math.Max(0, start - JingleLeadSeconds)
+                    ? AnchorJingleMark(start, match.PhraseStartSeconds, silences)
                     : Math.Max(0, start + (start == 0 ? match.PhraseStartSeconds : 0));
                 found.Add(new DetectedChapter(match.Number, time));
                 work.ChaptersFound = CountDistinct(found);
@@ -188,6 +188,26 @@ public sealed class ChapterDetector
                 result.Add(c);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Determines where to place a jingle-mode chapter mark found in a probe window. The window
+    /// can span the trailing speech of the previous chapter, the real inter-chapter silence, the
+    /// jingle and the phrase, so anchoring at the probe's own silence would mark the chapter too
+    /// early. Instead the mark is anchored at the latest detected silence that ends before the
+    /// phrase, falling back to the window start (the end of the silence that triggered the probe).
+    /// </summary>
+    /// <param name="windowStart">Absolute start of the probe window in seconds.</param>
+    /// <param name="phraseStartSeconds">Phrase start relative to the window start.</param>
+    /// <param name="silences">All silences found by the silence scan.</param>
+    private static double AnchorJingleMark(
+        double windowStart, double phraseStartSeconds, List<Silence> silences)
+    {
+        var phraseAbs = windowStart + phraseStartSeconds;
+        var silence = silences.LastOrDefault(s =>
+            s.EndSeconds > windowStart && s.EndSeconds <= phraseAbs);
+        var anchor = silence == default ? windowStart : silence.EndSeconds;
+        return Math.Max(0, anchor - JingleLeadSeconds);
     }
 
     /// <summary>Counts distinct chapter numbers in a raw detection list (for progress display).</summary>
