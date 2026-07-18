@@ -100,6 +100,9 @@ public sealed class CliOptions
 
     private static readonly string[] ModelNames = ["tiny", "base", "small", "medium", "turbo", "large"];
 
+    /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
+    public static string ExeName => OperatingSystem.IsWindows() ? "chapterize.exe" : "chapterize";
+
     /// <summary>
     /// Parses and validates the raw command line arguments.
     /// </summary>
@@ -302,8 +305,21 @@ public sealed class CliOptions
         }
     }
 
+    /// <summary>OS-specific note about where ffmpeg/ffprobe are searched (part of the usage info).</summary>
+    private static string FfmpegNote => OperatingSystem.IsWindows()
+        ? """
+          ffmpeg/ffprobe are required. They are searched in PATH, .\ffmpeg\bin,
+          %USERPROFILE%\ffmpeg\bin, common Program Files locations and finally %FFMPEG_DIR%\bin
+          (FFMPEG_DIR points to ffmpeg's base directory).
+          """
+        : """
+          ffmpeg/ffprobe are required. They are searched in PATH, ./ffmpeg, ~/ffmpeg, /usr/bin,
+          /usr/local/bin, /opt/ffmpeg, /snap/bin and finally $FFMPEG_DIR (FFMPEG_DIR points to
+          ffmpeg's base directory). Install e.g. with: sudo apt install ffmpeg
+          """;
+
     /// <summary>Comprehensive usage info printed on --help or on any command line error.</summary>
-    public static string UsageText => """
+    public static string UsageText => $"""
         chapterize - mark chapter starts in .m4a/.m4b audiobooks using Whisper speech recognition
 
         Usage:
@@ -354,8 +370,6 @@ public sealed class CliOptions
 
         Short options without parameters may be collapsed, e.g. "-rb" equals "-r -b".
 
-        ffmpeg/ffprobe are required. They are searched in PATH, .\ffmpeg\bin,
-        %USERPROFILE%\ffmpeg\bin, common Program Files locations and finally %FFMPEG_DIR%\bin
-        (FFMPEG_DIR points to ffmpeg's base directory).
+        {FfmpegNote}
         """;
 }

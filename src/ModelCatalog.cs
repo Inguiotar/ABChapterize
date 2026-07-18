@@ -153,15 +153,15 @@ public static class ModelCatalog
                {url}
           2. Put the file - without renaming it - here:
                {path}
-             (Create the "models" folder next to chapterize.exe if it does not exist.)
+             (Create the "models" folder next to {CliOptions.ExeName} if it does not exist.)
           3. Run chapterize again with the same options.
 
         All models can be browsed at {BrowseUrl}
 
         Things worth checking: Is the machine online? Is enough disk space free (the model
-        needs about {approxSize})? Is the folder writable? If chapterize.exe resides in a
+        needs about {approxSize})? Is the folder writable? If {CliOptions.ExeName} resides in a
         write-protected location, either install the model manually as described above or
-        move chapterize.exe (together with its "runtimes" and "models" folders) to a
+        move {CliOptions.ExeName} (together with its "runtimes" and "models" folders) to a
         writable location such as a folder in your user profile.
         """;
 }

@@ -9,14 +9,16 @@
     <AssemblyName>chapterize</AssemblyName>
     <Version>0.9.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- win-x64 by default; publish for Linux with: dotnet publish -c Release -r linux-x64 -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <!-- Single-file publish for the managed code. The native Whisper libraries must stay
          in the "runtimes" folder next to the exe: Whisper.net probes that folder structure
          at run time to pick the best backend (CUDA/Vulkan/CPU variants even share file
          names, so they cannot be embedded into the bundle). -->
-    <!-- Publish straight into the deployed location, where the "models" folder lives. -->
-    <PublishDir>bin\publish\</PublishDir>
+    <!-- Publish per platform into the deployed locations; the win-x64 one also holds the
+         "models" folder. -->
+    <PublishDir>bin\publish\$(RuntimeIdentifier)\</PublishDir>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
@@ -29,17 +31,20 @@
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
   </ItemGroup>
 
-  <!-- Whisper.net copies native libraries for all platforms; for a win-x64 publish only
-       the Windows binaries are needed, so prune the Linux/macOS ones. -->
+  <!-- Whisper.net copies native libraries for all platforms; only the ones matching the
+       published runtime identifier are needed, so prune the foreign ones. -->
   <Target Name="PruneForeignRuntimes" AfterTargets="Publish">
     <ItemGroup>
       <_ForeignRuntimeDir Include="$(PublishDir)runtimes\linux-arm" />
       <_ForeignRuntimeDir Include="$(PublishDir)runtimes\linux-arm64" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\linux-x64" />
       <_ForeignRuntimeDir Include="$(PublishDir)runtimes\macos-arm64" />
       <_ForeignRuntimeDir Include="$(PublishDir)runtimes\macos-x64" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\cuda\linux-x64" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\vulkan\linux-x64" />
+      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\win-arm64" />
+      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\win-x86" />
+      <_ForeignRuntimeDir Condition="'$(RuntimeIdentifier)' == 'win-x64'"
+                          Include="$(PublishDir)runtimes\linux-x64;$(PublishDir)runtimes\cuda\linux-x64;$(PublishDir)runtimes\vulkan\linux-x64" />
+      <_ForeignRuntimeDir Condition="'$(RuntimeIdentifier)' == 'linux-x64'"
+                          Include="$(PublishDir)runtimes\win-x64;$(PublishDir)runtimes\cuda\win-x64;$(PublishDir)runtimes\vulkan\win-x64" />
     </ItemGroup>
     <RemoveDir Directories="@(_ForeignRuntimeDir)" />
     <Delete Files="$(PublishDir)ggml-metal.metal;$(PublishDir)chapterize.pdb" />
