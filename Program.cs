@@ -41,7 +41,7 @@ public static class Program
             cts.Cancel();
         };
 
-        using var progress = new ProgressRenderer();
+        using var progress = new ProgressRenderer(options.Quiet);
         var processor = new FileProcessor(options, progress);
         try
         {

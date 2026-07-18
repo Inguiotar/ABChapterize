@@ -65,6 +65,7 @@ public sealed class WorkTracker
 public sealed class ProgressRenderer : IDisposable
 {
     private readonly bool _interactive;
+    private readonly bool _quiet;
     private readonly Timer? _timer;
     private WorkTracker? _tracker;
     private string _label = "";
@@ -72,9 +73,11 @@ public sealed class ProgressRenderer : IDisposable
     private readonly Lock _lock = new();
 
     /// <summary>Creates the renderer; when the console is redirected no bar is drawn.</summary>
-    public ProgressRenderer()
+    /// <param name="quiet">Suppress the bar and non-important summary lines (--quiet).</param>
+    public ProgressRenderer(bool quiet)
     {
-        _interactive = !Console.IsOutputRedirected;
+        _quiet = quiet;
+        _interactive = !quiet && !Console.IsOutputRedirected;
         if (_interactive)
             _timer = new Timer(_ => Render(), null, Timeout.Infinite, Timeout.Infinite);
     }
@@ -94,16 +97,19 @@ public sealed class ProgressRenderer : IDisposable
 
     /// <summary>
     /// Stops the progress bar and replaces it with the final per-file summary line.
+    /// In quiet mode the line is only printed when it is marked important.
     /// </summary>
     /// <param name="summary">Summary text describing what was (not) done.</param>
-    public void FinishWithSummary(string summary)
+    /// <param name="important">True for warnings/errors that must show even with --quiet.</param>
+    public void FinishWithSummary(string summary, bool important = false)
     {
         _timer?.Change(Timeout.Infinite, Timeout.Infinite);
         lock (_lock)
         {
             _tracker = null;
             ClearLine();
-            Console.WriteLine(summary);
+            if (!_quiet || important)
+                Console.WriteLine(summary);
         }
     }
 

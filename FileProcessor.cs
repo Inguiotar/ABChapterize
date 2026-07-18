@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Chapterize;
 
 /// <summary>
@@ -11,6 +13,15 @@ public sealed class FileProcessor
 
     /// <summary>Number of files for which processing was aborted with a warning.</summary>
     public int WarningCount { get; private set; }
+
+    /// <summary>Number of files skipped because of pre-existing chapter markings.</summary>
+    private int _skipped;
+
+    /// <summary>Number of files that actually went through chapter detection.</summary>
+    private int _processed;
+
+    /// <summary>Accumulated detection time of the processed files (for the --summary average).</summary>
+    private TimeSpan _processingTime;
 
     /// <summary>Creates a processor for the given validated options.</summary>
     /// <param name="options">Validated command line options.</param>
@@ -48,6 +59,7 @@ public sealed class FileProcessor
             Console.WriteLine("No .m4a.bak/.m4b.bak files found; nothing to revert.");
             return;
         }
+        var watch = Stopwatch.StartNew();
         foreach (var bak in backups)
         {
             ct.ThrowIfCancellationRequested();
@@ -55,7 +67,13 @@ public sealed class FileProcessor
             if (File.Exists(original))
                 File.Delete(original);
             File.Move(bak, original);
-            Console.WriteLine($"{Path.GetFileName(original)}: reverted from backup");
+            if (!_options.Quiet)
+                Console.WriteLine($"{Path.GetFileName(original)}: reverted from backup");
+        }
+        if (_options.Summary)
+        {
+            Console.WriteLine($"Summary: {backups.Count} backup(s) encountered, {backups.Count} reverted");
+            Console.WriteLine($"Total time: {FormatTime(watch.Elapsed)}");
         }
     }
 
@@ -74,16 +92,35 @@ public sealed class FileProcessor
 
         var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
         await using var whisper = new WhisperTranscriber(modelPath, _options.Language);
-        Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({whisper.RuntimeName} backend), " +
-                          $"{files.Count} file(s) to process.");
+        if (!_options.Quiet)
+            Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({whisper.RuntimeName} backend), " +
+                              $"{files.Count} file(s) to process.");
 
+        var watch = Stopwatch.StartNew();
         var detector = new ChapterDetector(_options, ffmpeg, whisper);
         foreach (var file in files)
         {
             ct.ThrowIfCancellationRequested();
             await ProcessOneAsync(file, ffmpeg, detector, ct);
         }
+
+        if (_options.Summary)
+        {
+            var warningNote = WarningCount > 0 ? $", {WarningCount} with warnings" : "";
+            Console.WriteLine(
+                $"Summary: {files.Count} file(s) encountered, {_processed} processed, " +
+                $"{_skipped} skipped{warningNote}");
+            var average = _processed > 0
+                ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
+                : "";
+            Console.WriteLine($"Total time: {FormatTime(watch.Elapsed)}{average}");
+        }
     }
+
+    /// <summary>Formats a duration as h:mm:ss (or m:ss below one hour) for the summary.</summary>
+    /// <param name="t">The duration to format.</param>
+    private static string FormatTime(TimeSpan t)
+        => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
     /// <summary>Processes a single audiobook file and prints its summary line.</summary>
     private async Task ProcessOneAsync(
@@ -91,6 +128,7 @@ public sealed class FileProcessor
     {
         var name = Path.GetFileName(file);
         var work = new WorkTracker();
+        var watch = Stopwatch.StartNew();
         _progress.Start(name, work);
         try
         {
@@ -103,6 +141,7 @@ public sealed class FileProcessor
                 var bogus = _options.MaxChapters is { } max && info.ChapterCount > max;
                 if (!_options.Force && !bogus)
                 {
+                    _skipped++;
                     _progress.FinishWithSummary(
                         $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
                     return;
@@ -113,13 +152,15 @@ public sealed class FileProcessor
             }
 
             var result = await detector.DetectAsync(file, info, work, ct);
+            _processed++;
+            _processingTime += watch.Elapsed;
 
             if (result.GapRemains)
             {
                 WarningCount++;
                 _progress.FinishWithSummary(
                     $"{name}: WARNING - unresolved chapter sequence gap (missing: " +
-                    $"{string.Join(", ", result.MissingNumbers)}); file unchanged");
+                    $"{string.Join(", ", result.MissingNumbers)}); file unchanged", important: true);
                 return;
             }
             if (result.Chapters.Count == 0)
@@ -154,7 +195,7 @@ public sealed class FileProcessor
         }
         catch (AppError ex)
         {
-            _progress.FinishWithSummary($"{name}: ERROR - {ex.Message}");
+            _progress.FinishWithSummary($"{name}: ERROR - {ex.Message}", important: true);
             throw;
         }
     }

@@ -63,6 +63,12 @@ public sealed class CliOptions
     /// </summary>
     public double MinSilenceSeconds { get; private set; } = 1.5;
 
+    /// <summary>Suppress per-file output; warnings and errors are still shown (--quiet / -q).</summary>
+    public bool Quiet { get; private set; }
+
+    /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
+    public bool Summary { get; private set; }
+
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter").</summary>
     public string Title { get; private set; } = "Chapter";
 
@@ -130,6 +136,8 @@ public sealed class CliOptions
                     case "--revert": o.Revert = true; break;
                     case "--force": o.Force = true; break;
                     case "--jingle": o.Jingle = true; break;
+                    case "--quiet": o.Quiet = true; break;
+                    case "--summary": o.Summary = true; break;
                     case "--lang": o.Language = NextParam(arg); langSet = true; break;
                     case "--chapter-phrase": o.ChapterPhrase = NextParam(arg); phraseSet = true; break;
                     case "--model": o.Model = NextParam(arg); modelSet = true; break;
@@ -155,6 +163,8 @@ public sealed class CliOptions
                         case 'b': o.Backup = true; break;
                         case 'f': o.Force = true; break;
                         case 'j': o.Jingle = true; break;
+                        case 'q': o.Quiet = true; break;
+                        case 's': o.Summary = true; break;
                         case '?': return null;
                         case 'l':
                         case 'c':
@@ -331,6 +341,9 @@ public sealed class CliOptions
                                     chapter break (default: 1.5). Every such silence is
                                     probed with Whisper, so higher values can drastically
                                     speed up detection when the breaks are known to be long.
+          -q, --quiet               Suppress per-file output; warnings and errors are still shown.
+          -s, --summary             Print a summary at the end: file counts, total and average
+                                    processing time.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
