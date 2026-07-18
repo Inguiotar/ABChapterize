@@ -52,7 +52,7 @@ public static class Program
             cts.Cancel();
         };
 
-        using var progress = new ProgressRenderer(options.Quiet);
+        using var progress = new ProgressRenderer(options.Quiet, options.Verbose, options.NoBar);
         var processor = new FileProcessor(options, progress);
         try
         {

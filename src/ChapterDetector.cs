@@ -45,13 +45,12 @@ public sealed class ChapterDetector
     /// <summary>Overlap between gap transcription chunks so no phrase is cut in half.</summary>
     private const double GapChunkOverlapSeconds = 10;
 
-    /// <summary>True when the CHAPTERIZE_DEBUG environment variable is set; dumps transcripts to stderr.</summary>
-    private static readonly bool Debug =
-        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CHAPTERIZE_DEBUG"));
-
     private readonly CliOptions _options;
     private readonly FfmpegClient _ffmpeg;
     private readonly WhisperTranscriber _whisper;
+
+    /// <summary>Per-file --verbose log sink set by <see cref="DetectAsync"/>; null when not verbose.</summary>
+    private Action<string>? _log;
 
     /// <summary>Creates a detector bound to the given tools and options.</summary>
     /// <param name="options">Validated command line options.</param>
@@ -70,10 +69,12 @@ public sealed class ChapterDetector
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
     /// <param name="work">Progress tracker fed with processed bytes.</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
     /// <param name="ct">Cancellation token.</param>
     public async Task<DetectionResult> DetectAsync(
-        string file, MediaInfo info, WorkTracker work, CancellationToken ct)
+        string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
     {
+        _log = log;
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var probeSeconds = _options.Jingle
             ? _options.MaxJingleSeconds + PhraseMarginSeconds
@@ -84,6 +85,8 @@ public sealed class ChapterDetector
         var silences = await _ffmpeg.DetectSilencesAsync(
             file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
+
+        _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= {_options.MinSilenceSeconds:0.#} s found");
 
         // Pass 2: probe the beginning of the file and the end of every silence.
         var probeStarts = new List<double> { 0 };
@@ -101,9 +104,7 @@ public sealed class ChapterDetector
             var samples = await _ffmpeg.DecodePcmAsync(file, start,
                 Math.Min(probeSeconds, info.DurationSeconds - start), info.InputDecoder, ct);
             var segments = await _whisper.TranscribeAsync(samples, ct);
-            if (Debug)
-                Console.Error.WriteLine($"[probe @{start:0.00}s, {samples.Length} samples] " +
-                    string.Join(" | ", segments.Select(s => $"{s.StartSeconds:0.0}-{s.EndSeconds:0.0} \"{s.Text}\"")));
+            LogTranscript($"probe @{FormatTimestamp(start)}", segments);
 
             foreach (var match in FindPhraseMatches(segments))
             {
@@ -112,6 +113,7 @@ public sealed class ChapterDetector
                 var time = _options.Jingle
                     ? AnchorJingleMark(start, match.PhraseStartSeconds, silences)
                     : Math.Max(0, start + (start == 0 ? match.PhraseStartSeconds : 0));
+                _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)}");
                 found.Add(new DetectedChapter(match.Number, time));
                 work.ChaptersFound = CountDistinct(found);
                 break; // one chapter per probe window
@@ -131,6 +133,8 @@ public sealed class ChapterDetector
         }
         foreach (var gap in gaps)
         {
+            _log?.Invoke($"Pass 3: transcribing suspicious region " +
+                         $"{FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)}");
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
                 silences, bytesPerSecond, work, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
@@ -292,6 +296,7 @@ public sealed class ChapterDetector
             var chunkLen = Math.Min(GapChunkSeconds, toSeconds - chunkStart);
             var samples = await _ffmpeg.DecodePcmAsync(file, chunkStart, chunkLen, info.InputDecoder, ct);
             var segments = await _whisper.TranscribeAsync(samples, ct);
+            LogTranscript($"gap chunk @{FormatTimestamp(chunkStart)}", segments);
 
             foreach (var match in FindPhraseMatches(segments))
             {
@@ -312,10 +317,30 @@ public sealed class ChapterDetector
                 {
                     time = phraseAbs;
                 }
+                _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)}");
                 found.Add(new DetectedChapter(match.Number, time));
             }
             work.Advance((long)(chunkLen * bytesPerSecond));
         }
         return found;
     }
+
+    /// <summary>
+    /// Logs a Whisper transcript in --verbose mode: every segment with its start/end time
+    /// relative to the decoded window. Does nothing when not verbose.
+    /// </summary>
+    /// <param name="context">Description of the decoded window, e.g. "probe @0:12:34.00".</param>
+    /// <param name="segments">The transcribed segments.</param>
+    private void LogTranscript(string context, List<TranscriptSegment> segments)
+    {
+        _log?.Invoke(segments.Count == 0
+            ? $"{context}: (no speech recognized)"
+            : $"{context}: " + string.Join(" | ",
+                segments.Select(s => $"{s.StartSeconds:0.0}-{s.EndSeconds:0.0} \"{s.Text.Trim()}\"")));
+    }
+
+    /// <summary>Formats a position in the file as h:mm:ss.ff for log messages.</summary>
+    /// <param name="seconds">Position in seconds.</param>
+    private static string FormatTimestamp(double seconds)
+        => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff");
 }

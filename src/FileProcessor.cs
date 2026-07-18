@@ -146,9 +146,15 @@ public sealed class FileProcessor
         var work = new WorkTracker();
         var watch = Stopwatch.StartNew();
         _progress.Start(name, work);
+        // --verbose log sink; every message is prefixed with the file name.
+        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
         try
         {
             var info = await ffmpeg.ProbeAsync(file, ct);
+            log?.Invoke($"probed: duration {FormatTime(TimeSpan.FromSeconds(info.DurationSeconds))}, " +
+                        $"codec {info.AudioCodec}" +
+                        (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
+                        $", {info.ChapterCount} existing chapter marking(s)");
 
             // xHE-AAC (USAC) audio: ffmpeg's native AAC decoder cannot handle it reliably,
             // so decode such files with libfdk_aac - or skip them when it is unavailable.
@@ -159,6 +165,7 @@ public sealed class FileProcessor
                 if (info.DurationSeconds > 0 && await ffmpeg.SupportsLibFdkAacAsync(ct))
                 {
                     info = info with { InputDecoder = "libfdk_aac" };
+                    log?.Invoke("xHE-AAC audio: decoding with libfdk_aac");
                 }
                 else
                 {
@@ -185,7 +192,7 @@ public sealed class FileProcessor
                     : $", {info.ChapterCount} existing marking(s) discarded";
             }
 
-            var result = await detector.DetectAsync(file, info, work, ct);
+            var result = await detector.DetectAsync(file, info, work, log, ct);
             _processed++;
             _processingTime += watch.Elapsed;
 

@@ -66,6 +66,8 @@ public sealed class ProgressRenderer : IDisposable
 {
     private readonly bool _interactive;
     private readonly bool _quiet;
+    private readonly bool _verbose;
+    private readonly bool _logStyle;
     private readonly Timer? _timer;
     private WorkTracker? _tracker;
     private string _label = "";
@@ -74,10 +76,16 @@ public sealed class ProgressRenderer : IDisposable
 
     /// <summary>Creates the renderer; when the console is redirected no bar is drawn.</summary>
     /// <param name="quiet">Suppress the bar and non-important summary lines (--quiet).</param>
-    public ProgressRenderer(bool quiet)
+    /// <param name="verbose">Print <see cref="Log"/> messages as timestamped log lines (--verbose).</param>
+    /// <param name="noBar">Suppress the progress bar; summary lines use the log format (--no-bar).</param>
+    public ProgressRenderer(bool quiet, bool verbose = false, bool noBar = false)
     {
         _quiet = quiet;
-        _interactive = !quiet && !Console.IsOutputRedirected;
+        _verbose = verbose;
+        // In both verbose and no-bar mode the per-file summaries become part of the log
+        // stream, so they use the same timestamped format (and appear exactly once).
+        _logStyle = verbose || noBar;
+        _interactive = !quiet && !noBar && !Console.IsOutputRedirected;
         if (_interactive)
             _timer = new Timer(_ => Render(), null, Timeout.Infinite, Timeout.Infinite);
     }
@@ -109,9 +117,30 @@ public sealed class ProgressRenderer : IDisposable
             _tracker = null;
             ClearLine();
             if (!_quiet || important)
-                Console.WriteLine(summary);
+                Console.WriteLine(_logStyle ? FormatLog(summary) : summary);
         }
     }
+
+    /// <summary>
+    /// Prints a --verbose log line. The progress bar is erased first (under the same lock
+    /// the bar renderer uses) so it is never left behind above the log output; the next
+    /// timer tick simply redraws it below. No-op unless --verbose is active.
+    /// </summary>
+    /// <param name="message">The log message (without timestamp).</param>
+    public void Log(string message)
+    {
+        if (!_verbose)
+            return;
+        lock (_lock)
+        {
+            ClearLine();
+            Console.WriteLine(FormatLog(message));
+        }
+    }
+
+    /// <summary>Formats a message as a timestamped log line.</summary>
+    /// <param name="message">The message to prefix.</param>
+    private static string FormatLog(string message) => $"[{DateTime.Now:HH:mm:ss}] {message}";
 
     /// <summary>Draws the current state of the progress bar.</summary>
     private void Render()

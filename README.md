@@ -118,6 +118,8 @@ Run `chapterize --help` for the full reference. The most useful knobs:
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: the title word plus `0`, e.g. `Chapter 0`). |
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals at the end. |
+| `-v`, `--verbose` | Log all transcriptions and processing details. |
+| `--no-bar` | No progress bar; per-file results as log lines. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`).
 
@@ -151,8 +153,8 @@ chapter keeps its exact position.
 - **Unusual announcements:** `--chapter-phrase` accepts a regexp between
   slashes, e.g. `-c "/part (\d+)/"` — a capturing group is used as the chapter
   number directly.
-- **Diagnosis:** set the environment variable `CHAPTERIZE_DEBUG=1` to dump all
-  Whisper transcripts to stderr and see what the recognizer actually heard.
+- **Diagnosis:** run with `--verbose` to see all Whisper transcriptions and
+  processing details as log lines — what the recognizer actually heard.
 
 ## Building from source
 

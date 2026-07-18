@@ -66,6 +66,12 @@ public sealed class CliOptions
     /// <summary>Suppress per-file output; warnings and errors are still shown (--quiet / -q).</summary>
     public bool Quiet { get; private set; }
 
+    /// <summary>Print processing details and Whisper transcriptions as log lines (--verbose / -v).</summary>
+    public bool Verbose { get; private set; }
+
+    /// <summary>Suppress the progress bar; per-file summaries use the log-line format (--no-bar).</summary>
+    public bool NoBar { get; private set; }
+
     /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
     public bool Summary { get; private set; }
 
@@ -181,6 +187,8 @@ public sealed class CliOptions
                     case "--force": o.Force = true; break;
                     case "--jingle": o.Jingle = true; break;
                     case "--quiet": o.Quiet = true; break;
+                    case "--verbose": o.Verbose = true; break;
+                    case "--no-bar": o.NoBar = true; break;
                     case "--summary": o.Summary = true; break;
                     case "--lang": o.Language = NextParam(arg); langSet = true; break;
                     case "--chapter-phrase": o.ChapterPhrase = NextParam(arg); phraseSet = true; break;
@@ -209,6 +217,7 @@ public sealed class CliOptions
                         case 'f': o.Force = true; break;
                         case 'j': o.Jingle = true; break;
                         case 'q': o.Quiet = true; break;
+                        case 'v': o.Verbose = true; break;
                         case 's': o.Summary = true; break;
                         case '?': return null;
                         case 'l':
@@ -465,6 +474,10 @@ public sealed class CliOptions
                                     probed with Whisper, so higher values can drastically
                                     speed up detection when the breaks are known to be long.
           -q, --quiet               Suppress per-file output; warnings and errors are still shown.
+          -v, --verbose             Print processing details and all Whisper transcriptions as
+                                    timestamped log lines (to see what the recognizer heard).
+              --no-bar              Do not display progress bars; per-file summary lines are
+                                    printed in the same timestamped format as --verbose logs.
           -s, --summary             Print a summary at the end: file counts, total and average
                                     processing time.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
