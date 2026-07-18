@@ -22,9 +22,6 @@ public readonly record struct DetectionResult(
 /// </summary>
 public sealed class ChapterDetector
 {
-    /// <summary>Minimum silence duration in seconds; longer than typical sentence/paragraph pauses.</summary>
-    private const double MinSilenceSeconds = 1.5;
-
     /// <summary>Noise floor in dBFS for silence detection.</summary>
     private const int SilenceNoiseDb = -35;
 
@@ -85,7 +82,7 @@ public sealed class ChapterDetector
         // Pass 1: silence scan (one full pass over the file).
         work.BeginPhase("Pass 1", info.SizeBytes);
         var silences = await _ffmpeg.DetectSilencesAsync(
-            file, info.DurationSeconds, MinSilenceSeconds, SilenceNoiseDb,
+            file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), ct);
 
         // Pass 2: probe the beginning of the file and the end of every silence.

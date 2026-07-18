@@ -56,6 +56,13 @@ public sealed class CliOptions
     /// </summary>
     public double MaxJingleSeconds { get; private set; } = 45;
 
+    /// <summary>
+    /// Minimum silence duration in seconds that counts as a potential chapter break
+    /// (--min-silence-length / -n, default 1.5). Every such silence triggers a Whisper probe,
+    /// so higher values can drastically reduce the number of probes.
+    /// </summary>
+    public double MinSilenceSeconds { get; private set; } = 1.5;
+
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter").</summary>
     public string Title { get; private set; } = "Chapter";
 
@@ -98,6 +105,7 @@ public sealed class CliOptions
         var o = new CliOptions();
         bool langSet = false, phraseSet = false, modelSet = false, maxSet = false, titleSet = false, introSet = false;
         var jingleLenSet = false;
+        var minSilenceSet = false;
         var i = 0;
 
         string NextParam(string optName)
@@ -129,6 +137,7 @@ public sealed class CliOptions
                     case "--title": o.Title = NextParam(arg); titleSet = true; break;
                     case "--intro-title": o.IntroTitle = NextParam(arg); introSet = true; break;
                     case "--max-jingle-length": o.MaxJingleSeconds = ParseJingleLength(NextParam(arg)); jingleLenSet = true; break;
+                    case "--min-silence-length": o.MinSilenceSeconds = ParseMinSilence(NextParam(arg)); minSilenceSet = true; break;
                     default: throw new CliError($"Unknown option: {arg}");
                 }
             }
@@ -152,6 +161,7 @@ public sealed class CliOptions
                         case 'm':
                         case 'x':
                         case 'X':
+                        case 'n':
                         case 't':
                         case 'i':
                             if (!isLast)
@@ -163,6 +173,7 @@ public sealed class CliOptions
                                 case 'm': o.Model = NextParam($"-{c}"); modelSet = true; break;
                                 case 'x': o.MaxChapters = ParseMax(NextParam($"-{c}")); maxSet = true; break;
                                 case 'X': o.MaxJingleSeconds = ParseJingleLength(NextParam($"-{c}")); jingleLenSet = true; break;
+                                case 'n': o.MinSilenceSeconds = ParseMinSilence(NextParam($"-{c}")); minSilenceSet = true; break;
                                 case 't': o.Title = NextParam($"-{c}"); titleSet = true; break;
                                 case 'i': o.IntroTitle = NextParam($"-{c}"); introSet = true; break;
                             }
@@ -184,7 +195,7 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet || introSet || jingleLenSet))
+        if (o.Revert && (o.Backup || o.Force || o.Jingle || langSet || phraseSet || modelSet || maxSet || titleSet || introSet || jingleLenSet || minSilenceSet))
             throw new CliError("--revert can only be combined with --recurse.");
 
         if (jingleLenSet && !o.Jingle)
@@ -234,6 +245,14 @@ public sealed class CliOptions
     {
         if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s <= 0 || s > 600)
             throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected seconds between 1 and 600.");
+        return s;
+    }
+
+    /// <summary>Parses the --min-silence-length parameter into a positive number of seconds.</summary>
+    private static double ParseMinSilence(string value)
+    {
+        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 0.1 || s > 60)
+            throw new CliError($"Invalid --min-silence-length value \"{value}\": expected seconds between 0.1 and 60.");
         return s;
     }
 
@@ -307,6 +326,11 @@ public sealed class CliOptions
                                     probed for this duration plus 5 seconds (for the phrase
                                     itself) after each silence. Lower values speed up probing.
                                     Requires --jingle.
+          -n, --min-silence-length <seconds>
+                                    Minimum silence duration that counts as a potential
+                                    chapter break (default: 1.5). Every such silence is
+                                    probed with Whisper, so higher values can drastically
+                                    speed up detection when the breaks are known to be long.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
