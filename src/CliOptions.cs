@@ -87,9 +87,9 @@ public sealed class CliOptions
     /// Title of the synthetic chapter covering the audio before the first detected chapter
     /// (--intro-title / -i). Audiobooks usually start with a prelude, so the first detected
     /// chapter must not be moved to 0:00; instead this intro chapter is prepended at 0:00
-    /// when the first chapter starts later. Defaults to the title word followed by "0".
+    /// when the first chapter starts later. Defaults to "Intro", localized by --lang.
     /// </summary>
-    public string IntroTitle { get; private set; } = "";
+    public string IntroTitle { get; private set; } = "Intro";
 
     /// <summary>
     /// Regular expression from --filter "/regexp/", matched case-insensitively against the
@@ -151,19 +151,21 @@ public sealed class CliOptions
     public static string SupportedExtensionsText => string.Join("/", SupportedExtensions);
 
     /// <summary>
-    /// Per-language defaults for the chapter phrase and the title word, applied when --lang
-    /// is given but --chapter-phrase/--title are not. "chapterize -l de buch.m4b" thus looks
-    /// for "Kapitel" and writes "Kapitel 1", "Kapitel 2", ... without further options.
+    /// Per-language defaults for the chapter phrase, the title word and the intro chapter
+    /// title, applied when --lang is given but --chapter-phrase/--title/--intro-title are
+    /// not. "chapterize -l de buch.m4b" thus looks for "Kapitel" and writes "Intro",
+    /// "Kapitel 1", "Kapitel 2", ... without further options. Languages without an entry
+    /// keep the English-ish defaults ("chapter", "Chapter", "Intro").
     /// </summary>
-    private static readonly Dictionary<string, (string Phrase, string Title)> LanguageDefaults = new()
+    private static readonly Dictionary<string, (string Phrase, string Title, string Intro)> LanguageDefaults = new()
     {
-        ["en"] = ("chapter", "Chapter"),
-        ["de"] = ("Kapitel", "Kapitel"),
-        ["fr"] = ("chapitre", "Chapitre"),
-        ["es"] = ("capítulo", "Capítulo"),
-        ["it"] = ("capitolo", "Capitolo"),
-        ["nl"] = ("hoofdstuk", "Hoofdstuk"),
-        ["tr"] = ("bölüm", "Bölüm"),
+        ["en"] = ("chapter", "Chapter", "Intro"),
+        ["de"] = ("Kapitel", "Kapitel", "Intro"),
+        ["fr"] = ("chapitre", "Chapitre", "Introduction"),
+        ["es"] = ("capítulo", "Capítulo", "Introducción"),
+        ["it"] = ("capitolo", "Capitolo", "Introduzione"),
+        ["nl"] = ("hoofdstuk", "Hoofdstuk", "Intro"),
+        ["tr"] = ("bölüm", "Bölüm", "Giriş"),
     };
 
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
@@ -272,17 +274,17 @@ public sealed class CliOptions
             throw new CliError($"File or directory not found: {o.TargetPath}");
         }
 
-        // Localize the chapter phrase and title word from --lang unless given explicitly;
-        // the intro title then follows the (possibly localized) title word.
+        // Localize the chapter phrase, title word and intro title from --lang unless
+        // given explicitly.
         if (LanguageDefaults.TryGetValue(o.Language, out var defaults))
         {
             if (!o._phraseSet)
                 o.ChapterPhrase = defaults.Phrase;
             if (!o._titleSet)
                 o.Title = defaults.Title;
+            if (!o._introSet)
+                o.IntroTitle = defaults.Intro;
         }
-        if (!o._introSet)
-            o.IntroTitle = $"{o.Title} 0";
 
         o.BuildPhraseRegex();
         return o;
@@ -466,7 +468,7 @@ public sealed class CliOptions
                                     {string.Join(", ", NumberWordParser.SupportedLanguages)}; digits
                                     ("2.", "2nd", "2e") work in every language. For these
                                     languages, --lang also localizes the defaults of
-                                    --chapter-phrase and --title (and thus --intro-title).
+                                    --chapter-phrase, --title and --intro-title.
           -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
                                     chapter, localized by --lang).
                                     Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
@@ -506,9 +508,8 @@ public sealed class CliOptions
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter, localized by --lang).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
-                                    first detected chapter, e.g. a prelude (default: the
-                                    --title word followed by "0", e.g. "Chapter 0" or,
-                                    with --lang de, "Kapitel 0").
+                                    first detected chapter, e.g. a prelude (default: Intro,
+                                    localized by --lang, e.g. "Giriş" with --lang tr).
           -?, --help                Show this help.
               --version             Show version information.
 

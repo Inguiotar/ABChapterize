@@ -134,9 +134,9 @@ force the first chapter mark to 0:00, which would move "Chapter 1" to the
 very beginning and misplace it.
 
 Therefore, when the first detected chapter starts later than one second into
-the file, a synthetic intro chapter (default title: the `--title` word plus
-"0", e.g. "Chapter 0"; customizable with `--intro-title`) is prepended at
-0:00. The first real chapter keeps its exact detected position.
+the file, a synthetic intro chapter (default title: "Intro", localized by
+`--lang`; customizable with `--intro-title`) is prepended at 0:00. The first
+real chapter keeps its exact detected position.
 
 ## 4. How chapters are written — file safety
 
@@ -247,7 +247,7 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   transcription quality and, for the languages listed in
   [section 7](#7-languages-and-number-recognition), enables number-word
   parsing and localizes the defaults of `--chapter-phrase`, `--title` and
-  thus `--intro-title`. `chapterize --lang de buch.m4b` finds "Kapitel eins"
+  `--intro-title`. `chapterize --lang de buch.m4b` finds "Kapitel eins"
   and writes "Kapitel 1" without further options.
 
 `-c`, `--chapter-phrase <p>`
@@ -324,8 +324,8 @@ skipped (reported as "skipped").
 
 `-i`, `--intro-title <word>`
 : Title of the synthetic intro chapter covering the audio before the first
-  detected chapter (default: the `--title` word followed by `0`, e.g.
-  "Chapter 0" or "Kapitel 0"). See
+  detected chapter (default: `Intro`, localized by `--lang` — see the table
+  in [section 7](#7-languages-and-number-recognition)). See
   [The intro chapter](#the-intro-chapter).
 
 ### Output
@@ -382,17 +382,17 @@ The parsers are exhaustively unit-tested against independent reference
 spellers for every number 0–999 in every language.
 
 For these languages, `--lang` also localizes the defaults of
-`--chapter-phrase` and `--title`:
+`--chapter-phrase`, `--title` and `--intro-title`:
 
-| `--lang` | Default phrase | Default title word |
-| --- | --- | --- |
-| `en` | chapter | Chapter |
-| `de` | Kapitel | Kapitel |
-| `fr` | chapitre | Chapitre |
-| `es` | capítulo | Capítulo |
-| `it` | capitolo | Capitolo |
-| `nl` | hoofdstuk | Hoofdstuk |
-| `tr` | bölüm | Bölüm |
+| `--lang` | Default phrase | Default title word | Default intro title |
+| --- | --- | --- | --- |
+| `en` | chapter | Chapter | Intro |
+| `de` | Kapitel | Kapitel | Intro |
+| `fr` | chapitre | Chapitre | Introduction |
+| `es` | capítulo | Capítulo | Introducción |
+| `it` | capitolo | Capitolo | Introduzione |
+| `nl` | hoofdstuk | Hoofdstuk | Intro |
+| `tr` | bölüm | Bölüm | Giriş |
 
 Other languages work too: give `--lang` for transcription and a
 `--chapter-phrase` (plain or regexp); announcements with digit numbers are

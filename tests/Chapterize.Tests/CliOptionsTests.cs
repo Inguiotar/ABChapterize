@@ -43,7 +43,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal("en", o.Language);
         Assert.Equal("chapter", o.ChapterPhrase);
         Assert.Equal("Chapter", o.Title);
-        Assert.Equal("Chapter 0", o.IntroTitle);
+        Assert.Equal("Intro", o.IntroTitle);
         Assert.Equal("turbo", o.Model);
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.False(o.TargetIsDirectory);
@@ -53,10 +53,24 @@ public sealed class CliOptionsTests : IDisposable
     [Fact]
     public void Lang_LocalizesPhraseTitleAndIntro()
     {
-        var o = ParseFile("--lang", "de")!;
-        Assert.Equal("Kapitel", o.ChapterPhrase);
-        Assert.Equal("Kapitel", o.Title);
-        Assert.Equal("Kapitel 0", o.IntroTitle);
+        var o = ParseFile("--lang", "tr")!;
+        Assert.Equal("bölüm", o.ChapterPhrase);
+        Assert.Equal("Bölüm", o.Title);
+        Assert.Equal("Giriş", o.IntroTitle);
+    }
+
+    [Theory]
+    [InlineData("en", "Intro")]
+    [InlineData("de", "Intro")]
+    [InlineData("fr", "Introduction")]
+    [InlineData("es", "Introducción")]
+    [InlineData("it", "Introduzione")]
+    [InlineData("nl", "Intro")]
+    [InlineData("tr", "Giriş")]
+    [InlineData("pl", "Intro")] // no dedicated language support: English-ish defaults
+    public void IntroTitle_Default_IsLocalized(string lang, string expected)
+    {
+        Assert.Equal(expected, ParseFile("--lang", lang)!.IntroTitle);
     }
 
     [Fact]

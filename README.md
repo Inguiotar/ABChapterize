@@ -121,7 +121,7 @@ when chapters are written. The most useful knobs:
 | `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45). |
 | `-n`, `--min-silence-length <s>` | Silence duration that counts as a potential chapter break (default: 1.5). |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
-| `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: the title word plus `0`, e.g. `Chapter 0`). |
+| `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals at the end. |
 | `-v`, `--verbose` | Log all transcriptions and processing details. |
 | `--no-bar` | No progress bar; per-file results as log lines. |
@@ -143,9 +143,10 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    hiding are transcribed completely. If a gap still remains, the file is left
    unchanged and a warning is printed.
 
-A synthetic "Chapter 0" intro mark covers everything before the first detected
-chapter (audiobooks usually start with title/credits), so the first real
-chapter keeps its exact position.
+A synthetic "Intro" mark (localized by `--lang`, customizable with
+`--intro-title`) covers everything before the first detected chapter
+(audiobooks usually start with title/credits), so the first real chapter
+keeps its exact position.
 
 ## Tuning tips
 
