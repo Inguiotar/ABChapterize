@@ -113,7 +113,7 @@ when chapters are written. The most useful knobs:
 | `--revert` | Restore all `*.bak` backups (undo). |
 | `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title`. |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
-| `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. |
+| `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
@@ -154,8 +154,12 @@ chapter keeps its exact position.
   If chapters go missing, lower it again.
 - **Jingles:** if you know the jingle is short, say so: `-j -X 15` shrinks the
   probe window and speeds things up.
-- **Accuracy vs. speed:** `--model turbo` (default) is a good balance. `tiny`
-  is much faster but mishears more; `large` is the most accurate and slowest.
+- **Accuracy vs. speed:** `--model turbo` (default) is a good balance;
+  `large` is the most accurate and slowest. Going smaller than `small` is
+  not advisable for real audiobooks: chapter detection stands or falls with
+  the recognizer catching a single short phrase, and `tiny` in particular
+  mishears or drops chapter announcements so often that it is supported
+  mostly for completeness (quick experiments, toy examples).
 - **Unusual announcements:** `--chapter-phrase` accepts a regexp between
   slashes, e.g. `-c "/part (\d+)/"` — a capturing group is used as the chapter
   number directly.

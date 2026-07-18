@@ -258,7 +258,8 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
 
 `-m`, `--model <name>`
 : Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default) or
-  `large`. See [section 8](#8-whisper-models).
+  `large`. `tiny` and `base` are not recommended for real audiobooks; see
+  [section 8](#8-whisper-models).
 
 `-n`, `--min-silence-length <seconds>`
 : Minimum silence duration (0.1–60, default: 1.5) that counts as a potential
@@ -393,12 +394,23 @@ then fully supported, e.g. `--lang pl --chapter-phrase rozdział`.
 
 | Selector | Model file | Download size | Notes |
 | --- | --- | --- | --- |
-| `tiny` | ggml-tiny.bin | ~75 MB | fastest, mishears the most |
-| `base` | ggml-base.bin | ~140 MB | |
-| `small` | ggml-small.bin | ~465 MB | |
+| `tiny` | ggml-tiny.bin | ~75 MB | fastest; not suitable for real audiobooks |
+| `base` | ggml-base.bin | ~140 MB | still error-prone; not recommended |
+| `small` | ggml-small.bin | ~465 MB | smallest model with dependable results |
 | `medium` | ggml-medium.bin | ~1.5 GB | |
 | `turbo` | ggml-large-v3-turbo.bin | ~1.6 GB | **default** — near-large accuracy, much faster |
 | `large` | ggml-large-v3.bin | ~3.1 GB | most accurate, slowest |
+
+A word of warning about the small end of the scale: chapter detection hinges
+on the recognizer catching one short, isolated phrase per chapter — there is
+no surrounding context to recover from a misheard word, and a single missed
+announcement leaves a sequence gap or a mismarked chapter. `tiny` mishears
+or drops chapter announcements far too often for that to be reliable; its
+support exists mostly for completeness — quick experiments, toy examples,
+or extremely constrained machines. `base` fares somewhat better but is
+still error-prone, especially for non-English audio. For real audiobooks,
+use `small` or bigger; the default `turbo` is the best choice on almost
+any hardware that can run it.
 
 Models live in the `models` folder next to the executable. A missing model is
 downloaded automatically on first use from the
