@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Chapterize.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" />
+  </ItemGroup>
+
+  <!-- The main project publishes as a self-contained single-file exe with a forced
+       RuntimeIdentifier, which does not mix well with a test host. The number parsers are
+       dependency-free, so the tests simply compile the relevant sources directly. -->
+  <ItemGroup>
+    <Compile Include="..\..\src\NumberWordParser.cs" Link="src\NumberWordParser.cs" />
+    <Compile Include="..\..\src\lang\*.cs" LinkBase="src\lang" />
+  </ItemGroup>
+
+</Project>

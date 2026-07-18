@@ -24,6 +24,12 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
+  <!-- The unit test project under tests\ has its own csproj; keep its sources out of
+       the default compile globs of this project. -->
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />

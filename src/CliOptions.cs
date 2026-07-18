@@ -334,6 +334,8 @@ public sealed class CliOptions
                                     corresponding *.m4a / *.m4b and rename the .bak file back.
                                     Only combinable with --recurse.
           -l, --lang <code>         Two-letter language hint for Whisper (default: en).
+                                    Spoken chapter numbers are understood in {string.Join(", ", NumberWordParser.SupportedLanguages)};
+                                    digits work in every language.
           -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default: chapter).
                                     Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
                                     The regexp may contain one capturing group "(\d+)" in place of

@@ -25,8 +25,10 @@ or pure fantasy (looking at you, Audible), this tool is for you.
   transcribed in full to find the missing ones.
 - **Zero setup for models** — the Whisper model downloads itself on first use.
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
-- **English and German** chapter numbers out of the box ("twenty-one",
-  "einundzwanzig"); other languages work with a custom phrase/regexp.
+- **Seven languages** of spoken chapter numbers out of the box — English, German,
+  French, Spanish, Italian, Dutch and Turkish ("twenty-one", "einundzwanzig",
+  "vingt et un", "veintiuno", "ventuno", "eenentwintig", "yirmi bir");
+  other languages work with a custom phrase/regexp.
 - **Windows and Linux**, single self-contained executable.
 
 ## Getting started
@@ -96,7 +98,7 @@ Run `chapterize --help` for the full reference. The most useful knobs:
 | `-r`, `--recurse` | Descend into subdirectories. |
 | `-b`, `--backup` | Keep the original file as `*.bak`. |
 | `--revert` | Restore all `*.bak` backups (undo). |
-| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). |
+| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Spoken numbers are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`; digits in every language. |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`). |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
@@ -116,7 +118,8 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    `--min-silence-length` (default 1.5 s below −35 dBFS) in one quick pass.
 2. **Pass 2 — probing:** a short stretch of audio after each silence is
    transcribed with Whisper and matched against the chapter phrase. The chapter
-   number is parsed from digits or spoken number words.
+   number is parsed from digits or spoken number words (0-999, including
+   ordinals like "chapitre premier" where customary).
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely. If a gap still remains, the file is left
@@ -148,6 +151,7 @@ Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 ```sh
 dotnet publish -c Release                 # Windows build -> bin/publish/win-x64
 dotnet publish -c Release -r linux-x64    # Linux build   -> bin/publish/linux-x64
+dotnet test tests/Chapterize.Tests        # run the unit tests
 ```
 
 ## License

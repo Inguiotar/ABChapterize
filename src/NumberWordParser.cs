@@ -1,47 +1,34 @@
 using System.Globalization;
+using Chapterize.Lang;
 
 namespace Chapterize;
 
 /// <summary>
 /// Extracts chapter numbers from transcribed text. Understands plain digits in any language
-/// plus spoken number words in English ("twenty-one") and German ("einundzwanzig"),
-/// covering the range 0-999.
+/// plus spoken number words (0-999) via the per-language parsers in <see cref="Lang"/>;
+/// unknown language codes fall back to the English parser.
 /// </summary>
 public static class NumberWordParser
 {
-    private static readonly Dictionary<string, int> EnUnits = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["zero"] = 0, ["one"] = 1, ["two"] = 2, ["three"] = 3, ["four"] = 4,
-        ["five"] = 5, ["six"] = 6, ["seven"] = 7, ["eight"] = 8, ["nine"] = 9,
-        ["ten"] = 10, ["eleven"] = 11, ["twelve"] = 12, ["thirteen"] = 13,
-        ["fourteen"] = 14, ["fifteen"] = 15, ["sixteen"] = 16, ["seventeen"] = 17,
-        ["eighteen"] = 18, ["nineteen"] = 19,
-    };
+    /// <summary>All available language parsers, keyed by their ISO 639-1 code.</summary>
+    private static readonly Dictionary<string, INumberWordParser> Parsers =
+        new INumberWordParser[]
+        {
+            new EnglishNumberParser(),
+            new GermanNumberParser(),
+            new FrenchNumberParser(),
+            new SpanishNumberParser(),
+            new DutchNumberParser(),
+            new ItalianNumberParser(),
+            new TurkishNumberParser(),
+        }
+        .ToDictionary(p => p.LanguageCode, StringComparer.OrdinalIgnoreCase);
 
-    private static readonly Dictionary<string, int> EnTens = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["twenty"] = 20, ["thirty"] = 30, ["forty"] = 40, ["fifty"] = 50,
-        ["sixty"] = 60, ["seventy"] = 70, ["eighty"] = 80, ["ninety"] = 90,
-    };
+    /// <summary>Fallback parser for language codes without a dedicated implementation.</summary>
+    private static readonly INumberWordParser Fallback = Parsers["en"];
 
-    private static readonly Dictionary<string, int> DeSimple = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["null"] = 0, ["eins"] = 1, ["ein"] = 1, ["eine"] = 1, ["zwei"] = 2, ["drei"] = 3,
-        ["vier"] = 4, ["fuenf"] = 5, ["fünf"] = 5, ["sechs"] = 6, ["sieben"] = 7,
-        ["acht"] = 8, ["neun"] = 9, ["zehn"] = 10, ["elf"] = 11, ["zwoelf"] = 12,
-        ["zwölf"] = 12, ["dreizehn"] = 13, ["vierzehn"] = 14, ["fuenfzehn"] = 15,
-        ["fünfzehn"] = 15, ["sechzehn"] = 16, ["siebzehn"] = 17, ["achtzehn"] = 18,
-        ["neunzehn"] = 19, ["zwanzig"] = 20, ["dreissig"] = 30, ["dreißig"] = 30,
-        ["vierzig"] = 40, ["fuenfzig"] = 50, ["fünfzig"] = 50, ["sechzig"] = 60,
-        ["siebzig"] = 70, ["achtzig"] = 80, ["neunzig"] = 90, ["hundert"] = 100,
-        ["einhundert"] = 100,
-    };
-
-    private static readonly (string Word, int Value)[] DeUnitsForCompound =
-    [
-        ("ein", 1), ("zwei", 2), ("drei", 3), ("vier", 4), ("fuenf", 5), ("fünf", 5),
-        ("sechs", 6), ("sieben", 7), ("acht", 8), ("neun", 9),
-    ];
+    /// <summary>Language codes with a dedicated number-word parser, for help/docs output.</summary>
+    public static IEnumerable<string> SupportedLanguages => Parsers.Keys.Order();
 
     /// <summary>
     /// Tries to extract a number from the beginning of <paramref name="text"/>,
@@ -65,11 +52,8 @@ public static class NumberWordParser
             return true;
         }
 
-        return language switch
-        {
-            "de" => TryParseGerman(tokens[0], out number),
-            _ => TryParseEnglish(tokens, out number),
-        };
+        var parser = Parsers.GetValueOrDefault(language, Fallback);
+        return parser.TryParse(tokens, out number);
     }
 
     /// <summary>
@@ -88,99 +72,5 @@ public static class NumberWordParser
                 break;
         }
         return tokens;
-    }
-
-    /// <summary>
-    /// Parses an English spoken number from the token list, e.g.
-    /// "twelve", "twenty-one", "one hundred and five". Consumes tokens greedily.
-    /// </summary>
-    private static bool TryParseEnglish(List<string> tokens, out int number)
-    {
-        number = 0;
-        var current = 0;
-        var any = false;
-
-        foreach (var token in tokens)
-        {
-            var consumedToken = false;
-            // "twenty-one" and "twenty one" are both possible transcriptions.
-            foreach (var part in token.Split('-', StringSplitOptions.RemoveEmptyEntries))
-            {
-                if (EnUnits.TryGetValue(part, out var u)) { current += u; any = consumedToken = true; }
-                else if (EnTens.TryGetValue(part, out var t)) { current += t; any = consumedToken = true; }
-                else if (part.Equals("hundred", StringComparison.OrdinalIgnoreCase))
-                {
-                    current = (current == 0 ? 1 : current) * 100;
-                    any = consumedToken = true;
-                }
-                else if (part.Equals("and", StringComparison.OrdinalIgnoreCase) && any)
-                {
-                    consumedToken = true;
-                }
-                else
-                {
-                    consumedToken = false;
-                    break;
-                }
-            }
-            if (!consumedToken)
-                break; // first non-number word ends the number
-        }
-
-        number = current;
-        return any;
-    }
-
-    /// <summary>
-    /// Parses a German spoken number, which is written as a single compound word,
-    /// e.g. "sieben", "einundzwanzig", "hundertdreiundvierzig".
-    /// </summary>
-    private static bool TryParseGerman(string token, out int number)
-    {
-        number = 0;
-        var s = token.ToLowerInvariant();
-
-        if (DeSimple.TryGetValue(s, out number))
-            return true;
-
-        var hundreds = 0;
-        var idx = s.IndexOf("hundert", StringComparison.Ordinal);
-        if (idx >= 0)
-        {
-            var prefix = s[..idx];
-            if (prefix.Length == 0) hundreds = 1;
-            else if (DeSimple.TryGetValue(prefix, out var h) && h is >= 1 and <= 9) hundreds = h;
-            else return false;
-            s = s[(idx + "hundert".Length)..];
-            if (s.StartsWith("und", StringComparison.Ordinal)) // "hundertundeins"
-                s = s[3..];
-            if (s.Length == 0)
-            {
-                number = hundreds * 100;
-                return true;
-            }
-        }
-
-        if (DeSimple.TryGetValue(s, out var rest))
-        {
-            number = hundreds * 100 + rest;
-            return true;
-        }
-
-        // Compound like "einundzwanzig": <unit>und<tens>.
-        foreach (var (word, value) in DeUnitsForCompound)
-        {
-            if (s.StartsWith(word + "und", StringComparison.Ordinal))
-            {
-                var tensPart = s[(word.Length + 3)..];
-                if (DeSimple.TryGetValue(tensPart, out var tens) && tens is >= 20 and <= 90)
-                {
-                    number = hundreds * 100 + value + tens;
-                    return true;
-                }
-            }
-        }
-
-        return hundreds > 0 && s.Length == 0;
     }
 }
