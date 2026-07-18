@@ -26,13 +26,15 @@ or pure fantasy (looking at you, Audible), this tool is for you.
   transcribed in full to find the missing ones.
 - **Zero setup for models** — the Whisper model downloads itself on first use.
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
-- **Seven languages** of spoken chapter numbers out of the box — English, German,
-  French, Spanish, Italian, Dutch and Turkish ("twenty-one", "einundzwanzig",
-  "vingt et un", "veintiuno", "ventuno", "eenentwintig", "yirmi bir");
-  other languages work with a custom phrase/regexp. Ordinal announcements are
-  understood too, before or after the phrase — "Erstes Kapitel", "2. Kapitel",
-  "chapitre premier", "Birinci Bölüm" — and `--lang` localizes the chapter
-  phrase and title defaults, so `--lang de` alone finds and writes "Kapitel".
+- **Seven languages** of number recognition out of the box — English, German,
+  French, Spanish, Italian, Dutch and Turkish. Whisper likes to write numbers
+  out as words ("twenty-one", "einundzwanzig", "vingt et un", "veintiuno",
+  "ventuno", "eenentwintig", "yirmi bir"), and Chapterize understands them
+  all; other languages work with a custom phrase/regexp. Ordinal
+  announcements are understood too, before or after the phrase — "Erstes
+  Kapitel", "2. Kapitel", "chapitre premier", "Birinci Bölüm" — and `--lang`
+  localizes the chapter phrase and title defaults, so `--lang de` alone finds
+  and writes "Kapitel".
 - **All chapter-capable audio formats** — MP4 audiobooks (`.m4a`/`.m4b`), MP3,
   Opus and Matroska audio (`.mka`). (`.ogg` and `.flac` are out, through no
   fault of their own: ffmpeg cannot write chapter marks into those containers.)
@@ -99,14 +101,17 @@ chapterize -rqs "D:\Audiobooks"
 
 ## Options
 
-Run `chapterize --help` for the full reference. The most useful knobs:
+Run `chapterize --help` for a quick reference, or see the
+[manual](doc/manual.md) for the full story — including exactly
+[what is kept and what is stripped](doc/manual.md#5-what-is-kept-and-what-is-stripped)
+when chapters are written. The most useful knobs:
 
 | Option | What it does |
 | --- | --- |
 | `-r`, `--recurse` | Descend into subdirectories. |
 | `-b`, `--backup` | Keep the original file as `*.bak`. |
 | `--revert` | Restore all `*.bak` backups (undo). |
-| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Spoken numbers — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title`. |
+| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title`. |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. |
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
@@ -129,8 +134,9 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    `--min-silence-length` (default 1.5 s below −35 dBFS) in one quick pass.
 2. **Pass 2 — probing:** a short stretch of audio after each silence is
    transcribed with Whisper and matched against the chapter phrase. The chapter
-   number is parsed from digits or spoken number words (0-999, cardinals and
-   ordinals alike), whether it follows the phrase ("Chapter Seven") or precedes
+   number is parsed from digits or from numbers written out as words (0-999,
+   cardinals and ordinals alike), whether it follows the phrase ("Chapter
+   Seven") or precedes
    it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be

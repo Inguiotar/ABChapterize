@@ -448,9 +448,10 @@ public sealed class CliOptions
                                     rename the .bak file back. Only combinable with --recurse
                                     and --filter.
           -l, --lang <code>         Two-letter language hint for Whisper (default: en).
-                                    Spoken chapter numbers - cardinals and ordinals, before or
-                                    after the phrase ("chapter two", "Erstes Kapitel") - are
-                                    understood in {string.Join(", ", NumberWordParser.SupportedLanguages)}; digits
+                                    Chapter numbers transcribed as words - cardinals and
+                                    ordinals, before or after the phrase ("chapter two",
+                                    "Erstes Kapitel") - are understood in
+                                    {string.Join(", ", NumberWordParser.SupportedLanguages)}; digits
                                     ("2.", "2nd", "2e") work in every language. For these
                                     languages, --lang also localizes the defaults of
                                     --chapter-phrase and --title (and thus --intro-title).
