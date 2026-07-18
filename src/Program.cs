@@ -1,5 +1,3 @@
-using System.Reflection;
-
 namespace Chapterize;
 
 /// <summary>
@@ -18,9 +16,7 @@ public static class Program
         // --version wins over everything else on the command line and needs no target path.
         if (args.Contains("--version"))
         {
-            var version = typeof(Program).Assembly
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
-            Console.WriteLine($"chapterize {version}");
+            Console.WriteLine($"chapterize {CliOptions.Version}");
             return 0;
         }
 

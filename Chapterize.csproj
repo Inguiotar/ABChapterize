@@ -8,6 +8,9 @@
     <RootNamespace>Chapterize</RootNamespace>
     <AssemblyName>chapterize</AssemblyName>
     <Version>0.9.0</Version>
+    <!-- Keep the informational version (shown by the version option and in the usage
+         note) a plain version number instead of appending "+<git commit hash>". -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- win-x64 by default; publish for Linux with: dotnet publish -c Release -r linux-x64 -->
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>

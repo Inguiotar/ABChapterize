@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
 
 namespace Chapterize;
@@ -149,6 +150,10 @@ public sealed class CliOptions
 
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
     public static string ExeName => OperatingSystem.IsWindows() ? "chapterize.exe" : "chapterize";
+
+    /// <summary>Informational version of this build (from the csproj Version property).</summary>
+    public static string Version => typeof(CliOptions).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
 
     /// <summary>
     /// Parses and validates the raw command line arguments.
@@ -422,7 +427,8 @@ public sealed class CliOptions
 
     /// <summary>Comprehensive usage info printed on --help or on any command line error.</summary>
     public static string UsageText => $"""
-        chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+        chapterize {Version} - mark chapter starts in audiobooks using Whisper speech recognition
+        Copyright (c) 2026 Jan O. Gretza - MIT license - written with Claude (Anthropic)
         Supported formats: {SupportedExtensionsText} (formats whose containers can hold chapter marks)
 
         Usage:
