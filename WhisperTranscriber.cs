@@ -10,39 +10,6 @@ namespace Chapterize;
 public readonly record struct TranscriptSegment(double StartSeconds, double EndSeconds, string Text);
 
 /// <summary>
-/// Maps the model names accepted on the command line to the bundled GGML model files.
-/// </summary>
-public static class ModelCatalog
-{
-    /// <summary>
-    /// Returns the full path of the GGML file for a model selector (tiny, base, small,
-    /// medium, turbo, large). Models are expected in the "models" folder next to the executable.
-    /// </summary>
-    /// <param name="model">Validated model selector from the command line.</param>
-    /// <exception cref="AppError">Thrown when the model file does not exist.</exception>
-    public static string GetModelPath(string model)
-    {
-        var fileName = model switch
-        {
-            "tiny" => "ggml-tiny.bin",
-            "base" => "ggml-base.bin",
-            "small" => "ggml-small.bin",
-            "medium" => "ggml-medium.bin",
-            "turbo" => "ggml-large-v3-turbo.bin",
-            "large" => "ggml-large-v3.bin",
-            _ => throw new AppError($"Unknown model \"{model}\"."),
-        };
-        var path = Path.Combine(AppContext.BaseDirectory, "models", fileName);
-        if (!File.Exists(path))
-            throw new AppError(
-                $"Whisper model file not found: {path}\n" +
-                "Hint: the \"models\" folder must reside next to chapterize.exe and contain " +
-                "the GGML models (download from https://huggingface.co/ggerganov/whisper.cpp).");
-        return path;
-    }
-}
-
-/// <summary>
 /// Wraps a Whisper.net processor for a single model, using the best available
 /// hardware acceleration (CUDA, then Vulkan GPU, then CPU with AVX).
 /// </summary>

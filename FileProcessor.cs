@@ -72,7 +72,7 @@ public sealed class FileProcessor
         var (ffmpegPath, ffprobePath) = FfmpegLocator.Locate();
         var ffmpeg = new FfmpegClient(ffmpegPath, ffprobePath);
 
-        var modelPath = ModelCatalog.GetModelPath(_options.Model);
+        var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
         await using var whisper = new WhisperTranscriber(modelPath, _options.Language);
         Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({whisper.RuntimeName} backend), " +
                           $"{files.Count} file(s) to process.");
