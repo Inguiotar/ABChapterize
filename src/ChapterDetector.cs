@@ -10,14 +10,20 @@ namespace ABChapterize;
 /// <summary>A detected chapter start: number plus position in the file.</summary>
 /// <param name="Number">Chapter number as spoken/parsed.</param>
 /// <param name="TimeSeconds">Position of the chapter marking in seconds.</param>
-public readonly record struct DetectedChapter(int Number, double TimeSeconds);
+/// <param name="Confidence">Whisper's probability for the segment the chapter number was parsed
+/// from (0-1); 1.0 when unknown. Below <see cref="ChapterDetector.LowConfidenceThreshold"/> the
+/// number surfaces in <see cref="DetectionResult.LowConfidenceNumbers"/>.</param>
+public readonly record struct DetectedChapter(int Number, double TimeSeconds, double Confidence = 1.0);
 
 /// <summary>Outcome of chapter detection for one file.</summary>
 /// <param name="Chapters">Detected chapters in chronological order; empty when none were found.</param>
 /// <param name="GapRemains">True when a chapter sequence gap could not be resolved; the file must be left unchanged.</param>
 /// <param name="MissingNumbers">The chapter numbers that could not be located (only when <paramref name="GapRemains"/>).</param>
+/// <param name="LowConfidenceNumbers">Chapter numbers whose Whisper probability fell below
+/// <see cref="ChapterDetector.LowConfidenceThreshold"/> - worth a manual spot-check.</param>
 public readonly record struct DetectionResult(
-    IReadOnlyList<DetectedChapter> Chapters, bool GapRemains, IReadOnlyList<int> MissingNumbers);
+    IReadOnlyList<DetectedChapter> Chapters, bool GapRemains, IReadOnlyList<int> MissingNumbers,
+    IReadOnlyList<int> LowConfidenceNumbers);
 
 /// <summary>
 /// Finds chapter starts in an audiobook. Fast path: detect longer-than-usual silences and
@@ -48,6 +54,11 @@ public sealed class ChapterDetector
 
     /// <summary>Overlap between gap transcription chunks so no phrase is cut in half.</summary>
     private const double GapChunkOverlapSeconds = 10;
+
+    /// <summary>Whisper segment probability below which a chapter detection is flagged as
+    /// low-confidence instead of being silently trusted. 0.5 was chosen as the point below
+    /// which Whisper itself is, on average, more unsure than sure about the words it heard.</summary>
+    internal const double LowConfidenceThreshold = 0.5;
 
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
@@ -117,8 +128,9 @@ public sealed class ChapterDetector
                 var time = _options.Jingle
                     ? AnchorJingleMark(start, match.PhraseStartSeconds, silences)
                     : Math.Max(0, start + (start == 0 ? match.PhraseStartSeconds : 0));
-                _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)}");
-                found.Add(new DetectedChapter(match.Number, time));
+                _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)} " +
+                             $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}");
+                found.Add(new DetectedChapter(match.Number, time, match.Confidence));
                 work.ChaptersFound = CountDistinct(found);
                 break; // one chapter per probe window
             }
@@ -151,7 +163,11 @@ public sealed class ChapterDetector
             for (var n = chapters[i - 1].Number + 1; n < chapters[i].Number; n++)
                 missing.Add(n);
 
-        return new DetectionResult(chapters, missing.Count > 0, missing);
+        var lowConfidence = chapters
+            .Where(c => c.Confidence < LowConfidenceThreshold)
+            .Select(c => c.Number)
+            .ToList();
+        return new DetectionResult(chapters, missing.Count > 0, missing, lowConfidence);
     }
 
     /// <summary>A time region suspected to contain undetected chapter starts.</summary>
@@ -222,7 +238,8 @@ public sealed class ChapterDetector
     /// <summary>A phrase match inside a transcribed window.</summary>
     /// <param name="Number">Parsed chapter number.</param>
     /// <param name="PhraseStartSeconds">Phrase start relative to the window start.</param>
-    private readonly record struct PhraseMatch(int Number, double PhraseStartSeconds);
+    /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
+    private readonly record struct PhraseMatch(int Number, double PhraseStartSeconds, double Confidence);
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -281,7 +298,7 @@ public sealed class ChapterDetector
                 else
                     break;
             }
-            yield return new PhraseMatch(number, segments[segIndex].StartSeconds);
+            yield return new PhraseMatch(number, segments[segIndex].StartSeconds, segments[segIndex].Probability);
         }
     }
 
@@ -321,8 +338,9 @@ public sealed class ChapterDetector
                 {
                     time = phraseAbs;
                 }
-                _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)}");
-                found.Add(new DetectedChapter(match.Number, time));
+                _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)} " +
+                             $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}");
+                found.Add(new DetectedChapter(match.Number, time, match.Confidence));
             }
             work.Advance((long)(chunkLen * bytesPerSecond));
         }
@@ -340,8 +358,14 @@ public sealed class ChapterDetector
         _log?.Invoke(segments.Count == 0
             ? $"{context}: (no speech recognized)"
             : $"{context}: " + string.Join(" | ",
-                segments.Select(s => $"{s.StartSeconds:0.0}-{s.EndSeconds:0.0} \"{s.Text.Trim()}\"")));
+                segments.Select(s =>
+                    $"{s.StartSeconds:0.0}-{s.EndSeconds:0.0} (p={s.Probability:0.00}) \"{s.Text.Trim()}\"")));
     }
+
+    /// <summary>Trailing note appended to a --verbose detection log line when the segment
+    /// confidence is below <see cref="LowConfidenceThreshold"/>.</summary>
+    private static string LowConfidenceNote(double confidence)
+        => confidence < LowConfidenceThreshold ? " - LOW CONFIDENCE, worth a manual check" : "";
 
     /// <summary>Formats a position in the file as h:mm:ss.ff for log messages.</summary>
     /// <param name="seconds">Position in seconds.</param>

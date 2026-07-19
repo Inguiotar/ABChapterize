@@ -86,8 +86,8 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     /// <summary>One speech segment starting at the given offset within the decode window.</summary>
-    private static TranscriptSegment Seg(double startSeconds, string text)
-        => new(startSeconds, startSeconds + 2, text);
+    private static TranscriptSegment Seg(double startSeconds, string text, double confidence = 1.0)
+        => new(startSeconds, startSeconds + 2, text, confidence);
 
     /// <summary>Builds validated options with the temp file as target.</summary>
     private CliOptions Options(params string[] args)
@@ -256,6 +256,39 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.Contains(new DetectedChapter(2, 617.5), result.Chapters);
+    }
+
+    [Fact]
+    public async Task LowConfidenceSegment_CarriesConfidence_AndIsFlagged()
+    {
+        var result = await DetectAsync(
+            Options(),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one.", confidence: 0.95));
+                s.Add(600, Seg(0.3, " Chapter two.", confidence: 0.2));
+            });
+
+        Assert.Equal(
+            [new(1, 0.5, 0.95), new(2, 600, 0.2)],
+            result.Chapters);
+        Assert.Equal([2], result.LowConfidenceNumbers);
+    }
+
+    [Fact]
+    public async Task HighConfidenceSegments_YieldNoLowConfidenceFlags()
+    {
+        var result = await DetectAsync(
+            Options(),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Empty(result.LowConfidenceNumbers);
     }
 
     [Fact]

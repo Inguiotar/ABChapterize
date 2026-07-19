@@ -35,6 +35,7 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
         _processor = _factory.CreateBuilder()
             .WithLanguage(language)
             .WithThreads(Math.Max(2, Environment.ProcessorCount - 1))
+            .WithProbabilities()
             .Build();
         RuntimeName = RuntimeOptions.LoadedLibrary?.ToString() ?? "unknown";
     }
@@ -49,7 +50,7 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
         await foreach (var seg in _processor.ProcessAsync(samples, ct))
         {
             result.Add(new TranscriptSegment(
-                seg.Start.TotalSeconds, seg.End.TotalSeconds, seg.Text));
+                seg.Start.TotalSeconds, seg.End.TotalSeconds, seg.Text, seg.Probability));
         }
         return result;
     }

@@ -8,7 +8,10 @@ namespace ABChapterize;
 /// <param name="StartSeconds">Segment start in seconds, relative to the decoded audio window.</param>
 /// <param name="EndSeconds">Segment end in seconds, relative to the decoded audio window.</param>
 /// <param name="Text">Recognized text.</param>
-public readonly record struct TranscriptSegment(double StartSeconds, double EndSeconds, string Text);
+/// <param name="Probability">Whisper's average token probability for this segment (0-1);
+/// 1.0 when the transcriber does not compute probabilities.</param>
+public readonly record struct TranscriptSegment(
+    double StartSeconds, double EndSeconds, string Text, double Probability = 1.0);
 
 /// <summary>
 /// Speech recognizer that turns PCM audio into timed text segments. Implemented by

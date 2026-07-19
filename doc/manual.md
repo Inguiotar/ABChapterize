@@ -109,6 +109,10 @@ Rules applied to the matches:
 - Duplicate detections of the same chapter number keep the earliest position;
   out-of-order regressions (typically in-text mentions like "as seen in
   chapter three") are dropped.
+- Whisper's own confidence (average token probability) for the segment the
+  chapter number came from travels with the detection. Marks below 0.5 are
+  flagged as low-confidence instead of being silently trusted — see
+  [section 12](#12-output-progress-and-logging).
 
 ### Pass 3 — gap filling (only when needed)
 
@@ -346,7 +350,10 @@ skipped (reported as "skipped").
 
 `-s`, `--summary`
 : Print a summary at the end of the run: files encountered / processed /
-  skipped, warnings, total and average processing time.
+  skipped, warnings, total and average processing time, and — when at least
+  one chapter mark was written — the min/max/average Whisper confidence
+  across those marks (not every probe attempted, only the ones that produced
+  a mark).
 
 ### Miscellaneous
 
@@ -523,17 +530,28 @@ name, everything the pipeline does:
 
 - probe result (duration, codec/profile, existing chapter marks),
 - the silence count of pass 1,
-- **every Whisper transcription** with segment timings — both the probe
-  windows and the full-transcription chunks of pass 3,
-- every accepted chapter detection with the exact mark position,
+- **every Whisper transcription** with segment timings and confidence
+  (`p=0.87`) — both the probe windows and the full-transcription chunks of
+  pass 3,
+- every accepted chapter detection with the exact mark position and
+  confidence, flagged `LOW CONFIDENCE` below 0.5,
 - the regions transcribed in pass 3.
 
 This is the primary diagnosis tool: it shows verbatim what the recognizer
 heard, so you can see *why* an announcement was missed and adjust
 `--chapter-phrase`, `--min-silence-length` or the model.
 
-Warnings (unresolved gaps, skipped xHE-AAC files) are always shown, even with
-`--quiet`, and never abort the rest of a batch run.
+**Confidence flagging** — every chapter mark carries Whisper's own confidence
+(the average token probability of the segment the number was parsed from).
+When a written mark's confidence is below 0.5, the file's result line notes
+it (`N low-confidence mark(s) (chapter ...; see --verbose)`) even without
+`--verbose` — a nudge to spot-check that chapter rather than silently
+trusting a mark Whisper itself was unsure about. With `--summary`, the
+min/max/average confidence across all marks written in the run is printed
+too.
+
+Warnings (unresolved gaps, skipped xHE-AAC files, low-confidence marks) are
+always shown, even with `--quiet`, and never abort the rest of a batch run.
 
 ## 13. Exit codes
 

@@ -27,6 +27,13 @@ public sealed class FileProcessor
     /// <summary>Accumulated detection time of the processed files (for the --summary average).</summary>
     private TimeSpan _processingTime;
 
+    /// <summary>Confidence stats (for --summary) across every chapter mark actually written,
+    /// run-wide - not every probe attempted, only the ones that produced a mark.</summary>
+    private double _confidenceMin = double.PositiveInfinity;
+    private double _confidenceMax = double.NegativeInfinity;
+    private double _confidenceSum;
+    private int _confidenceCount;
+
     /// <summary>Creates a processor for the given validated options.</summary>
     /// <param name="options">Validated command line options.</param>
     /// <param name="progress">Renderer for progress bars and summary lines.</param>
@@ -121,6 +128,10 @@ public sealed class FileProcessor
                 ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
                 : "";
             Console.WriteLine($"Total time: {FormatTime(watch.Elapsed)}{average}");
+            if (_confidenceCount > 0)
+                Console.WriteLine(
+                    $"Confidence of written chapter marks: min {_confidenceMin:0.00}, " +
+                    $"max {_confidenceMax:0.00}, avg {_confidenceSum / _confidenceCount:0.00}");
         }
     }
 
@@ -214,6 +225,14 @@ public sealed class FileProcessor
                 return;
             }
 
+            foreach (var c in result.Chapters)
+            {
+                _confidenceSum += c.Confidence;
+                _confidenceCount++;
+                _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
+                _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
+            }
+
             var chapters = result.Chapters
                 .Select(c => new Chapter(c.TimeSeconds, $"{_options.Title} {c.Number}"))
                 .ToList();
@@ -229,9 +248,15 @@ public sealed class FileProcessor
             await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
 
             var backupNote = _options.Backup ? ", backup kept" : "";
+            var lowConfidenceNote = result.LowConfidenceNumbers.Count > 0
+                ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
+                  $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
+                : "";
             _progress.FinishWithSummary(
                 $"{name}: {result.Chapters.Count} chapter(s) written " +
-                $"({result.Chapters[0].Number}-{result.Chapters[^1].Number}){introNote}{discardNote}{backupNote}");
+                $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
+                $"{introNote}{discardNote}{lowConfidenceNote}{backupNote}",
+                important: lowConfidenceNote.Length > 0);
         }
         catch (OperationCanceledException)
         {

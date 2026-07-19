@@ -128,7 +128,7 @@ when chapters are written. The most useful knobs:
 | `-n`, `--min-silence-length <s>` | Silence duration that counts as a potential chapter break (default: 1.5). |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
-| `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals at the end. |
+| `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (and confidence stats) at the end. |
 | `-v`, `--verbose` | Log all transcriptions and processing details. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
 
@@ -171,7 +171,10 @@ keeps its exact position.
   slashes, e.g. `-c "/part (\d+)/"` — a capturing group is used as the chapter
   number directly.
 - **Diagnosis:** run with `--verbose` to see all Whisper transcriptions and
-  processing details as log lines — what the recognizer actually heard.
+  processing details as log lines — what the recognizer actually heard, and
+  the confidence it had in each transcription. Chapter marks below 50%
+  confidence are flagged in the per-file result line (even without
+  `--verbose`) as worth a manual spot-check.
 
 ## Building from source
 
