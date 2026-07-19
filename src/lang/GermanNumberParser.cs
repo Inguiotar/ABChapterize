@@ -16,6 +16,9 @@ public sealed class GermanNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "de";
 
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "te";
+
     /// <summary>Simple (non-compound) number words, including alternate spellings.</summary>
     private static readonly Dictionary<string, int> Simple = new()
     {

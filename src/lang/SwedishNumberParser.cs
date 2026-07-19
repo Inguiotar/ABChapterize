@@ -18,6 +18,15 @@ public sealed class SwedishNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "sv";
 
+    /// <summary>
+    /// The colon Swedish puts before its ordinal suffix is mandatory (unlike Turkish's
+    /// optional apostrophe), so it is baked into this pattern rather than assumed by
+    /// <see cref="NumberWordParser"/>: "a" for 1st/2nd ("1:a", "2:a"), "e" for the rest
+    /// ("3:e", "21:e").
+    /// </summary>
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => ":(?:a|e)";
+
     /// <summary>Simple (non-compound) cardinal words, including "en"/"ett" for one.</summary>
     private static readonly Dictionary<string, int> Simple = new()
     {

@@ -17,6 +17,18 @@ public interface INumberWordParser
     string LanguageCode { get; }
 
     /// <summary>
+    /// Regex alternation fragment (no capturing groups) matching this language's digit
+    /// ordinal suffix, e.g. "st|nd|rd|th" for English or "'?(?:inci|nci|uncu|ncu)" for
+    /// Turkish's optional apostrophe. <see cref="NumberWordParser"/> combines every
+    /// parser's fragment into one regex, so a language that needs a separator (Turkish's
+    /// apostrophe, Swedish's colon) must bake it into its own fragment rather than assume
+    /// one is shared. Empty for languages whose digit ordinals are a bare number plus a
+    /// trailing period ("2.", "17."), which the generic digit/period fallback already
+    /// handles without any suffix at all.
+    /// </summary>
+    string DigitOrdinalSuffixPattern { get; }
+
+    /// <summary>
     /// Tries to parse a spoken number from the given word tokens. The tokens are
     /// lowercase-insensitive raw words with surrounding punctuation already stripped;
     /// the number is expected to start at the first token, and trailing non-number

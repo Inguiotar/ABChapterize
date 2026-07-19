@@ -15,7 +15,7 @@ namespace Chapterize;
 /// back to the English parser. Numbers can be extracted after the chapter phrase
 /// ("Chapter Seven") or before it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
 /// </summary>
-public static partial class NumberWordParser
+public static class NumberWordParser
 {
     /// <summary>All available language parsers, keyed by their ISO 639-1 code.</summary>
     private static readonly Dictionary<string, INumberWordParser> Parsers =
@@ -42,14 +42,25 @@ public static partial class NumberWordParser
     public static IEnumerable<string> SupportedLanguages => Parsers.Keys.Order();
 
     /// <summary>
-    /// Matches a digit ordinal: 1-3 digits plus an ordinal suffix of any supported
-    /// language ("2nd", "1er", "2e", "2ème", "2de", "2ste", "5'inci", "3º", "21:a"), with
-    /// the apostrophe Turkish puts before its suffix, and the colon Swedish puts before
-    /// its suffix, both allowed everywhere.
+    /// Matches a digit ordinal: 1-3 digits plus the ordinal suffix of any registered
+    /// language's parser ("2nd", "1er", "2e", "2ème", "2de", "2ste", "5'inci", "3º",
+    /// "21:a"). Assembled from each parser's own <see cref="INumberWordParser.DigitOrdinalSuffixPattern"/>
+    /// rather than hardcoded here, so a language brings its own suffixes (and any
+    /// separator it needs, like Turkish's optional apostrophe or Swedish's mandatory
+    /// colon) simply by declaring them.
     /// </summary>
-    [GeneratedRegex(@"^(\d{1,3})[':]?(st|nd|rd|th|er|re|e|de|ste|te|eme|ème|ieme|ième|inci|nci|uncu|ncu|ncı|ncü|ıncı|üncü|a|º|ª|°)$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex DigitOrdinalRegex();
+    private static readonly Regex DigitOrdinalRegex = BuildDigitOrdinalRegex();
+
+    /// <summary>Builds <see cref="DigitOrdinalRegex"/> from every registered parser's suffix fragment.</summary>
+    private static Regex BuildDigitOrdinalRegex()
+    {
+        var fragments = Parsers.Values
+            .Select(p => p.DigitOrdinalSuffixPattern)
+            .Where(p => p.Length > 0)
+            .Distinct();
+        var pattern = $@"^(\d{{1,3}})(?:{string.Join('|', fragments)})$";
+        return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
 
     /// <summary>
     /// Tries to extract a number from the beginning of <paramref name="text"/>,
@@ -115,7 +126,7 @@ public static partial class NumberWordParser
     {
         if (int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out number))
             return true;
-        var m = DigitOrdinalRegex().Match(token);
+        var m = DigitOrdinalRegex.Match(token);
         if (m.Success)
         {
             number = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);

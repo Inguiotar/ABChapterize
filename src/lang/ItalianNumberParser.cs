@@ -18,6 +18,9 @@ public sealed class ItalianNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "it";
 
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "°";
+
     /// <summary>Simple number words 0-19, keyed in normalized (accent-free) form.</summary>
     private static readonly Dictionary<string, int> Simple = new()
     {

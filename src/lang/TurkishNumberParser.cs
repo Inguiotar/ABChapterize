@@ -19,6 +19,14 @@ public sealed class TurkishNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "tr";
 
+    /// <summary>
+    /// The optional apostrophe Turkish puts before its ordinal suffix is baked in here
+    /// rather than assumed by <see cref="NumberWordParser"/>, since it is specific to
+    /// Turkish's vowel-harmony suffix ("5'inci" and "5inci" both parse).
+    /// </summary>
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "'?(?:inci|nci|uncu|ncu|ncı|ncü|ıncı|üncü)";
+
     /// <summary>Directly addable words 0-10, keyed in normalized ASCII form.</summary>
     private static readonly Dictionary<string, int> Units = new()
     {

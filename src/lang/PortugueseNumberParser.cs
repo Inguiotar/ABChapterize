@@ -17,6 +17,9 @@ public sealed class PortugueseNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "pt";
 
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "º|ª";
+
     /// <summary>Number words 0-29 plus the tens 30-90.</summary>
     private static readonly Dictionary<string, int> Small = new()
     {

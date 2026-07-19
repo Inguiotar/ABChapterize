@@ -15,6 +15,9 @@ public sealed class EnglishNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "en";
 
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "st|nd|rd|th";
+
     /// <summary>Simple number words 0-19.</summary>
     private static readonly Dictionary<string, int> Units = new()
     {

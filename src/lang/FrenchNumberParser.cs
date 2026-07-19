@@ -16,6 +16,9 @@ public sealed class FrenchNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "fr";
 
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "ième|ieme|ème|eme|er|re|e";
+
     /// <summary>Directly addable number words (units, teens, tens up to 60).</summary>
     private static readonly Dictionary<string, int> Values = new()
     {

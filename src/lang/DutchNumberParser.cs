@@ -16,6 +16,9 @@ public sealed class DutchNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "nl";
 
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "ste|de";
+
     /// <summary>Simple (non-compound) number words, keyed in normalized (accent-free) form.</summary>
     private static readonly Dictionary<string, int> Simple = new()
     {

@@ -20,6 +20,13 @@ public sealed class PolishNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "pl";
 
+    /// <summary>
+    /// Polish digit ordinals are a bare number plus a trailing period ("21."), already
+    /// handled by the generic digit/period fallback, so no suffix is needed here.
+    /// </summary>
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "";
+
     /// <summary>Cardinal units 0-9, keyed in normalized (accent-free) form.</summary>
     private static readonly Dictionary<string, int> Units = new()
     {

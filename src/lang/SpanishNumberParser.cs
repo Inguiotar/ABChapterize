@@ -15,6 +15,9 @@ public sealed class SpanishNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "es";
 
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "º|ª";
+
     /// <summary>Number words 0-29 (fused forms included) plus the tens 30-90.</summary>
     private static readonly Dictionary<string, int> Small = new()
     {

@@ -23,6 +23,13 @@ public sealed class DanishNumberParser : INumberWordParser
     /// <inheritdoc/>
     public string LanguageCode => "da";
 
+    /// <summary>
+    /// Danish digit ordinals are a bare number plus a trailing period ("21."), already
+    /// handled by the generic digit/period fallback, so no suffix is needed here.
+    /// </summary>
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => "";
+
     /// <summary>Units 0-9, including both "en" and "et" for one ("et hundrede", "et kapitel").</summary>
     private static readonly Dictionary<string, int> Units = new()
     {
