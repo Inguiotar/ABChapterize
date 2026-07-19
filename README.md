@@ -30,6 +30,9 @@ Prebuilt binaries for Windows and Linux are available on the
 - **Zero setup for models** — the Whisper model is downloaded automatically on
   first use.
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
+- **Processes batches in parallel** — multiple files at once, auto-throttled to
+  live CPU load (and capped at 1 concurrent file on GPU backends by default,
+  for VRAM/context safety); override with `--jobs`.
 - **Eleven languages** of number recognition out of the box — English, German,
   French, Spanish, Italian, Dutch, Turkish, Portuguese, Polish, Swedish and
   Danish. Whisper likes to write numbers out as words ("twenty-one",
@@ -113,6 +116,12 @@ abchapterize --export "My Audiobook.m4b"
 # ...fix a chapter title in My Audiobook.m4b.chapters.ffmeta, then apply it
 # without re-running Whisper:
 abchapterize --import --force "My Audiobook.m4b"
+
+# Process a big batch faster: several files at once, auto-throttled to CPU load:
+abchapterize --recurse "D:\Audiobooks"
+
+# Force a fixed number of concurrent files instead of the automatic ceiling:
+abchapterize --recurse --jobs 4 "D:\Audiobooks"
 ```
 
 ## Options
@@ -145,6 +154,7 @@ when chapters are written. The most useful knobs:
 | `-e`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. |
 | `-I`, `--import` | Skip Whisper entirely and write chapters from a previously exported sidecar file instead — for reapplying a hand-corrected result. |
 | `-S`, `--simple-metadata` | Use a plain `H:MM:SS.fff  Title` sidecar format instead of FFMETADATA for `--export`/`--import`. |
+| `-J`, `--jobs <n\|auto>` | Number of files processed concurrently (default: `auto` — adjusted between 1 and a hardware-derived ceiling based on live CPU load). `-J 1` forces strictly sequential processing. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`).
 

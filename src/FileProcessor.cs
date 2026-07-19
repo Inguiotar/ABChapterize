@@ -4,17 +4,20 @@
 
 using System.Diagnostics;
 using System.Text;
+using System.Threading.Channels;
 
 namespace ABChapterize;
 
 /// <summary>
 /// Orchestrates the whole run: file enumeration, revert handling, per-file chapter
-/// detection and writing, plus the one-line-per-file console reporting.
+/// detection and writing (optionally several files at once, see
+/// <see cref="RunConcurrentlyAsync"/>), plus the one-line-per-file console reporting.
 /// </summary>
 public sealed class FileProcessor
 {
     private readonly CliOptions _options;
     private readonly ProgressRenderer _progress;
+    private readonly Lock _statsLock = new();
 
     /// <summary>Number of files for which processing was aborted with a warning.</summary>
     private int _warnings;
@@ -109,26 +112,69 @@ public sealed class FileProcessor
         if (_options.Import)
         {
             // --import skips Whisper entirely: chapters come from a sidecar file, so
-            // there is nothing to detect and no model to load.
-            foreach (var file in files)
-            {
-                ct.ThrowIfCancellationRequested();
-                await ProcessOneImportAsync(file, ffmpeg, ct);
-            }
+            // there is nothing to detect and no model to load. It is just ffprobe + a
+            // direct write per file, so concurrency can scale further than detection does.
+            var hardCap = ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount, 1, 8));
+            if (!_options.Quiet && hardCap > 1)
+                Console.WriteLine($"Importing chapters for {files.Count} file(s), up to {hardCap} at a time.");
+            await RunConcurrentlyAsync(files, hardCap, ct,
+                (file, token) => ProcessOneImportAsync(file, ffmpeg, token));
         }
         else
         {
             var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
-            await using var whisper = new WhisperTranscriber(modelPath, _options.Language);
-            if (!_options.Quiet)
-                Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({whisper.RuntimeName} backend), " +
-                                  $"{files.Count} file(s) to process.");
+            var first = new WhisperTranscriber(modelPath, _options.Language);
 
-            var detector = new ChapterDetector(_options, ffmpeg, whisper);
-            foreach (var file in files)
+            // GPU backends are capped at one file at a time: a GPU context is not proven safe
+            // for concurrent inference, and loading the model into VRAM again per concurrent
+            // instance risks exhausting it. CPU backends scale with core count instead, since
+            // each pooled instance can be given a correspondingly smaller thread budget.
+            var gpuBound = first.RuntimeName is "Cuda" or "Vulkan";
+            var hardCap = gpuBound
+                ? ResolveConcurrency(files.Count, 1)
+                : ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount / 4, 1, 4));
+
+            if (!_options.Quiet)
+                Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({first.RuntimeName} backend), " +
+                                  $"{files.Count} file(s) to process" +
+                                  (hardCap > 1 ? $", up to {hardCap} at a time." : "."));
+
+            List<WhisperTranscriber> pool;
+            if (hardCap == 1)
             {
-                ct.ThrowIfCancellationRequested();
-                await ProcessOneAsync(file, ffmpeg, detector, ct);
+                pool = [first];
+            }
+            else
+            {
+                await first.DisposeAsync();
+                var threadsPerInstance = Math.Max(2, Environment.ProcessorCount / hardCap);
+                pool = [.. Enumerable.Range(0, hardCap)
+                    .Select(_ => new WhisperTranscriber(modelPath, _options.Language, threadsPerInstance))];
+            }
+
+            try
+            {
+                var channel = Channel.CreateUnbounded<ChapterDetector>();
+                foreach (var w in pool)
+                    channel.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w));
+
+                await RunConcurrentlyAsync(files, hardCap, ct, async (file, token) =>
+                {
+                    var detector = await channel.Reader.ReadAsync(token);
+                    try
+                    {
+                        await ProcessOneAsync(file, ffmpeg, detector, token);
+                    }
+                    finally
+                    {
+                        await channel.Writer.WriteAsync(detector, CancellationToken.None);
+                    }
+                });
+            }
+            finally
+            {
+                foreach (var w in pool)
+                    await w.DisposeAsync();
             }
         }
 
@@ -146,6 +192,79 @@ public sealed class FileProcessor
                 Console.WriteLine(
                     $"Confidence of written chapter marks: min {_confidenceMin:0.00}, " +
                     $"max {_confidenceMax:0.00}, avg {_confidenceSum / _confidenceCount:0.00}");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the effective degree of parallelism for a run: an explicit --jobs value
+    /// always wins; otherwise the given hardware-derived ceiling applies. Either way it is
+    /// never more than the number of files there actually are.
+    /// </summary>
+    /// <param name="fileCount">Number of files to process.</param>
+    /// <param name="autoHardCap">Ceiling used when --jobs was not given.</param>
+    private int ResolveConcurrency(int fileCount, int autoHardCap)
+        => Math.Max(1, Math.Min(fileCount, _options.Jobs ?? autoHardCap));
+
+    /// <summary>
+    /// Runs <paramref name="processOne"/> for every file, at most <paramref name="hardCap"/>
+    /// at a time. The effective limit is additionally throttled downward (never upward
+    /// beyond <paramref name="hardCap"/>) by live CPU load via <see cref="ConcurrencyMonitor"/>.
+    /// If any file's processing throws, admission of further files stops on a best-effort
+    /// basis (a file or two already admitted concurrently with the failing one may still
+    /// start - stopping instantly would require serializing admission, defeating the point
+    /// of concurrency); already-running files are always left to finish normally. The first
+    /// such exception is re-thrown once all started files have completed, so the run's
+    /// overall outcome - stop and report the error - matches sequential processing even
+    /// though a couple of extra files may have been attempted first.
+    /// </summary>
+    /// <param name="files">Files to process.</param>
+    /// <param name="hardCap">Absolute ceiling on concurrent files (already resolved from --jobs/hardware).</param>
+    /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
+    /// <param name="processOne">Processes one file.</param>
+    private async Task RunConcurrentlyAsync(
+        List<string> files, int hardCap, CancellationToken ct, Func<string, CancellationToken, Task> processOne)
+    {
+        var gate = new AdaptiveConcurrencyGate(hardCap, initialSoftLimit: 1);
+        using var monitor = new ConcurrencyMonitor(gate, TimeSpan.FromSeconds(2),
+            _options.Verbose ? msg => _progress.Log(msg) : null);
+
+        var tasks = new List<Task>();
+        Exception? firstError = null;
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Volatile.Read(ref firstError) != null)
+                break;
+
+            var slot = await gate.AcquireAsync(ct);
+            tasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    await processOne(file, ct);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(ref firstError, ex, null);
+                    throw;
+                }
+                finally
+                {
+                    slot.Dispose();
+                }
+            }, CancellationToken.None));
+        }
+
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception) when (firstError != null)
+        {
+            // Task.WhenAll surfaces whichever faulted task it happens to observe first,
+            // which need not be the one that failed first chronologically; re-throw the
+            // one we tracked so callers see the same failure a sequential run would report.
+            throw firstError;
         }
     }
 
@@ -203,8 +322,8 @@ public sealed class FileProcessor
                 }
                 else
                 {
-                    _warnings++;
-                    _progress.FinishWithSummary($"{name}: WARNING - {XheAacHint}", important: true);
+                    lock (_statsLock) _warnings++;
+                    _progress.FinishWithSummary(work, $"{name}: WARNING - {XheAacHint}", important: true);
                     return;
                 }
             }
@@ -213,36 +332,42 @@ public sealed class FileProcessor
             var (skip, discardNote) = EvaluateExistingChapters(info);
             if (skip)
             {
-                _skipped++;
-                _progress.FinishWithSummary(
+                lock (_statsLock) _skipped++;
+                _progress.FinishWithSummary(work,
                     $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
                 return;
             }
 
             var result = await detector.DetectAsync(file, info, work, log, ct);
-            _processed++;
-            _processingTime += watch.Elapsed;
+            lock (_statsLock)
+            {
+                _processed++;
+                _processingTime += watch.Elapsed;
+            }
 
             if (result.GapRemains)
             {
-                _warnings++;
-                _progress.FinishWithSummary(
+                lock (_statsLock) _warnings++;
+                _progress.FinishWithSummary(work,
                     $"{name}: WARNING - unresolved chapter sequence gap (missing: " +
                     $"{string.Join(", ", result.MissingNumbers)}); file unchanged", important: true);
                 return;
             }
             if (result.Chapters.Count == 0)
             {
-                _progress.FinishWithSummary($"{name}: no chapter phrases found; file unchanged");
+                _progress.FinishWithSummary(work, $"{name}: no chapter phrases found; file unchanged");
                 return;
             }
 
-            foreach (var c in result.Chapters)
+            lock (_statsLock)
             {
-                _confidenceSum += c.Confidence;
-                _confidenceCount++;
-                _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
-                _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
+                foreach (var c in result.Chapters)
+                {
+                    _confidenceSum += c.Confidence;
+                    _confidenceCount++;
+                    _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
+                    _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
+                }
             }
 
             var chapters = result.Chapters
@@ -280,7 +405,7 @@ public sealed class FileProcessor
             {
                 var listing = string.Join(Environment.NewLine,
                     chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
-                _progress.FinishWithSummary(
+                _progress.FinishWithSummary(work,
                     $"{name}: DRY RUN - would write {result.Chapters.Count} chapter(s) " +
                     $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
                     $"{introNote}{discardNote}{lowConfidenceNote}{exportNote}:{Environment.NewLine}{listing}",
@@ -291,7 +416,7 @@ public sealed class FileProcessor
             await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
 
             var backupNote = _options.Backup ? ", backup kept" : "";
-            _progress.FinishWithSummary(
+            _progress.FinishWithSummary(work,
                 $"{name}: {result.Chapters.Count} chapter(s) written " +
                 $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
                 $"{introNote}{discardNote}{lowConfidenceNote}{exportNote}{backupNote}",
@@ -299,12 +424,12 @@ public sealed class FileProcessor
         }
         catch (OperationCanceledException)
         {
-            _progress.FinishWithSummary($"{name}: aborted");
+            _progress.FinishWithSummary(work, $"{name}: aborted");
             throw;
         }
         catch (AppError ex)
         {
-            _progress.FinishWithSummary($"{name}: ERROR - {ex.Message}", important: true);
+            _progress.FinishWithSummary(work, $"{name}: ERROR - {ex.Message}", important: true);
             throw;
         }
     }
@@ -346,7 +471,7 @@ public sealed class FileProcessor
             var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
             if (!File.Exists(sidecarPath))
             {
-                _progress.FinishWithSummary(
+                _progress.FinishWithSummary(work,
                     $"{name}: skipped - no sidecar file found ({Path.GetFileName(sidecarPath)}); use --export to create one",
                     important: true);
                 return;
@@ -361,8 +486,8 @@ public sealed class FileProcessor
             var (skip, discardNote) = EvaluateExistingChapters(info);
             if (skip)
             {
-                _skipped++;
-                _progress.FinishWithSummary(
+                lock (_statsLock) _skipped++;
+                _progress.FinishWithSummary(work,
                     $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
                 return;
             }
@@ -371,14 +496,17 @@ public sealed class FileProcessor
             var chapters = _options.SimpleMetadata
                 ? ChapterSidecar.ParseSimple(text, sidecarPath)
                 : ChapterSidecar.ParseFfMetadata(text, sidecarPath);
-            _processed++;
-            _processingTime += watch.Elapsed;
+            lock (_statsLock)
+            {
+                _processed++;
+                _processingTime += watch.Elapsed;
+            }
 
             if (_options.DryRun)
             {
                 var listing = string.Join(Environment.NewLine,
                     chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
-                _progress.FinishWithSummary(
+                _progress.FinishWithSummary(work,
                     $"{name}: DRY RUN - would import {chapters.Count} chapter(s) from " +
                     $"{Path.GetFileName(sidecarPath)}{discardNote}:{Environment.NewLine}{listing}");
                 return;
@@ -387,18 +515,18 @@ public sealed class FileProcessor
             await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
 
             var backupNote = _options.Backup ? ", backup kept" : "";
-            _progress.FinishWithSummary(
+            _progress.FinishWithSummary(work,
                 $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
                 $"{discardNote}{backupNote}");
         }
         catch (OperationCanceledException)
         {
-            _progress.FinishWithSummary($"{name}: aborted");
+            _progress.FinishWithSummary(work, $"{name}: aborted");
             throw;
         }
         catch (AppError ex)
         {
-            _progress.FinishWithSummary($"{name}: ERROR - {ex.Message}", important: true);
+            _progress.FinishWithSummary(work, $"{name}: ERROR - {ex.Message}", important: true);
             throw;
         }
     }

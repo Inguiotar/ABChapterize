@@ -24,7 +24,13 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     /// </summary>
     /// <param name="modelPath">Full path of the GGML model file.</param>
     /// <param name="language">Two-letter language hint for Whisper.</param>
-    public WhisperTranscriber(string modelPath, string language)
+    /// <param name="threads">
+    /// CPU threads given to this processor. Defaults to nearly all logical cores, which is
+    /// right for the common case of one processor at a time; when several run concurrently
+    /// (see <see cref="ConcurrencyPolicy"/>) each instance is given a smaller share instead,
+    /// so the total across all of them still roughly matches the core count.
+    /// </param>
+    public WhisperTranscriber(string modelPath, string language, int? threads = null)
     {
         // Prefer the fastest available backend; Whisper.net probes them in this order
         // and silently falls back to the next one.
@@ -34,7 +40,7 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
         _factory = WhisperFactory.FromPath(modelPath);
         _processor = _factory.CreateBuilder()
             .WithLanguage(language)
-            .WithThreads(Math.Max(2, Environment.ProcessorCount - 1))
+            .WithThreads(threads ?? Math.Max(2, Environment.ProcessorCount - 1))
             .WithProbabilities()
             .Build();
         RuntimeName = RuntimeOptions.LoadedLibrary?.ToString() ?? "unknown";

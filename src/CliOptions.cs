@@ -108,6 +108,14 @@ public sealed class CliOptions
     /// </summary>
     public bool SimpleMetadata { get; private set; }
 
+    /// <summary>
+    /// Maximum number of files processed concurrently (--jobs / -J), or null for the
+    /// default: automatically adjusted between 1 and a hardware-derived ceiling based on
+    /// live CPU load (see <see cref="ConcurrencyMonitor"/>). "1" disables concurrency
+    /// entirely - useful for CI logs or troubleshooting.
+    /// </summary>
+    public int? Jobs { get; private set; }
+
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter", localized by --lang).</summary>
     public string Title { get; private set; } = "Chapter";
 
@@ -164,6 +172,7 @@ public sealed class CliOptions
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['e'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
+        ['J'] = "--jobs",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -271,7 +280,7 @@ public sealed class CliOptions
         // Semantic validation.
         if (o.Revert && (o.Backup || o.Force || o.Jingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                          || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
-                         || o.Export || o.Import || o.SimpleMetadata))
+                         || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
         if (o._jingleLenSet && !o.Jingle)
@@ -382,6 +391,7 @@ public sealed class CliOptions
             case "--filter": ParseFilter(nextParam()); return true;
             case "--max-jingle-length": MaxJingleSeconds = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": MinSilenceSeconds = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
+            case "--jobs": Jobs = ParseJobs(nextParam()); return true;
             default: return false;
         }
     }
@@ -440,6 +450,16 @@ public sealed class CliOptions
         if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 0.1 || s > 60)
             throw new CliError($"Invalid --min-silence-length value \"{value}\": expected seconds between 0.1 and 60.");
         return s;
+    }
+
+    /// <summary>Parses the --jobs parameter into a positive job count, or "auto".</summary>
+    private static int? ParseJobs(string value)
+    {
+        if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (!int.TryParse(value, out var n) || n < 1)
+            throw new CliError($"Invalid --jobs value \"{value}\": expected a positive number or \"auto\".");
+        return n;
     }
 
     /// <summary>Parses the --max-chapters parameter into a positive integer.</summary>
@@ -567,6 +587,9 @@ public sealed class CliOptions
                                     --max-jingle-length, --min-silence-length or --revert.
           -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
                                     of FFMETADATA for --export/--import. Requires one of them.
+          -J, --jobs <n|auto>       Number of files processed concurrently (default: auto -
+                                    adjusted between 1 and a hardware-derived ceiling based on
+                                    live CPU load). "1" forces strictly sequential processing.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter, localized by --lang).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the

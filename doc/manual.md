@@ -444,6 +444,45 @@ touching Whisper at all.
   In the plain-text format, blank lines and lines starting with `;` or `#`
   are ignored, so notes can be added freely between chapters.
 
+### Parallel file processing
+
+`-J`, `--jobs <n|auto>`
+: Number of files processed concurrently (default: `auto`). With `auto`, the
+  ceiling depends on the Whisper backend in use and is then adjusted live
+  between 1 and that ceiling based on measured CPU load (sampled every
+  250 ms, using `GetSystemTimes` on Windows and `/proc/stat` on Linux — no
+  extra runtime dependency on either platform): above 85% CPU usage the
+  limit is lowered by one; below 55% it is raised by one, at most one step
+  per sample to avoid flapping.
+
+  - **GPU backends (CUDA, Vulkan):** capped at 1 concurrent file. Running
+    several Whisper inferences on the same GPU context at once is not
+    something whisper.cpp guarantees is safe, and each concurrent instance
+    would duplicate the model into VRAM, risking exhaustion. An explicit
+    `-J`/`--jobs` value always overrides this cap if you want to force it
+    anyway (verified to work correctly on a Vulkan GPU in testing, but at
+    your own risk regarding VRAM).
+  - **CPU backend:** ceiling is `Environment.ProcessorCount / 4`, clamped to
+    1-4; each concurrent instance is given a matching share of threads so
+    the total stays close to the core count instead of oversubscribing it.
+  - **`--import`:** since there is no Whisper involved (just `ffprobe` and a
+    direct metadata write), the ceiling is `Environment.ProcessorCount`,
+    clamped to 1-8.
+
+  `-J 1` forces strictly sequential processing, matching earlier versions'
+  behavior. The number actually used is also clamped to the number of files
+  being processed, so a single-file run is always sequential regardless of
+  `--jobs`. Not valid with `--revert` (there is nothing to parallelize when
+  restoring backups).
+
+  With more than one file in flight, the progress display shows one bar per
+  active file (see [section 12](#12-output-progress-and-logging)), and
+  `--verbose` logs each automatic adjustment:
+
+  ```
+  [14:32:07] concurrency: CPU 50%, adjusted parallel file limit 1 -> 2
+  ```
+
 ### Miscellaneous
 
 `-?`, `--help`
@@ -603,6 +642,13 @@ done:
 ```
 My Audiobook.m4b: 23 chapter(s) written (1-23) + intro
 ```
+
+With more than one file processed concurrently (see
+[`--jobs`](#parallel-file-processing)), one bar is shown per file currently
+in flight, stacked in a block capped to the terminal's height (a terminal
+resize is picked up automatically on the next refresh); each file's bar is
+replaced by its own one-line result as soon as it finishes, while the other
+active bars keep redrawing below it.
 
 Progress bars are only drawn on an interactive console; when the output is
 redirected (pipe, log file), they are suppressed automatically.

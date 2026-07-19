@@ -49,6 +49,37 @@ public sealed class CliOptionsTests : IDisposable
         Assert.False(o.TargetIsDirectory);
         Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata);
+        Assert.Null(o.Jobs);
+    }
+
+    [Theory]
+    [InlineData("--jobs", "1")]
+    [InlineData("-J", "4")]
+    public void Jobs_IsParsed_LongAndShort(string opt, string value)
+    {
+        Assert.Equal(int.Parse(value), ParseFile(opt, value)!.Jobs);
+    }
+
+    [Fact]
+    public void Jobs_Auto_ParsesAsNull()
+    {
+        Assert.Null(ParseFile("--jobs", "auto")!.Jobs);
+        Assert.Null(ParseFile("--jobs", "AUTO")!.Jobs);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("many")]
+    public void InvalidJobs_AreRejected(string value)
+    {
+        Assert.Throws<CliError>(() => ParseFile("--jobs", value));
+    }
+
+    [Fact]
+    public void JobsWithRevert_IsAnError()
+    {
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--jobs", "2"));
     }
 
     [Fact]
