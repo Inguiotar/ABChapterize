@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Diagnostics;
+using System.Text;
 
 namespace ABChapterize;
 
@@ -103,19 +104,32 @@ public sealed class FileProcessor
 
         var (ffmpegPath, ffprobePath) = FfmpegLocator.Locate();
         var ffmpeg = new FfmpegClient(ffmpegPath, ffprobePath);
-
-        var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
-        await using var whisper = new WhisperTranscriber(modelPath, _options.Language);
-        if (!_options.Quiet)
-            Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({whisper.RuntimeName} backend), " +
-                              $"{files.Count} file(s) to process.");
-
         var watch = Stopwatch.StartNew();
-        var detector = new ChapterDetector(_options, ffmpeg, whisper);
-        foreach (var file in files)
+
+        if (_options.Import)
         {
-            ct.ThrowIfCancellationRequested();
-            await ProcessOneAsync(file, ffmpeg, detector, ct);
+            // --import skips Whisper entirely: chapters come from a sidecar file, so
+            // there is nothing to detect and no model to load.
+            foreach (var file in files)
+            {
+                ct.ThrowIfCancellationRequested();
+                await ProcessOneImportAsync(file, ffmpeg, ct);
+            }
+        }
+        else
+        {
+            var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
+            await using var whisper = new WhisperTranscriber(modelPath, _options.Language);
+            if (!_options.Quiet)
+                Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({whisper.RuntimeName} backend), " +
+                                  $"{files.Count} file(s) to process.");
+
+            var detector = new ChapterDetector(_options, ffmpeg, whisper);
+            foreach (var file in files)
+            {
+                ct.ThrowIfCancellationRequested();
+                await ProcessOneAsync(file, ffmpeg, detector, ct);
+            }
         }
 
         if (_options.Summary)
@@ -196,20 +210,13 @@ public sealed class FileProcessor
             }
 
             // Policy for pre-existing chapter markings.
-            var discardNote = "";
-            if (info.ChapterCount > 0)
+            var (skip, discardNote) = EvaluateExistingChapters(info);
+            if (skip)
             {
-                var bogus = _options.MaxChapters is { } max && info.ChapterCount > max;
-                if (!_options.Force && !bogus)
-                {
-                    _skipped++;
-                    _progress.FinishWithSummary(
-                        $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
-                    return;
-                }
-                discardNote = bogus && !_options.Force
-                    ? $", {info.ChapterCount} bogus marking(s) discarded (> --max-chapters)"
-                    : $", {info.ChapterCount} existing marking(s) discarded";
+                _skipped++;
+                _progress.FinishWithSummary(
+                    $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
+                return;
             }
 
             var result = await detector.DetectAsync(file, info, work, log, ct);
@@ -256,6 +263,19 @@ public sealed class FileProcessor
                   $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
                 : "";
 
+            // --export writes the sidecar regardless of --dry-run, so a run can be
+            // previewed and saved for hand-editing in one pass.
+            var exportNote = "";
+            if (_options.Export)
+            {
+                var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
+                var sidecarText = _options.SimpleMetadata
+                    ? ChapterSidecar.BuildSimple(chapters)
+                    : FfmpegClient.BuildFfMetadata(chapters, info.DurationSeconds);
+                await File.WriteAllTextAsync(sidecarPath, sidecarText, new UTF8Encoding(false), ct);
+                exportNote = $", sidecar exported to {Path.GetFileName(sidecarPath)}";
+            }
+
             if (_options.DryRun)
             {
                 var listing = string.Join(Environment.NewLine,
@@ -263,7 +283,7 @@ public sealed class FileProcessor
                 _progress.FinishWithSummary(
                     $"{name}: DRY RUN - would write {result.Chapters.Count} chapter(s) " +
                     $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
-                    $"{introNote}{discardNote}{lowConfidenceNote}:{Environment.NewLine}{listing}",
+                    $"{introNote}{discardNote}{lowConfidenceNote}{exportNote}:{Environment.NewLine}{listing}",
                     important: lowConfidenceNote.Length > 0);
                 return;
             }
@@ -274,8 +294,102 @@ public sealed class FileProcessor
             _progress.FinishWithSummary(
                 $"{name}: {result.Chapters.Count} chapter(s) written " +
                 $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
-                $"{introNote}{discardNote}{lowConfidenceNote}{backupNote}",
+                $"{introNote}{discardNote}{lowConfidenceNote}{exportNote}{backupNote}",
                 important: lowConfidenceNote.Length > 0);
+        }
+        catch (OperationCanceledException)
+        {
+            _progress.FinishWithSummary($"{name}: aborted");
+            throw;
+        }
+        catch (AppError ex)
+        {
+            _progress.FinishWithSummary($"{name}: ERROR - {ex.Message}", important: true);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Applies the policy for pre-existing chapter markings, shared between normal
+    /// detection and --import: without --force, a file with any markings is skipped;
+    /// with --max-chapters, a marking count above the threshold is treated as bogus and
+    /// discarded even without --force.
+    /// </summary>
+    /// <param name="info">Probed media info of the file being processed.</param>
+    /// <returns>Whether the file should be skipped, and a note describing discarded markings.</returns>
+    private (bool Skip, string DiscardNote) EvaluateExistingChapters(MediaInfo info)
+    {
+        if (info.ChapterCount == 0)
+            return (false, "");
+        var bogus = _options.MaxChapters is { } max && info.ChapterCount > max;
+        if (!_options.Force && !bogus)
+            return (true, "");
+        var discardNote = bogus && !_options.Force
+            ? $", {info.ChapterCount} bogus marking(s) discarded (> --max-chapters)"
+            : $", {info.ChapterCount} existing marking(s) discarded";
+        return (false, discardNote);
+    }
+
+    /// <summary>
+    /// Processes a single audiobook file in --import mode: reads its sidecar file and
+    /// writes the chapters it contains, without running Whisper detection at all.
+    /// </summary>
+    private async Task ProcessOneImportAsync(string file, FfmpegClient ffmpeg, CancellationToken ct)
+    {
+        var name = Path.GetFileName(file);
+        var work = new WorkTracker();
+        var watch = Stopwatch.StartNew();
+        _progress.Start(name, work);
+        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
+        try
+        {
+            var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
+            if (!File.Exists(sidecarPath))
+            {
+                _progress.FinishWithSummary(
+                    $"{name}: skipped - no sidecar file found ({Path.GetFileName(sidecarPath)}); use --export to create one",
+                    important: true);
+                return;
+            }
+
+            var info = await ffmpeg.ProbeAsync(file, ct);
+            log?.Invoke($"probed: duration {FormatTime(TimeSpan.FromSeconds(info.DurationSeconds))}, " +
+                        $"codec {info.AudioCodec}" +
+                        (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
+                        $", {info.ChapterCount} existing chapter marking(s)");
+
+            var (skip, discardNote) = EvaluateExistingChapters(info);
+            if (skip)
+            {
+                _skipped++;
+                _progress.FinishWithSummary(
+                    $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
+                return;
+            }
+
+            var text = await File.ReadAllTextAsync(sidecarPath, ct);
+            var chapters = _options.SimpleMetadata
+                ? ChapterSidecar.ParseSimple(text, sidecarPath)
+                : ChapterSidecar.ParseFfMetadata(text, sidecarPath);
+            _processed++;
+            _processingTime += watch.Elapsed;
+
+            if (_options.DryRun)
+            {
+                var listing = string.Join(Environment.NewLine,
+                    chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
+                _progress.FinishWithSummary(
+                    $"{name}: DRY RUN - would import {chapters.Count} chapter(s) from " +
+                    $"{Path.GetFileName(sidecarPath)}{discardNote}:{Environment.NewLine}{listing}");
+                return;
+            }
+
+            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
+
+            var backupNote = _options.Backup ? ", backup kept" : "";
+            _progress.FinishWithSummary(
+                $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
+                $"{discardNote}{backupNote}");
         }
         catch (OperationCanceledException)
         {

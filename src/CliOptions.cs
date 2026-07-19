@@ -87,6 +87,27 @@ public sealed class CliOptions
     /// </summary>
     public bool DryRun { get; private set; }
 
+    /// <summary>
+    /// Write detected chapters to a sidecar file alongside the output (--export / -e), in
+    /// addition to writing them into the audio file. Composes with normal detection (and
+    /// with --dry-run, which still saves the sidecar even though the audio file is left
+    /// untouched). Format is FFMETADATA unless --simple-metadata is given.
+    /// </summary>
+    public bool Export { get; private set; }
+
+    /// <summary>
+    /// Skip Whisper detection entirely and write chapters from a previously exported
+    /// sidecar file instead (--import / -I). Lets a rare misdetection be hand-corrected in
+    /// the sidecar and re-applied without re-transcribing the whole file.
+    /// </summary>
+    public bool Import { get; private set; }
+
+    /// <summary>
+    /// Use the plain-text "H:MM:SS.fff  Title" sidecar format instead of FFMETADATA for
+    /// both --export and --import (--simple-metadata / -S).
+    /// </summary>
+    public bool SimpleMetadata { get; private set; }
+
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter", localized by --lang).</summary>
     public string Title { get; private set; } = "Chapter";
 
@@ -142,6 +163,7 @@ public sealed class CliOptions
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
+        ['e'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -248,11 +270,23 @@ public sealed class CliOptions
 
         // Semantic validation.
         if (o.Revert && (o.Backup || o.Force || o.Jingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                         || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet))
+                         || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
+                         || o.Export || o.Import || o.SimpleMetadata))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
         if (o._jingleLenSet && !o.Jingle)
             throw new CliError("--max-jingle-length requires --jingle.");
+
+        if (o.Import && o.Export)
+            throw new CliError("--import and --export cannot be combined.");
+
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._jingleLenSet || o._minSilenceSet || o.Jingle))
+            throw new CliError(
+                "--import skips detection entirely, so --lang, --chapter-phrase, --model, " +
+                "--jingle, --max-jingle-length and --min-silence-length have no effect and cannot be combined with it.");
+
+        if (o.SimpleMetadata && !o.Export && !o.Import)
+            throw new CliError("--simple-metadata requires --export or --import.");
 
         if (!Regex.IsMatch(o.Language, "^[a-zA-Z]{2}$"))
             throw new CliError($"Invalid language code \"{o.Language}\": expected a two-letter code like \"en\".");
@@ -321,6 +355,9 @@ public sealed class CliOptions
             case "--no-bar": NoBar = true; return true;
             case "--summary": Summary = true; return true;
             case "--dry-run": DryRun = true; return true;
+            case "--export": Export = true; return true;
+            case "--import": Import = true; return true;
+            case "--simple-metadata": SimpleMetadata = true; return true;
             default: return false;
         }
     }
@@ -520,6 +557,16 @@ public sealed class CliOptions
                                     processing time.
           -d, --dry-run             Run detection but write nothing; print the chapters that
                                     would be written (timestamps, numbers, titles) instead.
+          -e, --export              Also write detected chapters to a sidecar file next to
+                                    the audio file (<file>.chapters.ffmeta by default, or
+                                    <file>.chapters.txt with --simple-metadata), for manual
+                                    review or correction. Combinable with --dry-run.
+          -I, --import              Skip Whisper detection; write chapters from a previously
+                                    exported sidecar file instead. Cannot be combined with
+                                    --lang, --chapter-phrase, --model, --jingle,
+                                    --max-jingle-length, --min-silence-length or --revert.
+          -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
+                                    of FFMETADATA for --export/--import. Requires one of them.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter, localized by --lang).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the

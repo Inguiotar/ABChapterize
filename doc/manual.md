@@ -374,6 +374,76 @@ skipped (reported as "skipped").
   ffmpeg remux is skipped, so the file is guaranteed untouched. Cannot be
   combined with `--revert` (there is nothing to preview when reverting).
 
+### Chapter export/import
+
+A rare misdetection (a mis-heard chapter number, a title that needs
+tweaking) doesn't have to mean re-running Whisper on the whole file. Export
+the detected chapters to a sidecar file, hand-correct it in a text editor,
+then import it back — the corrected chapters are written directly, without
+touching Whisper at all.
+
+`-e`, `--export`
+: In addition to writing chapters into the audio file as usual, also save
+  them to a sidecar file next to it: `<file>.chapters.ffmeta` by default, or
+  `<file>.chapters.txt` with `--simple-metadata`. Composes with normal
+  detection — it is not a separate mode — and works together with
+  `--dry-run`, so `abchapterize --dry-run --export book.m4b` previews the
+  result *and* saves it for review without touching the audio file.
+
+`-I`, `--import`
+: Skip Whisper detection entirely and write the chapters found in the
+  sidecar file instead (looked up next to the audio file, same naming as
+  `--export`). If no sidecar file is found, the file is skipped with a
+  message suggesting `--export`. Because there is nothing to detect,
+  `--import` cannot be combined with any detection option — `--lang`,
+  `--chapter-phrase`, `--model`, `--jingle`, `--max-jingle-length`,
+  `--min-silence-length` — nor with `--revert`. Pre-existing chapter
+  handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
+  `--summary` all behave the same as in a normal run; imported chapters
+  have no Whisper confidence, so they never trigger low-confidence
+  warnings and are not counted in `--summary`'s confidence stats.
+
+`-S`, `--simple-metadata`
+: Switch both `--export` and `--import` from the default FFMETADATA sidecar
+  to a plain-text format: one `H:MM:SS.fff  Title` line per chapter (the
+  de facto format used by tools like m4b-tool and `mp4chaps -e`), easier to
+  hand-edit at the cost of a small custom parser on import. Requires
+  `--export` or `--import`.
+
+  The default FFMETADATA format is ffmpeg's own chapter metadata document
+  (`;FFMETADATA1` header, one `[CHAPTER]` section per chapter with
+  `TIMEBASE`/`START`/`END`/`title` keys — see
+  [section 5](#5-what-is-kept-and-what-is-stripped)); characters `=`, `;`,
+  `#`, `\` and literal newlines in titles are backslash-escaped, matching
+  ffmpeg's own convention, so the file can also be fed straight to
+  `ffmpeg -i metadata.txt -map_metadata` by hand if needed.
+
+  Example FFMETADATA sidecar for a two-chapter file:
+
+  ```
+  ;FFMETADATA1
+  [CHAPTER]
+  TIMEBASE=1/1000
+  START=0
+  END=83450
+  title=Intro
+  [CHAPTER]
+  TIMEBASE=1/1000
+  START=83450
+  END=942100
+  title=Chapter 1
+  ```
+
+  The equivalent `--simple-metadata` sidecar:
+
+  ```
+  0:00:00.000  Intro
+  0:01:23.450  Chapter 1
+  ```
+
+  In the plain-text format, blank lines and lines starting with `;` or `#`
+  are ignored, so notes can be added freely between chapters.
+
 ### Miscellaneous
 
 `-?`, `--help`

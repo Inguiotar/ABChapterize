@@ -350,6 +350,24 @@ public sealed partial class FfmpegClient : IAudioSource
         return sb.ToString();
     }
 
+    /// <summary>Reverses <see cref="EscapeMeta"/>: strips the backslash before an escaped
+    /// '=', ';', '#', '\' or newline. Internal for unit testing.</summary>
+    internal static string UnescapeMeta(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\\' && i + 1 < s.Length)
+            {
+                i++;
+                sb.Append(s[i]);
+                continue;
+            }
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>Starts a child process with redirected streams and hidden window.</summary>
     private static Process StartProcess(string exe, IEnumerable<string> args, bool redirectStdout)
     {

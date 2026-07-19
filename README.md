@@ -106,6 +106,13 @@ abchapterize --dry-run "My Audiobook.m4b"
 
 # Batch run: quiet, but with a summary at the end:
 abchapterize -rqs "D:\Audiobooks"
+
+# Detect, write, and also save a sidecar for manual review/correction:
+abchapterize --export "My Audiobook.m4b"
+
+# ...fix a chapter title in My Audiobook.m4b.chapters.ffmeta, then apply it
+# without re-running Whisper:
+abchapterize --import --force "My Audiobook.m4b"
 ```
 
 ## Options
@@ -135,6 +142,9 @@ when chapters are written. The most useful knobs:
 | `-v`, `--verbose` | Log all transcriptions and processing details. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
 | `-d`, `--dry-run` | Detect chapters but write nothing; print what would be written. |
+| `-e`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. |
+| `-I`, `--import` | Skip Whisper entirely and write chapters from a previously exported sidecar file instead — for reapplying a hand-corrected result. |
+| `-S`, `--simple-metadata` | Use a plain `H:MM:SS.fff  Title` sidecar format instead of FFMETADATA for `--export`/`--import`. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`).
 

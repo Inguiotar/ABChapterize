@@ -63,4 +63,22 @@ public class FfMetadataTests
     {
         Assert.Equal(expected, FfmpegClient.EscapeMeta(raw));
     }
+
+    [Theory]
+    [InlineData("plain title", "plain title")]
+    [InlineData(@"a\=b", "a=b")]
+    [InlineData(@"a\;b", "a;b")]
+    [InlineData(@"a\#b", "a#b")]
+    [InlineData(@"a\\b", @"a\b")]
+    public void UnescapeMeta_ReversesEscapeMeta(string escaped, string expected)
+    {
+        Assert.Equal(expected, FfmpegClient.UnescapeMeta(escaped));
+    }
+
+    [Fact]
+    public void UnescapeMeta_RoundTripsThroughEscapeMeta()
+    {
+        const string raw = "A=B;C#D\\E";
+        Assert.Equal(raw, FfmpegClient.UnescapeMeta(FfmpegClient.EscapeMeta(raw)));
+    }
 }

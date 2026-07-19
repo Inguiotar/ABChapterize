@@ -48,7 +48,78 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.False(o.TargetIsDirectory);
         Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose
-                     | o.NoBar | o.Summary | o.DryRun);
+                     | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata);
+    }
+
+    [Fact]
+    public void Export_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--export")!.Export);
+        Assert.True(ParseFile("-e")!.Export);
+    }
+
+    [Fact]
+    public void Import_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--import")!.Import);
+        Assert.True(ParseFile("-I")!.Import);
+    }
+
+    [Fact]
+    public void SimpleMetadata_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--export", "--simple-metadata")!.SimpleMetadata);
+        Assert.True(ParseFile("-eS")!.SimpleMetadata);
+    }
+
+    [Fact]
+    public void ExportAndImport_Together_IsAnError()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--export", "--import"));
+    }
+
+    [Fact]
+    public void ImportWithRevert_IsAnError()
+    {
+        Assert.Throws<CliError>(() => ParseDir("--import", "--revert"));
+    }
+
+    [Theory]
+    [InlineData("--lang", "de")]
+    [InlineData("--chapter-phrase", "part")]
+    [InlineData("--model", "small")]
+    [InlineData("--jingle")]
+    [InlineData("--min-silence-length", "2")]
+    public void ImportWithDetectionOptions_IsAnError(params string[] extra)
+    {
+        Assert.Throws<CliError>(() => ParseFile([.. new[] { "--import" }, .. extra]));
+    }
+
+    [Fact]
+    public void ImportWithMaxJingleLength_RequiresJingle_ButStillRejectsImport()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--import", "--jingle", "--max-jingle-length", "30"));
+    }
+
+    [Fact]
+    public void Import_WithForceAndMaxChapters_IsAllowed()
+    {
+        var o = ParseFile("--import", "--force", "--max-chapters", "5")!;
+        Assert.True(o.Import && o.Force);
+        Assert.Equal(5, o.MaxChapters);
+    }
+
+    [Fact]
+    public void SimpleMetadata_WithoutExportOrImport_IsAnError()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--simple-metadata"));
+    }
+
+    [Fact]
+    public void Export_ComposesWithDryRun()
+    {
+        var o = ParseFile("--export", "--dry-run")!;
+        Assert.True(o.Export && o.DryRun);
     }
 
     [Fact]
