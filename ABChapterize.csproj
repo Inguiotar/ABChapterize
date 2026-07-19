@@ -5,8 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RootNamespace>Chapterize</RootNamespace>
-    <AssemblyName>chapterize</AssemblyName>
+    <RootNamespace>ABChapterize</RootNamespace>
+    <AssemblyName>abchapterize</AssemblyName>
     <Version>0.8.1</Version>
     <!-- Keep the informational version (shown by the version option and in the usage
          note) a plain version number instead of appending "+<git commit hash>". -->
@@ -56,7 +56,7 @@
                           Include="$(PublishDir)runtimes\win-x64;$(PublishDir)runtimes\cuda\win-x64;$(PublishDir)runtimes\vulkan\win-x64" />
     </ItemGroup>
     <RemoveDir Directories="@(_ForeignRuntimeDir)" />
-    <Delete Files="$(PublishDir)ggml-metal.metal;$(PublishDir)chapterize.pdb" />
+    <Delete Files="$(PublishDir)ggml-metal.metal;$(PublishDir)abchapterize.pdb" />
   </Target>
 
 </Project>

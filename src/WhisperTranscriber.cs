@@ -1,11 +1,11 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
 using Whisper.net;
 using Whisper.net.LibraryLoader;
 
-namespace Chapterize;
+namespace ABChapterize;
 
 /// <summary>
 /// Wraps a Whisper.net processor for a single model, using the best available

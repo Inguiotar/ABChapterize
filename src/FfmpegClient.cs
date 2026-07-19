@@ -1,4 +1,4 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
@@ -8,7 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace Chapterize;
+namespace ABChapterize;
 
 /// <summary>A chapter marking with start time and title.</summary>
 /// <param name="StartSeconds">Chapter start in seconds from the beginning of the file.</param>
@@ -240,8 +240,8 @@ public sealed partial class FfmpegClient : IAudioSource
         string file, IReadOnlyList<Chapter> chapters, double durationSeconds,
         bool backup, CancellationToken ct)
     {
-        var metaFile = Path.Combine(Path.GetTempPath(), $"chapterize-{Guid.NewGuid():N}.ffmeta");
-        var tmpFile = file + ".chapterize.tmp" + Path.GetExtension(file);
+        var metaFile = Path.Combine(Path.GetTempPath(), $"abchapterize-{Guid.NewGuid():N}.ffmeta");
+        var tmpFile = file + ".abchapterize.tmp" + Path.GetExtension(file);
         try
         {
             await File.WriteAllTextAsync(metaFile, BuildFfMetadata(chapters, durationSeconds), new UTF8Encoding(false), ct);
@@ -299,7 +299,7 @@ public sealed partial class FfmpegClient : IAudioSource
         }
         else
         {
-            var parked = file + ".chapterize.orig";
+            var parked = file + ".abchapterize.orig";
             File.Move(file, parked);
             try
             {

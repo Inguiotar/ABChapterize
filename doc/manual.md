@@ -1,11 +1,11 @@
-# Chapterize manual
+# ABChapterize manual
 
-This is the complete reference for Chapterize. For a quick start, see the
+This is the complete reference for ABChapterize. For a quick start, see the
 [README](../README.md).
 
 Contents:
 
-1. [What Chapterize does](#1-what-chapterize-does)
+1. [What ABChapterize does](#1-what-abchapterize-does)
 2. [Supported file formats](#2-supported-file-formats)
 3. [How detection works](#3-how-detection-works)
 4. [How chapters are written — file safety](#4-how-chapters-are-written--file-safety)
@@ -22,9 +22,9 @@ Contents:
 
 ---
 
-## 1. What Chapterize does
+## 1. What ABChapterize does
 
-Chapterize scans audiobook files for the narrator's actual chapter
+ABChapterize scans audiobook files for the narrator's actual chapter
 announcements ("Chapter Seven", "Kapitel 12", "chapitre premier", …) using
 [Whisper](https://github.com/ggerganov/whisper.cpp) speech recognition, and
 writes matching chapter marks into the file's metadata.
@@ -38,7 +38,7 @@ cannot be lost — see [section 4](#4-how-chapters-are-written--file-safety).
 Basic usage:
 
 ```
-chapterize [options] <file-or-directory>
+abchapterize [options] <file-or-directory>
 ```
 
 When a directory is given, every supported audio file directly inside it is
@@ -56,7 +56,7 @@ chapter marks are skipped unless `--force` or `--max-chapters` says otherwise.
 
 The set is determined by what ffmpeg can both read *and write* chapter marks
 for; each of these formats has been verified to round-trip chapters through
-the exact remux command Chapterize uses.
+the exact remux command ABChapterize uses.
 
 Notably absent:
 
@@ -140,12 +140,12 @@ real chapter keeps its exact detected position.
 
 ## 4. How chapters are written — file safety
 
-Chapterize is designed so that the original audio cannot be lost, even
+ABChapterize is designed so that the original audio cannot be lost, even
 without `--backup`, even on a crash or power failure mid-write:
 
 1. The chapter list is written to a temporary FFMETADATA file.
 2. ffmpeg remuxes the original into a temporary file next to it
-   (`<name>.<ext>.chapterize.tmp<ext>`, e.g. `book.m4b.chapterize.tmp.m4b`),
+   (`<name>.<ext>.abchapterize.tmp<ext>`, e.g. `book.m4b.abchapterize.tmp.m4b`),
    stream-copying the audio and cover art — no re-encoding, no quality loss.
 3. The temporary file is **verified** with ffprobe: its duration must match
    the original (within 2 seconds) and it must contain exactly the expected
@@ -153,16 +153,16 @@ without `--backup`, even on a crash or power failure mid-write:
 4. Only then is the original replaced:
    - with `--backup`: the original is renamed to `<name>.<ext>.bak`, then the
      new file takes its place (with rollback if that rename fails);
-   - without `--backup`: the original is parked as `<name>.chapterize.orig`,
+   - without `--backup`: the original is parked as `<name>.abchapterize.orig`,
      the new file takes its place, and only then is the parked original
      deleted (again with rollback on failure).
 
-Temporary files (`*.chapterize.*`) are cleaned up afterwards and are always
+Temporary files (`*.abchapterize.*`) are cleaned up afterwards and are always
 excluded from directory scans. If you ever find one lying around after a
 power failure, the original file next to it is intact; just delete the stray
 temporary file.
 
-`chapterize -R <target>` (`--revert`) undoes a `--backup` run: for every
+`abchapterize -R <target>` (`--revert`) undoes a `--backup` run: for every
 supported audio file with an added `.bak` suffix, the current file is deleted
 and the backup renamed back. `--revert` can be combined with `--recurse`, with
 `--filter` (the filter then selects which backups are restored) and with the
@@ -206,10 +206,10 @@ ffmpeg afterwards.
 ## 6. Command line reference
 
 ```
-chapterize [options] <file-or-directory>
-chapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
-chapterize --help | -?
-chapterize --version
+abchapterize [options] <file-or-directory>
+abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
+abchapterize --help | -?
+abchapterize --version
 ```
 
 Options must precede the file/directory argument, which must come last.
@@ -247,7 +247,7 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   transcription quality and, for the languages listed in
   [section 7](#7-languages-and-number-recognition), enables number-word
   parsing and localizes the defaults of `--chapter-phrase`, `--title` and
-  `--intro-title`. `chapterize --lang de buch.m4b` finds "Kapitel eins"
+  `--intro-title`. `abchapterize --lang de buch.m4b` finds "Kapitel eins"
   and writes "Kapitel 1" without further options.
 
 `-c`, `--chapter-phrase <p>`
@@ -457,7 +457,7 @@ and must be kept — without it, nothing works.
 
 ## 10. ffmpeg: requirements and discovery
 
-Chapterize needs `ffmpeg` and `ffprobe` (any reasonably recent version) as
+ABChapterize needs `ffmpeg` and `ffprobe` (any reasonably recent version) as
 external programs; they do all decoding, silence scanning and chapter
 writing. Search order:
 
@@ -484,7 +484,7 @@ reliably; the Fraunhofer `libfdk_aac` decoder can, but it is
 license-restricted ("nonfree") and therefore **not included in any official
 ffmpeg download or distribution package**.
 
-Chapterize detects xHE-AAC files (even with an ffmpeg build that cannot probe
+ABChapterize detects xHE-AAC files (even with an ffmpeg build that cannot probe
 them at all) and:
 
 - if the installed ffmpeg has `libfdk_aac`, transparently decodes with it and

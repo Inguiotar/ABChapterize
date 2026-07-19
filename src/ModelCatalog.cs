@@ -1,8 +1,8 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-namespace Chapterize;
+namespace ABChapterize;
 
 /// <summary>
 /// Maps the model names accepted on the command line to their GGML model files and
@@ -88,7 +88,7 @@ public static class ModelCatalog
         // The overall transfer may take arbitrarily long; stalls are detected per read instead.
         http.Timeout = Timeout.InfiniteTimeSpan;
         http.DefaultRequestHeaders.UserAgent.ParseAdd(
-            $"chapterize/{typeof(ModelCatalog).Assembly.GetName().Version?.ToString(3) ?? "0"}");
+            $"abchapterize/{typeof(ModelCatalog).Assembly.GetName().Version?.ToString(3) ?? "0"}");
 
         using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
@@ -158,7 +158,7 @@ public static class ModelCatalog
           2. Put the file - without renaming it - here:
                {path}
              (Create the "models" folder next to {CliOptions.ExeName} if it does not exist.)
-          3. Run chapterize again with the same options.
+          3. Run abchapterize again with the same options.
 
         All models can be browsed at {BrowseUrl}
 

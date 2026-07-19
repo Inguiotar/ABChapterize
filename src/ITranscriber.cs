@@ -1,8 +1,8 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-namespace Chapterize;
+namespace ABChapterize;
 
 /// <summary>A transcribed text segment with absolute timing.</summary>
 /// <param name="StartSeconds">Segment start in seconds, relative to the decoded audio window.</param>

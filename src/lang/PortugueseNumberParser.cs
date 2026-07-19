@@ -1,8 +1,8 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-namespace Chapterize.Lang;
+namespace ABChapterize.Lang;
 
 /// <summary>
 /// Parses Portuguese spoken numbers 0-999: "sete", "vinte e um", "cento e um",

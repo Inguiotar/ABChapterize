@@ -1,10 +1,10 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
 using Xunit;
 
-namespace Chapterize.Tests;
+namespace ABChapterize.Tests;
 
 /// <summary>
 /// Tests for <see cref="FileProcessor.EnumerateTargets"/>: extension matching, --recurse,
@@ -17,12 +17,12 @@ public sealed class FileEnumerationTests : IDisposable
     /// <summary>Creates a temp directory tree with a mix of supported and foreign files.</summary>
     public FileEnumerationTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), $"chapterize-test-{Guid.NewGuid():N}");
+        _dir = Path.Combine(Path.GetTempPath(), $"abchapterize-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(_dir, "sub"));
         foreach (var name in new[]
                  {
                      "alpha.m4b", "beta.MP3", "notes.txt", "old.m4b.bak",
-                     "alpha.m4b.chapterize.tmp.m4b", Path.Combine("sub", "gamma.opus"),
+                     "alpha.m4b.abchapterize.tmp.m4b", Path.Combine("sub", "gamma.opus"),
                  })
             File.WriteAllText(Path.Combine(_dir, name), "x");
     }
@@ -59,7 +59,7 @@ public sealed class FileEnumerationTests : IDisposable
     public void OwnTemporaryFiles_AreAlwaysExcluded()
     {
         var names = Names(Processor(), [".m4b"]);
-        Assert.DoesNotContain("alpha.m4b.chapterize.tmp.m4b", names);
+        Assert.DoesNotContain("alpha.m4b.abchapterize.tmp.m4b", names);
     }
 
     [Fact]

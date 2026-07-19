@@ -1,11 +1,11 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-namespace Chapterize;
+namespace ABChapterize;
 
 /// <summary>
-/// Entry point of the chapterize tool: command line handling, Ctrl+C wiring and
+/// Entry point of the abchapterize tool: command line handling, Ctrl+C wiring and
 /// top-level error reporting.
 /// </summary>
 public static class Program
@@ -20,7 +20,7 @@ public static class Program
         // --version wins over everything else on the command line and needs no target path.
         if (args.Contains("--version"))
         {
-            Console.WriteLine($"chapterize {CliOptions.Version}");
+            Console.WriteLine($"abchapterize {CliOptions.Version}");
             return 0;
         }
 

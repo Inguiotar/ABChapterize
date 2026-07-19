@@ -1,8 +1,8 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-namespace Chapterize.Tests;
+namespace ABChapterize.Tests;
 
 /// <summary>
 /// Reference number-to-words spellers, implemented independently from the parsers under
@@ -491,7 +491,7 @@ public static class Spellers
     /// <remarks>
     /// Only the number's last nonzero place is ordinal-marked; anything before it (a
     /// hundreds word ahead of a nonzero remainder) stays in cardinal form, matching how
-    /// <see cref="Chapterize.Lang.PolishNumberParser"/> reads it back.
+    /// <see cref="ABChapterize.Lang.PolishNumberParser"/> reads it back.
     /// </remarks>
     public static string PolishOrdinal(int n)
     {
@@ -537,7 +537,7 @@ public static class Spellers
     /// <summary>Spells 1-999 as a Swedish ordinal ("tredje", "tjugotredje", "hundraförsta").</summary>
     /// <remarks>
     /// Like the Polish ordinal, only the last part inflects; a hundreds word ahead of a
-    /// nonzero remainder stays cardinal, matching <see cref="Chapterize.Lang.SwedishNumberParser"/>.
+    /// nonzero remainder stays cardinal, matching <see cref="ABChapterize.Lang.SwedishNumberParser"/>.
     /// </remarks>
     public static string SwedishOrdinal(int n)
     {

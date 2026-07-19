@@ -1,10 +1,10 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Diagnostics;
 
-namespace Chapterize;
+namespace ABChapterize;
 
 /// <summary>
 /// Orchestrates the whole run: file enumeration, revert handling, per-file chapter
@@ -36,7 +36,7 @@ public sealed class FileProcessor
         _progress = progress;
     }
 
-    /// <summary>Runs the tool in the mode selected by the options (revert or chapterize).</summary>
+    /// <summary>Runs the tool in the mode selected by the options (revert or abchapterize).</summary>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     public async Task RunAsync(CancellationToken ct)
     {
@@ -45,7 +45,7 @@ public sealed class FileProcessor
             RunRevert(ct);
             return;
         }
-        await RunChapterizeAsync(ct);
+        await RunABChapterizeAsync(ct);
     }
 
     /// <summary>
@@ -83,7 +83,7 @@ public sealed class FileProcessor
     }
 
     /// <summary>Runs chapter detection and writing for all selected files.</summary>
-    private async Task RunChapterizeAsync(CancellationToken ct)
+    private async Task RunABChapterizeAsync(CancellationToken ct)
     {
         var files = EnumerateTargets(_options.EffectiveExtensions);
         if (files.Count == 0)
@@ -265,7 +265,7 @@ public sealed class FileProcessor
 
         return candidates
             .Where(f => suffixes.Any(s => f.EndsWith(s, StringComparison.OrdinalIgnoreCase)))
-            .Where(f => !f.Contains(".chapterize.", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !f.Contains(".abchapterize.", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.Revert || !f.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.FilterRegex == null || _options.FilterRegex.IsMatch(f))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)

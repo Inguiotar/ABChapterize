@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <RootNamespace>Chapterize.Tests</RootNamespace>
+    <RootNamespace>ABChapterize.Tests</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

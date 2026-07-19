@@ -1,8 +1,8 @@
-# Chapterize
+# ABChapterize
 
 **Correct chapter marks for your audiobooks — by actually listening to them.**
 
-Chapterize scans audiobook files (`.m4a`, `.m4b`, `.mp3`, `.opus`, `.mka`) for
+ABChapterize scans audiobook files (`.m4a`, `.m4b`, `.mp3`, `.opus`, `.mka`) for
 spoken chapter announcements ("Chapter Seven", "Kapitel 12", …) using
 [Whisper](https://github.com/ggerganov/whisper.cpp) speech recognition and
 writes proper chapter marks directly into the file.
@@ -35,7 +35,7 @@ Prebuilt binaries for Windows and Linux are available on the
   Danish. Whisper likes to write numbers out as words ("twenty-one",
   "einundzwanzig", "vingt et un", "veintiuno", "ventuno", "eenentwintig",
   "yirmi bir", "vinte e um", "dwadzieścia jeden", "tjugoett", "enogtyve"),
-  and Chapterize understands them all; other languages work with a custom
+  and ABChapterize understands them all; other languages work with a custom
   phrase/regexp. Ordinal
   announcements are understood too, before or after the phrase — "Erstes
   Kapitel", "2. Kapitel", "chapitre premier", "Birinci Bölüm" — and `--lang`
@@ -50,16 +50,16 @@ Prebuilt binaries for Windows and Linux are available on the
 
 ### 1. Get ffmpeg
 
-Chapterize uses `ffmpeg`/`ffprobe` for audio decoding and chapter writing.
+ABChapterize uses `ffmpeg`/`ffprobe` for audio decoding and chapter writing.
 If you don't have it yet:
 
 - **Windows:** download a build from [ffmpeg.org](https://ffmpeg.org/download.html)
-  (e.g. the gyan.dev "essentials" zip) and unpack it. Chapterize finds it
+  (e.g. the gyan.dev "essentials" zip) and unpack it. ABChapterize finds it
   automatically in `PATH`, in an `ffmpeg` folder next to the exe or in your user
   profile, in Program Files, or wherever `FFMPEG_DIR` points.
 - **Linux:** `sudo apt install ffmpeg` (or your distribution's equivalent).
 
-### 2. Get Chapterize
+### 2. Get ABChapterize
 
 Download the archive for your platform from the
 [Releases](../../releases) page and unpack it anywhere you like.
@@ -69,7 +69,7 @@ Whisper libraries.
 ### 3. Run it
 
 ```
-chapterize "My Audiobook.m4b"
+abchapterize "My Audiobook.m4b"
 ```
 
 That's it. On the first run, the speech model is downloaded automatically
@@ -82,32 +82,32 @@ My Audiobook.m4b: 23 chapter(s) written (1-23) + intro
 ```
 
 Want to be extra careful on the first try? Use `--backup` — the original file
-is kept as `My Audiobook.m4b.bak`, and `chapterize --revert` restores it if you
+is kept as `My Audiobook.m4b.bak`, and `abchapterize --revert` restores it if you
 don't like the result.
 
 ## Everyday examples
 
 ```sh
 # A whole audiobook collection, subfolders included, keeping backups:
-chapterize --recurse --backup "D:\Audiobooks"
+abchapterize --recurse --backup "D:\Audiobooks"
 
 # German audiobook ("Kapitel eins", "Erstes Kapitel", ...) - the chapter
 # phrase and title default to "Kapitel" automatically with --lang de:
-chapterize --lang de buch.m4b
+abchapterize --lang de buch.m4b
 
 # The publisher plays a jingle before each chapter announcement:
-chapterize --jingle hoerbuch.m4b
+abchapterize --jingle hoerbuch.m4b
 
 # Redo files that already have (wrong) chapter marks:
-chapterize --force badly-marked.m4b
+abchapterize --force badly-marked.m4b
 
 # Batch run: quiet, but with a summary at the end:
-chapterize -rqs "D:\Audiobooks"
+abchapterize -rqs "D:\Audiobooks"
 ```
 
 ## Options
 
-Run `chapterize --help` for a quick reference, or see the
+Run `abchapterize --help` for a quick reference, or see the
 [manual](doc/manual.md) for the full story — including exactly
 [what is kept and what is stripped](doc/manual.md#5-what-is-kept-and-what-is-stripped)
 when chapters are written. The most useful knobs:
@@ -180,7 +180,7 @@ Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 ```sh
 dotnet publish -c Release                 # Windows build -> bin/publish/win-x64
 dotnet publish -c Release -r linux-x64    # Linux build   -> bin/publish/linux-x64
-dotnet test tests/Chapterize.Tests        # run the unit tests
+dotnet test tests/ABChapterize.Tests        # run the unit tests
 ```
 
 ## License

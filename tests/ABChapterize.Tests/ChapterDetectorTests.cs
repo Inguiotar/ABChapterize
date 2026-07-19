@@ -1,10 +1,10 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
 using Xunit;
 
-namespace Chapterize.Tests;
+namespace ABChapterize.Tests;
 
 /// <summary>
 /// Tests for the <see cref="ChapterDetector"/> pipeline using a scripted audio source and
@@ -24,7 +24,7 @@ public sealed class ChapterDetectorTests : IDisposable
     /// <summary>Creates a temp .m4b file so <see cref="CliOptions.Parse"/> accepts the target.</summary>
     public ChapterDetectorTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), $"chapterize-test-{Guid.NewGuid():N}");
+        _dir = Path.Combine(Path.GetTempPath(), $"abchapterize-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_dir);
         _file = Path.Combine(_dir, "book.m4b");
         File.WriteAllText(_file, "x");

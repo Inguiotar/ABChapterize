@@ -1,8 +1,8 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-namespace Chapterize.Lang;
+namespace ABChapterize.Lang;
 
 /// <summary>
 /// Parses German spoken numbers 0-999, which are written as a single compound word:

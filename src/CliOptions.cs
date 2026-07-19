@@ -1,11 +1,11 @@
-// Chapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Reflection;
 using System.Text.RegularExpressions;
 
-namespace Chapterize;
+namespace ABChapterize;
 
 /// <summary>
 /// Exception thrown for any command line syntax or validation error.
@@ -19,7 +19,7 @@ public sealed class CliError : Exception
 }
 
 /// <summary>
-/// Parsed and validated command line options of the chapterize tool.
+/// Parsed and validated command line options of the abchapterize tool.
 /// Use <see cref="Parse"/> to create an instance from raw arguments.
 /// </summary>
 public sealed class CliOptions
@@ -154,7 +154,7 @@ public sealed class CliOptions
     /// <summary>
     /// Per-language defaults for the chapter phrase, the title word and the intro chapter
     /// title, applied when --lang is given but --chapter-phrase/--title/--intro-title are
-    /// not. "chapterize -l de buch.m4b" thus looks for "Kapitel" and writes "Intro",
+    /// not. "abchapterize -l de buch.m4b" thus looks for "Kapitel" and writes "Intro",
     /// "Kapitel 1", "Kapitel 2", ... without further options. Languages without an entry
     /// keep the English-ish defaults ("chapter", "Chapter", "Intro").
     /// </summary>
@@ -174,7 +174,7 @@ public sealed class CliOptions
     };
 
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
-    public static string ExeName => OperatingSystem.IsWindows() ? "chapterize.exe" : "chapterize";
+    public static string ExeName => OperatingSystem.IsWindows() ? "abchapterize.exe" : "abchapterize";
 
     /// <summary>Informational version of this build (from the csproj Version property).</summary>
     public static string Version => typeof(CliOptions).Assembly
@@ -438,7 +438,7 @@ public sealed class CliOptions
         ? """
           ffmpeg/ffprobe are required. They are searched in %FFMPEG_DIR%\bin (highest priority,
           FFMPEG_DIR points to ffmpeg's base directory), PATH, an "ffmpeg" folder in the current
-          directory, next to chapterize.exe or in the user profile, and common Program Files
+          directory, next to abchapterize.exe or in the user profile, and common Program Files
           locations.
           """
         : """
@@ -450,14 +450,14 @@ public sealed class CliOptions
 
     /// <summary>Comprehensive usage info printed on --help or on any command line error.</summary>
     public static string UsageText => $"""
-        chapterize {Version} - mark chapter starts in audiobooks using Whisper speech recognition
+        abchapterize {Version} - mark chapter starts in audiobooks using Whisper speech recognition
         Copyright (c) 2026 Jan O. Gretza - MIT license - written with Claude (Anthropic)
         Supported formats: {SupportedExtensionsText} (formats whose containers can hold chapter marks)
 
         Usage:
-          chapterize [options] <file-or-directory>
-          chapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
-          chapterize --help | -?
+          abchapterize [options] <file-or-directory>
+          abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
+          abchapterize --help | -?
 
         Options (must precede the file/directory argument):
           -r, --recurse             Recursively descend into subdirectories (directories only).
