@@ -111,6 +111,61 @@ public class ExhaustiveOrdinalTests
         }
     }
 
+    [Fact]
+    public void Polish_AllOrdinals_AccentedAndAsciiVariants()
+    {
+        for (var n = 1; n <= 999; n++)
+        {
+            var word = Spellers.PolishOrdinal(n);
+            AssertRoundTrip(word, "pl", n);
+            AssertRoundTrip(AsciifyPolish(word), "pl", n);
+        }
+    }
+
+    [Fact]
+    public void Swedish_AllOrdinals_AccentedAndAsciiVariants()
+    {
+        for (var n = 1; n <= 999; n++)
+        {
+            var word = Spellers.SwedishOrdinal(n);
+            AssertRoundTrip(word, "sv", n);
+            AssertRoundTrip(AsciifySwedish(word), "sv", n);
+        }
+    }
+
+    [Theory]
+    // Portuguese irregular ordinals 1st-10th ("capítulo primeiro").
+    [InlineData("primeiro", "pt", 1)]
+    [InlineData("primeira", "pt", 1)]
+    [InlineData("segundo", "pt", 2)]
+    [InlineData("terceiro", "pt", 3)]
+    [InlineData("quarto", "pt", 4)]
+    [InlineData("quinto", "pt", 5)]
+    [InlineData("sexto", "pt", 6)]
+    [InlineData("sétimo", "pt", 7)]
+    [InlineData("oitavo", "pt", 8)]
+    [InlineData("nono", "pt", 9)]
+    [InlineData("décimo", "pt", 10)]
+    // Danish ordinals 1st-20th ("Første kapitel"); compound ordinals beyond that are out
+    // of scope for this parser (see DanishNumberParser class docs).
+    [InlineData("første", "da", 1)]
+    [InlineData("anden", "da", 2)]
+    [InlineData("andet", "da", 2)]
+    [InlineData("tredje", "da", 3)]
+    [InlineData("fjerde", "da", 4)]
+    [InlineData("femte", "da", 5)]
+    [InlineData("sjette", "da", 6)]
+    [InlineData("syvende", "da", 7)]
+    [InlineData("ottende", "da", 8)]
+    [InlineData("niende", "da", 9)]
+    [InlineData("tiende", "da", 10)]
+    [InlineData("tyvende", "da", 20)]
+    // Danish ordinal combined with a hundreds word ahead of it.
+    [InlineData("et hundrede og femte", "da", 105)]
+    [InlineData("hundrede og tyvende", "da", 120)]
+    public void OrdinalVariants_ParseTargeted(string text, string language, int expected)
+        => AssertParses(text + ".", language, expected);
+
     [Theory]
     // English digit ordinals.
     [InlineData("1st", "en", 1)]
@@ -139,6 +194,17 @@ public class ExhaustiveOrdinalTests
     [InlineData("5'inci", "tr", 5)]
     [InlineData("5inci", "tr", 5)]
     [InlineData("4üncü", "tr", 4)]
+    // Portuguese masculine/feminine markers (shared with Spanish/Italian).
+    [InlineData("2º", "pt", 2)]
+    [InlineData("2ª", "pt", 2)]
+    // Polish and Danish use a plain trailing dot, like German/Dutch.
+    [InlineData("2.", "pl", 2)]
+    [InlineData("21.", "da", 21)]
+    // Swedish uses a colon before its suffix, "a" for 1st/2nd and "e" for the rest.
+    [InlineData("1:a", "sv", 1)]
+    [InlineData("2:a", "sv", 2)]
+    [InlineData("3:e", "sv", 3)]
+    [InlineData("21:a", "sv", 21)]
     public void DigitOrdinals_ParseInBothPositions(string text, string language, int expected)
     {
         AssertParses(text, language, expected);
@@ -181,4 +247,13 @@ public class ExhaustiveOrdinalTests
     private static string AsciifyTurkish(string s) => s
         .Replace('ı', 'i').Replace('ü', 'u').Replace('ö', 'o')
         .Replace('ş', 's').Replace('ç', 'c').Replace('ğ', 'g');
+
+    /// <summary>Replaces the Polish diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyPolish(string s) => s
+        .Replace('ą', 'a').Replace('ć', 'c').Replace('ę', 'e').Replace('ł', 'l')
+        .Replace('ń', 'n').Replace('ó', 'o').Replace('ś', 's').Replace('ź', 'z').Replace('ż', 'z');
+
+    /// <summary>Replaces the Swedish diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifySwedish(string s) => s
+        .Replace('å', 'a').Replace('ä', 'a').Replace('ö', 'o');
 }

@@ -166,6 +166,10 @@ public sealed class CliOptions
         ["it"] = ("capitolo", "Capitolo", "Introduzione"),
         ["nl"] = ("hoofdstuk", "Hoofdstuk", "Intro"),
         ["tr"] = ("bölüm", "Bölüm", "Giriş"),
+        ["pt"] = ("capítulo", "Capítulo", "Introdução"),
+        ["pl"] = ("rozdział", "Rozdział", "Wstęp"),
+        ["sv"] = ("kapitel", "Kapitel", "Introduktion"),
+        ["da"] = ("kapitel", "Kapitel", "Introduktion"),
     };
 
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>

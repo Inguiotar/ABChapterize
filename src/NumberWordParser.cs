@@ -28,6 +28,10 @@ public static partial class NumberWordParser
             new DutchNumberParser(),
             new ItalianNumberParser(),
             new TurkishNumberParser(),
+            new PortugueseNumberParser(),
+            new PolishNumberParser(),
+            new SwedishNumberParser(),
+            new DanishNumberParser(),
         }
         .ToDictionary(p => p.LanguageCode, StringComparer.OrdinalIgnoreCase);
 
@@ -39,10 +43,11 @@ public static partial class NumberWordParser
 
     /// <summary>
     /// Matches a digit ordinal: 1-3 digits plus an ordinal suffix of any supported
-    /// language ("2nd", "1er", "2e", "2ème", "2de", "2ste", "5'inci", "3º"), with the
-    /// apostrophe Turkish puts before its suffix allowed everywhere.
+    /// language ("2nd", "1er", "2e", "2ème", "2de", "2ste", "5'inci", "3º", "21:a"), with
+    /// the apostrophe Turkish puts before its suffix, and the colon Swedish puts before
+    /// its suffix, both allowed everywhere.
     /// </summary>
-    [GeneratedRegex(@"^(\d{1,3})'?(st|nd|rd|th|er|re|e|de|ste|te|eme|ème|ieme|ième|inci|nci|uncu|ncu|ncı|ncü|ıncı|üncü|º|ª|°)$",
+    [GeneratedRegex(@"^(\d{1,3})[':]?(st|nd|rd|th|er|re|e|de|ste|te|eme|ème|ieme|ième|inci|nci|uncu|ncu|ncı|ncü|ıncı|üncü|a|º|ª|°)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DigitOrdinalRegex();
 

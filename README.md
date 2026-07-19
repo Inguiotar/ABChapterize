@@ -26,11 +26,13 @@ or pure fantasy (looking at you, Audible), this tool is for you.
   transcribed in full to find the missing ones.
 - **Zero setup for models** — the Whisper model downloads itself on first use.
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
-- **Seven languages** of number recognition out of the box — English, German,
-  French, Spanish, Italian, Dutch and Turkish. Whisper likes to write numbers
-  out as words ("twenty-one", "einundzwanzig", "vingt et un", "veintiuno",
-  "ventuno", "eenentwintig", "yirmi bir"), and Chapterize understands them
-  all; other languages work with a custom phrase/regexp. Ordinal
+- **Eleven languages** of number recognition out of the box — English, German,
+  French, Spanish, Italian, Dutch, Turkish, Portuguese, Polish, Swedish and
+  Danish. Whisper likes to write numbers out as words ("twenty-one",
+  "einundzwanzig", "vingt et un", "veintiuno", "ventuno", "eenentwintig",
+  "yirmi bir", "vinte e um", "dwadzieścia jeden", "tjugoett", "enogtyve"),
+  and Chapterize understands them all; other languages work with a custom
+  phrase/regexp. Ordinal
   announcements are understood too, before or after the phrase — "Erstes
   Kapitel", "2. Kapitel", "chapitre premier", "Birinci Bölüm" — and `--lang`
   localizes the chapter phrase and title defaults, so `--lang de` alone finds

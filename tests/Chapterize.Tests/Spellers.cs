@@ -344,6 +344,240 @@ public static class Spellers
         return s[..^1] + "esimo";        // regular: drop the final vowel
     }
 
+    /// <summary>Spells 0-999 in Portuguese ("novecentos e noventa e nove", "cento e um").</summary>
+    public static string Portuguese(int n)
+    {
+        string[] small =
+        [
+            "zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove",
+            "dez", "onze", "doze", "treze", "catorze", "quinze", "dezasseis", "dezassete",
+            "dezoito", "dezanove",
+        ];
+        string[] tens =
+        [
+            "", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta",
+            "oitenta", "noventa",
+        ];
+        string[] hundreds =
+        [
+            "", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos",
+            "seiscentos", "setecentos", "oitocentos", "novecentos",
+        ];
+
+        string Sub100(int m)
+        {
+            if (m < 20)
+                return small[m];
+            var u = m % 10;
+            return tens[m / 10] + (u > 0 ? " e " + small[u] : "");
+        }
+
+        if (n < 100)
+            return Sub100(n);
+        if (n == 100)
+            return "cem";
+        var rest = n % 100;
+        return hundreds[n / 100] + (rest > 0 ? " e " + Sub100(rest) : "");
+    }
+
+    /// <summary>Spells 0-999 in Polish ("dziewięćset dziewięćdziesiąt dziewięć", "sto jeden").</summary>
+    public static string Polish(int n)
+    {
+        string[] units =
+            ["zero", "jeden", "dwa", "trzy", "cztery", "pięć", "sześć", "siedem", "osiem", "dziewięć"];
+        string[] teens =
+        [
+            "dziesięć", "jedenaście", "dwanaście", "trzynaście", "czternaście", "piętnaście",
+            "szesnaście", "siedemnaście", "osiemnaście", "dziewiętnaście",
+        ];
+        string[] tens =
+        [
+            "", "", "dwadzieścia", "trzydzieści", "czterdzieści", "pięćdziesiąt",
+            "sześćdziesiąt", "siedemdziesiąt", "osiemdziesiąt", "dziewięćdziesiąt",
+        ];
+        string[] hundreds =
+        [
+            "", "sto", "dwieście", "trzysta", "czterysta", "pięćset", "sześćset",
+            "siedemset", "osiemset", "dziewięćset",
+        ];
+
+        string Sub100(int m)
+        {
+            if (m == 0) return "";
+            if (m < 10) return units[m];
+            if (m < 20) return teens[m - 10];
+            var u = m % 10;
+            return tens[m / 10] + (u > 0 ? " " + units[u] : "");
+        }
+
+        if (n == 0)
+            return "zero";
+        var parts = new List<string>();
+        if (n / 100 > 0)
+            parts.Add(hundreds[n / 100]);
+        var sub = Sub100(n % 100);
+        if (sub.Length > 0)
+            parts.Add(sub);
+        return string.Join(' ', parts);
+    }
+
+    /// <summary>Spells 0-999 in Swedish ("niohundranittionio", "tjugoett", with no connector).</summary>
+    public static string Swedish(int n)
+    {
+        string[] simple =
+        [
+            "noll", "ett", "två", "tre", "fyra", "fem", "sex", "sju", "åtta", "nio", "tio",
+            "elva", "tolv", "tretton", "fjorton", "femton", "sexton", "sjutton", "arton", "nitton",
+        ];
+        string[] tens =
+            ["", "", "tjugo", "trettio", "fyrtio", "femtio", "sextio", "sjuttio", "åttio", "nittio"];
+
+        string Sub100(int m)
+        {
+            if (m < 20)
+                return simple[m];
+            var u = m % 10;
+            return tens[m / 10] + (u > 0 ? simple[u] : "");
+        }
+
+        if (n < 100)
+            return Sub100(n);
+        var h = n / 100;
+        var rest = n % 100;
+        var prefix = h == 1 ? "" : simple[h];
+        return prefix + "hundra" + (rest > 0 ? Sub100(rest) : "");
+    }
+
+    /// <summary>
+    /// Spells 0-999 in Danish ("et hundrede og enogtyve", "nioghalvfems"), using the
+    /// modern short tens forms (halvtreds, tres, ...) and "et hundrede" for the hundreds.
+    /// </summary>
+    public static string Danish(int n)
+    {
+        string[] units = ["nul", "en", "to", "tre", "fire", "fem", "seks", "syv", "otte", "ni"];
+        string[] teens =
+        [
+            "ti", "elleve", "tolv", "tretten", "fjorten", "femten", "seksten", "sytten",
+            "atten", "nitten",
+        ];
+        string[] tens =
+            ["", "", "tyve", "tredive", "fyrre", "halvtreds", "tres", "halvfjerds", "firs", "halvfems"];
+
+        string Sub100(int m)
+        {
+            if (m < 20)
+                return m < 10 ? units[m] : teens[m - 10];
+            var u = m % 10;
+            return u == 0 ? tens[m / 10] : units[u] + "og" + tens[m / 10];
+        }
+
+        if (n < 100)
+            return n == 0 ? "nul" : Sub100(n);
+
+        var h = n / 100;
+        var rest = n % 100;
+        var parts = new List<string>();
+        if (h == 1) { parts.Add("et"); parts.Add("hundrede"); }
+        else { parts.Add(units[h]); parts.Add("hundrede"); }
+        if (rest > 0)
+        {
+            parts.Add("og");
+            parts.Add(Sub100(rest));
+        }
+        return string.Join(' ', parts);
+    }
+
+    /// <summary>Spells 1-999 as a Polish ordinal, masculine ("dwudziesty pierwszy", "setny").</summary>
+    /// <remarks>
+    /// Only the number's last nonzero place is ordinal-marked; anything before it (a
+    /// hundreds word ahead of a nonzero remainder) stays in cardinal form, matching how
+    /// <see cref="Chapterize.Lang.PolishNumberParser"/> reads it back.
+    /// </remarks>
+    public static string PolishOrdinal(int n)
+    {
+        string[] unitsOrd =
+            ["", "pierwszy", "drugi", "trzeci", "czwarty", "piąty", "szósty", "siódmy", "ósmy", "dziewiąty"];
+        string[] teensOrd =
+        [
+            "dziesiąty", "jedenasty", "dwunasty", "trzynasty", "czternasty", "piętnasty",
+            "szesnasty", "siedemnasty", "osiemnasty", "dziewiętnasty",
+        ];
+        string[] tensOrd =
+        [
+            "", "", "dwudziesty", "trzydziesty", "czterdziesty", "pięćdziesiąty",
+            "sześćdziesiąty", "siedemdziesiąty", "osiemdziesiąty", "dziewięćdziesiąty",
+        ];
+        string[] hundredsCard =
+        [
+            "", "sto", "dwieście", "trzysta", "czterysta", "pięćset", "sześćset",
+            "siedemset", "osiemset", "dziewięćset",
+        ];
+        string[] hundredsOrd =
+        [
+            "", "setny", "dwusetny", "trzysetny", "czterysetny", "pięćsetny", "sześćsetny",
+            "siedemsetny", "osiemsetny", "dziewięćsetny",
+        ];
+
+        string OrdSub100(int m)
+        {
+            if (m < 10) return unitsOrd[m];
+            if (m < 20) return teensOrd[m - 10];
+            var u = m % 10;
+            return u == 0 ? tensOrd[m / 10] : tensOrd[m / 10] + " " + unitsOrd[u];
+        }
+
+        var h = n / 100;
+        var rest = n % 100;
+        if (rest == 0)
+            return hundredsOrd[h];
+        var tail = OrdSub100(rest);
+        return h > 0 ? hundredsCard[h] + " " + tail : tail;
+    }
+
+    /// <summary>Spells 1-999 as a Swedish ordinal ("tredje", "tjugotredje", "hundraförsta").</summary>
+    /// <remarks>
+    /// Like the Polish ordinal, only the last part inflects; a hundreds word ahead of a
+    /// nonzero remainder stays cardinal, matching <see cref="Chapterize.Lang.SwedishNumberParser"/>.
+    /// </remarks>
+    public static string SwedishOrdinal(int n)
+    {
+        string[] irregular =
+        [
+            "", "första", "andra", "tredje", "fjärde", "femte", "sjätte", "sjunde",
+            "åttonde", "nionde", "tionde", "elfte", "tolfte",
+        ];
+        string[] simpleCard =
+        [
+            "noll", "ett", "två", "tre", "fyra", "fem", "sex", "sju", "åtta", "nio", "tio",
+            "elva", "tolv", "tretton", "fjorton", "femton", "sexton", "sjutton", "arton", "nitton",
+        ];
+        string[] tensCard =
+            ["", "", "tjugo", "trettio", "fyrtio", "femtio", "sextio", "sjuttio", "åttio", "nittio"];
+        string[] tensOrd =
+        [
+            "", "", "tjugonde", "trettionde", "fyrtionde", "femtionde", "sextionde",
+            "sjuttionde", "åttionde", "nittionde",
+        ];
+
+        string OrdSub100(int m)
+        {
+            if (m == 0) return "";
+            if (m <= 12) return irregular[m];
+            if (m < 20) return simpleCard[m] + "de";
+            var u = m % 10;
+            return u == 0 ? tensOrd[m / 10] : tensCard[m / 10] + irregular[u];
+        }
+
+        if (n < 100)
+            return OrdSub100(n);
+        var h = n / 100;
+        var rest = n % 100;
+        var prefix = h == 1 ? "" : simpleCard[h];
+        if (rest == 0)
+            return prefix + "hundrade";
+        return prefix + "hundra" + OrdSub100(rest);
+    }
+
     /// <summary>Spells 1-999 as a Turkish ordinal ("birinci", "yirmi birinci", "yüzüncü").</summary>
     public static string TurkishOrdinal(int n)
     {

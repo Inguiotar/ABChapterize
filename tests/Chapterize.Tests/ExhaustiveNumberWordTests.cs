@@ -108,6 +108,63 @@ public class ExhaustiveNumberWordTests
     }
 
     [Fact]
+    public void Portuguese_AllNumbers_AccentedAndBrazilianVariants()
+    {
+        for (var n = 0; n <= 999; n++)
+        {
+            var word = Spellers.Portuguese(n);
+            AssertParses(word + ".", "pt", n);
+            AssertParses(StripAccents(word) + ".", "pt", n);
+            AssertParses(Brazilify(word) + ".", "pt", n);
+        }
+    }
+
+    [Fact]
+    public void Polish_AllNumbers_AccentedAndAsciiVariants()
+    {
+        for (var n = 0; n <= 999; n++)
+        {
+            var word = Spellers.Polish(n);
+            AssertParses(word + ".", "pl", n);
+            AssertParses(AsciifyPolish(word) + ".", "pl", n);
+        }
+    }
+
+    [Fact]
+    public void Swedish_AllNumbers_AccentedAndAsciiVariants()
+    {
+        for (var n = 0; n <= 999; n++)
+        {
+            var word = Spellers.Swedish(n);
+            AssertParses(word + ".", "sv", n);
+            AssertParses(AsciifySwedish(word) + ".", "sv", n);
+        }
+    }
+
+    [Fact]
+    public void Danish_AllNumbers_ShortAndLongTensVariants()
+    {
+        for (var n = 0; n <= 999; n++)
+        {
+            var word = Spellers.Danish(n);
+            AssertParses(word + ".", "da", n);
+            // "et hundrede" is often just "hundrede" in natural speech.
+            AssertParses(word.Replace("et hundrede", "hundrede") + ".", "da", n);
+        }
+    }
+
+    [Theory]
+    // The historical long tens forms, standalone.
+    [InlineData("fyrretyve", "da", 40)]
+    [InlineData("halvtredsindstyve", "da", 50)]
+    [InlineData("tresindstyve", "da", 60)]
+    [InlineData("halvfjerdsindstyve", "da", 70)]
+    [InlineData("firsindstyve", "da", 80)]
+    [InlineData("halvfemsindstyve", "da", 90)]
+    public void Danish_LongTensForms_Parse(string text, string language, int expected)
+        => AssertParses(text + ".", language, expected);
+
+    [Fact]
     public void AllLanguages_TrailingProseDoesNotChangeTheNumber()
     {
         // A word following the number must end it, not corrupt it.
@@ -120,8 +177,26 @@ public class ExhaustiveNumberWordTests
             AssertParses(Spellers.Spanish(n) + " comienza ahora", "es", n);
             AssertParses(Spellers.Italian(n, elideCento: true) + " inizia adesso", "it", n);
             AssertParses(Spellers.Turkish(n) + " burada başlar", "tr", n);
+            AssertParses(Spellers.Portuguese(n) + " começa agora", "pt", n);
+            AssertParses(Spellers.Polish(n) + " zaczyna się teraz", "pl", n);
+            AssertParses(Spellers.Swedish(n) + " börjar nu", "sv", n);
+            AssertParses(Spellers.Danish(n) + " begynder nu", "da", n);
         }
     }
+
+    /// <summary>Replaces the European Portuguese teen spellings by their Brazilian counterparts.</summary>
+    private static string Brazilify(string s) => s
+        .Replace("dezasseis", "dezesseis").Replace("dezassete", "dezessete")
+        .Replace("dezanove", "dezenove");
+
+    /// <summary>Replaces the Polish diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyPolish(string s) => s
+        .Replace('ą', 'a').Replace('ć', 'c').Replace('ę', 'e').Replace('ł', 'l')
+        .Replace('ń', 'n').Replace('ó', 'o').Replace('ś', 's').Replace('ź', 'z').Replace('ż', 'z');
+
+    /// <summary>Replaces the Swedish diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifySwedish(string s) => s
+        .Replace('å', 'a').Replace('ä', 'a').Replace('ö', 'o');
 
     /// <summary>Replaces German umlauts/ß by their ASCII transliterations.</summary>
     private static string Transliterate(string s) => s

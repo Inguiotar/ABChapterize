@@ -134,7 +134,9 @@ public class NumberWordParserTests
     [Fact]
     public void SupportedLanguages_ListsAllParsers()
     {
-        Assert.Equal(["de", "en", "es", "fr", "it", "nl", "tr"], NumberWordParser.SupportedLanguages);
+        Assert.Equal(
+            ["da", "de", "en", "es", "fr", "it", "nl", "pl", "pt", "sv", "tr"],
+            NumberWordParser.SupportedLanguages);
     }
 
     [Theory]

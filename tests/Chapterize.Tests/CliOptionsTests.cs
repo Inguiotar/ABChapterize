@@ -67,7 +67,11 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("it", "Introduzione")]
     [InlineData("nl", "Intro")]
     [InlineData("tr", "Giriş")]
-    [InlineData("pl", "Intro")] // no dedicated language support: English-ish defaults
+    [InlineData("pt", "Introdução")]
+    [InlineData("pl", "Wstęp")]
+    [InlineData("sv", "Introduktion")]
+    [InlineData("da", "Introduktion")]
+    [InlineData("cs", "Intro")] // no dedicated language support: English-ish defaults
     public void IntroTitle_Default_IsLocalized(string lang, string expected)
     {
         Assert.Equal(expected, ParseFile("--lang", lang)!.IntroTitle);
