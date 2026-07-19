@@ -27,7 +27,8 @@ Prebuilt binaries for Windows and Linux are available on the
 - **Self-healing** — when the detected chapter numbers have gaps (e.g. chapter 12
   was announced without a pause before it), the suspicious regions are
   transcribed in full to find the missing ones.
-- **Zero setup for models** — the Whisper model downloads itself on first use.
+- **Zero setup for models** — the Whisper model is downloaded automatically on
+  first use.
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
 - **Eleven languages** of number recognition out of the box — English, German,
   French, Spanish, Italian, Dutch, Turkish, Portuguese, Polish, Swedish and
