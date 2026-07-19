@@ -101,6 +101,9 @@ abchapterize --jingle hoerbuch.m4b
 # Redo files that already have (wrong) chapter marks:
 abchapterize --force badly-marked.m4b
 
+# See what would be detected without writing anything:
+abchapterize --dry-run "My Audiobook.m4b"
+
 # Batch run: quiet, but with a summary at the end:
 abchapterize -rqs "D:\Audiobooks"
 ```
@@ -131,6 +134,7 @@ when chapters are written. The most useful knobs:
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (and confidence stats) at the end. |
 | `-v`, `--verbose` | Log all transcriptions and processing details. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
+| `-d`, `--dry-run` | Detect chapters but write nothing; print what would be written. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`).
 

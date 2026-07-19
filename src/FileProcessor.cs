@@ -153,6 +153,11 @@ public sealed class FileProcessor
     private static string FormatTime(TimeSpan t)
         => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
+    /// <summary>Formats a chapter mark position as h:mm:ss.ff for the --dry-run listing.</summary>
+    /// <param name="seconds">Position in seconds.</param>
+    private static string FormatTimestamp(double seconds)
+        => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff");
+
     /// <summary>Processes a single audiobook file and prints its summary line.</summary>
     private async Task ProcessOneAsync(
         string file, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
@@ -245,13 +250,27 @@ public sealed class FileProcessor
                 chapters.Insert(0, new Chapter(0, _options.IntroTitle));
                 introNote = " + intro";
             }
-            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
 
-            var backupNote = _options.Backup ? ", backup kept" : "";
             var lowConfidenceNote = result.LowConfidenceNumbers.Count > 0
                 ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
                   $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
                 : "";
+
+            if (_options.DryRun)
+            {
+                var listing = string.Join(Environment.NewLine,
+                    chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
+                _progress.FinishWithSummary(
+                    $"{name}: DRY RUN - would write {result.Chapters.Count} chapter(s) " +
+                    $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
+                    $"{introNote}{discardNote}{lowConfidenceNote}:{Environment.NewLine}{listing}",
+                    important: lowConfidenceNote.Length > 0);
+                return;
+            }
+
+            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
+
+            var backupNote = _options.Backup ? ", backup kept" : "";
             _progress.FinishWithSummary(
                 $"{name}: {result.Chapters.Count} chapter(s) written " +
                 $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +

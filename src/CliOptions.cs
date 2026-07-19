@@ -80,6 +80,13 @@ public sealed class CliOptions
     /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
     public bool Summary { get; private set; }
 
+    /// <summary>
+    /// Run full detection but write nothing (--dry-run / -d): the chapters that would be
+    /// written are printed (timestamps, numbers and titles) instead. Lets a result be
+    /// reviewed before trusting it with a real file, without needing --backup/--revert.
+    /// </summary>
+    public bool DryRun { get; private set; }
+
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter", localized by --lang).</summary>
     public string Title { get; private set; } = "Chapter";
 
@@ -134,7 +141,7 @@ public sealed class CliOptions
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model",
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
-        ['R'] = "--revert", ['B'] = "--no-bar",
+        ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -240,7 +247,7 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.Jingle || o._langSet || o._phraseSet || o._modelSet
+        if (o.Revert && (o.Backup || o.Force || o.Jingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                          || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
@@ -313,6 +320,7 @@ public sealed class CliOptions
             case "--verbose": Verbose = true; return true;
             case "--no-bar": NoBar = true; return true;
             case "--summary": Summary = true; return true;
+            case "--dry-run": DryRun = true; return true;
             default: return false;
         }
     }
@@ -510,6 +518,8 @@ public sealed class CliOptions
                                     printed in the same timestamped format as --verbose logs.
           -s, --summary             Print a summary at the end: file counts, total and average
                                     processing time.
+          -d, --dry-run             Run detection but write nothing; print the chapters that
+                                    would be written (timestamps, numbers, titles) instead.
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter, localized by --lang).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the

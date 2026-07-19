@@ -355,6 +355,25 @@ skipped (reported as "skipped").
   across those marks (not every probe attempted, only the ones that produced
   a mark).
 
+`-d`, `--dry-run`
+: Run full detection but write nothing. Instead of the usual "N chapter(s)
+  written" line, the file's result shows every chapter that *would* be
+  written, with its exact timestamp and title:
+
+  ```
+  My Audiobook.m4b: DRY RUN - would write 23 chapter(s) (1-23) + intro:
+    0:00:00.00  Intro
+    0:01:23.45  Chapter 1
+    0:15:42.10  Chapter 2
+    ...
+  ```
+
+  Everything else about the run is unaffected — pre-existing chapter
+  handling (`--force`/`--max-chapters`), low-confidence flagging and
+  `--summary` stats all behave exactly as in a real run; only the final
+  ffmpeg remux is skipped, so the file is guaranteed untouched. Cannot be
+  combined with `--revert` (there is nothing to preview when reverting).
+
 ### Miscellaneous
 
 `-?`, `--help`

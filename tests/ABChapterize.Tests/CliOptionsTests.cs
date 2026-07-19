@@ -47,7 +47,21 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal("turbo", o.Model);
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.False(o.TargetIsDirectory);
-        Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose | o.NoBar | o.Summary);
+        Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose
+                     | o.NoBar | o.Summary | o.DryRun);
+    }
+
+    [Fact]
+    public void DryRun_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--dry-run")!.DryRun);
+        Assert.True(ParseFile("-d")!.DryRun);
+    }
+
+    [Fact]
+    public void DryRun_WithRevert_IsAnError()
+    {
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--dry-run"));
     }
 
     [Fact]
