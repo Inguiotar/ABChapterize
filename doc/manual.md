@@ -162,9 +162,9 @@ excluded from directory scans. If you ever find one lying around after a
 power failure, the original file next to it is intact; just delete the stray
 temporary file.
 
-`chapterize --revert <target>` undoes a `--backup` run: for every supported
-audio file with an added `.bak` suffix, the current file is deleted and the
-backup renamed back. `--revert` can be combined with `--recurse`, with
+`chapterize -R <target>` (`--revert`) undoes a `--backup` run: for every
+supported audio file with an added `.bak` suffix, the current file is deleted
+and the backup renamed back. `--revert` can be combined with `--recurse`, with
 `--filter` (the filter then selects which backups are restored) and with the
 output options (`--quiet`, `--summary`), but with no detection or safety
 options.
@@ -207,7 +207,7 @@ ffmpeg afterwards.
 
 ```
 chapterize [options] <file-or-directory>
-chapterize --revert [--recurse] [--filter <f>] <file-or-directory>
+chapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
 chapterize --help | -?
 chapterize --version
 ```
@@ -306,7 +306,7 @@ skipped (reported as "skipped").
   If a `.bak` file already exists, the file is aborted with an error rather
   than overwriting the backup.
 
-`--revert`
+`-R`, `--revert`
 : Restore backups instead of processing: for every supported audio file with
   an added `.bak` suffix under the target, the current file is deleted and
   the backup renamed back. Combinable with `--recurse`, `--filter` and the
@@ -339,7 +339,7 @@ skipped (reported as "skipped").
   log lines — the best way to see what the recognizer actually heard. See
   [section 12](#12-output-progress-and-logging).
 
-`--no-bar`
+`-B`, `--no-bar`
 : Never display progress bars; per-file results are printed as timestamped
   log lines. Useful for CI jobs and log files. (Progress bars are also
   disabled automatically when the output is redirected.)

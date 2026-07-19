@@ -30,7 +30,7 @@ public sealed class CliOptions
     /// <summary>Keep the original file as "*.bak" (--backup / -b).</summary>
     public bool Backup { get; private set; }
 
-    /// <summary>Restore "*.&lt;ext&gt;.bak" backup files to their original names (--revert).</summary>
+    /// <summary>Restore "*.&lt;ext&gt;.bak" backup files to their original names (--revert / -R).</summary>
     public bool Revert { get; private set; }
 
     /// <summary>Two-letter ISO 639-1 language hint for Whisper (--lang / -l, default "en").</summary>
@@ -74,7 +74,7 @@ public sealed class CliOptions
     /// <summary>Print processing details and Whisper transcriptions as log lines (--verbose / -v).</summary>
     public bool Verbose { get; private set; }
 
-    /// <summary>Suppress the progress bar; per-file summaries use the log-line format (--no-bar).</summary>
+    /// <summary>Suppress the progress bar; per-file summaries use the log-line format (--no-bar / -B).</summary>
     public bool NoBar { get; private set; }
 
     /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
@@ -134,6 +134,7 @@ public sealed class CliOptions
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model",
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
+        ['R'] = "--revert", ['B'] = "--no-bar",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -455,13 +456,13 @@ public sealed class CliOptions
 
         Usage:
           chapterize [options] <file-or-directory>
-          chapterize --revert [--recurse] [--filter <f>] <file-or-directory>
+          chapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
           chapterize --help | -?
 
         Options (must precede the file/directory argument):
           -r, --recurse             Recursively descend into subdirectories (directories only).
           -b, --backup              Keep the original file with the added suffix ".bak".
-              --revert              Restore backups: for every supported audio file with an
+          -R, --revert              Restore backups: for every supported audio file with an
                                     added ".bak" suffix, delete the corresponding original and
                                     rename the .bak file back. Combinable with --recurse,
                                     --filter and the output options, but nothing else.
@@ -505,7 +506,7 @@ public sealed class CliOptions
           -q, --quiet               Suppress per-file output; warnings and errors are still shown.
           -v, --verbose             Print processing details and all Whisper transcriptions as
                                     timestamped log lines (to see what the recognizer heard).
-              --no-bar              Do not display progress bars; per-file summary lines are
+          -B, --no-bar              Do not display progress bars; per-file summary lines are
                                     printed in the same timestamped format as --verbose logs.
           -s, --summary             Print a summary at the end: file counts, total and average
                                     processing time.
