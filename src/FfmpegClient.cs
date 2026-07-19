@@ -22,12 +22,21 @@ public readonly record struct Chapter(double StartSeconds, string Title);
 /// <param name="AudioCodec">Codec name of the first audio stream (e.g. "aac"), or "" if unknown.</param>
 /// <param name="AudioProfile">Codec profile of the first audio stream (e.g. "LC", "xHE-AAC"), or "" if unknown.</param>
 /// <param name="InputDecoder">Explicit ffmpeg input decoder to use for this file (e.g. "libfdk_aac"), or null for ffmpeg's default.</param>
+/// <param name="ExistingChapterList">Backing field for <see cref="ExistingChapters"/>; null when
+/// not probed for (e.g. the xHE-AAC-without-decoder early return) or when there are none.</param>
 public readonly record struct MediaInfo(
     double DurationSeconds, long SizeBytes, int ChapterCount,
-    string AudioCodec = "", string AudioProfile = "", string? InputDecoder = null)
+    string AudioCodec = "", string AudioProfile = "", string? InputDecoder = null,
+    IReadOnlyList<Chapter>? ExistingChapterList = null)
 {
     /// <summary>True when the audio stream uses the xHE-AAC (USAC) profile of AAC.</summary>
     public bool IsXheAac => AudioProfile.Contains("xHE", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The file's pre-existing chapter markings (start time and title), in the order ffprobe
+    /// reported them. Used by --verify to probe near each one instead of trusting it blindly.
+    /// </summary>
+    public IReadOnlyList<Chapter> ExistingChapters => ExistingChapterList ?? [];
 }
 
 /// <summary>
@@ -82,7 +91,19 @@ public sealed partial class FfmpegClient : IAudioSource
             format.TryGetProperty("duration", out var dur) &&
             double.TryParse(dur.GetString(), CultureInfo.InvariantCulture, out var d))
             duration = d;
-        var chapters = root.TryGetProperty("chapters", out var ch) ? ch.GetArrayLength() : 0;
+        var existingChapters = new List<Chapter>();
+        if (root.TryGetProperty("chapters", out var ch))
+        {
+            foreach (var c in ch.EnumerateArray())
+            {
+                var start = c.TryGetProperty("start_time", out var st) &&
+                            double.TryParse(st.GetString(), CultureInfo.InvariantCulture, out var s) ? s : 0;
+                var title = c.TryGetProperty("tags", out var tags) && tags.TryGetProperty("title", out var t)
+                    ? t.GetString() ?? ""
+                    : "";
+                existingChapters.Add(new Chapter(start, title));
+            }
+        }
         string codec = "", profile = "";
         if (root.TryGetProperty("streams", out var streams) && streams.GetArrayLength() > 0)
         {
@@ -93,7 +114,7 @@ public sealed partial class FfmpegClient : IAudioSource
                 profile = pr.GetString() ?? "";
         }
         var size = new FileInfo(file).Length;
-        return new MediaInfo(duration, size, chapters, codec, profile);
+        return new MediaInfo(duration, size, existingChapters.Count, codec, profile, ExistingChapterList: existingChapters);
     }
 
     /// <summary>Cached result of the libfdk_aac decoder availability check.</summary>

@@ -35,6 +35,14 @@ public readonly record struct DetectionResult(
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability);
 
+/// <summary>Outcome of checking pre-existing chapter markings against the audio (--verify).</summary>
+/// <param name="Passed">True when every checkable marking was confirmed; also true when none
+/// of the file's markings had a parseable expected number (nothing to disprove).</param>
+/// <param name="Checked">Number of markings that had a parseable expected number and were
+/// actually probed. Markings without one (e.g. a prelude/intro entry) are not counted.</param>
+/// <param name="Failed">Of <paramref name="Checked"/>, how many could not be confirmed.</param>
+public readonly record struct VerifyResult(bool Passed, int Checked, int Failed);
+
 /// <summary>
 /// Finds chapter starts in an audiobook. Fast path: detect longer-than-usual silences and
 /// probe the audio following each silence with Whisper. If the resulting chapter numbers
@@ -77,6 +85,15 @@ public sealed class ChapterDetector
     /// itself is, on average, more unsure than sure about its own guess.
     /// </summary>
     internal const double AutoLanguageProbabilityThreshold = 0.5;
+
+    /// <summary>How far before a pre-existing chapter marking's own timestamp --verify starts
+    /// probing - the marking may sit slightly after the phrase actually started.</summary>
+    private const double VerifyMarginBeforeSeconds = 5;
+
+    /// <summary>Total length of the --verify probe window, starting <see
+    /// cref="VerifyMarginBeforeSeconds"/> before the marking. Comparable in scale to the plain
+    /// post-silence probe window (<see cref="ProbeSecondsPlain"/>).</summary>
+    private const double VerifyWindowSeconds = 15;
 
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
@@ -203,6 +220,99 @@ public sealed class ChapterDetector
         return new DetectionResult(
             chapters, missing.Count > 0, missing, lowConfidence,
             profile!, detectedLanguage, detectedProbability);
+    }
+
+    /// <summary>
+    /// Checks pre-existing chapter markings against the audio (--verify), far cheaper than the
+    /// full silence-scan/probe pipeline since only the markings' own timestamps are visited:
+    /// for every marking whose title yields a parseable expected chapter number, a short window
+    /// around its timestamp is probed with Whisper and checked for a phrase match with that
+    /// number. A marking whose title has no parseable number (e.g. a prelude/intro entry
+    /// without one) cannot be checked and does not count against or for the result; if none of
+    /// a file's markings have a parseable number, verification trivially passes - there is
+    /// nothing to disprove, so the file is left alone rather than needlessly re-detected.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
+    /// <param name="work">Progress tracker, advanced once per marking (checked or skipped).</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<VerifyResult> VerifyExistingChaptersAsync(
+        string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
+    {
+        _log = log;
+        // With an explicit --lang, the profile is known upfront - no probing needed to resolve
+        // it, so title parsing below always uses the real language. With --lang auto it stays
+        // null until the first marking that actually gets decoded, resolved the same way
+        // DetectAsync resolves its own first probe window.
+        LanguageProfile? profile = _options.AutoLanguage ? null : _options.DefaultProfile;
+        if (profile != null)
+            _transcriber.ChangeLanguage(profile.Language);
+        var checkedCount = 0;
+        var failed = 0;
+
+        work.BeginPhase("Verify", info.ExistingChapters.Count);
+        foreach (var marking in info.ExistingChapters)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var windowStart = Math.Max(0, marking.StartSeconds - VerifyMarginBeforeSeconds);
+            var windowLen = Math.Min(VerifyWindowSeconds, info.DurationSeconds - windowStart);
+            if (windowLen <= 0)
+            {
+                work.Advance(1);
+                continue;
+            }
+
+            var placeholderLanguage = profile?.Language ?? "en";
+            if (!TryParseExpectedNumber(marking.Title, placeholderLanguage, out var expected))
+            {
+                work.Advance(1);
+                continue;
+            }
+
+            var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
+            if (profile == null)
+            {
+                (profile, _, _) = await ResolveLanguageAsync(samples, ct);
+                _transcriber.ChangeLanguage(profile.Language);
+                // The number may have been parsed above using "en" as a placeholder before the
+                // real language was known; re-parse now in case that made a difference.
+                if (!TryParseExpectedNumber(marking.Title, profile.Language, out expected))
+                {
+                    work.Advance(1);
+                    continue;
+                }
+            }
+
+            var segments = await _transcriber.TranscribeAsync(samples, ct);
+            LogTranscript($"verify @{FormatTimestamp(marking.StartSeconds)}", segments);
+
+            checkedCount++;
+            var confirmed = FindPhraseMatches(segments, profile).Any(m => m.Number == expected);
+            _log?.Invoke(confirmed
+                ? $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} confirmed"
+                : $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
+            if (!confirmed)
+                failed++;
+            work.Advance(1);
+        }
+
+        return new VerifyResult(failed == 0, checkedCount, failed);
+    }
+
+    /// <summary>
+    /// Extracts an expected chapter number from a pre-existing marking's title: a plain digit
+    /// sequence first (works regardless of language, and covers titles from other tools like
+    /// "Chapter 05" or "05 - Title"), then a spelled-out number via <see cref="NumberWordParser"/>
+    /// for the given language. Returns false when the title has no parseable number at all.
+    /// </summary>
+    private static bool TryParseExpectedNumber(string title, string language, out int number)
+    {
+        var digits = Regex.Match(title, @"\d+");
+        if (digits.Success && int.TryParse(digits.Value, out number))
+            return true;
+        return NumberWordParser.TryExtractNumber(title, language, out number);
     }
 
     /// <summary>

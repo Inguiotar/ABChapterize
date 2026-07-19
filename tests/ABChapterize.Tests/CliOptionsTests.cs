@@ -52,7 +52,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.False(o.TargetIsDirectory);
         Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose
-                     | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata);
+                     | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
         Assert.Null(o.Jobs);
     }
 
@@ -166,9 +166,31 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--model", "small")]
     [InlineData("--jingle")]
     [InlineData("--min-silence-length", "2")]
+    [InlineData("--verify")]
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
     {
         Assert.Throws<CliError>(() => ParseFile([.. new[] { "--import" }, .. extra]));
+    }
+
+    [Fact]
+    public void Verify_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--verify")!.Verify);
+        Assert.True(ParseFile("-V")!.Verify);
+    }
+
+    [Fact]
+    public void VerifyWithForce_IsAnError()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--verify", "--force"));
+    }
+
+    [Fact]
+    public void Verify_ComposesWithMaxChapters()
+    {
+        var o = ParseFile("--verify", "--max-chapters", "10")!;
+        Assert.True(o.Verify);
+        Assert.Equal(10, o.MaxChapters);
     }
 
     [Fact]
@@ -401,6 +423,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--force"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--lang", "de"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--backup"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--verify"));
     }
 
     [Fact]

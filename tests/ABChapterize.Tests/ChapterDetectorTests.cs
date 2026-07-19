@@ -416,4 +416,85 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal("de", result.Profile.Language);
         Assert.Equal(["de"], transcriber.LanguageChanges); // still (re-)asserted defensively
     }
+
+    /// <summary>Runs --verify against the given pre-existing chapter markings and script.</summary>
+    private async Task<VerifyResult> VerifyAsync(
+        CliOptions options, IReadOnlyList<Chapter> existingChapters, Action<ScriptedTranscriber> script)
+    {
+        var audio = new FakeAudioSource();
+        var transcriber = new ScriptedTranscriber(audio);
+        script(transcriber);
+        var detector = new ChapterDetector(options, audio, transcriber);
+        var info = new MediaInfo(Duration, (long)Duration, existingChapters.Count,
+            ExistingChapterList: existingChapters);
+        return await detector.VerifyExistingChaptersAsync(_file, info, new WorkTracker(), null, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Verify_ConfirmsMarkings_WhenThePhraseAndNumberAreFoundNearby()
+    {
+        // Markings at 10 s and 610 s; --verify probes 5 s before each, so windows start at 5 and 605.
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
+            s =>
+            {
+                s.Add(5, Seg(5, " Chapter 1."));
+                s.Add(605, Seg(5, " Chapter 2."));
+            });
+
+        Assert.True(result.Passed);
+        Assert.Equal(2, result.Checked);
+        Assert.Equal(0, result.Failed);
+    }
+
+    [Fact]
+    public async Task Verify_Fails_WhenThePhraseIsNotFoundNearby()
+    {
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
+            s => s.Add(5, Seg(5, " Chapter 1."))); // nothing scripted near the second marking
+
+        Assert.False(result.Passed);
+        Assert.Equal(2, result.Checked);
+        Assert.Equal(1, result.Failed);
+    }
+
+    [Fact]
+    public async Task Verify_Fails_WhenTheNumberNearbyDoesNotMatch()
+    {
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Chapter 1")],
+            s => s.Add(5, Seg(5, " Chapter 2."))); // wrong number for this marking
+
+        Assert.False(result.Passed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(1, result.Failed);
+    }
+
+    [Fact]
+    public async Task Verify_SkipsMarkings_WithNoParseableExpectedNumber()
+    {
+        // "Intro" has no digit and no recognizable number word, so it cannot be checked;
+        // with nothing else to disprove, verification passes trivially.
+        var result = await VerifyAsync(Options(), [new Chapter(0, "Intro")], _ => { });
+
+        Assert.True(result.Passed);
+        Assert.Equal(0, result.Checked);
+        Assert.Equal(0, result.Failed);
+    }
+
+    [Fact]
+    public async Task Verify_UnderstandsSpelledOutNumbers_ForTheGivenLanguage()
+    {
+        var result = await VerifyAsync(
+            Options("--lang", "de"),
+            [new Chapter(10, "Erstes Kapitel")],
+            s => s.Add(5, Seg(5, " Erstes Kapitel.")));
+
+        Assert.True(result.Passed);
+        Assert.Equal(1, result.Checked);
+    }
 }

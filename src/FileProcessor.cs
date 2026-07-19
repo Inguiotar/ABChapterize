@@ -335,6 +335,22 @@ public sealed class FileProcessor
 
             // Policy for pre-existing chapter markings.
             var (skip, discardNote) = EvaluateExistingChapters(info);
+            if (skip && _options.Verify)
+            {
+                var verify = await detector.VerifyExistingChaptersAsync(file, info, work, log, ct);
+                if (verify.Checked == 0 || verify.Passed)
+                {
+                    lock (_statsLock) _skipped++;
+                    var verifyNote = verify.Checked > 0
+                        ? $"{verify.Checked} pre-existing chapter marking(s) verified correct"
+                        : $"has {info.ChapterCount} chapter marking(s) (none had a checkable number)";
+                    _progress.FinishWithSummary(work, $"{name}: skipped - {verifyNote} (use --force to redo)");
+                    return;
+                }
+                skip = false;
+                discardNote = $", {info.ChapterCount} existing marking(s) discarded " +
+                              $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed)";
+            }
             if (skip)
             {
                 lock (_statsLock) _skipped++;

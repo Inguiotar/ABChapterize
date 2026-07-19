@@ -43,7 +43,8 @@ abchapterize [options] <file-or-directory>
 
 When a directory is given, every supported audio file directly inside it is
 processed (with `--recurse`, subdirectories too). Files that already have
-chapter marks are skipped unless `--force` or `--max-chapters` says otherwise.
+chapter marks are skipped unless `--force`, `--max-chapters` or `--verify`
+says otherwise.
 
 ## 2. Supported file formats
 
@@ -366,6 +367,25 @@ skipped (reported as "skipped").
   discarded, even without `--force`. Files at or below the threshold are
   still skipped unless `--force` is also given.
 
+`-V`, `--verify`
+: Instead of trusting pre-existing marks blindly (the default) or discarding
+  them outright (`--force`), check each one against the audio: a short
+  window around the mark's own timestamp is probed with Whisper for the
+  chapter phrase and the expected chapter number, reusing the same
+  transcription machinery as normal detection rather than a plain
+  string/fingerprint comparison. Marks that all check out are left
+  untouched, same as a skip without `--verify`. If any mark fails, all of
+  the file's existing marks are discarded and it goes through full
+  detection, same as `--force` would — a single bad mark is enough to
+  distrust the whole set, since a partially hand-edited or corrupted
+  chapter list isn't safely salvageable mark-by-mark. A file already over
+  the `--max-chapters` threshold is still assumed bogus outright and skips
+  verification entirely; `--verify` only decides the borderline cases where
+  the mark count alone isn't proof of anything. Since its intent
+  contradicts `--force` (always discard vs. decide based on a check) and it
+  has nothing to check against with `--import` (which never runs
+  detection), `--verify` cannot be combined with either.
+
 ### Safety and undo
 
 `-b`, `--backup`
@@ -432,8 +452,8 @@ skipped (reported as "skipped").
   ```
 
   Everything else about the run is unaffected — pre-existing chapter
-  handling (`--force`/`--max-chapters`), low-confidence flagging and
-  `--summary` stats all behave exactly as in a real run; only the final
+  handling (`--force`/`--max-chapters`/`--verify`), low-confidence flagging
+  and `--summary` stats all behave exactly as in a real run; only the final
   ffmpeg remux is skipped, so the file is guaranteed untouched. Cannot be
   combined with `--revert` (there is nothing to preview when reverting).
 

@@ -59,6 +59,18 @@ public sealed class CliOptions
     /// </summary>
     public int? MaxChapters { get; private set; }
 
+    /// <summary>
+    /// Check pre-existing chapter markings against the audio instead of trusting them
+    /// blindly (--verify / -V): a short window around each marking's own timestamp is probed
+    /// with Whisper for the chapter phrase and the expected number. Markings that all check
+    /// out leave the file untouched, same as today without --force; if any fails, the
+    /// markings are discarded and the file goes through full detection, same as --force would.
+    /// With --max-chapters, a file already over the threshold is still assumed bogus outright
+    /// and skips verification entirely - --verify only decides borderline cases, it never
+    /// makes a --max-chapters rejection stricter.
+    /// </summary>
+    public bool Verify { get; private set; }
+
     /// <summary>A jingle may precede the chapter phrase; mark chapters 0.5 s before it (--jingle / -j).</summary>
     public bool Jingle { get; private set; }
 
@@ -188,7 +200,7 @@ public sealed class CliOptions
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['e'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
-        ['J'] = "--jobs",
+        ['J'] = "--jobs", ['V'] = "--verify",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -296,7 +308,7 @@ public sealed class CliOptions
         // Semantic validation.
         if (o.Revert && (o.Backup || o.Force || o.Jingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                          || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
-                         || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null))
+                         || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
         if (o._jingleLenSet && !o.Jingle)
@@ -305,10 +317,15 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._jingleLenSet || o._minSilenceSet || o.Jingle))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._jingleLenSet || o._minSilenceSet || o.Jingle || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --model, " +
-                "--jingle, --max-jingle-length and --min-silence-length have no effect and cannot be combined with it.");
+                "--jingle, --max-jingle-length, --min-silence-length and --verify have no effect and cannot be combined with it.");
+
+        if (o.Force && o.Verify)
+            throw new CliError(
+                "--force and --verify cannot be combined: --force always discards pre-existing " +
+                "chapter markings, while --verify decides that based on whether they check out.");
 
         if (o.SimpleMetadata && !o.Export && !o.Import)
             throw new CliError("--simple-metadata requires --export or --import.");
@@ -380,6 +397,7 @@ public sealed class CliOptions
             case "--export": Export = true; return true;
             case "--import": Import = true; return true;
             case "--simple-metadata": SimpleMetadata = true; return true;
+            case "--verify": Verify = true; return true;
             default: return false;
         }
     }
@@ -590,6 +608,14 @@ public sealed class CliOptions
                                     that already have chapter markings are skipped.
           -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter markings,
                                     they are considered bogus and are discarded.
+          -V, --verify              Check pre-existing chapter markings against the audio
+                                    instead of trusting them blindly: a short window around
+                                    each marking is probed for the chapter phrase and the
+                                    expected number. Markings that all check out are left
+                                    alone; if any fails, they are discarded and the file goes
+                                    through full detection, same as --force would. A file
+                                    already rejected by --max-chapters skips verification and
+                                    stays bogus. Cannot be combined with --force or --import.
           -j, --jingle              A short jingle may precede the chapter phrase; chapter marks
                                     are placed 0.5 seconds before the jingle.
           -X, --max-jingle-length <seconds>

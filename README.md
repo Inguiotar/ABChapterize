@@ -117,6 +117,10 @@ abchapterize --jingle hoerbuch.m4b
 # Redo files that already have (wrong) chapter marks:
 abchapterize --force badly-marked.m4b
 
+# Not sure which files in a big collection have good marks and which don't?
+# Check each existing mark against the audio; only the bad ones get redone:
+abchapterize --recurse --verify "D:\Audiobooks"
+
 # See what would be detected without writing anything:
 abchapterize --dry-run "My Audiobook.m4b"
 
@@ -155,6 +159,7 @@ when chapters are written. The most useful knobs:
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
+| `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are left alone, marks that don't are discarded and the file goes through full detection. Cannot combine with `--force` or `--import`. |
 | `-j`, `--jingle` | A jingle precedes announcements; marks go before the jingle. |
 | `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45). |
 | `-n`, `--min-silence-length <s>` | Silence duration that counts as a potential chapter break (default: 1.5). |
