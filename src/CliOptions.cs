@@ -33,8 +33,16 @@ public sealed class CliOptions
     /// <summary>Restore "*.&lt;ext&gt;.bak" backup files to their original names (--revert / -R).</summary>
     public bool Revert { get; private set; }
 
-    /// <summary>Two-letter ISO 639-1 language hint for Whisper (--lang / -l, default "en").</summary>
-    public string Language { get; private set; } = "en";
+    /// <summary>
+    /// Two-letter ISO 639-1 language hint for Whisper, or "auto" (--lang / -l, default "auto").
+    /// With "auto", <see cref="ChapterDetector"/> detects each file's language from a short
+    /// clip via Whisper's own language detector instead of assuming a fixed language for the
+    /// whole run; see <see cref="AutoLanguage"/>.
+    /// </summary>
+    public string Language { get; private set; } = "auto";
+
+    /// <summary>True when <see cref="Language"/> is "auto" - the default. See <see cref="ResolveProfile"/>.</summary>
+    public bool AutoLanguage => Language == "auto";
 
     /// <summary>Raw chapter phrase or "/regexp/" as given on the command line (--chapter-phrase / -c); the default is localized by --lang.</summary>
     public string ChapterPhrase { get; private set; } = "chapter";
@@ -159,6 +167,14 @@ public sealed class CliOptions
     /// false when the number is expected to immediately follow the matched phrase.
     /// </summary>
     public bool PhraseHasNumberGroup { get; private set; }
+
+    /// <summary>
+    /// The profile resolved at parse time: for an explicit --lang, this is used for every file;
+    /// with <see cref="AutoLanguage"/>, it is the English fallback profile used only when a
+    /// file's own detection is inconclusive or skipped - see <see cref="ResolveProfile"/>, which
+    /// <see cref="ChapterDetector"/> calls per file instead when auto-detecting.
+    /// </summary>
+    public LanguageProfile DefaultProfile { get; private set; } = null!;
 
     private static readonly string[] ModelNames = ["tiny", "base", "small", "medium", "turbo", "large"];
 
@@ -297,9 +313,9 @@ public sealed class CliOptions
         if (o.SimpleMetadata && !o.Export && !o.Import)
             throw new CliError("--simple-metadata requires --export or --import.");
 
-        if (!Regex.IsMatch(o.Language, "^[a-zA-Z]{2}$"))
-            throw new CliError($"Invalid language code \"{o.Language}\": expected a two-letter code like \"en\".");
         o.Language = o.Language.ToLowerInvariant();
+        if (o.Language != "auto" && !Regex.IsMatch(o.Language, "^[a-z]{2}$"))
+            throw new CliError($"Invalid language code \"{o.Language}\": expected a two-letter code like \"en\", or \"auto\".");
 
         if (!ModelNames.Contains(o.Model.ToLowerInvariant()))
             throw new CliError($"Invalid model \"{o.Model}\": expected one of {string.Join(", ", ModelNames)}.");
@@ -329,19 +345,16 @@ public sealed class CliOptions
             throw new CliError($"File or directory not found: {o.TargetPath}");
         }
 
-        // Localize the chapter phrase, title word and intro title from --lang unless
-        // given explicitly.
-        if (LanguageDefaults.TryGetValue(o.Language, out var defaults))
-        {
-            if (!o._phraseSet)
-                o.ChapterPhrase = defaults.Phrase;
-            if (!o._titleSet)
-                o.Title = defaults.Title;
-            if (!o._introSet)
-                o.IntroTitle = defaults.Intro;
-        }
-
-        o.BuildPhraseRegex();
+        // Resolve the run's default profile: for an explicit --lang this localizes the
+        // chapter phrase, title word and intro title unless given explicitly (used for
+        // every file); with auto-detection this is just the English fallback profile,
+        // and ChapterDetector resolves a fresh one per file instead - see ResolveProfile.
+        o.DefaultProfile = o.ResolveProfile(o.AutoLanguage ? "en" : o.Language);
+        o.ChapterPhrase = o.DefaultProfile.ChapterPhrase;
+        o.Title = o.DefaultProfile.Title;
+        o.IntroTitle = o.DefaultProfile.IntroTitle;
+        o.PhraseRegex = o.DefaultProfile.PhraseRegex;
+        o.PhraseHasNumberGroup = o.DefaultProfile.PhraseHasNumberGroup;
         return o;
     }
 
@@ -471,31 +484,48 @@ public sealed class CliOptions
     }
 
     /// <summary>
-    /// Builds <see cref="PhraseRegex"/> from <see cref="ChapterPhrase"/>. A phrase enclosed in
+    /// Resolves the chapter phrase, title word and intro title for the given language: an
+    /// explicit --chapter-phrase/--title/--intro-title always wins; otherwise the localized
+    /// default for <paramref name="language"/> is used (English-ish defaults for languages
+    /// without a dedicated entry in <see cref="LanguageDefaults"/>). Called once at parse time
+    /// for an explicit --lang (building <see cref="DefaultProfile"/>), and once per file by
+    /// <see cref="ChapterDetector"/> when <see cref="AutoLanguage"/> is active.
+    /// </summary>
+    /// <param name="language">Two-letter language code (not "auto") to resolve defaults for.</param>
+    public LanguageProfile ResolveProfile(string language)
+    {
+        LanguageDefaults.TryGetValue(language, out var defaults);
+        var phrase = _phraseSet ? ChapterPhrase : defaults.Phrase ?? "chapter";
+        var title = _titleSet ? Title : defaults.Title ?? "Chapter";
+        var intro = _introSet ? IntroTitle : defaults.Intro ?? "Intro";
+        var (regex, hasGroup) = CompilePhraseRegex(phrase);
+        return new LanguageProfile(language, phrase, regex, hasGroup, title, intro);
+    }
+
+    /// <summary>
+    /// Compiles a chapter phrase into its matching regular expression. A phrase enclosed in
     /// slashes is compiled as-is (case-insensitive); anything else is escaped literally.
     /// </summary>
-    private void BuildPhraseRegex()
+    /// <param name="chapterPhrase">The raw phrase or "/regexp/".</param>
+    /// <exception cref="CliError">Thrown for an invalid regexp.</exception>
+    private static (Regex Regex, bool HasNumberGroup) CompilePhraseRegex(string chapterPhrase)
     {
-        string pattern;
-        if (ChapterPhrase.Length > 2 && ChapterPhrase.StartsWith('/') && ChapterPhrase.EndsWith('/'))
+        if (chapterPhrase.Length > 2 && chapterPhrase.StartsWith('/') && chapterPhrase.EndsWith('/'))
         {
-            pattern = ChapterPhrase[1..^1];
+            Regex regex;
             try
             {
-                PhraseRegex = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                regex = new Regex(chapterPhrase[1..^1], RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             }
             catch (ArgumentException ex)
             {
                 throw new CliError($"Invalid chapter phrase regexp: {ex.Message}");
             }
-            PhraseHasNumberGroup = PhraseRegex.GetGroupNumbers().Length > 1;
+            return (regex, regex.GetGroupNumbers().Length > 1);
         }
-        else
-        {
-            pattern = Regex.Escape(ChapterPhrase);
-            PhraseRegex = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            PhraseHasNumberGroup = false;
-        }
+
+        var pattern = Regex.Escape(chapterPhrase);
+        return (new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), false);
     }
 
     /// <summary>OS-specific note about where ffmpeg/ffprobe are searched (part of the usage info).</summary>
@@ -531,14 +561,18 @@ public sealed class CliOptions
                                     added ".bak" suffix, delete the corresponding original and
                                     rename the .bak file back. Combinable with --recurse,
                                     --filter and the output options, but nothing else.
-          -l, --lang <code>         Two-letter language hint for Whisper (default: en).
-                                    Chapter numbers transcribed as words - cardinals and
-                                    ordinals, before or after the phrase ("chapter two",
-                                    "Erstes Kapitel") - are understood in
+          -l, --lang <code|auto>    Two-letter language hint for Whisper, or "auto" (the
+                                    default): each file's language is detected from a short
+                                    clip and used for that file, falling back to "en" when
+                                    the detection is inconclusive. Chapter numbers
+                                    transcribed as words - cardinals and ordinals, before or
+                                    after the phrase ("chapter two", "Erstes Kapitel") - are
+                                    understood in
                                     {string.Join(", ", NumberWordParser.SupportedLanguages)}; digits
                                     ("2.", "2nd", "2e") work in every language. For these
                                     languages, --lang also localizes the defaults of
-                                    --chapter-phrase, --title and --intro-title.
+                                    --chapter-phrase, --title and --intro-title (per-file
+                                    with "auto").
           -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
                                     chapter, localized by --lang).
                                     Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".

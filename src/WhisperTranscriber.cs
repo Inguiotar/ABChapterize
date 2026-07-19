@@ -61,6 +61,20 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
         return result;
     }
 
+    /// <inheritdoc/>
+    public Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.Run(() =>
+        {
+            var (language, probability) = _processor.DetectLanguageWithProbability(samples);
+            return (language ?? "", probability);
+        }, ct);
+    }
+
+    /// <inheritdoc/>
+    public void ChangeLanguage(string language) => _processor.ChangeLanguage(language);
+
     /// <summary>
     /// Releases the native processor and model. Waits for an in-flight transcription to
     /// wind down first (after a cancellation the processor may still be processing, and

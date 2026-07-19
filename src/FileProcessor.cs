@@ -123,7 +123,11 @@ public sealed class FileProcessor
         else
         {
             var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
-            var first = new WhisperTranscriber(modelPath, _options.Language);
+            // The initial language is a placeholder: ChapterDetector always calls
+            // ChangeLanguage before the first real transcription of every file, resolving
+            // the actual language to use (the fixed --lang, or a fresh auto-detection).
+            var initialLanguage = _options.AutoLanguage ? "en" : _options.Language;
+            var first = new WhisperTranscriber(modelPath, initialLanguage);
 
             // GPU backends are capped at one file at a time: a GPU context is not proven safe
             // for concurrent inference, and loading the model into VRAM again per concurrent
@@ -135,7 +139,8 @@ public sealed class FileProcessor
                 : ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount / 4, 1, 4));
 
             if (!_options.Quiet)
-                Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({first.RuntimeName} backend), " +
+                Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({first.RuntimeName} backend" +
+                                  (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
                                   $"{files.Count} file(s) to process" +
                                   (hardCap > 1 ? $", up to {hardCap} at a time." : "."));
 
@@ -149,7 +154,7 @@ public sealed class FileProcessor
                 await first.DisposeAsync();
                 var threadsPerInstance = Math.Max(2, Environment.ProcessorCount / hardCap);
                 pool = [.. Enumerable.Range(0, hardCap)
-                    .Select(_ => new WhisperTranscriber(modelPath, _options.Language, threadsPerInstance))];
+                    .Select(_ => new WhisperTranscriber(modelPath, initialLanguage, threadsPerInstance))];
             }
 
             try
@@ -355,7 +360,8 @@ public sealed class FileProcessor
             }
             if (result.Chapters.Count == 0)
             {
-                _progress.FinishWithSummary(work, $"{name}: no chapter phrases found; file unchanged");
+                var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
+                _progress.FinishWithSummary(work, $"{name}: no chapter phrases found; file unchanged{langHint}");
                 return;
             }
 
@@ -371,7 +377,7 @@ public sealed class FileProcessor
             }
 
             var chapters = result.Chapters
-                .Select(c => new Chapter(c.TimeSeconds, $"{_options.Title} {c.Number}"))
+                .Select(c => new Chapter(c.TimeSeconds, $"{result.Profile.Title} {c.Number}"))
                 .ToList();
             // Audiobooks usually start with a prelude, and the mp4 muxer silently moves the
             // first chapter mark to 0:00. Prepend an intro chapter so the first detected
@@ -379,7 +385,7 @@ public sealed class FileProcessor
             var introNote = "";
             if (chapters[0].StartSeconds > 1.0)
             {
-                chapters.Insert(0, new Chapter(0, _options.IntroTitle));
+                chapters.Insert(0, new Chapter(0, result.Profile.IntroTitle));
                 introNote = " + intro";
             }
 
@@ -387,6 +393,21 @@ public sealed class FileProcessor
                 ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
                   $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
                 : "";
+
+            // With --lang auto, note which language was actually used for this file - the
+            // detected one, or "en" when detection was inconclusive or skipped.
+            var languageNote = "";
+            if (_options.AutoLanguage)
+            {
+                languageNote = result.DetectedLanguage switch
+                {
+                    { } lang when lang.Equals(result.Profile.Language, StringComparison.OrdinalIgnoreCase) =>
+                        $", language: {result.Profile.Language} (p={result.DetectedProbability:0.00})",
+                    { } lang =>
+                        $", language: {result.Profile.Language} (auto-detected {lang} p={result.DetectedProbability:0.00}, below threshold)",
+                    null => $", language: {result.Profile.Language} (auto-detection unavailable)",
+                };
+            }
 
             // --export writes the sidecar regardless of --dry-run, so a run can be
             // previewed and saved for hand-editing in one pass.
@@ -408,7 +429,7 @@ public sealed class FileProcessor
                 _progress.FinishWithSummary(work,
                     $"{name}: DRY RUN - would write {result.Chapters.Count} chapter(s) " +
                     $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
-                    $"{introNote}{discardNote}{lowConfidenceNote}{exportNote}:{Environment.NewLine}{listing}",
+                    $"{introNote}{discardNote}{lowConfidenceNote}{languageNote}{exportNote}:{Environment.NewLine}{listing}",
                     important: lowConfidenceNote.Length > 0);
                 return;
             }
@@ -419,7 +440,7 @@ public sealed class FileProcessor
             _progress.FinishWithSummary(work,
                 $"{name}: {result.Chapters.Count} chapter(s) written " +
                 $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
-                $"{introNote}{discardNote}{lowConfidenceNote}{exportNote}{backupNote}",
+                $"{introNote}{discardNote}{lowConfidenceNote}{languageNote}{exportNote}{backupNote}",
                 important: lowConfidenceNote.Length > 0);
         }
         catch (OperationCanceledException)

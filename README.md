@@ -33,6 +33,11 @@ Prebuilt binaries for Windows and Linux are available on the
 - **Processes batches in parallel** — multiple files at once, auto-throttled to
   live CPU load (and capped at 1 concurrent file on GPU backends by default,
   for VRAM/context safety); override with `--jobs`.
+- **Detects the language automatically** — by default, each file's language
+  is detected from a short clip before transcription and used just for that
+  file (falling back to English when the detection is inconclusive), so a
+  mixed-language collection just works with no `--lang` at all. Pin it to one
+  language with `--lang de` if you'd rather skip per-file detection.
 - **Eleven languages** of number recognition out of the box — English, German,
   French, Spanish, Italian, Dutch, Turkish, Portuguese, Polish, Swedish and
   Danish. Whisper likes to write numbers out as words ("twenty-one",
@@ -42,8 +47,9 @@ Prebuilt binaries for Windows and Linux are available on the
   phrase/regexp. Ordinal
   announcements are understood too, before or after the phrase — "Erstes
   Kapitel", "2. Kapitel", "chapitre premier", "Birinci Bölüm" — and `--lang`
-  localizes the chapter phrase and title defaults, so `--lang de` alone finds
-  and writes "Kapitel".
+  localizes the chapter phrase and title defaults (per-file when
+  auto-detecting), so a German audiobook alone finds and writes "Kapitel"
+  with no options at all.
 - **All chapter-capable audio formats** — MP4 audiobooks (`.m4a`/`.m4b`), MP3,
   Opus and Matroska audio (`.mka`). (`.ogg` and `.flac` are out, through no
   fault of their own: ffmpeg cannot write chapter marks into those containers.)
@@ -80,8 +86,8 @@ That's it. On the first run, the speech model is downloaded automatically
 Then the audiobook is scanned and the chapter marks are written:
 
 ```
-Whisper model "turbo" loaded (Vulkan backend), 1 file(s) to process.
-My Audiobook.m4b: 23 chapter(s) written (1-23) + intro
+Whisper model "turbo" loaded (Vulkan backend, auto language detection), 1 file(s) to process.
+My Audiobook.m4b: 23 chapter(s) written (1-23) + intro, language: en (p=1.00)
 ```
 
 Want to be extra careful on the first try? Use `--backup` — the original file
@@ -94,8 +100,13 @@ don't like the result.
 # A whole audiobook collection, subfolders included, keeping backups:
 abchapterize --recurse --backup "D:\Audiobooks"
 
-# German audiobook ("Kapitel eins", "Erstes Kapitel", ...) - the chapter
-# phrase and title default to "Kapitel" automatically with --lang de:
+# A mixed-language collection: no --lang needed, each file's language is
+# detected automatically and localizes "Kapitel"/"Chapter"/etc. per file:
+abchapterize --recurse "D:\Audiobooks (mixed languages)"
+
+# Pin a fixed language instead of auto-detecting per file (skips detection,
+# slightly faster): the chapter phrase and title default to "Kapitel"
+# automatically with --lang de:
 abchapterize --lang de buch.m4b
 
 # The publisher plays a jingle before each chapter announcement:
@@ -136,7 +147,7 @@ when chapters are written. The most useful knobs:
 | `-r`, `--recurse` | Descend into subdirectories. |
 | `-b`, `--backup` | Keep the original file as `*.bak`. |
 | `-R`, `--revert` | Restore all `*.bak` backups (undo). |
-| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title`. |
+| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title` (per-file with `auto`). |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |

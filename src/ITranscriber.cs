@@ -27,4 +27,22 @@ public interface ITranscriber
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Recognized segments in chronological order, timed relative to the chunk.</returns>
     Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct);
+
+    /// <summary>
+    /// Detects the most likely spoken language of a short audio clip, without transcribing it.
+    /// Used for <c>--lang auto</c> (the default): a clip from the start of each file is passed
+    /// here once, before any transcription of that file happens.
+    /// </summary>
+    /// <param name="samples">The audio samples (a short clip is enough).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The detected two-letter language code and Whisper's probability for it (0-1).</returns>
+    Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct);
+
+    /// <summary>
+    /// Switches the language used for subsequent <see cref="TranscribeAsync"/> calls. Used to
+    /// apply the outcome of <see cref="DetectLanguageWithProbability"/> (or an explicit --lang,
+    /// re-asserted defensively for transcriber instances reused across files with --jobs).
+    /// </summary>
+    /// <param name="language">Two-letter language code to switch to.</param>
+    void ChangeLanguage(string language);
 }

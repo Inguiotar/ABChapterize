@@ -21,9 +21,19 @@ public readonly record struct DetectedChapter(int Number, double TimeSeconds, do
 /// <param name="MissingNumbers">The chapter numbers that could not be located (only when <paramref name="GapRemains"/>).</param>
 /// <param name="LowConfidenceNumbers">Chapter numbers whose Whisper probability fell below
 /// <see cref="ChapterDetector.LowConfidenceThreshold"/> - worth a manual spot-check.</param>
+/// <param name="Profile">The language profile actually used for this file - the resolved
+/// per-file profile with <c>--lang auto</c>, or the run's fixed <see cref="CliOptions.DefaultProfile"/>
+/// otherwise.</param>
+/// <param name="DetectedLanguage">Whisper's raw language guess with <c>--lang auto</c>; null
+/// when auto-detection was not active, or was skipped because the file was too short to probe.</param>
+/// <param name="DetectedProbability">Whisper's probability for <paramref name="DetectedLanguage"/>;
+/// 0 when <paramref name="DetectedLanguage"/> is null. Note this may differ from
+/// <see cref="Profile"/>'s language when the probability fell below
+/// <see cref="ChapterDetector.AutoLanguageProbabilityThreshold"/> and the run fell back to English.</param>
 public readonly record struct DetectionResult(
     IReadOnlyList<DetectedChapter> Chapters, bool GapRemains, IReadOnlyList<int> MissingNumbers,
-    IReadOnlyList<int> LowConfidenceNumbers);
+    IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
+    string? DetectedLanguage, double DetectedProbability);
 
 /// <summary>
 /// Finds chapter starts in an audiobook. Fast path: detect longer-than-usual silences and
@@ -59,6 +69,14 @@ public sealed class ChapterDetector
     /// low-confidence instead of being silently trusted. 0.5 was chosen as the point below
     /// which Whisper itself is, on average, more unsure than sure about the words it heard.</summary>
     internal const double LowConfidenceThreshold = 0.5;
+
+    /// <summary>
+    /// Whisper language-detection probability below which the result is treated as
+    /// inconclusive and the run falls back to English for that file, with <c>--lang auto</c>.
+    /// Reuses the same 0.5 cutoff as <see cref="LowConfidenceThreshold"/>: below it, Whisper
+    /// itself is, on average, more unsure than sure about its own guess.
+    /// </summary>
+    internal const double AutoLanguageProbabilityThreshold = 0.5;
 
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
@@ -112,16 +130,31 @@ public sealed class ChapterDetector
         var probeBytes = (long)(probeSeconds * bytesPerSecond);
         work.BeginPhase("Pass 2", probeBytes * probeStarts.Count);
 
+        // With --lang auto, the language is resolved once per file, from the very first probe
+        // window's samples (always at start 0, decoded below like any other window - no extra
+        // decode needed) - then fixed for the rest of the file via ChangeLanguage, rather than
+        // re-detected per probe, which would be both slower and inconsistent within one file.
+        LanguageProfile? profile = null;
+        string? detectedLanguage = null;
+        var detectedProbability = 0.0;
+
         var found = new List<DetectedChapter>();
         foreach (var start in probeStarts)
         {
             ct.ThrowIfCancellationRequested();
             var samples = await _audio.DecodePcmAsync(file, start,
                 Math.Min(probeSeconds, info.DurationSeconds - start), info.InputDecoder, ct);
+
+            if (profile == null)
+            {
+                (profile, detectedLanguage, detectedProbability) = await ResolveLanguageAsync(samples, ct);
+                _transcriber.ChangeLanguage(profile.Language);
+            }
+
             var segments = await _transcriber.TranscribeAsync(samples, ct);
             LogTranscript($"probe @{FormatTimestamp(start)}", segments);
 
-            foreach (var match in FindPhraseMatches(segments))
+            foreach (var match in FindPhraseMatches(segments, profile))
             {
                 if (!_options.Jingle && match.PhraseStartSeconds > PhraseLatestStart)
                     continue; // without a jingle the phrase must directly follow the silence
@@ -152,7 +185,7 @@ public sealed class ChapterDetector
             _log?.Invoke($"Pass 3: transcribing suspicious region " +
                          $"{FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)}");
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
-                silences, bytesPerSecond, work, ct);
+                silences, bytesPerSecond, work, profile!, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             work.ChaptersFound = chapters.Count;
         }
@@ -167,7 +200,39 @@ public sealed class ChapterDetector
             .Where(c => c.Confidence < LowConfidenceThreshold)
             .Select(c => c.Number)
             .ToList();
-        return new DetectionResult(chapters, missing.Count > 0, missing, lowConfidence);
+        return new DetectionResult(
+            chapters, missing.Count > 0, missing, lowConfidence,
+            profile!, detectedLanguage, detectedProbability);
+    }
+
+    /// <summary>
+    /// Resolves the language profile to use for this file: with an explicit --lang, always
+    /// <see cref="CliOptions.DefaultProfile"/> (no detection call at all); with --lang auto,
+    /// runs Whisper's language detector on a short clip and applies
+    /// <see cref="AutoLanguageProbabilityThreshold"/>, falling back to English when the
+    /// detection is inconclusive or the clip is too short to probe.
+    /// </summary>
+    /// <param name="samples">Decoded samples of the first probe window (start of the file).</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<(LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)> ResolveLanguageAsync(
+        float[] samples, CancellationToken ct)
+    {
+        if (!_options.AutoLanguage)
+            return (_options.DefaultProfile, null, 0);
+
+        if (samples.Length < FfmpegClient.SampleRate / 2)
+        {
+            _log?.Invoke("language auto-detection skipped (clip too short); using en");
+            return (_options.ResolveProfile("en"), null, 0);
+        }
+
+        var (detected, probability) = await _transcriber.DetectLanguageWithProbability(samples, ct);
+        var conclusive = probability >= AutoLanguageProbabilityThreshold && !string.IsNullOrWhiteSpace(detected);
+        var effective = conclusive ? detected.ToLowerInvariant() : "en";
+        _log?.Invoke(conclusive
+            ? $"language auto-detected: {effective} (p={probability:0.00})"
+            : $"language auto-detection inconclusive ({detected ?? "?"} p={probability:0.00}); falling back to en");
+        return (_options.ResolveProfile(effective), detected, probability);
     }
 
     /// <summary>A time region suspected to contain undetected chapter starts.</summary>
@@ -247,7 +312,7 @@ public sealed class ChapterDetector
     /// ("Chapter Seven"); when neither yields a number, the words directly preceding the
     /// phrase are tried ("Erstes Kapitel", "Birinci Bölüm").
     /// </summary>
-    private IEnumerable<PhraseMatch> FindPhraseMatches(List<TranscriptSegment> segments)
+    private static IEnumerable<PhraseMatch> FindPhraseMatches(List<TranscriptSegment> segments, LanguageProfile profile)
     {
         if (segments.Count == 0)
             yield break;
@@ -264,10 +329,10 @@ public sealed class ChapterDetector
         }
         var text = sb.ToString();
 
-        foreach (Match m in _options.PhraseRegex.Matches(text))
+        foreach (Match m in profile.PhraseRegex.Matches(text))
         {
             int number;
-            if (_options.PhraseHasNumberGroup && m.Groups.Count > 1 && m.Groups[1].Success)
+            if (profile.PhraseHasNumberGroup && m.Groups.Count > 1 && m.Groups[1].Success)
             {
                 if (!int.TryParse(m.Groups[1].Value, out number))
                     continue;
@@ -277,14 +342,14 @@ public sealed class ChapterDetector
                 var tail = text[(m.Index + m.Length)..];
                 if (tail.Length > 80)
                     tail = tail[..80];
-                if (!NumberWordParser.TryExtractNumber(tail, _options.Language, out number))
+                if (!NumberWordParser.TryExtractNumber(tail, profile.Language, out number))
                 {
                     // No number after the phrase - try the ordinal-first announcement
                     // order ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
                     var head = text[..m.Index];
                     if (head.Length > 80)
                         head = head[^80..];
-                    if (!NumberWordParser.TryExtractNumberBefore(head, _options.Language, out number))
+                    if (!NumberWordParser.TryExtractNumberBefore(head, profile.Language, out number))
                         continue;
                 }
             }
@@ -308,7 +373,7 @@ public sealed class ChapterDetector
     /// </summary>
     private async Task<List<DetectedChapter>> TranscribeRegionAsync(
         string file, MediaInfo info, double fromSeconds, double toSeconds,
-        List<Silence> silences, double bytesPerSecond, WorkTracker work, CancellationToken ct)
+        List<Silence> silences, double bytesPerSecond, WorkTracker work, LanguageProfile profile, CancellationToken ct)
     {
         var found = new List<DetectedChapter>();
         for (var chunkStart = fromSeconds; chunkStart < toSeconds; chunkStart += GapChunkSeconds - GapChunkOverlapSeconds)
@@ -319,7 +384,7 @@ public sealed class ChapterDetector
             var segments = await _transcriber.TranscribeAsync(samples, ct);
             LogTranscript($"gap chunk @{FormatTimestamp(chunkStart)}", segments);
 
-            foreach (var match in FindPhraseMatches(segments))
+            foreach (var match in FindPhraseMatches(segments, profile))
             {
                 var phraseAbs = chunkStart + match.PhraseStartSeconds;
                 double time;

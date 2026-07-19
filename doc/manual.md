@@ -246,13 +246,21 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
 
 ### Detection behaviour
 
-`-l`, `--lang <code>`
-: Two-letter ISO 639-1 language hint for Whisper (default: `en`). Affects
-  transcription quality and, for the languages listed in
-  [section 7](#7-languages-and-number-recognition), enables number-word
-  parsing and localizes the defaults of `--chapter-phrase`, `--title` and
-  `--intro-title`. `abchapterize --lang de buch.m4b` finds "Kapitel eins"
-  and writes "Kapitel 1" without further options.
+`-l`, `--lang <code|auto>`
+: Two-letter ISO 639-1 language hint for Whisper, or `auto` (the default).
+  With `auto`, each file's language is detected once from a short clip right
+  after the silence scan (Whisper's own language detector, no separate model)
+  and used for the rest of that file, falling back to `en` when the
+  detection is inconclusive - see
+  [Auto language detection](#auto-language-detection) below. An explicit
+  two-letter code pins the whole run to one language instead, skipping
+  detection entirely. Either way, for the languages listed in
+  [section 7](#7-languages-and-number-recognition), the resolved language
+  enables number-word parsing and localizes the defaults of
+  `--chapter-phrase`, `--title` and `--intro-title` (per file with `auto`).
+  `abchapterize --lang de buch.m4b` finds "Kapitel eins" and writes
+  "Kapitel 1" without further options; so does plain `abchapterize buch.m4b`,
+  via auto-detection.
 
 `-c`, `--chapter-phrase <p>`
 : The word or phrase that announces a chapter (default: `chapter`, localized
@@ -287,6 +295,61 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
 `-X`, `--max-jingle-length <seconds>`
 : Longest expected jingle (1–600, default: 45). Requires `--jingle`. Lower
   values shrink the probe windows and speed up detection.
+
+### Auto language detection
+
+With `--lang auto` (the default - no `--lang` needed at all), each file's
+language is detected independently, so a directory containing audiobooks in
+several languages is processed correctly in one run without per-file options.
+
+Mechanically, this happens once per file, right after the silence scan
+(pass 1) and before any transcription: the samples already decoded for the
+very first probe window (the start of the file) are also handed to Whisper's
+own language detector (`WhisperProcessor.DetectLanguageWithProbability`),
+which returns a language code and Whisper's own probability for it - no
+extra decode, and no separate model. The resolved language is then fixed for
+the rest of that file via `ChangeLanguage`, rather than re-detected per
+probe, which would be both slower and could disagree with itself partway
+through a file.
+
+- At or above a probability of 0.5, the detected language is used, and
+  `--chapter-phrase`, `--title` and `--intro-title` are localized for it
+  (see [section 7](#7-languages-and-number-recognition)) exactly as an
+  explicit `--lang <code>` would, but resolved individually per file.
+- Below 0.5, or when the clip at the start of the file is too short to
+  probe (well under half a second of audio), the detection is treated as
+  inconclusive and the run falls back to `en` for that file - the same
+  0.5 cutoff used for flagging low-confidence chapter marks (see
+  [section 12](#12-output-progress-and-logging)), since Whisper itself is,
+  on average, more unsure than sure below it.
+- An explicit `--chapter-phrase`, `--title` or `--intro-title` always wins
+  over the localized default, regardless of the detected language.
+
+The outcome is shown in the per-file result line, `--dry-run` listing and
+`--verbose` log:
+
+```
+Whisper model "turbo" loaded (Vulkan backend, auto language detection), 2 file(s) to process.
+buch.m4b: 12 chapter(s) written (1-12) + intro, language: de (p=1.00)
+book.m4b: 8 chapter(s) written (1-8) + intro, language: en (p=0.98)
+```
+
+`--verbose` additionally logs the detection as it happens:
+
+```
+[14:02:11] buch.m4b: language auto-detected: de (p=1.00)
+```
+
+or, when the run fell back to English:
+
+```
+[14:03:40] book.m4b: language auto-detection inconclusive (tr p=0.31); falling back to en
+```
+
+Pin a fixed language with `--lang <code>` to skip per-file detection
+entirely - useful for a single-language collection (marginally faster, one
+less moving part) or when detection is unreliable for a particular
+recording (heavy accents, background music during the announcement).
 
 ### Handling of pre-existing chapters
 
@@ -492,6 +555,10 @@ touching Whisper at all.
 : Show the version number.
 
 ## 7. Languages and number recognition
+
+By default (`--lang auto`), the language used below is detected per file -
+see [Auto language detection](#auto-language-detection). An explicit
+`--lang <code>` pins the whole run to one language instead.
 
 The chapter number in an announcement is recognized in two ways:
 
@@ -704,9 +771,12 @@ files are cleaned up on the way out.
 
 **"No chapter phrases found"** — run with `--verbose` and read what Whisper
 actually transcribed. Typical causes: the announcements use a different word
-(fix with `--chapter-phrase`), the language hint is wrong (`--lang`), the
-pauses are shorter than `--min-silence-length` (lower `-n`), or a jingle sits
-between the pause and the announcement (add `--jingle`).
+(fix with `--chapter-phrase`), the language is wrong (with `--lang auto`,
+check the "language used" note in the result line - the auto-detection may
+have picked the wrong language or fallen back to `en`; pin it with an
+explicit `--lang` if so), the pauses are shorter than `--min-silence-length`
+(lower `-n`), or a jingle sits between the pause and the announcement (add
+`--jingle`).
 
 **Chapters found but some are missing** — if the missing ones are announced
 without a preceding pause, pass 3 usually catches them automatically. If a

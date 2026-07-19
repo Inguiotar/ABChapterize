@@ -83,6 +83,25 @@ public sealed class ChapterDetectorTests : IDisposable
             var hit = _script.FirstOrDefault(e => Math.Abs(e.Start - start) < 0.25);
             return Task.FromResult(hit.Segments ?? []);
         }
+
+        /// <summary>Language auto-detection result to return; defaults to a confident "en".</summary>
+        public (string Language, float Probability) DetectedLanguage { get; set; } = ("en", 0.99f);
+
+        /// <summary>Languages this transcriber was told to switch to, in call order.</summary>
+        public List<string> LanguageChanges { get; } = [];
+
+        /// <summary>Number of times <see cref="DetectLanguageWithProbability"/> was called.</summary>
+        public int DetectLanguageCalls { get; private set; }
+
+        /// <inheritdoc/>
+        public Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct)
+        {
+            DetectLanguageCalls++;
+            return Task.FromResult(DetectedLanguage);
+        }
+
+        /// <inheritdoc/>
+        public void ChangeLanguage(string language) => LanguageChanges.Add(language);
     }
 
     /// <summary>One speech segment starting at the given offset within the decode window.</summary>
@@ -96,12 +115,18 @@ public sealed class ChapterDetectorTests : IDisposable
     /// <summary>Runs the detector against the given silences and script.</summary>
     private async Task<DetectionResult> DetectAsync(
         CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script)
+        => (await DetectWithTranscriberAsync(options, silences, script)).Result;
+
+    /// <summary>Runs the detector, also returning the transcriber for language-detection assertions.</summary>
+    private async Task<(DetectionResult Result, ScriptedTranscriber Transcriber)> DetectWithTranscriberAsync(
+        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script)
     {
         var audio = new FakeAudioSource { Silences = silences };
         var transcriber = new ScriptedTranscriber(audio);
         script(transcriber);
         var detector = new ChapterDetector(options, audio, transcriber);
-        return await detector.DetectAsync(_file, Info, new WorkTracker(), null, CancellationToken.None);
+        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), null, CancellationToken.None);
+        return (result, transcriber);
     }
 
     [Fact]
@@ -326,5 +351,69 @@ public sealed class ChapterDetectorTests : IDisposable
         // A chapter > 1 within the first 30 s is taken as-is (e.g. a book starting mid-series).
         var chapters = new List<DetectedChapter> { new(2, 10) };
         Assert.Empty(ChapterDetector.FindGaps(chapters, Duration));
+    }
+
+    [Fact]
+    public async Task AutoLanguage_ResolvesProfileFromDetection_AndAppliesItThroughoutTheFile()
+    {
+        // No --lang given: the default is "auto". The transcriber "detects" German with high
+        // confidence from the first probe window, so the whole file - including the gap-fill
+        // pass - must be parsed as German ("Erstes Kapitel" / "Zweites Kapitel").
+        var (result, transcriber) = await DetectWithTranscriberAsync(
+            Options(),
+            [new(595, 600)],
+            s =>
+            {
+                s.DetectedLanguage = ("de", 0.9f);
+                s.Add(0, Seg(0.5, " Erstes Kapitel."));
+                s.Add(600, Seg(0.3, " Zweites Kapitel."));
+            });
+
+        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal("de", result.Profile.Language);
+        Assert.Equal("Kapitel", result.Profile.Title);
+        Assert.Equal("de", result.DetectedLanguage);
+        Assert.Equal(0.9, result.DetectedProbability, 3);
+        Assert.Equal(1, transcriber.DetectLanguageCalls);
+        Assert.Equal(["de"], transcriber.LanguageChanges);
+    }
+
+    [Fact]
+    public async Task AutoLanguage_FallsBackToEnglish_WhenDetectionIsBelowThreshold()
+    {
+        var (result, _) = await DetectWithTranscriberAsync(
+            Options(),
+            [new(595, 600)],
+            s =>
+            {
+                s.DetectedLanguage = ("tr", 0.3f); // below the 0.5 threshold
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal("en", result.Profile.Language);
+        Assert.Equal("Chapter", result.Profile.Title);
+        Assert.Equal("tr", result.DetectedLanguage); // the raw guess is still reported
+        Assert.Equal(0.3, result.DetectedProbability, 3);
+    }
+
+    [Fact]
+    public async Task ExplicitLang_NeverCallsLanguageDetection()
+    {
+        var (result, transcriber) = await DetectWithTranscriberAsync(
+            Options("--lang", "de"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Erstes Kapitel."));
+                s.Add(600, Seg(0.3, " Zweites Kapitel."));
+            });
+
+        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal(0, transcriber.DetectLanguageCalls);
+        Assert.Null(result.DetectedLanguage);
+        Assert.Equal("de", result.Profile.Language);
+        Assert.Equal(["de"], transcriber.LanguageChanges); // still (re-)asserted defensively
     }
 }

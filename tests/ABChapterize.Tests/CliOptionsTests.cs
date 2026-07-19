@@ -37,10 +37,14 @@ public sealed class CliOptionsTests : IDisposable
         => CliOptions.Parse([.. options, _dir]);
 
     [Fact]
-    public void Defaults_AreEnglish()
+    public void Defaults_AreAutoLanguageWithEnglishFallback()
     {
         var o = ParseFile()!;
-        Assert.Equal("en", o.Language);
+        Assert.Equal("auto", o.Language);
+        Assert.True(o.AutoLanguage);
+        // The parse-time DefaultProfile/ChapterPhrase/Title/IntroTitle are the English
+        // fallback used when a file's own auto-detection is inconclusive or skipped;
+        // ChapterDetector resolves a fresh profile per file when actually detecting.
         Assert.Equal("chapter", o.ChapterPhrase);
         Assert.Equal("Chapter", o.Title);
         Assert.Equal("Intro", o.IntroTitle);
@@ -50,6 +54,47 @@ public sealed class CliOptionsTests : IDisposable
         Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata);
         Assert.Null(o.Jobs);
+    }
+
+    [Theory]
+    [InlineData("auto")]
+    [InlineData("AUTO")]
+    [InlineData("Auto")]
+    public void Lang_Auto_IsAcceptedExplicitly(string value)
+    {
+        var o = ParseFile("--lang", value)!;
+        Assert.Equal("auto", o.Language);
+        Assert.True(o.AutoLanguage);
+    }
+
+    [Fact]
+    public void Lang_Auto_WithExplicitOverrides_StillWinsOverEnglishFallback()
+    {
+        var o = ParseFile("--lang", "auto", "-c", "Teil", "-t", "Teil", "-i", "Anfang")!;
+        Assert.Equal("Teil", o.ChapterPhrase);
+        Assert.Equal("Teil", o.Title);
+        Assert.Equal("Anfang", o.IntroTitle);
+    }
+
+    [Fact]
+    public void ResolveProfile_LocalizesForTheGivenLanguage()
+    {
+        var o = ParseFile()!; // auto, no overrides
+        var profile = o.ResolveProfile("de");
+        Assert.Equal("de", profile.Language);
+        Assert.Equal("Kapitel", profile.ChapterPhrase);
+        Assert.Equal("Kapitel", profile.Title);
+        Assert.Equal("Intro", profile.IntroTitle);
+    }
+
+    [Fact]
+    public void ResolveProfile_KeepsExplicitOverrides_RegardlessOfLanguage()
+    {
+        var o = ParseFile("-c", "Teil", "-t", "Teil", "-i", "Anfang")!;
+        var profile = o.ResolveProfile("de");
+        Assert.Equal("Teil", profile.ChapterPhrase);
+        Assert.Equal("Teil", profile.Title);
+        Assert.Equal("Anfang", profile.IntroTitle);
     }
 
     [Theory]
