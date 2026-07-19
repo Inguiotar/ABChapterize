@@ -644,6 +644,38 @@ count as installed. If the download fails (offline machine, write-protected
 folder), the error message contains step-by-step instructions for installing
 the model manually.
 
+### Download integrity verification
+
+Every downloaded model file is checked against a SHA-256 and a SHA3-256
+digest pinned in the executable, computed while the file streams in (no
+second pass over the multi-gigabyte file is needed). Both must match. This
+guards against the model repository itself being compromised: if an attacker
+ever took over the Hugging Face repository and swapped a model file for
+something else, that something else would also need to satisfy two
+independently-designed hash algorithms simultaneously to be accepted -
+something not achievable in practice, unlike defeating a single hash. A file
+that fails either check is rejected and deleted, never loaded by the native
+Whisper model loader. On success, the startup message reads
+"Model downloaded and verified at ...".
+
+If a platform's cryptography stack has no SHA3-256 support (a possibility on
+older or minimal Linux systems, depending on the OpenSSL version installed),
+only SHA-256 is enforced and a note is printed; this has not been observed
+on any system tested so far (Windows 11 and current WSL2/Ubuntu both support
+SHA3-256 natively). Manually installed model files (see above) are not
+verified automatically - if you install one by hand, check its SHA-256
+yourself against the digest shown in the manual-installation error message
+or listed here:
+
+| Selector | SHA-256 |
+| --- | --- |
+| `tiny` | `be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21` |
+| `base` | `60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe` |
+| `small` | `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b` |
+| `medium` | `6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208` |
+| `turbo` | `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69` |
+| `large` | `64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2` |
+
 ## 9. GPU acceleration
 
 The native Whisper runtime is selected automatically at start: **CUDA**
@@ -794,7 +826,11 @@ with stubborn cases.
 that the startup line reports a GPU backend, not CPU.
 
 **Model download fails** — the error message includes manual installation
-steps; see [section 8](#8-whisper-models).
+steps; see [section 8](#8-whisper-models). A checksum-mismatch error means
+the downloaded file did not match the pinned SHA-256/SHA3-256 digests and
+was rejected before use - retry the download; if it keeps failing, this may
+indicate a network issue corrupting the transfer, or the Hugging Face
+repository serving something unexpected.
 
 **ffmpeg not found** — see [section 10](#10-ffmpeg-requirements-and-discovery);
 the quickest fix is setting `FFMPEG_DIR`.

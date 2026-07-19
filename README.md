@@ -28,7 +28,9 @@ Prebuilt binaries for Windows and Linux are available on the
   was announced without a pause before it), the suspicious regions are
   transcribed in full to find the missing ones.
 - **Zero setup for models** — the Whisper model is downloaded automatically on
-  first use.
+  first use, and checked against pinned SHA-256 and SHA3-256 digests before
+  it is used — a compromised or tampered-with download is rejected rather
+  than silently loaded.
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
 - **Processes batches in parallel** — multiple files at once, auto-throttled to
   live CPU load (and capped at 1 concurrent file on GPU backends by default,
