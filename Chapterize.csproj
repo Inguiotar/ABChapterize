@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Chapterize</RootNamespace>
     <AssemblyName>chapterize</AssemblyName>
-    <Version>0.8.0</Version>
+    <Version>0.8.1</Version>
     <!-- Keep the informational version (shown by the version option and in the usage
          note) a plain version number instead of appending "+<git commit hash>". -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

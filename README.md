@@ -12,6 +12,9 @@ only the chapter metadata is rewritten.
 If you have ever bought an audiobook whose chapter marks were missing, misplaced,
 or pure fantasy (looking at you, Audible), this tool is for you.
 
+Prebuilt binaries for Windows and Linux are available on the
+[Releases](../../releases) page — no build tools required.
+
 ## Highlights
 
 - **Finds chapters by listening** — it detects the narrator's actual chapter
@@ -113,7 +116,7 @@ when chapters are written. The most useful knobs:
 | `-r`, `--recurse` | Descend into subdirectories. |
 | `-b`, `--backup` | Keep the original file as `*.bak`. |
 | `--revert` | Restore all `*.bak` backups (undo). |
-| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title`. |
+| `-l`, `--lang <code>` | Language hint for Whisper (default: `en`). Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title`. |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
