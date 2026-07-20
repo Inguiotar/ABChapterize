@@ -194,8 +194,11 @@ public sealed class ChapterDetector
         var found = new List<DetectedChapter>();
 
         // Probes a single window and appends any chapter mark found in it to `found`.
-        // Returns the chapter number found, or null when the phrase was not found.
-        async Task<int?> ProbeAsync(double start)
+        // Returns the chapter number found (or null when the phrase was not found), together
+        // with the real silence found to immediately precede the phrase - see
+        // FindRealAnchorSilence - for the caller to use when tightening --min-silence-length
+        // instead of blindly trusting this probe's own triggering candidate.
+        async Task<(int? Number, Silence? RealAnchorSilence)> ProbeAsync(double start)
         {
             ct.ThrowIfCancellationRequested();
             var samples = await _audio.DecodePcmAsync(file, start,
@@ -214,38 +217,54 @@ public sealed class ChapterDetector
             {
                 if (!_options.Jingle && match.PhraseStartSeconds > PhraseLatestStart)
                     continue; // without a jingle the phrase must directly follow the silence
+
+                var phraseAbs = start + match.PhraseStartSeconds;
+                // An in-text pause long enough to itself pass the --min-silence-length
+                // threshold can trigger a probe whose window - especially the wide one used
+                // with --jingle - still reaches the real chapter transition further along, so
+                // this probe's own triggering silence (at `start`) is not necessarily the one
+                // immediately preceding the phrase. Re-derive the real one from the full
+                // silence list; null means none was found between window start and the phrase,
+                // i.e. the triggering silence itself was the real one after all.
+                var realAnchorSilence = FindRealAnchorSilence(start, phraseAbs, silences);
+
                 var time = _options.Jingle
-                    ? AnchorJingleMark(start, match.PhraseStartSeconds, silences)
+                    ? Math.Max(0, (realAnchorSilence?.EndSeconds ?? start) - JingleLeadSeconds)
                     : Math.Max(0, start + (start == 0 ? match.PhraseStartSeconds : 0));
                 _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)} " +
                              $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}");
                 found.Add(new DetectedChapter(match.Number, time, match.Confidence));
                 work.ChaptersFound = CountDistinct(found);
 
-                if (_options.Jingle && _options.AutoMaxJingle && start != 0 &&
-                    match.PhraseStartSeconds >= MinJingleObservationSeconds &&
-                    match.PhraseStartSeconds > observedMaxJingleSeconds)
+                if (_options.Jingle && _options.AutoMaxJingle && start != 0)
                 {
-                    // match.PhraseStartSeconds is the phrase's offset from this window's own
-                    // start, i.e. roughly the jingle's own length (the window starts right at
-                    // the end of the triggering silence). Track the longest one seen so far and
-                    // resize future probe windows to it plus a safety margin, capped at the
-                    // original ceiling so an outlier can never make the window wider than what
-                    // --max-jingle-length was given (or its 45 s default) would allow. Not
-                    // shrink-only: a later, genuinely longer jingle must widen the window back
-                    // out too, or the safety margin below could never do its job.
-                    observedMaxJingleSeconds = match.PhraseStartSeconds;
-                    var resized = Math.Min(jingleCeilingSeconds,
-                        JingleObservationSafetyFactor * observedMaxJingleSeconds + PhraseMarginSeconds);
-                    if (resized != probeSeconds)
+                    // The real jingle length is the gap between the real preceding silence
+                    // (not necessarily this probe's own triggering one, see above) and the
+                    // phrase - using the raw offset from this probe's own window start would
+                    // inflate the observation whenever a false, earlier in-text pause was what
+                    // actually triggered this probe.
+                    var observedLength = phraseAbs - (realAnchorSilence?.EndSeconds ?? start);
+                    if (observedLength >= MinJingleObservationSeconds && observedLength > observedMaxJingleSeconds)
                     {
-                        probeSeconds = resized;
-                        _log?.Invoke($"Pass 2: jingle probe window resized to {probeSeconds:0.#} s");
+                        // Track the longest jingle seen so far and resize future probe windows
+                        // to it plus a safety margin, capped at the original ceiling so an
+                        // outlier can never make the window wider than what --max-jingle-length
+                        // was given (or its 45 s default) would allow. Not shrink-only: a later,
+                        // genuinely longer jingle must widen the window back out too, or the
+                        // safety margin could never do its job.
+                        observedMaxJingleSeconds = observedLength;
+                        var resized = Math.Min(jingleCeilingSeconds,
+                            JingleObservationSafetyFactor * observedMaxJingleSeconds + PhraseMarginSeconds);
+                        if (resized != probeSeconds)
+                        {
+                            probeSeconds = resized;
+                            _log?.Invoke($"Pass 2: jingle probe window resized to {probeSeconds:0.#} s");
+                        }
                     }
                 }
-                return match.Number; // one chapter per probe window
+                return (match.Number, realAnchorSilence); // one chapter per probe window
             }
-            return null;
+            return (null, null);
         }
 
         // Adaptive threshold state (--min-silence-length auto only; otherwise every candidate
@@ -271,7 +290,7 @@ public sealed class ChapterDetector
                 continue;
             }
 
-            var number = await ProbeAsync(candidate.Start);
+            var (number, realAnchorSilence) = await ProbeAsync(candidate.Start);
             work.Advance(probeBytes);
 
             if (number is not { } n || n <= (lastNumber ?? 0))
@@ -288,7 +307,11 @@ public sealed class ChapterDetector
                     foreach (var skipped in skippedSinceLastMark)
                         await ProbeAsync(skipped.Start);
                 }
-                else if (lastNumber.HasValue && candidate.Silence is { } triggeringSilence)
+                // realAnchorSilence, when present, is the silence that truly precedes the
+                // phrase - preferred over candidate.Silence, this probe's own triggering
+                // silence, which can be an earlier, unrelated in-text pause that merely
+                // happened to itself pass the threshold (see FindRealAnchorSilence).
+                else if (lastNumber.HasValue && (realAnchorSilence ?? candidate.Silence) is { } triggeringSilence)
                 {
                     // lastNumber.HasValue means this is at least the second mark found, so
                     // its triggering silence is a real inter-chapter break - not the
@@ -502,23 +525,23 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Determines where to place a jingle-mode chapter mark found in a probe window. The window
-    /// can span the trailing speech of the previous chapter, the real inter-chapter silence, the
-    /// jingle and the phrase, so anchoring at the probe's own silence would mark the chapter too
-    /// early. Instead the mark is anchored at the latest detected silence that ends before the
-    /// phrase, falling back to the window start (the end of the silence that triggered the probe).
+    /// Finds the silence that truly precedes a matched phrase, independent of which candidate
+    /// silence actually triggered the probe. A probe window can span the trailing speech of the
+    /// previous chapter, an unrelated in-text pause long enough to itself have passed the
+    /// --min-silence-length threshold, the real inter-chapter silence, the jingle (with
+    /// --jingle) and finally the phrase - so trusting the probe's own triggering silence, both
+    /// for the jingle-mode mark position and for the --min-silence-length/--max-jingle-length
+    /// auto mechanisms, would anchor to the wrong (earlier, false) silence whenever that
+    /// happens. Returns null when no silence between the window start and the phrase was found,
+    /// meaning the triggering silence (ending exactly at windowStart) was the real one after all.
     /// </summary>
     /// <param name="windowStart">Absolute start of the probe window in seconds.</param>
-    /// <param name="phraseStartSeconds">Phrase start relative to the window start.</param>
+    /// <param name="phraseAbsSeconds">Absolute phrase start in seconds.</param>
     /// <param name="silences">All silences found by the silence scan.</param>
-    private static double AnchorJingleMark(
-        double windowStart, double phraseStartSeconds, List<Silence> silences)
+    private static Silence? FindRealAnchorSilence(double windowStart, double phraseAbsSeconds, List<Silence> silences)
     {
-        var phraseAbs = windowStart + phraseStartSeconds;
-        var silence = silences.LastOrDefault(s =>
-            s.EndSeconds > windowStart && s.EndSeconds <= phraseAbs);
-        var anchor = silence == default ? windowStart : silence.EndSeconds;
-        return Math.Max(0, anchor - JingleLeadSeconds);
+        var silence = silences.LastOrDefault(s => s.EndSeconds > windowStart && s.EndSeconds <= phraseAbsSeconds);
+        return silence == default ? null : silence;
     }
 
     /// <summary>Counts distinct chapter numbers in a raw detection list (for progress display).</summary>
