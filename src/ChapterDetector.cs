@@ -58,17 +58,16 @@ public sealed class ChapterDetector
     private const double ProbeSecondsPlain = 12;
 
     /// <summary>
-    /// When one probe window overlaps the previous one, the overlapping portion is not
-    /// re-transcribed with Whisper - the prior window's cached transcript is reused for it (see
-    /// the reuse logic in ProbeAsync). Only the not-yet-transcribed tail is decoded and sent to
-    /// Whisper, but starting this many seconds <em>before</em> the overlap border rather than
-    /// exactly at it: Whisper's accuracy near the very start of a decode is poorer (it has no
-    /// left-hand acoustic context), so the tail decode reaches back a little into the already
-    /// cached region as pure context. Segments produced within that reached-back margin are
-    /// discarded in favor of the cached ones, so the margin only improves the fresh tail's
-    /// transcription without double-counting the overlap.
+    /// The shortest silence Pass 1 retains in memory (see the <c>allSilences</c>/<c>silences</c>
+    /// split in <see cref="DetectAsync"/>) for use as an overlap split point (see
+    /// <see cref="FindOverlapSplitPoint"/>), regardless of how high --min-silence-length is set.
+    /// Only silences at or above --min-silence-length are ever reported as Pass 2 candidates or
+    /// logged; this lower floor exists purely so a silence-mid-point split point is available
+    /// even when the nearest real silence around an overlap border is shorter than the book's
+    /// candidate threshold. Kept low enough to catch ordinary clause pauses without noticeably
+    /// growing Pass 1's silence list.
     /// </summary>
-    private const double ProbeReuseContextSeconds = 2.0;
+    private const double MinStoredSilenceSeconds = 0.5;
 
     /// <summary>Without a jingle the phrase must start within this many seconds after the silence.</summary>
     private const double PhraseLatestStart = 5.0;
@@ -218,23 +217,31 @@ public sealed class ChapterDetector
         // detector) regardless of amplitude, so it can catch what silencedetect misses. See
         // ComputeJingleMark for how the two detectors' findings combine to place the mark.
         work.BeginPhase("Pass 1", info.SizeBytes);
-        List<Silence> silences;
+        // The scan itself always goes down to MinStoredSilenceSeconds (or --min-silence-length
+        // itself, if that is lower still) so short silences are available for overlap-border
+        // snapping (see FindOverlapSplitPoint); allSilences holds every one of those, while
+        // `silences` - used everywhere else below exactly as before this feature existed - keeps
+        // only the ones at or above --min-silence-length.
+        var storedSilenceFloor = Math.Min(_options.MinSilenceSeconds, MinStoredSilenceSeconds);
+        List<Silence> allSilences;
         var nonSpeechRegions = new List<NonSpeechRegion>();
         if (_options.Jingle && _vad is { } vad)
         {
             List<SpeechSegment> speech = [];
-            silences = await _audio.DetectSilencesAndStreamPcmAsync(
-                file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
+            allSilences = await _audio.DetectSilencesAndStreamPcmAsync(
+                file, info.DurationSeconds, storedSilenceFloor, SilenceNoiseDb,
                 async (pcm, innerCt) => speech = await vad.DetectSpeechAsync(pcm, innerCt),
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
             nonSpeechRegions = ComputeNonSpeechRegions(speech);
         }
         else
         {
-            silences = await _audio.DetectSilencesAsync(
-                file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
+            allSilences = await _audio.DetectSilencesAsync(
+                file, info.DurationSeconds, storedSilenceFloor, SilenceNoiseDb,
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
         }
+        var silences = allSilences
+            .Where(s => s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds).ToList();
 
         _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= " +
                      $"{_options.MinSilenceSeconds:0.#} s found" + (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
@@ -339,21 +346,25 @@ public sealed class ChapterDetector
                 }
                 else
                 {
-                    // Partial overlap: reuse cached segments up to the overlap border and transcribe
-                    // only the fresh tail, reaching ProbeReuseContextSeconds back into the cache as
-                    // Whisper context (those reached-back segments are dropped in favor of the cache).
-                    var decodeFrom = Math.Max(start, cacheTo - ProbeReuseContextSeconds);
-                    var samples = await _audio.DecodePcmAsync(file, decodeFrom,
-                        windowEnd - decodeFrom, info.InputDecoder, ct);
+                    // Partial overlap: snap the cut between the reused cache and the fresh tail to
+                    // a silence (or, in --jingle mode, a VAD non-speech region) mid-point instead of
+                    // the arbitrary overlap border, so it never falls mid-word - see
+                    // FindOverlapSplitPoint. Falls back to the border itself, with no reach-back
+                    // margin, when neither exists: that almost certainly means there is no chapter
+                    // transition in the overlap at all.
+                    var splitPoint = FindOverlapSplitPoint(
+                        start, cacheTo, windowEnd, allSilences, nonSpeechRegions, _options.Jingle);
+                    var samples = await _audio.DecodePcmAsync(file, splitPoint,
+                        windowEnd - splitPoint, info.InputDecoder, ct);
                     var fresh = await _transcriber.TranscribeAsync(samples, ct);
                     windowSegmentsAbs = cacheSegmentsAbs
-                        .Where(s => s.StartSeconds >= start && s.StartSeconds < decodeFrom)
-                        .Concat(ShiftSegments(fresh, decodeFrom))
+                        .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint)
+                        .Concat(ShiftSegments(fresh, splitPoint))
                         .ToList();
                     cacheSegmentsAbs = windowSegmentsAbs;
                     cacheFrom = start;
                     cacheTo = windowEnd;
-                    logLabel = $"probe @{FormatTimestamp(start)} (tail from {FormatTimestamp(decodeFrom)})";
+                    logLabel = $"probe @{FormatTimestamp(start)} (tail from {FormatTimestamp(splitPoint)})";
                 }
             }
             else
@@ -934,6 +945,48 @@ public sealed class ChapterDetector
     {
         var silence = silences.LastOrDefault(s => s.EndSeconds > windowStart && s.EndSeconds <= phraseAbsSeconds);
         return silence == default ? null : silence;
+    }
+
+    /// <summary>
+    /// Finds where to cut an overlapping pair of Pass 2 probe windows so the split never falls
+    /// mid-word: the mid-point of the nearest silence found anywhere in window 2 (the overlap
+    /// portion and the rest of the window past the original border - searching both directions
+    /// from it), falling back to a VAD non-speech region under the same rule in --jingle mode
+    /// when no silence qualifies, and finally to the original border itself (no snap, no
+    /// reach-back) when neither exists - which almost certainly means there is no chapter
+    /// transition in the overlap to begin with, so a mid-word cut there is not a real risk.
+    /// </summary>
+    /// <param name="windowStart">Start of window 2 (the new probe's window).</param>
+    /// <param name="border">The original, unsnapped overlap border - window 1's end.</param>
+    /// <param name="windowEnd">End of window 2.</param>
+    /// <param name="allSilences">Every silence Pass 1 found, down to <see
+    /// cref="MinStoredSilenceSeconds"/> - not just the ones at or above --min-silence-length.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
+    /// <param name="jingle">True when --jingle is in effect, enabling the VAD region fallback.</param>
+    private static double FindOverlapSplitPoint(
+        double windowStart, double border, double windowEnd,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, bool jingle)
+    {
+        var silenceSplit = allSilences
+            .Where(s => s.StartSeconds >= windowStart && s.EndSeconds <= windowEnd)
+            .Select(s => (double?)((s.StartSeconds + s.EndSeconds) / 2))
+            .OrderBy(mid => Math.Abs(mid!.Value - border))
+            .FirstOrDefault();
+        if (silenceSplit is { } ss)
+            return ss;
+
+        if (jingle)
+        {
+            var regionSplit = nonSpeechRegions
+                .Where(r => r.StartSeconds >= windowStart && r.EndSeconds <= windowEnd)
+                .Select(r => (double?)((r.StartSeconds + r.EndSeconds) / 2))
+                .OrderBy(mid => Math.Abs(mid!.Value - border))
+                .FirstOrDefault();
+            if (regionSplit is { } rs)
+                return rs;
+        }
+
+        return border;
     }
 
     /// <summary>Counts distinct chapter numbers in a raw detection list (for progress display).</summary>

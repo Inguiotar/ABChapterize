@@ -676,16 +676,17 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Two silences 6 s apart give overlapping 12 s probe windows ([600, 612] and [606, 618]).
         // Chapter one is found by the first probe. The second probe must not re-decode the shared
-        // [606, 612] span: with reuse it only decodes the fresh tail, starting ProbeReuseContextSeconds
-        // (2 s) before the overlap border at 610 - so 610 is decoded and the candidate's own start
-        // (606) never is. The detected chapter is unaffected by the optimization.
+        // [606, 612] span: neither silence lies fully within window 2 ([606, 618]), so
+        // FindOverlapSplitPoint falls back to the original border (612, no snap, no reach-back) -
+        // that is where the fresh tail decode starts, and the candidate's own start (606) never is.
+        // The detected chapter is unaffected by the optimization.
         var (result, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(601, 606)],
             s => s.Add(600, Seg(0.5, " Chapter one.")));
 
         Assert.Equal([new DetectedChapter(1, 600)], result.Chapters);
-        Assert.Contains(610.0, audio.DecodeStarts);       // fresh tail only (overlap border - 2 s)
+        Assert.Contains(612.0, audio.DecodeStarts);        // fresh tail only (fallback: the border itself)
         Assert.DoesNotContain(606.0, audio.DecodeStarts);  // the overlap was reused, not re-decoded
     }
 
@@ -697,8 +698,10 @@ public sealed class ChapterDetectorTests : IDisposable
         // --jingle window [600, 650] also contains chapter two's announcement 40 s in; the probe
         // returns chapter one and leaves chapter two unseen. The overlapping candidate at 640 must
         // recover chapter two from the reused transcript - a naive "transcribe only the new tail"
-        // scheme would never see it, since it sits inside the already-transcribed overlap. The tail
-        // decode still lands at the reuse border (648), never at the candidate start (640).
+        // scheme would never see it, since it sits inside the already-transcribed overlap. Neither
+        // silence lies fully within window 2 ([640, 690]), and there are no VAD non-speech regions
+        // (one continuous speech segment), so FindOverlapSplitPoint falls back to the original
+        // border (650) - the tail decode lands there, never at the candidate start (640).
         var (result, _, audio) = await DetectFullAsync(
             Options("--jingle"),
             [new(598, 600), new(638, 640)],
@@ -707,7 +710,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
         Assert.Contains(new DetectedChapter(2, 639.5), result.Chapters);
-        Assert.Contains(648.0, audio.DecodeStarts);
+        Assert.Contains(650.0, audio.DecodeStarts);
         Assert.DoesNotContain(640.0, audio.DecodeStarts);
     }
 
@@ -719,16 +722,55 @@ public sealed class ChapterDetectorTests : IDisposable
         // probe rejects it as too late. The next candidate at 606 sees the very same phrase only 3 s
         // in ([606, 618], phrase at 609) and must accept it. That phrase lives in the
         // already-transcribed overlap, so only the reused transcript - not a tail-only re-decode -
-        // can surface it. The chapter is recovered and the overlap is not re-decoded (610 is, 606 is
-        // not).
+        // can surface it. Neither silence lies fully within window 2 ([606, 618]), so
+        // FindOverlapSplitPoint falls back to the original border (612). The chapter is recovered
+        // and the overlap is not re-decoded (612 is, 606 is not).
         var (result, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606)],
             s => s.Add(600, Seg(9, " Chapter one.")));
 
         Assert.Equal([new DetectedChapter(1, 606)], result.Chapters);
-        Assert.Contains(610.0, audio.DecodeStarts);
+        Assert.Contains(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_SnapsTheSplitToASilenceMidpointWithinWindowTwo()
+    {
+        // Window 1 (candidate 600, --min-silence-length 1.5) spans [600, 612]; window 2
+        // (candidate 606) spans [606, 618] and overlaps it. A short 0.6 s silence at
+        // [608, 608.6] is well below the 1.5 s candidate threshold - it never becomes a Pass 2
+        // candidate of its own - but is still retained down to the 0.5 s floor
+        // (MinStoredSilenceSeconds) purely for overlap snapping, and it lies fully inside
+        // window 2. FindOverlapSplitPoint must snap the cut to its mid-point (608.3) instead of
+        // falling back to the raw border (612).
+        var (_, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(603, 606), new(608, 608.6)],
+            s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(608.3, audio.DecodeStarts);
+        Assert.DoesNotContain(612.0, audio.DecodeStarts);
+        Assert.DoesNotContain(606.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_SnapsTheSplitToAVadRegion_WhenNoSilenceQualifies()
+    {
+        // Window 1 (candidate 600, --jingle) spans [600, 650]; window 2 (candidate 640) spans
+        // [640, 690]. Neither silence lies fully within window 2, but a 3 s VAD non-speech
+        // region at [660, 663] does - so FindOverlapSplitPoint must fall back to (jingle mode
+        // only) the region's mid-point (661.5) rather than the raw border (650).
+        var (_, _, audio) = await DetectFullAsync(
+            Options("--jingle"),
+            [new(598, 600), new(638, 640)],
+            s => s.Add(600, Seg(2, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 660), new(663, 3600)] });
+
+        Assert.Contains(661.5, audio.DecodeStarts);
+        Assert.DoesNotContain(650.0, audio.DecodeStarts);
+        Assert.DoesNotContain(640.0, audio.DecodeStarts);
     }
 
     [Fact]
