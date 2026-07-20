@@ -643,14 +643,16 @@ public sealed class CliOptions
                                     Minimum silence duration that counts as a potential
                                     chapter break; the silence scan always uses this as its
                                     floor (default, and floor with "auto": 1.5). With "auto"
-                                    (the default), after each chapter mark is found the
-                                    probing threshold tightens to 90% of the length of the
-                                    silence that triggered it, resetting to the floor
-                                    whenever a sequence gap is hit, so fewer Whisper probes
-                                    are needed without a fixed guess. An explicit numeric
-                                    value disables this and probes every such silence
-                                    instead - useful if the breaks are known to vary a lot,
-                                    or for troubleshooting.
+                                    (the default), starting from the second chapter mark
+                                    found (the silence before the first mark is usually the
+                                    intro/title silence and often longer, so it is not used
+                                    to tighten), each mark tightens the probing threshold to
+                                    90% of the length of the silence that triggered it,
+                                    resetting to the floor whenever a sequence gap is hit -
+                                    fewer Whisper probes without a fixed guess. An explicit
+                                    numeric value disables this and probes every such
+                                    silence instead - useful if the breaks are known to vary
+                                    a lot, or for troubleshooting.
           -q, --quiet               Suppress per-file output; warnings and errors are still shown.
           -v, --verbose             Print processing details and all Whisper transcriptions as
                                     timestamped log lines (to see what the recognizer heard).

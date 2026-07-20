@@ -119,13 +119,15 @@ Rules applied to the matches:
   [section 12](#12-output-progress-and-logging).
 
 By default (`--min-silence-length auto`), probing does not visit every
-silence from pass 1 unconditionally. It starts at the 1.5 s floor as usual;
-the first chapter mark found via an actual silence (rather than at the very
-start of the file) tightens the threshold to 90% of that silence's length,
-and every subsequent mark re-tightens it the same way against its own
-triggering silence — so once real inter-chapter breaks establish a typical
-length, clearly shorter in-chapter pauses stop being probed, while breaks
-close to (or longer than) that length still are. If a chapter number is then
+silence from pass 1 unconditionally. It starts at the 1.5 s floor as usual
+and stays there until the *second* chapter mark is found - the silence
+before the first mark is typically the intro/title silence, often longer
+than the breaks between chapters, so it is never used to tighten. From the
+second mark on, every mark tightens the threshold to 90% of its own
+triggering silence's length, re-tightening again on every subsequent mark —
+so once real inter-chapter breaks establish a typical length, clearly
+shorter in-chapter pauses stop being probed, while breaks close to (or
+longer than) that length still are. If a chapter number is then
 found out of sequence (a gap), the threshold immediately resets to the 1.5 s
 floor and every silence skipped since the last mark is re-probed right away,
 before falling through to pass 3 — so pass 3's full transcription is only

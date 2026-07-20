@@ -202,11 +202,14 @@ public sealed class ChapterDetector
         }
 
         // Adaptive threshold state (--min-silence-length auto only; otherwise every candidate
-        // is probed unconditionally, same as before this feature existed). Tightens to
-        // AdaptiveTightenFactor * the triggering silence's length after every new mark; resets
-        // to the 1.5 s floor - and re-probes everything skipped since the last mark - the
-        // moment a sequence gap turns up, so gap-filling stays inside Pass 2 where possible and
-        // Pass 3's full transcription is only needed if that still fails.
+        // is probed unconditionally, same as before this feature existed). Probing proceeds
+        // unthrottled until the second mark is found (its triggering silence is the first
+        // real inter-chapter break - the silence before the first mark is typically the
+        // intro/title silence, often longer, so it must not be used to tighten). From there,
+        // every new mark tightens the threshold to AdaptiveTightenFactor * its own triggering
+        // silence's length; a sequence gap resets it to the 1.5 s floor and re-probes
+        // everything skipped since the last mark, so gap-filling stays inside Pass 2 where
+        // possible and Pass 3's full transcription is only needed if that still fails.
         var threshold = _options.MinSilenceSeconds;
         var skippedSinceLastMark = new List<(double Start, Silence? Silence)>();
         int? lastNumber = null;
@@ -238,8 +241,12 @@ public sealed class ChapterDetector
                     foreach (var skipped in skippedSinceLastMark)
                         await ProbeAsync(skipped.Start);
                 }
-                else if (candidate.Silence is { } triggeringSilence)
+                else if (lastNumber.HasValue && candidate.Silence is { } triggeringSilence)
                 {
+                    // lastNumber.HasValue means this is at least the second mark found, so
+                    // its triggering silence is a real inter-chapter break - not the
+                    // intro-to-chapter-1 silence, which is routinely longer than that and
+                    // would otherwise over-tighten the threshold from the very first mark.
                     threshold = AdaptiveTightenFactor * (triggeringSilence.EndSeconds - triggeringSilence.StartSeconds);
                     _log?.Invoke($"Pass 2: threshold tightened to {threshold:0.##} s after chapter {n}");
                 }

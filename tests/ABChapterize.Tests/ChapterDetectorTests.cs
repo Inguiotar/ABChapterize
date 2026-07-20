@@ -278,6 +278,34 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoMinSilence_DoesNotTightenOnTheFirstMark()
+    {
+        // The intro-to-chapter-1 silence (30 s) is longer than the real inter-chapter breaks
+        // (5 s each) - a common shape (title/credits pause vs. normal chapter breaks).
+        // Tightening on chapter 1's own triggering silence would push the threshold above
+        // those breaks and silently skip chapters 2 and 3 entirely (no gap would even be
+        // detected, since pass 2 would never find a second chapter to compare against).
+        // Tightening must only start once the second mark is found, using its own (genuine
+        // inter-chapter) triggering silence instead.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(10, 40), new(595, 600), new(900, 905)],
+            s =>
+            {
+                s.Add(40, Seg(0.3, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(905, Seg(0.2, " Chapter three."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal(
+            [new(1, 40), new(2, 600), new(3, 905)],
+            result.Chapters);
+        Assert.Contains(600.0, audio.DecodeStarts);
+        Assert.Contains(905.0, audio.DecodeStarts);
+    }
+
+    [Fact]
     public async Task AutoMinSilence_ResetsThreshold_AndRetriesSkippedSilences_OnSequenceGap()
     {
         // Same setup, but chapter 3's phrase only lives in the skipped 700-703 silence and the

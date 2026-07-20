@@ -187,11 +187,14 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
    Seven") or precedes
    it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). By default
-   (`--min-silence-length auto`), every mark found tightens the probing
-   threshold to 90% of the length of the silence that triggered it, so
-   shorter in-chapter pauses stop being probed once real inter-chapter
-   breaks are established; the threshold resets to the 1.5 s floor - and
-   everything skipped since the last mark is re-probed - the moment a
+   (`--min-silence-length auto`), starting from the second mark found (the
+   silence before the first mark is usually the intro/title silence, often
+   longer than the breaks between chapters, so it's not used to tighten),
+   every mark tightens the probing threshold to 90% of the length of the
+   silence that triggered it, so shorter in-chapter pauses stop being probed
+   once real inter-chapter breaks are established; the threshold resets to
+   the 1.5 s floor - and everything skipped since the last mark is
+   re-probed - the moment a
    sequence gap turns up. An explicit `--min-silence-length` value disables
    this and probes every silence at or above it instead.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
