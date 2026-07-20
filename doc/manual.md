@@ -105,9 +105,15 @@ file as speech or non-speech. Music reads as non-speech to a speech detector,
 the same as silence, so a jingle shows up as a non-speech region flanked by
 speech regardless of whether there is any amplitude gap around it.
 
-Every such region is a candidate jingle transition, subject to two filters:
-it must be at least 2 seconds long (shorter blips are treated as VAD noise,
-not a real jingle) and no longer than the current `--max-jingle-length`
+Before candidates are built, the raw VAD output is cleaned up: Silero VAD is
+not fully reliable on jingle music, so a "speech" blip shorter than 1 second
+(a vocal-like transient or a strong rhythmic passage inside otherwise
+instrumental music) does not end a non-speech region — the regions on either
+side of it are merged into one, so a single jingle is not fragmented into
+several short candidates. Every such region is then a candidate jingle
+transition, subject to two filters: it must be at least 2 seconds long
+(shorter regions are dropped outright — more likely an in-narration breath
+pause than a jingle) and no longer than the current `--max-jingle-length`
 window (see below) — a region longer than that could never fit its
 announcement in the probe window anyway. When a `silencedetect` silence
 already leads into the region, pass 1's own candidate already covers that

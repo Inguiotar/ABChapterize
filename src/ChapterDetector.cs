@@ -80,14 +80,30 @@ public sealed class ChapterDetector
     private const double JinglePhraseMatchToleranceSeconds = 0.5;
 
     /// <summary>
-    /// With --max-jingle-length auto, an observed phrase offset below this is treated as "this
-    /// chapter had no jingle (or an ultra-short one)" and is excluded from tightening the probe
-    /// window: some audiobooks only play the jingle for some chapters, and such a chapter gives
-    /// no information about how long the window needs to be for chapters that do have one -
-    /// using it anyway could shrink the window before a later, genuinely full-length jingle is
-    /// ever probed.
+    /// The shortest span this codebase ever treats as "plausibly a real jingle". Used two ways:
+    /// (1) a VAD non-speech region shorter than this (after <see
+    /// cref="ComputeNonSpeechRegions"/>'s short-blip merging) is dropped outright rather than
+    /// ever becoming a candidate - too short to be a jingle at any book's pacing, more likely an
+    /// in-narration breath pause VAD happened to classify as non-speech; (2) with
+    /// --max-jingle-length auto, an observed phrase offset below this is treated as "this chapter
+    /// had no jingle (or an ultra-short one)" and excluded from tightening the probe window: some
+    /// audiobooks only play the jingle for some chapters, and such a chapter gives no information
+    /// about how long the window needs to be for chapters that do have one - using it anyway
+    /// could shrink the window before a later, genuinely full-length jingle is ever probed.
     /// </summary>
     private const double MinJingleObservationSeconds = 2.0;
+
+    /// <summary>
+    /// With --jingle, a VAD "speech" segment shorter than this, sandwiched between two non-speech
+    /// regions, does not end the surrounding jingle - the two regions are merged and the blip is
+    /// treated as VAD noise rather than a genuine return to narration. Silero VAD is not reliable
+    /// on jingle music: a vocal-like transient or a strong rhythmic passage can cross its speech
+    /// threshold for a fraction of a second in the middle of an otherwise instrumental jingle,
+    /// which would otherwise fragment one continuous jingle into several too-short regions (see
+    /// <see cref="ComputeNonSpeechRegions"/>). Deliberately well below any real inter-chapter
+    /// narration gap, so a genuine speech resume is never merged away.
+    /// </summary>
+    private const double MergeShortSpeechGapSeconds = 1.0;
 
     /// <summary>
     /// With --max-jingle-length auto, each resized probe window is this factor times the
@@ -208,7 +224,11 @@ public sealed class ChapterDetector
                 file, info.DurationSeconds,
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
             nonSpeechRegions = ComputeNonSpeechRegions(speech);
-            _log?.Invoke($"Pass 1b: {speech.Count} speech segment(s), {nonSpeechRegions.Count} non-speech region(s) found");
+            // speech.Count and nonSpeechRegions.Count always differ by exactly one (a non-speech
+            // region is the gap between two consecutive speech segments) before the merge/filter
+            // cleanup below can drop some, and always differ by at most one afterwards - the
+            // region count alone is the actionable number, so only it is logged.
+            _log?.Invoke($"Pass 1b: {nonSpeechRegions.Count} non-speech region(s) found");
         }
 
         // Pass 2: probe the beginning of the file and the end of every silence. With
@@ -222,9 +242,10 @@ public sealed class ChapterDetector
         // Add a VAD candidate for every silence-less non-speech region: a silencedetect
         // silence already leading the region means the existing silence candidate above
         // probes the same transition, so skip it there (dedup - the silence path stays
-        // primary). MinJingleObservationSeconds/jingleCeilingSeconds bound out breath-pause
-        // blips and regions too long to ever be this book's jingle; the latter is rechecked
-        // against the (possibly since-narrowed) probe window inside the Pass 2 loop below.
+        // primary). The lower length bound is already guaranteed by ComputeNonSpeechRegions'
+        // own MinJingleObservationSeconds filter, kept here as well as a defensive invariant;
+        // the upper bound (regions too long to ever be this book's jingle) is rechecked against
+        // the (possibly since-narrowed) probe window inside the Pass 2 loop below.
         if (_options.Jingle)
         {
             foreach (var region in nonSpeechRegions)
@@ -613,13 +634,30 @@ public sealed class ChapterDetector
     /// <param name="EndSeconds">Where VAD resumed detecting speech.</param>
     internal readonly record struct NonSpeechRegion(double StartSeconds, double EndSeconds);
 
-    /// <summary>Inverts consecutive VAD speech segments into the non-speech gaps between them.</summary>
-    private static List<NonSpeechRegion> ComputeNonSpeechRegions(List<SpeechSegment> speech)
+    /// <summary>
+    /// Inverts consecutive VAD speech segments into the non-speech gaps between them, then cleans
+    /// up two things Silero VAD is not reliable about on real jingle music: a "speech" blip
+    /// shorter than <see cref="MergeShortSpeechGapSeconds"/> (a vocal-like transient or a strong
+    /// rhythmic passage inside otherwise instrumental music) does not end a jingle - the non-speech
+    /// regions on either side of it are merged into one, rather than fragmenting one continuous
+    /// jingle into several too-short regions; and any region that is still shorter than <see
+    /// cref="MinJingleObservationSeconds"/> after merging is dropped outright, being too short to
+    /// ever be a real jingle (more likely an in-narration breath pause VAD classified as
+    /// non-speech). Internal for unit testing.
+    /// </summary>
+    internal static List<NonSpeechRegion> ComputeNonSpeechRegions(List<SpeechSegment> speech)
     {
-        var regions = new List<NonSpeechRegion>();
+        var merged = new List<NonSpeechRegion>();
         for (var i = 1; i < speech.Count; i++)
-            regions.Add(new NonSpeechRegion(speech[i - 1].EndSeconds, speech[i].StartSeconds));
-        return regions;
+        {
+            var start = speech[i - 1].EndSeconds;
+            var end = speech[i].StartSeconds;
+            if (merged.Count > 0 && start - merged[^1].EndSeconds < MergeShortSpeechGapSeconds)
+                merged[^1] = merged[^1] with { EndSeconds = end };
+            else
+                merged.Add(new NonSpeechRegion(start, end));
+        }
+        return merged.Where(r => r.EndSeconds - r.StartSeconds >= MinJingleObservationSeconds).ToList();
     }
 
     /// <summary>

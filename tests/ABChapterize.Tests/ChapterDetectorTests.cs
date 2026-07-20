@@ -631,6 +631,64 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void ComputeNonSpeechRegions_MergesRegionsSeparatedByAShortSpeechBlip()
+    {
+        // A 0.5 s "speech" blip - short enough to be a vocal-like transient inside otherwise
+        // instrumental jingle music, not a genuine return to narration - must not fragment the
+        // jingle: the non-speech regions on either side merge into one spanning both.
+        var speech = new List<SpeechSegment> { new(0, 100), new(110, 110.5), new(122.5, 200) };
+        Assert.Equal(
+            [new ChapterDetector.NonSpeechRegion(100, 122.5)],
+            ChapterDetector.ComputeNonSpeechRegions(speech));
+    }
+
+    [Fact]
+    public void ComputeNonSpeechRegions_ChainsMergesAcrossSeveralShortBlips()
+    {
+        // Three non-speech spans separated by two short blips (0.2 s, 0.9 s) must all merge into
+        // a single region, not just the first pair.
+        var speech = new List<SpeechSegment>
+        {
+            new(0, 100), new(108, 108.2), new(115, 115.9), new(120, 200),
+        };
+        Assert.Equal(
+            [new ChapterDetector.NonSpeechRegion(100, 120)],
+            ChapterDetector.ComputeNonSpeechRegions(speech));
+    }
+
+    [Fact]
+    public void ComputeNonSpeechRegions_DoesNotMerge_WhenTheSpeechGapIsNotShort()
+    {
+        // A 1.5 s speech segment is a genuine return to narration, not VAD noise - the two
+        // non-speech regions must stay separate (both are otherwise well above the 2 s floor).
+        var speech = new List<SpeechSegment> { new(0, 100), new(110, 111.5), new(120, 200) };
+        Assert.Equal(
+            [new ChapterDetector.NonSpeechRegion(100, 110), new ChapterDetector.NonSpeechRegion(111.5, 120)],
+            ChapterDetector.ComputeNonSpeechRegions(speech));
+    }
+
+    [Fact]
+    public void ComputeNonSpeechRegions_DropsRegionsShorterThanTheFloor_AfterMerging()
+    {
+        // A 1.2 s non-speech region, not adjacent to anything it could merge with, never reaches
+        // the 2 s floor and must be dropped entirely rather than surfacing as a candidate.
+        var speech = new List<SpeechSegment> { new(0, 100), new(101.2, 200) };
+        Assert.Empty(ChapterDetector.ComputeNonSpeechRegions(speech));
+    }
+
+    [Fact]
+    public void ComputeNonSpeechRegions_KeepsRegionsAtExactlyTheThresholds()
+    {
+        // A speech gap of exactly 1 s is not "shorter than" the merge threshold, so the regions
+        // must stay separate; a region of exactly 2 s is not "shorter than" the drop floor, so it
+        // must be kept.
+        var speech = new List<SpeechSegment> { new(0, 100), new(102, 103), new(105, 200) };
+        Assert.Equal(
+            [new ChapterDetector.NonSpeechRegion(100, 102), new ChapterDetector.NonSpeechRegion(103, 105)],
+            ChapterDetector.ComputeNonSpeechRegions(speech));
+    }
+
+    [Fact]
     public void Normalize_SortsAndDropsDuplicatesAndRegressions()
     {
         var raw = new List<DetectedChapter>
