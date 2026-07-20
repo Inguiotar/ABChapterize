@@ -320,9 +320,20 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   marks are placed 0.5 seconds *before* the jingle — where the chapter really
   starts — instead of at the announcement.
 
-`-X`, `--max-jingle-length <seconds>`
+`-X`, `--max-jingle-length <seconds|auto>`
 : Longest expected jingle (1–600, default: 45). Requires `--jingle`. Lower
-  values shrink the probe windows and speed up detection.
+  values shrink the probe windows and speed up detection. With `auto`,
+  probing starts at the 45 s ceiling and, from the second jingle mark found
+  (the first is excluded for the same reason as `--min-silence-length auto`
+  excludes the first silence — the gap before it isn't necessarily
+  representative), self-tightens the probe window to the longest jingle
+  actually observed so far plus the 5-second phrase margin, never past the
+  original ceiling. Chapters with no jingle (or an ultra-short one, under
+  2 seconds) are excluded from this — some audiobooks only play the jingle
+  for some chapters, and such a chapter says nothing about how long the
+  window needs to be for one that does have a full jingle. Same idea as
+  `--min-silence-length auto`, just for the jingle window instead of the
+  silence threshold.
 
 ### Auto language detection
 

@@ -77,9 +77,24 @@ public sealed class CliOptions
     /// <summary>
     /// Maximum expected jingle duration in seconds (--max-jingle-length / -X, default 45).
     /// With --jingle, the probe window after each silence spans this duration plus a flat
-    /// 5-second margin for the chapter phrase itself.
+    /// 5-second margin for the chapter phrase itself. This is always the ceiling used until
+    /// a real jingle length has been observed; see <see cref="AutoMaxJingle"/> for the
+    /// default self-tightening behavior applied on top of it during probing.
     /// </summary>
     public double MaxJingleSeconds { get; private set; } = 45;
+
+    /// <summary>
+    /// True when --max-jingle-length was given the value "auto": <see cref="ChapterDetector"/>
+    /// starts probing with the <see cref="MaxJingleSeconds"/> ceiling, then - from the second
+    /// jingle mark found (the same reasoning as <see cref="AutoMinSilence"/>: the gap before
+    /// the first mark is not necessarily representative) - tightens the probe window to the
+    /// longest jingle actually observed so far plus margin, capped at the original ceiling.
+    /// Chapters with no jingle (or an ultra-short one) are excluded from that tightening, since
+    /// some audiobooks only play the jingle for some chapters and such a chapter says nothing
+    /// about how long the window needs to be for one that does have a full jingle.
+    /// False (the default) keeps the window fixed at <see cref="MaxJingleSeconds"/> throughout.
+    /// </summary>
+    public bool AutoMaxJingle { get; private set; }
 
     /// <summary>
     /// Minimum silence duration in seconds that counts as a potential chapter break
@@ -447,7 +462,7 @@ public sealed class CliOptions
             case "--title": Title = nextParam(); _titleSet = true; return true;
             case "--intro-title": IntroTitle = nextParam(); _introSet = true; return true;
             case "--filter": ParseFilter(nextParam()); return true;
-            case "--max-jingle-length": MaxJingleSeconds = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
+            case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--jobs": Jobs = ParseJobs(nextParam()); return true;
             default: return false;
@@ -494,12 +509,19 @@ public sealed class CliOptions
         FilterExtensions = extensions;
     }
 
-    /// <summary>Parses the --max-jingle-length parameter into a number of seconds between 1 and 600.</summary>
-    private static double ParseJingleLength(string value)
+    /// <summary>
+    /// Parses the --max-jingle-length parameter into a number of seconds between 1 and 600,
+    /// or "auto". "auto" resolves to the 45 s default ceiling plus <see cref="AutoMaxJingle"/>
+    /// set, telling <see cref="ChapterDetector"/> to self-tighten the probe window as real
+    /// jingle lengths are observed.
+    /// </summary>
+    private static (double Seconds, bool Auto) ParseJingleLength(string value)
     {
+        if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return (45, true);
         if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 1 || s > 600)
-            throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected seconds between 1 and 600.");
-        return s;
+            throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected seconds between 1 and 600, or \"auto\".");
+        return (s, false);
     }
 
     /// <summary>
@@ -651,11 +673,14 @@ public sealed class CliOptions
                                     stays bogus. Cannot be combined with --force or --import.
           -j, --jingle              A short jingle may precede the chapter phrase; chapter marks
                                     are placed 0.5 seconds before the jingle.
-          -X, --max-jingle-length <seconds>
+          -X, --max-jingle-length <seconds|auto>
                                     Maximum expected jingle duration (default: 45). Audio is
                                     probed for this duration plus 5 seconds (for the phrase
                                     itself) after each silence. Lower values speed up probing.
-                                    Requires --jingle.
+                                    With "auto", probing starts at the default ceiling and -
+                                    from the second jingle mark found - tightens to the
+                                    longest jingle actually observed so far plus margin,
+                                    capped at the ceiling. Requires --jingle.
           -n, --min-silence-length <seconds|auto>
                                     Minimum silence duration that counts as a potential
                                     chapter break; the silence scan always uses this as its

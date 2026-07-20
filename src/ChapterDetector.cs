@@ -68,6 +68,16 @@ public sealed class ChapterDetector
     private const double JingleLeadSeconds = 0.5;
 
     /// <summary>
+    /// With --max-jingle-length auto, an observed phrase offset below this is treated as "this
+    /// chapter had no jingle (or an ultra-short one)" and is excluded from tightening the probe
+    /// window: some audiobooks only play the jingle for some chapters, and such a chapter gives
+    /// no information about how long the window needs to be for chapters that do have one -
+    /// using it anyway could shrink the window before a later, genuinely full-length jingle is
+    /// ever probed.
+    /// </summary>
+    private const double MinJingleObservationSeconds = 2.0;
+
+    /// <summary>
     /// With --min-silence-length auto, each chapter mark tightens the Pass 2 probing threshold
     /// to this factor times the length of the silence that triggered it, so probing keeps
     /// following silences close to the length of recent inter-chapter breaks (allowing a bit
@@ -134,9 +144,14 @@ public sealed class ChapterDetector
     {
         _log = log;
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
-        var probeSeconds = _options.Jingle
-            ? _options.MaxJingleSeconds + PhraseMarginSeconds
-            : ProbeSecondsPlain;
+        var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var probeSeconds = _options.Jingle ? jingleCeilingSeconds : ProbeSecondsPlain;
+
+        // With --max-jingle-length auto, the longest jingle observed so far (from the second
+        // mark found - see the AutoMinSilence precedent below for why the first is excluded).
+        // probeSeconds (captured by ProbeAsync below) is tightened towards it, never past the
+        // original ceiling, so later probes decode less audio once a real jingle length is known.
+        var observedMaxJingleSeconds = 0.0;
 
         // Pass 1: silence scan (one full pass over the file).
         work.BeginPhase("Pass 1", info.SizeBytes);
@@ -196,6 +211,27 @@ public sealed class ChapterDetector
                              $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}");
                 found.Add(new DetectedChapter(match.Number, time, match.Confidence));
                 work.ChaptersFound = CountDistinct(found);
+
+                if (_options.Jingle && _options.AutoMaxJingle && start != 0 &&
+                    match.PhraseStartSeconds >= MinJingleObservationSeconds)
+                {
+                    // match.PhraseStartSeconds is the phrase's offset from this window's own
+                    // start, i.e. roughly the jingle's own length (the window starts right at
+                    // the end of the triggering silence). Track the longest one seen so far and
+                    // shrink future probe windows towards it, capped at the original ceiling so
+                    // an outlier can never make the window wider than what --max-jingle-length
+                    // was given (or its 45 s default) would allow.
+                    var observed = Math.Min(jingleCeilingSeconds, match.PhraseStartSeconds + PhraseMarginSeconds);
+                    if (observed > observedMaxJingleSeconds)
+                    {
+                        observedMaxJingleSeconds = observed;
+                        if (observed < probeSeconds)
+                        {
+                            probeSeconds = observed;
+                            _log?.Invoke($"Pass 2: jingle probe window tightened to {probeSeconds:0.#} s");
+                        }
+                    }
+                }
                 return match.Number; // one chapter per probe window
             }
             return null;
