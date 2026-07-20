@@ -36,10 +36,11 @@
   <!-- Auto-incrementing build number, baked in as assembly metadata read by CliOptions and
        surfaced only by the version-info command line option (never in the plain
        Version-based banner/usage text). The counter lives in BuildNumber.txt, tracked in git
-       so it keeps counting up across clones instead of resetting; it is bumped on every build
-       of this project (any configuration or RuntimeIdentifier), so publishing both win-x64 and
-       linux-x64 for the same release bumps it twice; that is fine, it identifies a build, not
-       a release. -->
+       so it keeps counting up across clones instead of resetting. Only the win-x64 build (the
+       default RuntimeIdentifier, see above) bumps it; linux-x64 (or any other RID) just reads
+       the current value without writing it back, so publishing both platforms for the same
+       release embeds the same build number in each. Build win-x64 first if a release needs a
+       fresh number picked up by both. -->
   <PropertyGroup>
     <BuildNumberFile>$(MSBuildProjectDirectory)\BuildNumber.txt</BuildNumberFile>
   </PropertyGroup>
@@ -61,10 +62,12 @@
     <PropertyGroup>
       <_PreviousBuildNumber Condition="'@(_PreviousBuildNumberLine)' != ''">@(_PreviousBuildNumberLine)</_PreviousBuildNumber>
       <_PreviousBuildNumber Condition="'$(_PreviousBuildNumber)' == ''">0</_PreviousBuildNumber>
-      <BuildNumber>$([MSBuild]::Add($(_PreviousBuildNumber), 1))</BuildNumber>
+      <BuildNumber Condition="'$(RuntimeIdentifier)' == 'win-x64'">$([MSBuild]::Add($(_PreviousBuildNumber), 1))</BuildNumber>
+      <BuildNumber Condition="'$(RuntimeIdentifier)' != 'win-x64'">$(_PreviousBuildNumber)</BuildNumber>
       <BuildTimestamp>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC</BuildTimestamp>
     </PropertyGroup>
-    <WriteLinesToFile File="$(BuildNumberFile)" Lines="$(BuildNumber)" Overwrite="true" />
+    <WriteLinesToFile File="$(BuildNumberFile)" Lines="$(BuildNumber)" Overwrite="true"
+                       Condition="'$(RuntimeIdentifier)' == 'win-x64'" />
     <ItemGroup>
       <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
         <_Parameter1>BuildNumber</_Parameter1>
