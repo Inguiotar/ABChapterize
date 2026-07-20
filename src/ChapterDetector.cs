@@ -191,8 +191,8 @@ public sealed class ChapterDetector
             file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
 
-        _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= {_options.MinSilenceSeconds:0.#} s found" +
-                     (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
+        _log?.Invoke($"{(hasVadPrePass ? "Pass 1a" : "Pass 1")}: {silences.Count} silence(s) of >= " +
+                     $"{_options.MinSilenceSeconds:0.#} s found" + (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
 
         // Pass 1b (--jingle only): a full-file VAD pre-pass. silencedetect alone never
         // produces a Pass 2 candidate at a chapter transition where the jingle abuts speech
@@ -208,7 +208,7 @@ public sealed class ChapterDetector
                 file, info.DurationSeconds,
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
             nonSpeechRegions = ComputeNonSpeechRegions(speech);
-            _log?.Invoke($"VAD: {speech.Count} speech segment(s), {nonSpeechRegions.Count} non-speech region(s) found");
+            _log?.Invoke($"Pass 1b: {speech.Count} speech segment(s), {nonSpeechRegions.Count} non-speech region(s) found");
         }
 
         // Pass 2: probe the beginning of the file and the end of every silence. With
