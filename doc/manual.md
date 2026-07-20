@@ -76,6 +76,11 @@ optional VAD pre-pass with `--jingle`.
 
 ### Pass 1 — silence scan
 
+In the progress bar this phase is labeled "Pass 1" normally, or "Pass 1a"
+when the VAD pre-pass below also runs (`--jingle`) — keeping the numbering
+contiguous with that phase's own "Pass 1b" label. "Pass 2" and "Pass 3"
+are unaffected either way.
+
 ffmpeg's `silencedetect` filter finds every silence of at least
 `--min-silence-length` seconds (default, and floor with `auto`: 1.5) below
 −35 dBFS, in one quick decode pass over the whole file. Chapter announcements

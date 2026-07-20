@@ -180,8 +180,13 @@ public sealed class ChapterDetector
         // ceiling, so later probes decode less audio once a real jingle length is known.
         var observedMaxJingleSeconds = 0.0;
 
-        // Pass 1: silence scan (one full pass over the file).
-        work.BeginPhase("Pass 1", info.SizeBytes);
+        // With --jingle, a second sub-pass (VAD, below) follows before Pass 2, so Pass 1 is
+        // labeled "Pass 1a"/"Pass 1b" in the progress bar to keep the numbering contiguous;
+        // without it, Pass 1 stands alone as "Pass 1".
+        var hasVadPrePass = _options.Jingle && _vad != null;
+
+        // Pass 1(a): silence scan (one full pass over the file).
+        work.BeginPhase(hasVadPrePass ? "Pass 1a" : "Pass 1", info.SizeBytes);
         var silences = await _audio.DetectSilencesAsync(
             file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
@@ -198,7 +203,7 @@ public sealed class ChapterDetector
         var nonSpeechRegions = new List<NonSpeechRegion>();
         if (_options.Jingle && _vad != null)
         {
-            work.BeginPhase("VAD", info.SizeBytes);
+            work.BeginPhase("Pass 1b", info.SizeBytes);
             var speech = await _vad.DetectSpeechAsync(
                 file, info.DurationSeconds,
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
