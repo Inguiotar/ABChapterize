@@ -157,11 +157,16 @@ public sealed class FileProcessor
                     .Select(_ => new WhisperTranscriber(modelPath, initialLanguage, threadsPerInstance))];
             }
 
+            // Shared like ffmpeg above (one instance for the whole run, safe for concurrent
+            // use - see SileroVadDetector's threading remarks); only needed with --jingle,
+            // where ChapterDetector runs its full-file VAD pre-pass.
+            using var vad = _options.Jingle ? new SileroVadDetector(ffmpeg) : null;
+
             try
             {
                 var channel = Channel.CreateUnbounded<ChapterDetector>();
                 foreach (var w in pool)
-                    channel.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w));
+                    channel.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w, vad));
 
                 await RunConcurrentlyAsync(files, hardCap, ct, async (file, token) =>
                 {

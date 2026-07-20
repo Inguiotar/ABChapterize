@@ -23,7 +23,10 @@ Prebuilt binaries for Windows and Linux are available on the
   remuxing into a temporary file that is verified before it atomically replaces
   the original. Your audiobook cannot be lost, even without `--backup`.
 - **Jingle-aware** — if your audiobook plays a jingle before each announcement,
-  the mark is placed *before* the jingle, where the chapter really starts.
+  the mark is placed *before* the jingle, where the chapter really starts. A
+  bundled voice-activity model (Silero VAD) catches jingles even when they
+  abut speech with no silence on either side, which a plain amplitude scan
+  would miss entirely.
 - **Self-healing** — when the detected chapter numbers have gaps (e.g. chapter 12
   was announced without a pause before it), the suspicious regions are
   transcribed in full to find the missing ones.
@@ -160,7 +163,7 @@ when chapters are written. The most useful knobs:
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are left alone, marks that don't are discarded and the file goes through full detection. Cannot combine with `--force` or `--import`. |
-| `-j`, `--jingle` | A jingle precedes announcements; marks go before the jingle. |
+| `-j`, `--jingle` | A jingle precedes announcements. Marks go 0.5 s before the jingle when a silence precedes it, or at the jingle's own start when it doesn't (found via a bundled voice-activity model — see [How it works](#how-it-works)). |
 | `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45). |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
@@ -181,7 +184,18 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
 1. **Pass 1 — silence scan:** ffmpeg finds every silence longer than
    `--min-silence-length` (default, and floor with `auto`: 1.5 s below
    −35 dBFS) in one quick pass.
-2. **Pass 2 — probing:** a short stretch of audio after each silence is
+1b. **VAD pre-pass (`--jingle` only):** a bundled voice-activity model
+   ([Silero VAD](https://github.com/snakers4/silero-vad)) scans the whole file
+   for speech vs. non-speech. A jingle is music, which reads as non-speech to
+   a speech detector just like silence does — so this catches jingles the
+   amplitude-only silence scan misses entirely: one that abuts the narration
+   with no detectable gap on either side. Where a silence leads into the
+   jingle, the silence scan already has it covered and VAD adds nothing
+   redundant; VAD only contributes new candidates at the silence-less
+   transitions, so it doesn't add extra Whisper probes for books that don't
+   need it.
+2. **Pass 2 — probing:** a short stretch of audio after each silence (and
+   after each silence-less jingle VAD found) is
    transcribed with Whisper and matched against the chapter phrase. The chapter
    number is parsed from digits or from numbers written out as words (0-999,
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
@@ -247,4 +261,7 @@ dotnet test tests/ABChapterize.Tests        # run the unit tests
 [Whisper.net](https://github.com/sandrohanea/whisper.net) /
 [whisper.cpp](https://github.com/ggerganov/whisper.cpp) (MIT), and the speech
 models are OpenAI's [Whisper](https://github.com/openai/whisper) models (MIT).
+The bundled jingle-detection model is [Silero VAD](https://github.com/snakers4/silero-vad)
+(MIT, Copyright (c) 2020-present Silero Team) — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full notice.
 ffmpeg is used as an external program and is not part of this project.

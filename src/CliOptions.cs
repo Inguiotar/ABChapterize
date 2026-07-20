@@ -672,8 +672,14 @@ public sealed class CliOptions
                                     through full detection, same as --force would. A file
                                     already rejected by --max-chapters skips verification and
                                     stays bogus. Cannot be combined with --force or --import.
-          -j, --jingle              A short jingle may precede the chapter phrase; chapter marks
-                                    are placed 0.5 seconds before the jingle.
+          -j, --jingle              A short jingle may precede the chapter phrase. Both a
+                                    silence scan and a voice-activity (VAD) pre-pass run over
+                                    the whole file, so jingles are found whether or not they
+                                    are preceded by a silence: when a silence precedes the
+                                    jingle, the chapter mark is placed 0.5 seconds before it;
+                                    when the jingle abuts speech with no silence (or is itself
+                                    the only thing separating chapters), the mark is placed at
+                                    the start of the jingle instead.
           -X, --max-jingle-length <seconds|auto>
                                     Maximum expected jingle duration (default: 45). Audio is
                                     probed for this duration plus 5 seconds (for the phrase

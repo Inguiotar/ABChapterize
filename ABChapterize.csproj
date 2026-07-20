@@ -90,6 +90,21 @@
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime.Cuda" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.1" />
+  </ItemGroup>
+
+  <!-- Silero VAD model, bundled (MIT-licensed, see THIRD-PARTY-NOTICES.md) rather than
+       downloaded: small enough (~2.2 MB) to embed directly into the assembly, avoiding a
+       first-run download step entirely. Loaded from assembly resources by SileroVadDetector. -->
+  <ItemGroup>
+    <EmbeddedResource Include="assets\silero_vad.onnx" LogicalName="ABChapterize.silero_vad.onnx" />
+  </ItemGroup>
+
+  <!-- Ship the third-party notices/license texts alongside the executable, satisfying the
+       Silero VAD MIT license's "include the copyright notice" redistribution condition. -->
+  <ItemGroup>
+    <None Include="THIRD-PARTY-NOTICES.md" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="licenses\silero-vad-LICENSE" CopyToPublishDirectory="PreserveNewest" Link="licenses\silero-vad-LICENSE" />
   </ItemGroup>
 
   <!-- Whisper.net copies native libraries for all platforms; only the ones matching the
@@ -108,7 +123,21 @@
                           Include="$(PublishDir)runtimes\win-x64;$(PublishDir)runtimes\cuda\win-x64;$(PublishDir)runtimes\vulkan\win-x64" />
     </ItemGroup>
     <RemoveDir Directories="@(_ForeignRuntimeDir)" />
-    <Delete Files="$(PublishDir)ggml-metal.metal;$(PublishDir)abchapterize.pdb" />
+    <ItemGroup>
+      <_ForeignPublishFile Include="$(PublishDir)ggml-metal.metal;$(PublishDir)abchapterize.pdb" />
+      <!-- Unlike Whisper.net's runtimes\<rid>\ layout above, Microsoft.ML.OnnxRuntime copies
+           its native libraries flat into the publish root for every platform it supports,
+           not just the target RuntimeIdentifier (confirmed by publishing both targets: the
+           linux-x64 output also carried onnxruntime.dll/onnxruntime_providers_shared.dll).
+           The *.lib import libraries are Windows build-time-only artifacts, never needed at
+           run time, so they are always pruned regardless of target. -->
+      <_ForeignPublishFile Include="$(PublishDir)onnxruntime.lib;$(PublishDir)onnxruntime_providers_shared.lib" />
+      <_ForeignPublishFile Condition="'$(RuntimeIdentifier)' == 'win-x64'"
+                           Include="$(PublishDir)libonnxruntime.so;$(PublishDir)libonnxruntime_providers_shared.so" />
+      <_ForeignPublishFile Condition="'$(RuntimeIdentifier)' == 'linux-x64'"
+                           Include="$(PublishDir)onnxruntime.dll;$(PublishDir)onnxruntime_providers_shared.dll" />
+    </ItemGroup>
+    <Delete Files="@(_ForeignPublishFile)" />
   </Target>
 
 </Project>

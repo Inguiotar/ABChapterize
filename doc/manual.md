@@ -71,7 +71,8 @@ naming one directly as the target is an error.
 
 ## 3. How detection works
 
-Detection runs in up to three passes per file.
+Detection runs in up to three Whisper-transcription passes per file, plus an
+optional VAD pre-pass with `--jingle`.
 
 ### Pass 1 — silence scan
 
@@ -86,12 +87,36 @@ the resulting silence list.
 The scan is guarded: if it ends prematurely (e.g. because of a damaged file),
 the file is aborted with an error instead of silently reporting "no chapters".
 
+### Pass 1b — VAD pre-pass (`--jingle` only)
+
+`silencedetect` is amplitude-only: a jingle that abuts the narration with no
+detectable gap on either side produces no silence at all, so pass 1 never
+gives pass 2 a candidate near that transition. With `--jingle`, a second full
+decode pass runs the file through a bundled voice-activity detection (VAD)
+model — [Silero VAD](https://github.com/snakers4/silero-vad), MIT-licensed,
+embedded in the executable (~2.2 MB, no separate download; see
+[THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)) — classifying the whole
+file as speech or non-speech. Music reads as non-speech to a speech detector,
+the same as silence, so a jingle shows up as a non-speech region flanked by
+speech regardless of whether there is any amplitude gap around it.
+
+Every such region is a candidate jingle transition, subject to two filters:
+it must be at least 2 seconds long (shorter blips are treated as VAD noise,
+not a real jingle) and no longer than the current `--max-jingle-length`
+window (see below) — a region longer than that could never fit its
+announcement in the probe window anyway. When a `silencedetect` silence
+already leads into the region, pass 1's own candidate already covers that
+transition and no separate VAD candidate is added (VAD only contributes
+*new* candidates at transitions with no leading silence, so books with only
+silence-backed jingles get no extra Whisper probes at all from this pass).
+
 ### Pass 2 — probing
 
 A short window of audio is transcribed with Whisper:
 
-- at the very beginning of the file, and
-- after the end of every detected silence.
+- at the very beginning of the file,
+- after the end of every detected silence, and
+- (with `--jingle`) at every silence-less jingle transition VAD found.
 
 The window is 12 seconds normally, or `--max-jingle-length` + 5 seconds with
 `--jingle`. Each transcript is matched against the chapter phrase
@@ -107,9 +132,14 @@ Rules applied to the matches:
 - The chapter mark is placed at the end of the silence (i.e. where the
   announcement starts). For a match at the very beginning of the file, the
   phrase position itself is used.
-- With `--jingle`, the mark is placed 0.5 seconds *before* the jingle: the
-  mark is anchored at the latest silence ending before the phrase, so the
-  chapter starts where the jingle starts, not where the announcement starts.
+- With `--jingle`, the mark is placed at the start of the jingle, not the
+  announcement. When a silence precedes the jingle, the mark is anchored 0.5
+  seconds *before* the end of that silence (so it lands inside the silence,
+  not into the previous chapter's narration). When there is no silence — the
+  jingle abuts speech directly, found only via the VAD pre-pass above — the
+  mark is placed exactly at the jingle's own start instead, with no 0.5 s
+  lead: a lead would have nowhere absorbable to land and would cut into the
+  previous chapter.
 - Duplicate detections of the same chapter number keep the earliest position;
   out-of-order regressions (typically in-text mentions like "as seen in
   chapter three") are dropped.
@@ -316,9 +346,12 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
 
 `-j`, `--jingle`
 : Declare that a jingle (music sting) may precede each chapter announcement.
-  Probe windows are widened to `--max-jingle-length` + 5 seconds, and chapter
-  marks are placed 0.5 seconds *before* the jingle — where the chapter really
-  starts — instead of at the announcement.
+  Probe windows are widened to `--max-jingle-length` + 5 seconds, a VAD
+  pre-pass runs to catch jingles with no detectable silence around them (see
+  [Pass 1b](#pass-1b--vad-pre-pass---jingle-only)), and chapter marks are
+  placed at the jingle's start instead of at the announcement — 0.5 seconds
+  *before* it when a silence precedes it, or exactly at its start when it
+  doesn't.
 
 `-X`, `--max-jingle-length <seconds|auto>`
 : Longest expected jingle (1–600, default: 45). Requires `--jingle`. Lower
@@ -329,12 +362,19 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   representative), resizes the probe window to 1.25x the longest jingle
   actually observed so far plus the 5-second phrase margin (both wider and
   narrower, as that observed maximum changes), never past the original
-  ceiling. Chapters with no jingle (or an ultra-short one, under 2 seconds)
-  are excluded from this — some audiobooks only play the jingle for some
-  chapters, and such a chapter says nothing about how long the window needs
-  to be for one that does have a full jingle. Same idea as
-  `--min-silence-length auto`, just for the jingle window instead of the
-  silence threshold.
+  ceiling. For a silence-less jingle (found via the VAD pre-pass), the
+  observed length comes from the VAD region's own boundaries rather than the
+  distance to the announcement, which can otherwise include a bit of
+  post-jingle silence before the phrase starts. Chapters with no jingle (or
+  an ultra-short one, under 2 seconds) are excluded from this — some
+  audiobooks only play the jingle for some chapters, and such a chapter says
+  nothing about how long the window needs to be for one that does have a
+  full jingle. Same idea as `--min-silence-length auto`, just for the jingle
+  window instead of the silence threshold. Once the window narrows, VAD
+  regions longer than it stop being probed too — the same speedup pass 2
+  already gets from tightened silence candidates — but a later sequence gap
+  resets the window back to the ceiling and retries everything skipped,
+  exactly like `--min-silence-length auto`'s own gap recovery.
 
 ### Auto language detection
 

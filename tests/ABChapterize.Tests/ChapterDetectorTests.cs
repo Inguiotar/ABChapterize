@@ -58,6 +58,30 @@ public sealed class ChapterDetectorTests : IDisposable
             DecodeStarts.Add(startSeconds);
             return Task.FromResult(new float[16000]);
         }
+
+        /// <inheritdoc/>
+        /// <remarks>Never called in these tests - VAD is scripted directly via <see cref="FakeVad"/>,
+        /// bypassing this streaming decode path entirely.</remarks>
+        public IAsyncEnumerable<float[]> StreamPcmAsync(string file, string? inputDecoder, CancellationToken ct)
+            => throw new NotSupportedException("not scripted for these tests - see FakeVad");
+    }
+
+    /// <summary>Voice activity detector returning a fixed, scripted list of speech segments.</summary>
+    private sealed class FakeVad : IVoiceActivityDetector
+    {
+        /// <summary>Speech segments to return; empty means the whole file is non-speech.</summary>
+        public List<SpeechSegment> Speech { get; init; } = [];
+
+        /// <summary>Number of times <see cref="DetectSpeechAsync"/> was called.</summary>
+        public int CallCount { get; private set; }
+
+        /// <inheritdoc/>
+        public Task<List<SpeechSegment>> DetectSpeechAsync(
+            string file, double durationSeconds, Action<double>? progress, string? inputDecoder, CancellationToken ct)
+        {
+            CallCount++;
+            return Task.FromResult(Speech);
+        }
     }
 
     /// <summary>
@@ -114,26 +138,26 @@ public sealed class ChapterDetectorTests : IDisposable
 
     /// <summary>Runs the detector against the given silences and script.</summary>
     private async Task<DetectionResult> DetectAsync(
-        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script)
-        => (await DetectWithTranscriberAsync(options, silences, script)).Result;
+        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script, FakeVad? vad = null)
+        => (await DetectWithTranscriberAsync(options, silences, script, vad)).Result;
 
     /// <summary>Runs the detector, also returning the transcriber for language-detection assertions.</summary>
     private async Task<(DetectionResult Result, ScriptedTranscriber Transcriber)> DetectWithTranscriberAsync(
-        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script)
+        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script, FakeVad? vad = null)
     {
-        var (result, transcriber, _) = await DetectFullAsync(options, silences, script);
+        var (result, transcriber, _) = await DetectFullAsync(options, silences, script, vad);
         return (result, transcriber);
     }
 
     /// <summary>Runs the detector, also returning the audio source for decode-window assertions
     /// (e.g. which probes the adaptive --min-silence-length threshold actually decoded).</summary>
     private async Task<(DetectionResult Result, ScriptedTranscriber Transcriber, FakeAudioSource Audio)> DetectFullAsync(
-        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script)
+        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script, FakeVad? vad = null)
     {
         var audio = new FakeAudioSource { Silences = silences };
         var transcriber = new ScriptedTranscriber(audio);
         script(transcriber);
-        var detector = new ChapterDetector(options, audio, transcriber);
+        var detector = new ChapterDetector(options, audio, transcriber, vad);
         var result = await detector.DetectAsync(_file, Info, new WorkTracker(), null, CancellationToken.None);
         return (result, transcriber, audio);
     }
@@ -385,6 +409,99 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.Contains(new DetectedChapter(2, 617.5), result.Chapters);
+    }
+
+    [Fact]
+    public async Task JingleWithNoSilenceEitherSide_IsCaughtByVad_MarkAtJingleStart()
+    {
+        // No silencedetect silence anywhere near the transition - the jingle abuts speech on
+        // both sides, the bare-jingle-as-sole-separator case. Only VAD (which sees the
+        // jingle's music as non-speech, same as it would silence) can locate this transition
+        // at all; silencedetect alone would never produce a Pass 2 candidate here. The mark
+        // must land at the jingle's own start, with no lead, since there is no absorbable
+        // silence to place the usual 0.5 s lead in.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle"),
+            [],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(700, Seg(0.3, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 700), new(705, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Contains(new DetectedChapter(2, 700), result.Chapters);
+        Assert.Contains(700.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task JingleWithLeadingSilence_MarkUnchanged_AndVadDoesNotDoubleProbe()
+    {
+        // A silence precedes the jingle - the existing silence-based candidate already probes
+        // this transition, so the VAD non-speech region covering the same silence+jingle span
+        // must not add a second, duplicate candidate (dedup): the silence path stays primary,
+        // and the mark lands 0.5 s before it exactly as it would without VAD at all.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle"),
+            [new(695, 700)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(700, Seg(3.2, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
+
+        Assert.Contains(new DetectedChapter(2, 699.5), result.Chapters);
+        Assert.Single(audio.DecodeStarts, d => Math.Abs(d - 700) < 0.5);
+    }
+
+    [Fact]
+    public async Task AutoMaxJingle_ObservesLengthFromVadBoundaries_NotPhraseOffset()
+    {
+        // Chapter two's phrase starts 20 s into its probe window, but the VAD region itself
+        // (the true jingle) is only 5 s long. If the resize wrongly used the phrase-relative
+        // offset (20 s) instead of the VAD boundaries, the window would resize to ~30 s and
+        // still probe chapter three's 15 s-long region; using the correct 5 s observation
+        // resizes to ~11 s instead, so that region must be skipped (too long to be this
+        // book's jingle) and chapter three must not be found.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle", "--max-jingle-length", "auto"),
+            [],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(800, Seg(20, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 800), new(805, 900), new(915, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.DoesNotContain(900.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task AutoMinSilence_NeverSkipsVadCandidates_AndTheyDoNotMistightenTheThreshold()
+    {
+        // Chapter two's 5 s triggering silence tightens the threshold to 4.5 s (0.9x). Chapter
+        // three is then found via a silence-less, VAD-only candidate (region length 3 s) -
+        // since it carries no Silence, it must always be probed regardless of the threshold
+        // (that's exactly what lets VAD catch silence-less chapters). It must also not disturb
+        // the threshold itself: the following 4.4 s silence - just below 4.5 s - must still be
+        // skipped, proving the threshold is unchanged by the silence-less mark.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle"),
+            [new(595, 600), new(800, 804.4)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(700, Seg(0.3, " Chapter three."));
+            },
+            new FakeVad { Speech = [new(0, 700), new(703, 3600)] });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Contains(700.0, audio.DecodeStarts);
+        Assert.DoesNotContain(804.4, audio.DecodeStarts);
     }
 
     [Fact]

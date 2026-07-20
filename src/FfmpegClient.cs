@@ -4,6 +4,7 @@
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -245,6 +246,59 @@ public sealed partial class FfmpegClient : IAudioSource
         var samples = new float[count];
         Buffer.BlockCopy(bytes, 0, samples, 0, count * sizeof(float));
         return samples;
+    }
+
+    /// <summary>Chunk size for <see cref="StreamPcmAsync"/>: 65536 samples is ~4 s of 16 kHz
+    /// audio, 256 KB per chunk - large enough to keep per-chunk overhead low, small enough that
+    /// the whole file is never held in memory at once.</summary>
+    private const int StreamChunkSamples = 65536;
+
+    /// <inheritdoc/>
+    public async IAsyncEnumerable<float[]> StreamPcmAsync(
+        string file, string? inputDecoder, [EnumeratorCancellation] CancellationToken ct)
+    {
+        List<string> args = ["-hide_banner", "-v", "error", "-nostdin"];
+        if (inputDecoder != null)
+            args.AddRange(["-c:a", inputDecoder]);
+        args.AddRange(["-i", file, "-ac", "1", "-ar", SampleRate.ToString(), "-f", "f32le", "pipe:1"]);
+
+        using var proc = StartProcess(_ffmpeg, args, redirectStdout: true);
+        using var reg = ct.Register(() => TryKill(proc));
+
+        var stream = proc.StandardOutput.BaseStream;
+        var byteBuffer = new byte[StreamChunkSamples * sizeof(float)];
+        var filled = 0;
+        while (true)
+        {
+            var read = await stream.ReadAsync(byteBuffer.AsMemory(filled, byteBuffer.Length - filled), ct);
+            if (read == 0)
+                break;
+            filled += read;
+            if (filled < byteBuffer.Length)
+                continue;
+            yield return BytesToFloats(byteBuffer, filled);
+            filled = 0;
+        }
+        // A trailing partial chunk; f32le byte counts are always a multiple of 4 in practice,
+        // but guard against a stray truncated sample regardless.
+        var wholeBytes = filled - filled % sizeof(float);
+        if (wholeBytes > 0)
+            yield return BytesToFloats(byteBuffer, wholeBytes);
+
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        ct.ThrowIfCancellationRequested();
+        if (proc.ExitCode != 0)
+            throw new AppError($"ffmpeg PCM streaming failed for \"{file}\": {stderr.Trim()}");
+    }
+
+    /// <summary>Converts the first <paramref name="byteCount"/> bytes of an f32le buffer to samples.</summary>
+    private static float[] BytesToFloats(byte[] bytes, int byteCount)
+    {
+        var count = byteCount / sizeof(float);
+        var floats = new float[count];
+        Buffer.BlockCopy(bytes, 0, floats, 0, count * sizeof(float));
+        return floats;
     }
 
     /// <summary>

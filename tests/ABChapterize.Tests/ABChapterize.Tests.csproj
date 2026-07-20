@@ -15,6 +15,9 @@
     <!-- Compile-time only: WhisperTranscriber/FileProcessor reference Whisper.net types.
          No runtime package is needed - the tests never load a model. -->
     <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <!-- Compile-time only: SileroVadDetector references OnnxRuntime types. The tests use a
+         FakeVad instead of loading the real embedded model, so no native runtime is needed. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.1" />
   </ItemGroup>
 
   <!-- The main project publishes as a self-contained single-file exe with a forced

@@ -43,4 +43,16 @@ public interface IAudioSource
     /// <returns>The decoded samples.</returns>
     Task<float[]> DecodePcmAsync(
         string file, double startSeconds, double? durationSeconds, string? inputDecoder, CancellationToken ct);
+
+    /// <summary>
+    /// Streams the whole file as 16 kHz mono 32-bit float PCM in bounded-size chunks, for
+    /// scanning a full audiobook without holding the entire decoded file in memory. Used only
+    /// by <see cref="IVoiceActivityDetector"/>'s full-file VAD pre-pass (--jingle only);
+    /// probing and gap-filling still use <see cref="DecodePcmAsync"/>.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force (e.g. "libfdk_aac"), or null.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Chunks of decoded samples, in chronological order.</returns>
+    IAsyncEnumerable<float[]> StreamPcmAsync(string file, string? inputDecoder, CancellationToken ct);
 }
