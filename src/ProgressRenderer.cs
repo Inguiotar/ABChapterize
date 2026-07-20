@@ -77,6 +77,10 @@ public sealed class ProgressRenderer : IDisposable
     private readonly Timer? _timer;
     private readonly List<(WorkTracker Tracker, string Label)> _slots = [];
     private int _blockLineCount;
+    /// <summary>The exact lines last drawn on screen, so a timer tick that would redraw an
+    /// identical block can be skipped entirely (see <see cref="Render"/>). Empty whenever no
+    /// block is currently drawn - including right after <see cref="ClearBlock"/> erased it.</summary>
+    private List<string> _lastLines = [];
     private readonly Lock _lock = new();
 
     /// <summary>Creates the renderer; when the console is redirected no bar is drawn.</summary>
@@ -154,26 +158,43 @@ public sealed class ProgressRenderer : IDisposable
     /// <param name="message">The message to prefix.</param>
     private static string FormatLog(string message) => $"[{DateTime.Now:HH:mm:ss}] {message}";
 
-    /// <summary>Redraws every active file's progress bar, capped to the terminal height.</summary>
+    /// <summary>
+    /// Redraws every active file's progress bar, capped to the terminal height - but only when
+    /// the resulting block actually differs from what is already on screen. Each visible line is
+    /// quantized (integer percent, a fixed-width bar, a chapter count), so it changes far less
+    /// often than the timer ticks; skipping the erase-and-redraw for an unchanged block keeps the
+    /// bar from flickering on every tick while nothing is moving.
+    /// </summary>
     private void Render()
     {
         lock (_lock)
         {
             if (_slots.Count == 0)
                 return;
-            ClearBlock();
 
             var maxRows = Math.Max(1, SafeWindowHeight() - 1);
             var rows = Math.Min(_slots.Count, maxRows);
             var width = SafeWindowWidth() - 1;
+            var lines = new List<string>(rows);
             for (var i = 0; i < rows; i++)
             {
                 var line = BuildLine(_slots[i]);
                 if (width > 10 && line.Length > width)
                     line = line[..width];
-                Console.WriteLine(line);
+                lines.Add(line);
             }
+
+            // Nothing to do when the identical block is already drawn. When the block was erased
+            // by an interleaved log/summary line, _blockLineCount is 0, so this never wrongly
+            // skips the redraw needed to put the bar back.
+            if (_blockLineCount > 0 && lines.SequenceEqual(_lastLines))
+                return;
+
+            ClearBlock();
+            foreach (var line in lines)
+                Console.WriteLine(line);
             _blockLineCount = rows;
+            _lastLines = lines;
         }
     }
 
@@ -193,7 +214,9 @@ public sealed class ProgressRenderer : IDisposable
 
     /// <summary>
     /// Erases every line of the currently drawn block (if any), leaving the cursor at its
-    /// top-left corner ready for the next redraw or for an interleaved log/summary line.
+    /// top-left corner ready for the next redraw or for an interleaved log/summary line. Also
+    /// drops the <see cref="_lastLines"/> cache so <see cref="Render"/> treats the block as gone
+    /// and redraws it, rather than skipping on a stale content match.
     /// </summary>
     private void ClearBlock()
     {
@@ -205,6 +228,7 @@ public sealed class ProgressRenderer : IDisposable
             Console.WriteLine(new string(' ', Math.Max(0, width)));
         Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - _blockLineCount));
         _blockLineCount = 0;
+        _lastLines = [];
     }
 
     /// <summary>
