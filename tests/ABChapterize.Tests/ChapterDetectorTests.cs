@@ -457,6 +457,69 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task SilencelessJingle_TriggeredByAFalseInTextPause_MarksAtJingleNotThePause()
+    {
+        // A false in-text pause (silence 610-613, >= the 1.5 s floor) sits in the narration
+        // before a silence-less jingle transition (jingle 640-645, phrase at 645). The pause's
+        // candidate is probed first and its wide window reaches the phrase - but the mark must
+        // still land at the jingle's own start (640, via the VAD region), NOT 0.5 s before the
+        // pause (612.5). The pause does not lead the jingle's VAD region, so it must not be
+        // mistaken for the anchor.
+        var result = await DetectAsync(
+            Options("--jingle"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(32, " Chapter two.")); // probe window [613, 663], phrase at 645
+            },
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(645, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task SilencelessJingleAfterFalsePause_DoesNotCorruptTheAutoMechanisms()
+    {
+        // Same false-pause-before-silence-less-jingle shape, now with --max-jingle-length auto
+        // and (default) --min-silence-length auto, laid out so that both auto mechanisms would
+        // visibly misbehave if the false pause were mistaken for chapter two's anchor:
+        //
+        //   * --min-silence-length: the false pause is 3 s, so the buggy path tightens the
+        //     threshold to 2.7 s (0.9x). Chapter three's genuine 2 s inter-chapter silence
+        //     (1000-1002) would then be skipped and lost. The correct path takes chapter two's
+        //     anchor from the VAD region (Silence = null), tightens nothing, and finds chapter
+        //     three - so the result must be [1, 2, 3], not [1, 2].
+        //   * --max-jingle-length: the buggy path measures the jingle as phrase - pause.End =
+        //     32 s and keeps the window at ~45 s; the correct path measures the VAD region (5 s)
+        //     and narrows it to ~11 s. The spurious 20 s music-bed region at 700-720 must then
+        //     be skipped (too long to be this book's jingle) rather than probed.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle", "--max-jingle-length", "auto"),
+            [new(610, 613), new(1000, 1002)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(32, " Chapter two."));  // window [613, 663], phrase at 645
+                s.Add(1002, Seg(4, " Chapter three.")); // window [1002, ...], phrase at 1006
+            },
+            new FakeVad
+            {
+                Speech =
+                [
+                    new(0, 610), new(613, 640), new(645, 700),
+                    new(720, 1000), new(1006, 3600),
+                ],
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Contains(new DetectedChapter(2, 640), result.Chapters);       // jingle start, not 612.5
+        Assert.DoesNotContain(700.0, audio.DecodeStarts);                    // window narrowed to ~11 s
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_ObservesLengthFromVadBoundaries_NotPhraseOffset()
     {
         // Chapter two's phrase starts 20 s into its probe window, but the VAD region itself
