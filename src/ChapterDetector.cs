@@ -317,7 +317,12 @@ public sealed class ChapterDetector
                     // its triggering silence is a real inter-chapter break - not the
                     // intro-to-chapter-1 silence, which is routinely longer than that and
                     // would otherwise over-tighten the threshold from the very first mark.
-                    threshold = AdaptiveTightenFactor * (triggeringSilence.EndSeconds - triggeringSilence.StartSeconds);
+                    // Never below the MinSilenceSeconds floor: Pass 1's silence scan never
+                    // detects anything shorter than that floor in the first place, so every
+                    // candidate is already >= it - a threshold below the floor would skip
+                    // nothing at all and silently defeat the whole point of tightening.
+                    threshold = Math.Max(_options.MinSilenceSeconds,
+                        AdaptiveTightenFactor * (triggeringSilence.EndSeconds - triggeringSilence.StartSeconds));
                     _log?.Invoke($"Pass 2: threshold tightened to {threshold:0.##} s after chapter {n}");
                 }
                 skippedSinceLastMark.Clear();
