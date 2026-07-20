@@ -121,12 +121,21 @@ public sealed class ChapterDetectorTests : IDisposable
     private async Task<(DetectionResult Result, ScriptedTranscriber Transcriber)> DetectWithTranscriberAsync(
         CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script)
     {
+        var (result, transcriber, _) = await DetectFullAsync(options, silences, script);
+        return (result, transcriber);
+    }
+
+    /// <summary>Runs the detector, also returning the audio source for decode-window assertions
+    /// (e.g. which probes the adaptive --min-silence-length threshold actually decoded).</summary>
+    private async Task<(DetectionResult Result, ScriptedTranscriber Transcriber, FakeAudioSource Audio)> DetectFullAsync(
+        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script)
+    {
         var audio = new FakeAudioSource { Silences = silences };
         var transcriber = new ScriptedTranscriber(audio);
         script(transcriber);
         var detector = new ChapterDetector(options, audio, transcriber);
         var result = await detector.DetectAsync(_file, Info, new WorkTracker(), null, CancellationToken.None);
-        return (result, transcriber);
+        return (result, transcriber, audio);
     }
 
     [Fact]
@@ -243,6 +252,73 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([new(1, 10), new(2, 1200)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task AutoMinSilence_TightensThreshold_AndSkipsShorterSilences()
+    {
+        // Default --min-silence-length auto. Chapter 2's triggering silence is 5 s, tightening
+        // the threshold to 4.5 s; the 3 s silence at 700-703 falls below it and must not be
+        // probed at all, but the 5 s silence at 900-905 still is, finding chapter 3.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(595, 600), new(700, 703), new(900, 905)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(905, Seg(0.2, " Chapter three."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal(
+            [new(1, 0.5), new(2, 600), new(3, 905)],
+            result.Chapters);
+        Assert.DoesNotContain(703, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task AutoMinSilence_ResetsThreshold_AndRetriesSkippedSilences_OnSequenceGap()
+    {
+        // Same setup, but chapter 3's phrase only lives in the skipped 700-703 silence and the
+        // next probed silence yields chapter 4 instead - a sequence gap. The adaptive threshold
+        // must reset to the 1.5 s floor and re-probe what it skipped since chapter 2, finding
+        // chapter 3 there and closing the gap without needing pass 3 at all.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(595, 600), new(700, 703), new(900, 905)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(703, Seg(0.3, " Chapter three."));
+                s.Add(905, Seg(0.2, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal(
+            [new(1, 0.5), new(2, 600), new(3, 703), new(4, 905)],
+            result.Chapters);
+        Assert.Contains(703, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task ExplicitMinSilenceLength_NeverSkipsAnyDetectedSilence()
+    {
+        // With an explicit numeric --min-silence-length, adaptive tightening is off: every
+        // silence from pass 1 is probed regardless of length or what was found before it.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(700, 703), new(900, 905)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(905, Seg(0.2, " Chapter three."));
+            });
+
+        Assert.Equal([new(1, 0.5), new(2, 600), new(3, 905)], result.Chapters);
+        Assert.Contains(703, audio.DecodeStarts);
     }
 
     [Fact]

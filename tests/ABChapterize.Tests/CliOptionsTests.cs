@@ -50,6 +50,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal("Intro", o.IntroTitle);
         Assert.Equal("turbo", o.Model);
         Assert.Equal(1.5, o.MinSilenceSeconds);
+        Assert.True(o.AutoMinSilence);
         Assert.False(o.TargetIsDirectory);
         Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
@@ -472,6 +473,22 @@ public sealed class CliOptionsTests : IDisposable
     public void InvalidMinSilenceLengths_AreRejected(string value)
     {
         Assert.Throws<CliError>(() => ParseFile("--min-silence-length", value));
+    }
+
+    [Fact]
+    public void MinSilenceLength_Auto_SetsFloorAndFlag()
+    {
+        var o = ParseFile("--min-silence-length", "AUTO")!;
+        Assert.True(o.AutoMinSilence);
+        Assert.Equal(1.5, o.MinSilenceSeconds);
+    }
+
+    [Fact]
+    public void MinSilenceLength_ExplicitValue_LeavesAutoFlagUnset()
+    {
+        var o = ParseFile("--min-silence-length", "2.5")!;
+        Assert.False(o.AutoMinSilence);
+        Assert.Equal(2.5, o.MinSilenceSeconds);
     }
 
     [Fact]

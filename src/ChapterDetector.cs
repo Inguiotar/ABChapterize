@@ -67,6 +67,14 @@ public sealed class ChapterDetector
     /// <summary>Chapter marks are placed this many seconds before a jingle (per specification).</summary>
     private const double JingleLeadSeconds = 0.5;
 
+    /// <summary>
+    /// With --min-silence-length auto, each chapter mark tightens the Pass 2 probing threshold
+    /// to this factor times the length of the silence that triggered it, so probing keeps
+    /// following silences close to the length of recent inter-chapter breaks (allowing a bit
+    /// of slack below it) while skipping clearly shorter in-chapter pauses.
+    /// </summary>
+    private const double AdaptiveTightenFactor = 0.9;
+
     /// <summary>Chunk length in seconds for full transcription of gap regions.</summary>
     private const double GapChunkSeconds = 600;
 
@@ -136,16 +144,19 @@ public sealed class ChapterDetector
             file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
             seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
 
-        _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= {_options.MinSilenceSeconds:0.#} s found");
+        _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= {_options.MinSilenceSeconds:0.#} s found" +
+                     (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
 
-        // Pass 2: probe the beginning of the file and the end of every silence.
-        var probeStarts = new List<double> { 0 };
-        probeStarts.AddRange(silences
+        // Pass 2: probe the beginning of the file and the end of every silence. With
+        // --min-silence-length auto, ProbeThresholdTightening below can skip some of these
+        // candidates instead of probing every one.
+        var candidates = new List<(double Start, Silence? Silence)> { (0, null) };
+        candidates.AddRange(silences
             .Where(s => s.EndSeconds < info.DurationSeconds - 1)
-            .Select(s => s.EndSeconds));
+            .Select(s => ((double)s.EndSeconds, (Silence?)s)));
 
         var probeBytes = (long)(probeSeconds * bytesPerSecond);
-        work.BeginPhase("Pass 2", probeBytes * probeStarts.Count);
+        work.BeginPhase("Pass 2", probeBytes * candidates.Count);
 
         // With --lang auto, the language is resolved once per file, from the very first probe
         // window's samples (always at start 0, decoded below like any other window - no extra
@@ -156,7 +167,10 @@ public sealed class ChapterDetector
         var detectedProbability = 0.0;
 
         var found = new List<DetectedChapter>();
-        foreach (var start in probeStarts)
+
+        // Probes a single window and appends any chapter mark found in it to `found`.
+        // Returns the chapter number found, or null when the phrase was not found.
+        async Task<int?> ProbeAsync(double start)
         {
             ct.ThrowIfCancellationRequested();
             var samples = await _audio.DecodePcmAsync(file, start,
@@ -182,9 +196,56 @@ public sealed class ChapterDetector
                              $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}");
                 found.Add(new DetectedChapter(match.Number, time, match.Confidence));
                 work.ChaptersFound = CountDistinct(found);
-                break; // one chapter per probe window
+                return match.Number; // one chapter per probe window
             }
+            return null;
+        }
+
+        // Adaptive threshold state (--min-silence-length auto only; otherwise every candidate
+        // is probed unconditionally, same as before this feature existed). Tightens to
+        // AdaptiveTightenFactor * the triggering silence's length after every new mark; resets
+        // to the 1.5 s floor - and re-probes everything skipped since the last mark - the
+        // moment a sequence gap turns up, so gap-filling stays inside Pass 2 where possible and
+        // Pass 3's full transcription is only needed if that still fails.
+        var threshold = _options.MinSilenceSeconds;
+        var skippedSinceLastMark = new List<(double Start, Silence? Silence)>();
+        int? lastNumber = null;
+
+        foreach (var candidate in candidates)
+        {
+            if (_options.AutoMinSilence && candidate.Silence is { } candidateSilence &&
+                candidateSilence.EndSeconds - candidateSilence.StartSeconds < threshold)
+            {
+                skippedSinceLastMark.Add(candidate);
+                work.Advance(probeBytes);
+                continue;
+            }
+
+            var number = await ProbeAsync(candidate.Start);
             work.Advance(probeBytes);
+
+            if (number is not { } n || n <= (lastNumber ?? 0))
+                continue; // no match, or a duplicate/regression (e.g. an in-text mention)
+
+            if (_options.AutoMinSilence)
+            {
+                if (lastNumber.HasValue && n > lastNumber.Value + 1 && skippedSinceLastMark.Count > 0)
+                {
+                    _log?.Invoke($"Pass 2: sequence gap between chapter {lastNumber} and {n}, " +
+                                 $"re-probing {skippedSinceLastMark.Count} skipped silence(s) at the " +
+                                 $"{_options.MinSilenceSeconds:0.#} s floor");
+                    threshold = _options.MinSilenceSeconds;
+                    foreach (var skipped in skippedSinceLastMark)
+                        await ProbeAsync(skipped.Start);
+                }
+                else if (candidate.Silence is { } triggeringSilence)
+                {
+                    threshold = AdaptiveTightenFactor * (triggeringSilence.EndSeconds - triggeringSilence.StartSeconds);
+                    _log?.Invoke($"Pass 2: threshold tightened to {threshold:0.##} s after chapter {n}");
+                }
+                skippedSinceLastMark.Clear();
+            }
+            lastNumber = n;
         }
 
         var chapters = Normalize(found);

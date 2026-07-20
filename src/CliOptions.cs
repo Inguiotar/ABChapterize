@@ -83,10 +83,20 @@ public sealed class CliOptions
 
     /// <summary>
     /// Minimum silence duration in seconds that counts as a potential chapter break
-    /// (--min-silence-length / -n, default 1.5). Every such silence triggers a Whisper probe,
-    /// so higher values can drastically reduce the number of probes.
+    /// (--min-silence-length / -n). Every such silence triggers a Whisper probe, so an
+    /// explicit higher value can reduce the number of probes further still. This is always
+    /// the silence scan's floor (1.5 by default); see <see cref="AutoMinSilence"/> for the
+    /// default self-tightening behavior applied on top of it during probing.
     /// </summary>
     public double MinSilenceSeconds { get; private set; } = 1.5;
+
+    /// <summary>
+    /// True (the default) unless --min-silence-length was given an explicit numeric value:
+    /// the silence scan (Pass 1) still uses the 1.5 s floor, but <see cref="ChapterDetector"/>
+    /// self-tightens the probing threshold after each chapter mark instead of probing every
+    /// silence found. "auto" can also be given explicitly for clarity.
+    /// </summary>
+    public bool AutoMinSilence { get; private set; } = true;
 
     /// <summary>Suppress per-file output; warnings and errors are still shown (--quiet / -q).</summary>
     public bool Quiet { get; private set; }
@@ -421,7 +431,7 @@ public sealed class CliOptions
             case "--intro-title": IntroTitle = nextParam(); _introSet = true; return true;
             case "--filter": ParseFilter(nextParam()); return true;
             case "--max-jingle-length": MaxJingleSeconds = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
-            case "--min-silence-length": MinSilenceSeconds = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
+            case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--jobs": Jobs = ParseJobs(nextParam()); return true;
             default: return false;
         }
@@ -475,12 +485,18 @@ public sealed class CliOptions
         return s;
     }
 
-    /// <summary>Parses the --min-silence-length parameter into a positive number of seconds.</summary>
-    private static double ParseMinSilence(string value)
+    /// <summary>
+    /// Parses the --min-silence-length parameter into a positive number of seconds, or "auto".
+    /// "auto" resolves to the 1.5 s floor plus <see cref="AutoMinSilence"/> set, telling
+    /// <see cref="ChapterDetector"/> to self-tighten the threshold as chapters are found.
+    /// </summary>
+    private static (double Seconds, bool Auto) ParseMinSilence(string value)
     {
+        if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return (1.5, true);
         if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 0.1 || s > 60)
-            throw new CliError($"Invalid --min-silence-length value \"{value}\": expected seconds between 0.1 and 60.");
-        return s;
+            throw new CliError($"Invalid --min-silence-length value \"{value}\": expected seconds between 0.1 and 60, or \"auto\".");
+        return (s, false);
     }
 
     /// <summary>Parses the --jobs parameter into a positive job count, or "auto".</summary>
@@ -623,11 +639,18 @@ public sealed class CliOptions
                                     probed for this duration plus 5 seconds (for the phrase
                                     itself) after each silence. Lower values speed up probing.
                                     Requires --jingle.
-          -n, --min-silence-length <seconds>
+          -n, --min-silence-length <seconds|auto>
                                     Minimum silence duration that counts as a potential
-                                    chapter break (default: 1.5). Every such silence is
-                                    probed with Whisper, so higher values can drastically
-                                    speed up detection when the breaks are known to be long.
+                                    chapter break; the silence scan always uses this as its
+                                    floor (default, and floor with "auto": 1.5). With "auto"
+                                    (the default), after each chapter mark is found the
+                                    probing threshold tightens to 90% of the length of the
+                                    silence that triggered it, resetting to the floor
+                                    whenever a sequence gap is hit, so fewer Whisper probes
+                                    are needed without a fixed guess. An explicit numeric
+                                    value disables this and probes every such silence
+                                    instead - useful if the breaks are known to vary a lot,
+                                    or for troubleshooting.
           -q, --quiet               Suppress per-file output; warnings and errors are still shown.
           -v, --verbose             Print processing details and all Whisper transcriptions as
                                     timestamped log lines (to see what the recognizer heard).

@@ -162,7 +162,7 @@ when chapters are written. The most useful knobs:
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are left alone, marks that don't are discarded and the file goes through full detection. Cannot combine with `--force` or `--import`. |
 | `-j`, `--jingle` | A jingle precedes announcements; marks go before the jingle. |
 | `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45). |
-| `-n`, `--min-silence-length <s>` | Silence duration that counts as a potential chapter break (default: 1.5). |
+| `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (and confidence stats) at the end. |
@@ -179,13 +179,21 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
 ## How it works
 
 1. **Pass 1 — silence scan:** ffmpeg finds every silence longer than
-   `--min-silence-length` (default 1.5 s below −35 dBFS) in one quick pass.
+   `--min-silence-length` (default, and floor with `auto`: 1.5 s below
+   −35 dBFS) in one quick pass.
 2. **Pass 2 — probing:** a short stretch of audio after each silence is
    transcribed with Whisper and matched against the chapter phrase. The chapter
    number is parsed from digits or from numbers written out as words (0-999,
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
    Seven") or precedes
-   it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
+   it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). By default
+   (`--min-silence-length auto`), every mark found tightens the probing
+   threshold to 90% of the length of the silence that triggered it, so
+   shorter in-chapter pauses stop being probed once real inter-chapter
+   breaks are established; the threshold resets to the 1.5 s floor - and
+   everything skipped since the last mark is re-probed - the moment a
+   sequence gap turns up. An explicit `--min-silence-length` value disables
+   this and probes every silence at or above it instead.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely. If a gap still remains, the file is left
@@ -198,9 +206,11 @@ keeps its exact position.
 
 ## Tuning tips
 
-- **Speed:** if your audiobook has generous pauses at chapter breaks, raise the
-  silence threshold, e.g. `-n 2.5` — far fewer Whisper probes, much faster run.
-  If chapters go missing, lower it again.
+- **Speed:** by default (`-n auto`), the silence threshold self-tightens as
+  real chapter breaks are found, without having to guess a fixed value. If
+  your audiobook's pauses vary too much for that to help, an explicit
+  threshold like `-n 2.5` still works — far fewer Whisper probes, much faster
+  run, but chapters go missing if it's set too high.
 - **Jingles:** if you know the jingle is short, say so: `-j -X 15` shrinks the
   probe window and speeds things up.
 - **Accuracy vs. speed:** `--model turbo` (default) is a good balance;

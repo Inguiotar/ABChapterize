@@ -76,9 +76,12 @@ Detection runs in up to three passes per file.
 ### Pass 1 — silence scan
 
 ffmpeg's `silencedetect` filter finds every silence of at least
-`--min-silence-length` seconds (default 1.5) below −35 dBFS, in one quick
-decode pass over the whole file. Chapter announcements in audiobooks
-practically always follow such a pause.
+`--min-silence-length` seconds (default, and floor with `auto`: 1.5) below
+−35 dBFS, in one quick decode pass over the whole file. Chapter announcements
+in audiobooks practically always follow such a pause. This pass always uses
+the 1.5 s floor when `--min-silence-length` is left at its default `auto`;
+the self-tightening described under Pass 2 happens afterwards, in C#, over
+the resulting silence list.
 
 The scan is guarded: if it ends prematurely (e.g. because of a damaged file),
 the file is aborted with an error instead of silently reporting "no chapters".
@@ -114,6 +117,21 @@ Rules applied to the matches:
   chapter number came from travels with the detection. Marks below 0.5 are
   flagged as low-confidence instead of being silently trusted — see
   [section 12](#12-output-progress-and-logging).
+
+By default (`--min-silence-length auto`), probing does not visit every
+silence from pass 1 unconditionally. It starts at the 1.5 s floor as usual;
+the first chapter mark found via an actual silence (rather than at the very
+start of the file) tightens the threshold to 90% of that silence's length,
+and every subsequent mark re-tightens it the same way against its own
+triggering silence — so once real inter-chapter breaks establish a typical
+length, clearly shorter in-chapter pauses stop being probed, while breaks
+close to (or longer than) that length still are. If a chapter number is then
+found out of sequence (a gap), the threshold immediately resets to the 1.5 s
+floor and every silence skipped since the last mark is re-probed right away,
+before falling through to pass 3 — so pass 3's full transcription is only
+needed if that still fails to find the missing chapter(s). Giving
+`--min-silence-length` an explicit numeric value disables all of this and
+probes every silence at or above it, same as before this feature existed.
 
 ### Pass 3 — gap filling (only when needed)
 
@@ -280,12 +298,19 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   `large`. `tiny` and `base` are not recommended for real audiobooks; see
   [section 8](#8-whisper-models).
 
-`-n`, `--min-silence-length <seconds>`
-: Minimum silence duration (0.1–60, default: 1.5) that counts as a potential
-  chapter break. Every such silence triggers a Whisper probe, so this is the
-  main speed knob: if your audiobook has generous pauses at chapter breaks,
-  `-n 2.5` can cut the number of probes dramatically. If chapters go missing,
-  lower it again.
+`-n`, `--min-silence-length <seconds|auto>`
+: Minimum silence duration (0.1–60, default: `auto`) that counts as a
+  potential chapter break; the silence scan always uses this as its floor
+  (1.5 by default, and as `auto`'s floor). By default (`auto`), pass 2
+  self-tightens the probing threshold to 90% of each mark's triggering
+  silence length as chapters are found, resetting to the floor whenever a
+  sequence gap turns up, so far fewer Whisper probes are needed without a
+  fixed guess — see [Pass 2 — probing](#pass-2--probing). An explicit
+  numeric value disables this and probes every silence at or above it
+  instead; this is still the main manual speed knob if `auto`'s heuristic
+  doesn't suit a particular audiobook: if the pauses are unusually generous
+  and consistent, `-n 2.5` can cut the number of probes further still, but
+  chapters go missing if it's set too high.
 
 `-j`, `--jingle`
 : Declare that a jingle (music sting) may precede each chapter announcement.
