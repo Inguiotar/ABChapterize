@@ -68,6 +68,18 @@ public sealed class ChapterDetector
     private const double JingleLeadSeconds = 0.5;
 
     /// <summary>
+    /// Slack allowed when matching a VAD non-speech region (the jingle) to a Whisper phrase: the
+    /// region's end is where VAD resumes detecting speech, which should coincide with the phrase
+    /// start, but the two detectors time boundaries slightly differently - Whisper's segment
+    /// timestamps can be a touch earlier (coarser) than VAD's frame-precise resume, leaving the
+    /// region ending just <em>after</em> the phrase start. Without this slack such a region would
+    /// be missed and a silence-less jingle would fall back to the (possibly false) nearest
+    /// silence. Kept small - far below any real jingle length or inter-chapter spacing - so it
+    /// only absorbs boundary jitter and can never grab an unrelated, later non-speech region.
+    /// </summary>
+    private const double JinglePhraseMatchToleranceSeconds = 0.5;
+
+    /// <summary>
     /// With --max-jingle-length auto, an observed phrase offset below this is treated as "this
     /// chapter had no jingle (or an ultra-short one)" and is excluded from tightening the probe
     /// window: some audiobooks only play the jingle for some chapters, and such a chapter gives
@@ -696,15 +708,18 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Finds the VAD non-speech region that truly precedes a matched phrase, the same way <see
-    /// cref="FindRealAnchorSilence"/> does for silencedetect silences. Only used as a fallback
-    /// when no anchor silence was found, since a leading silence is always the more precise
-    /// anchor when one exists. Returns null when none was found in the window.
+    /// Finds the VAD non-speech region (the jingle) that ends at a matched phrase, the same way
+    /// <see cref="FindRealAnchorSilence"/> does for silencedetect silences. The region's end is
+    /// matched against the phrase with <see cref="JinglePhraseMatchToleranceSeconds"/> of slack,
+    /// so a region ending a hair after the phrase (VAD and Whisper time boundaries slightly
+    /// differently) is still recognised rather than missed. Returns null when none was found in
+    /// the window.
     /// </summary>
     private static NonSpeechRegion? FindLastRegionEndingWithin(
         double windowStart, double phraseAbsSeconds, List<NonSpeechRegion> regions)
     {
-        var region = regions.LastOrDefault(r => r.EndSeconds > windowStart && r.EndSeconds <= phraseAbsSeconds);
+        var latestEnd = phraseAbsSeconds + JinglePhraseMatchToleranceSeconds;
+        var region = regions.LastOrDefault(r => r.EndSeconds > windowStart && r.EndSeconds <= latestEnd);
         return region == default ? null : region;
     }
 

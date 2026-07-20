@@ -520,6 +520,28 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task SilencelessJingle_IsMatched_WhenVadResumesSlightlyAfterThePhrase()
+    {
+        // The jingle's VAD region ends at 645.3 - 0.3 s *after* Whisper's phrase timestamp (645),
+        // as happens when the two detectors time the boundary slightly differently. The region
+        // must still be recognised as the jingle (within the phrase-match tolerance) so the mark
+        // lands at its start (640); without the tolerance it would be missed and the transition
+        // would wrongly fall back to the false in-text pause at 610-613 (marking at 612.5).
+        var result = await DetectAsync(
+            Options("--jingle"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(32, " Chapter two.")); // phrase at 645, VAD resumes at 645.3
+            },
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(645.3, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_ObservesLengthFromVadBoundaries_NotPhraseOffset()
     {
         // Chapter two's phrase starts 20 s into its probe window, but the VAD region itself
