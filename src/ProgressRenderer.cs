@@ -198,8 +198,13 @@ public sealed class ProgressRenderer : IDisposable
         }
     }
 
-    /// <summary>Builds one progress bar line for a single active file.</summary>
-    private static string BuildLine((WorkTracker Tracker, string Label) slot)
+    /// <summary>
+    /// Builds one progress bar line for a single active file. Internal for unit testing: the
+    /// per-tick redraw is skipped only when this exact string is unchanged (see <see
+    /// cref="Render"/>), so the tests assert that the percent number and chapter count both take
+    /// part in the string and therefore always trigger a redraw when they change.
+    /// </summary>
+    internal static string BuildLine((WorkTracker Tracker, string Label) slot)
     {
         var fraction = slot.Tracker.Fraction;
         var percent = (int)Math.Floor(fraction * 100);
