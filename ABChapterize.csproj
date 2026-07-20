@@ -33,6 +33,50 @@
     <Compile Remove="tests/**" />
   </ItemGroup>
 
+  <!-- Auto-incrementing build number, baked in as assembly metadata read by CliOptions and
+       surfaced only by the version-info command line option (never in the plain
+       Version-based banner/usage text). The counter lives in BuildNumber.txt, tracked in git
+       so it keeps counting up across clones instead of resetting; it is bumped on every build
+       of this project (any configuration or RuntimeIdentifier), so publishing both win-x64 and
+       linux-x64 for the same release bumps it twice; that is fine, it identifies a build, not
+       a release. -->
+  <PropertyGroup>
+    <BuildNumberFile>$(MSBuildProjectDirectory)\BuildNumber.txt</BuildNumberFile>
+  </PropertyGroup>
+
+  <!-- Hooked onto GetAssemblyAttributes specifically, not the outer GenerateAssemblyInfo: the
+       SDK resolves GenerateAssemblyInfo's own DependsOnTargets chain - which is what actually
+       populates and hashes @(AssemblyAttribute) and writes the generated file - before a
+       BeforeTargets="GenerateAssemblyInfo" hook gets to run, so items added there arrive too
+       late to be picked up. GetAssemblyAttributes is the actual target that builds up
+       @(AssemblyAttribute) (by appending to it, so our items added here survive), and running
+       before it lands our items in time for the hash/file-write that follows.
+       Guarded on TargetFramework being set so this only fires for an actual compile, not any
+       property-evaluation-only pass (design-time builds, IDE background restores) that might
+       otherwise bump the counter without a real build happening. -->
+  <Target Name="IncrementBuildNumber" BeforeTargets="GetAssemblyAttributes" Condition="'$(TargetFramework)' != ''">
+    <ReadLinesFromFile File="$(BuildNumberFile)" Condition="Exists('$(BuildNumberFile)')">
+      <Output TaskParameter="Lines" ItemName="_PreviousBuildNumberLine" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <_PreviousBuildNumber Condition="'@(_PreviousBuildNumberLine)' != ''">@(_PreviousBuildNumberLine)</_PreviousBuildNumber>
+      <_PreviousBuildNumber Condition="'$(_PreviousBuildNumber)' == ''">0</_PreviousBuildNumber>
+      <BuildNumber>$([MSBuild]::Add($(_PreviousBuildNumber), 1))</BuildNumber>
+      <BuildTimestamp>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC</BuildTimestamp>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(BuildNumberFile)" Lines="$(BuildNumber)" Overwrite="true" />
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>BuildNumber</_Parameter1>
+        <_Parameter2>$(BuildNumber)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>BuildTimestamp</_Parameter1>
+        <_Parameter2>$(BuildTimestamp)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />

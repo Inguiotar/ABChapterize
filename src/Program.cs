@@ -20,7 +20,10 @@ public static class Program
         // --version wins over everything else on the command line and needs no target path.
         if (args.Contains("--version"))
         {
-            Console.WriteLine($"abchapterize {CliOptions.Version}");
+            var buildInfo = CliOptions.BuildNumber != null
+                ? $" (build {CliOptions.BuildNumber}, built {CliOptions.BuildTimestamp})"
+                : "";
+            Console.WriteLine($"abchapterize {CliOptions.Version}{buildInfo}");
             return 0;
         }
 

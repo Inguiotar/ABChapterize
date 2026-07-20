@@ -599,7 +599,10 @@ touching Whisper at all.
 : Show the usage information.
 
 `--version`
-: Show the version number.
+: Show the version number, plus the auto-incrementing build number and UTC
+  build timestamp (e.g. `abchapterize 0.8.1 (build 42, built 2026-07-20
+  14:33:12 UTC)`). Not shown anywhere else - `--help`'s banner only ever
+  shows the plain version number.
 
 ## 7. Languages and number recognition
 

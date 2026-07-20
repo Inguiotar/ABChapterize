@@ -257,6 +257,23 @@ public sealed class CliOptions
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
 
     /// <summary>
+    /// Auto-incrementing build counter baked into the assembly by the IncrementBuildNumber
+    /// MSBuild target (see the csproj and BuildNumber.txt); null only if that target never ran
+    /// (e.g. a host that loads these sources without going through a normal build). Shown only
+    /// by --version, not in <see cref="Version"/> or <see cref="UsageText"/>.
+    /// </summary>
+    public static string? BuildNumber => GetAssemblyMetadata("BuildNumber");
+
+    /// <summary>UTC timestamp of the build that produced this assembly, set by the same
+    /// MSBuild target as <see cref="BuildNumber"/>; null under the same circumstances.</summary>
+    public static string? BuildTimestamp => GetAssemblyMetadata("BuildTimestamp");
+
+    /// <summary>Reads a value written into the assembly via [AssemblyMetadata(key, value)].</summary>
+    private static string? GetAssemblyMetadata(string key) => typeof(CliOptions).Assembly
+        .GetCustomAttributes<AssemblyMetadataAttribute>()
+        .FirstOrDefault(a => a.Key == key)?.Value;
+
+    /// <summary>
     /// Parses and validates the raw command line arguments.
     /// </summary>
     /// <param name="args">Arguments as passed to Main.</param>
