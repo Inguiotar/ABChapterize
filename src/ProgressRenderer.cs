@@ -92,7 +92,14 @@ public sealed class ProgressRenderer : IDisposable
         _logStyle = verbose || noBar;
         _interactive = !quiet && !noBar && !Console.IsOutputRedirected;
         if (_interactive)
+        {
+            // Hide the cursor for the whole interactive run: the block is erased and redrawn
+            // every timer tick, and a visible cursor would flicker between the top of the bar
+            // block (where ClearBlock parks it) and the empty line below the last bar (where the
+            // final WriteLine leaves it) on every redraw. Restored in Dispose.
+            TrySetCursorVisible(false);
             _timer = new Timer(_ => Render(), null, Timeout.Infinite, Timeout.Infinite);
+        }
     }
 
     /// <summary>Starts displaying progress for one file, in addition to any already in flight.</summary>
@@ -200,6 +207,18 @@ public sealed class ProgressRenderer : IDisposable
         _blockLineCount = 0;
     }
 
+    /// <summary>
+    /// Sets the console cursor visibility, swallowing any platform error. The
+    /// <see cref="Console.CursorVisible"/> setter works on both Windows and Linux (it emits the
+    /// ANSI show/hide sequence), but a redirected or dumb terminal can still throw; the cursor is
+    /// purely cosmetic here, so a failure is ignored rather than aborting the run.
+    /// </summary>
+    /// <param name="visible">True to show the cursor, false to hide it.</param>
+    private static void TrySetCursorVisible(bool visible)
+    {
+        try { Console.CursorVisible = visible; } catch { /* cosmetic only */ }
+    }
+
     /// <summary>Returns the console width, tolerating consoles that do not report one.</summary>
     private static int SafeWindowWidth()
     {
@@ -212,6 +231,11 @@ public sealed class ProgressRenderer : IDisposable
         try { return Console.WindowHeight; } catch { return 24; }
     }
 
-    /// <summary>Stops the refresh timer.</summary>
-    public void Dispose() => _timer?.Dispose();
+    /// <summary>Stops the refresh timer and restores the cursor hidden for the interactive run.</summary>
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        if (_interactive)
+            TrySetCursorVisible(true);
+    }
 }
