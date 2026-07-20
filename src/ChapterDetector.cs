@@ -273,6 +273,11 @@ public sealed class ChapterDetector
         var detectedProbability = 0.0;
 
         var found = new List<DetectedChapter>();
+        // Declared here (rather than with the rest of the adaptive-threshold state below) so
+        // ProbeAsync, defined next, can read it - set to the previous distinct chapter mark's
+        // number by the main candidate loop, still holding that value (not yet this mark's)
+        // while a probe is in flight.
+        int? lastNumber = null;
 
         // Probes a single window and appends any chapter mark found in it to `found`.
         // Returns the chapter number found (or null when the phrase was not found), together
@@ -338,8 +343,14 @@ public sealed class ChapterDetector
                 found.Add(new DetectedChapter(match.Number, time, match.Confidence));
                 work.ChaptersFound = CountDistinct(found);
 
-                if (_options.Jingle && _options.AutoMaxJingle && start != 0)
+                if (_options.Jingle && _options.AutoMaxJingle && lastNumber.HasValue)
                 {
+                    // lastNumber.HasValue means this is at least the second mark found, so its
+                    // triggering candidate is a real inter-chapter jingle - not the
+                    // intro-to-chapter-1 gap, which can easily run longer (or shorter) than a
+                    // book's regular jingles and would otherwise size the window off a
+                    // one-off observation before any real jingle has even been seen. Same
+                    // reasoning as the analogous --min-silence-length auto tightening below.
                     // The real jingle length is the gap between the real preceding anchor (not
                     // necessarily this probe's own triggering candidate, see above) and the
                     // phrase - using the raw offset from this probe's own window start would
@@ -387,7 +398,6 @@ public sealed class ChapterDetector
         // possible and Pass 3's full transcription is only needed if that still fails.
         var threshold = _options.MinSilenceSeconds;
         var skippedSinceLastMark = new List<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)>();
-        int? lastNumber = null;
 
         foreach (var candidate in candidates)
         {

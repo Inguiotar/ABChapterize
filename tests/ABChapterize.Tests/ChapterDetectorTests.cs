@@ -580,6 +580,32 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoMaxJingle_DoesNotResizeFromTheFirstMark()
+    {
+        // Chapter one's own silence-less jingle (region 50-53, 3 s) is found via a candidate
+        // whose start (50) is not the file's absolute beginning - exactly what happens whenever
+        // a book has any preface/intro before the first chapter announcement. That observation
+        // must not resize the probe window, for the same reason the intro-to-chapter-1 silence
+        // must not tighten --min-silence-length: it is not a real inter-chapter jingle length yet
+        // (there has been no second mark to compare it against). If it wrongly did, the window
+        // would narrow to ~8.75 s (1.25 * 3 + 5), and chapter two's own, much longer (20 s)
+        // silence-less jingle region (600-620) would then be skipped outright (too long for that
+        // wrongly-narrowed window) - so chapter two must still be found.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle", "--max-jingle-length", "auto"),
+            [],
+            s =>
+            {
+                s.Add(50, Seg(0.3, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 50), new(53, 600), new(620, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Contains(600.0, audio.DecodeStarts);
+    }
+
+    [Fact]
     public async Task AutoMinSilence_NeverSkipsVadCandidates_AndTheyDoNotMistightenTheThreshold()
     {
         // Chapter two's 5 s triggering silence tightens the threshold to 4.5 s (0.9x). Chapter
