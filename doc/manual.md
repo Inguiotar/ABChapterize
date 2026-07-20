@@ -74,12 +74,7 @@ naming one directly as the target is an error.
 Detection runs in up to three Whisper-transcription passes per file, plus an
 optional VAD pre-pass with `--jingle`.
 
-### Pass 1 — silence scan
-
-In the progress bar this phase is labeled "Pass 1" normally, or "Pass 1a"
-when the VAD pre-pass below also runs (`--jingle`) — keeping the numbering
-contiguous with that phase's own "Pass 1b" label. "Pass 2" and "Pass 3"
-are unaffected either way.
+### Pass 1 — silence scan (and VAD pre-pass with `--jingle`)
 
 ffmpeg's `silencedetect` filter finds every silence of at least
 `--min-silence-length` seconds (default, and floor with `auto`: 1.5) below
@@ -92,14 +87,18 @@ the resulting silence list.
 The scan is guarded: if it ends prematurely (e.g. because of a damaged file),
 the file is aborted with an error instead of silently reporting "no chapters".
 
-### Pass 1b — VAD pre-pass (`--jingle` only)
+With `--jingle`, a voice-activity detection (VAD) pre-pass runs alongside the
+silence scan — see below — over the very same decode: one ffmpeg process
+splits the audio into two filter branches (`silencedetect` on one, resampled
+PCM for the VAD model on the other), so the progress bar shows a single
+"Pass 1" either way instead of separate sub-passes.
 
 `silencedetect` is amplitude-only: a jingle that abuts the narration with no
-detectable gap on either side produces no silence at all, so pass 1 never
-gives pass 2 a candidate near that transition. With `--jingle`, a second full
-decode pass runs the file through a bundled voice-activity detection (VAD)
-model — [Silero VAD](https://github.com/snakers4/silero-vad), MIT-licensed,
-embedded in the executable (~2.2 MB, no separate download; see
+detectable gap on either side produces no silence at all, so it never gives
+pass 2 a candidate near that transition. The VAD pre-pass runs the shared
+decode's PCM branch through a bundled voice-activity detection model —
+[Silero VAD](https://github.com/snakers4/silero-vad), MIT-licensed, embedded
+in the executable (~2.2 MB, no separate download; see
 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)) — classifying the whole
 file as speech or non-speech. Music reads as non-speech to a speech detector,
 the same as silence, so a jingle shows up as a non-speech region flanked by
@@ -359,8 +358,9 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
 : Declare that a jingle (music sting) may precede each chapter announcement.
   Probe windows are widened to `--max-jingle-length` + 5 seconds, a VAD
   pre-pass runs to catch jingles with no detectable silence around them (see
-  [Pass 1b](#pass-1b--vad-pre-pass---jingle-only)), and chapter marks are
-  placed at the jingle's start instead of at the announcement — 0.5 seconds
+  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass-with---jingle)), and
+  chapter marks are placed at the jingle's start instead of at the
+  announcement — 0.5 seconds
   *before* it when a silence precedes it, or exactly at its start when it
   doesn't.
 

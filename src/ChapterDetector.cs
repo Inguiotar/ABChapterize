@@ -196,40 +196,40 @@ public sealed class ChapterDetector
         // ceiling, so later probes decode less audio once a real jingle length is known.
         var observedMaxJingleSeconds = 0.0;
 
-        // With --jingle, a second sub-pass (VAD, below) follows before Pass 2, so Pass 1 is
-        // labeled "Pass 1a"/"Pass 1b" in the progress bar to keep the numbering contiguous;
-        // without it, Pass 1 stands alone as "Pass 1".
-        var hasVadPrePass = _options.Jingle && _vad != null;
-
-        // Pass 1(a): silence scan (one full pass over the file).
-        work.BeginPhase(hasVadPrePass ? "Pass 1a" : "Pass 1", info.SizeBytes);
-        var silences = await _audio.DetectSilencesAsync(
-            file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
-            seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
-
-        _log?.Invoke($"{(hasVadPrePass ? "Pass 1a" : "Pass 1")}: {silences.Count} silence(s) of >= " +
-                     $"{_options.MinSilenceSeconds:0.#} s found" + (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
-
-        // Pass 1b (--jingle only): a full-file VAD pre-pass. silencedetect alone never
-        // produces a Pass 2 candidate at a chapter transition where the jingle abuts speech
-        // on both sides with no amplitude gap; VAD sees that transition as a non-speech
-        // region (music, like silence, reads as non-speech to a speech detector) regardless
-        // of amplitude, so it can catch what silencedetect misses. See ComputeJingleMark for
-        // how the two detectors' findings combine to place the mark.
+        // Pass 1: silence scan (one full pass over the file). With --jingle, a VAD pre-pass
+        // runs concurrently over the very same decode (see DetectSilencesAndStreamPcmAsync) -
+        // silencedetect alone never produces a Pass 2 candidate at a chapter transition where
+        // the jingle abuts speech on both sides with no amplitude gap; VAD sees that transition
+        // as a non-speech region (music, like silence, reads as non-speech to a speech
+        // detector) regardless of amplitude, so it can catch what silencedetect misses. See
+        // ComputeJingleMark for how the two detectors' findings combine to place the mark.
+        work.BeginPhase("Pass 1", info.SizeBytes);
+        List<Silence> silences;
         var nonSpeechRegions = new List<NonSpeechRegion>();
-        if (_options.Jingle && _vad != null)
+        if (_options.Jingle && _vad is { } vad)
         {
-            work.BeginPhase("Pass 1b", info.SizeBytes);
-            var speech = await _vad.DetectSpeechAsync(
-                file, info.DurationSeconds,
+            List<SpeechSegment> speech = [];
+            silences = await _audio.DetectSilencesAndStreamPcmAsync(
+                file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
+                async (pcm, innerCt) => speech = await vad.DetectSpeechAsync(pcm, innerCt),
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
             nonSpeechRegions = ComputeNonSpeechRegions(speech);
+        }
+        else
+        {
+            silences = await _audio.DetectSilencesAsync(
+                file, info.DurationSeconds, _options.MinSilenceSeconds, SilenceNoiseDb,
+                seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
+        }
+
+        _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= " +
+                     $"{_options.MinSilenceSeconds:0.#} s found" + (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
+        if (_options.Jingle && _vad != null)
             // speech.Count and nonSpeechRegions.Count always differ by exactly one (a non-speech
             // region is the gap between two consecutive speech segments) before the merge/filter
             // cleanup below can drop some, and always differ by at most one afterwards - the
             // region count alone is the actionable number, so only it is logged.
-            _log?.Invoke($"Pass 1b: {nonSpeechRegions.Count} non-speech region(s) found");
-        }
+            _log?.Invoke($"Pass 1: {nonSpeechRegions.Count} non-speech region(s) found");
 
         // Pass 2: probe the beginning of the file and the end of every silence. With
         // --min-silence-length auto, ProbeThresholdTightening below can skip some of these

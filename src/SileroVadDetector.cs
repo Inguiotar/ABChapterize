@@ -10,9 +10,10 @@ namespace ABChapterize;
 
 /// <summary>
 /// Voice activity detection using the Silero VAD ONNX model (MIT-licensed, bundled with the
-/// executable as an embedded resource - see THIRD-PARTY-NOTICES.md). Streams the file to
-/// 16 kHz mono PCM via the injected <see cref="IAudioSource"/> and feeds it through the model
-/// <see cref="FrameSamples"/> new samples at a time. The frame size and the stateful
+/// executable as an embedded resource - see THIRD-PARTY-NOTICES.md). Consumes an externally-fed
+/// 16 kHz mono PCM stream - see <see cref="IAudioSource.DetectSilencesAndStreamPcmAsync"/>,
+/// which decodes the file once for both the silence scan and this VAD pass - and feeds it
+/// through the model <see cref="FrameSamples"/> new samples at a time. The frame size and the stateful
 /// (recurrent) input/output tensor contract were confirmed by inspecting the bundled model
 /// file's actual ONNX input/output metadata directly, and cross-checked against the upstream
 /// silero-vad repository's own Python reference wrapper (not assumed - a first implementation
@@ -44,8 +45,9 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
     /// <summary>Embedded resource name of the bundled model (see the csproj's EmbeddedResource item).</summary>
     private const string ResourceName = "ABChapterize.silero_vad.onnx";
 
-    /// <summary>Sample rate the model expects; matches <see cref="IAudioSource.StreamPcmAsync"/>'s
-    /// fixed 16 kHz output, so no resampling is needed here.</summary>
+    /// <summary>Sample rate the model expects; matches <see
+    /// cref="IAudioSource.DetectSilencesAndStreamPcmAsync"/>'s fixed 16 kHz PCM output, so no
+    /// resampling is needed here.</summary>
     private const long SampleRate = 16000;
 
     /// <summary>New samples per inference frame (32 ms at 16 kHz) - required exactly by this
@@ -62,14 +64,12 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
     /// <summary>Number of stacked recurrent state layers the model carries.</summary>
     private const int StateLayers = 2;
 
-    private readonly IAudioSource _audio;
     private readonly InferenceSession _session;
 
-    /// <summary>Creates a detector that decodes through <paramref name="audio"/> and loads the
-    /// bundled model once, reused for every file processed through this instance.</summary>
-    public SileroVadDetector(IAudioSource audio)
+    /// <summary>Creates a detector that loads the bundled model once, reused for every file
+    /// processed through this instance.</summary>
+    public SileroVadDetector()
     {
-        _audio = audio;
         _session = new InferenceSession(LoadModelBytes());
     }
 
@@ -85,8 +85,7 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
     }
 
     /// <inheritdoc/>
-    public async Task<List<SpeechSegment>> DetectSpeechAsync(
-        string file, double durationSeconds, Action<double>? progress, string? inputDecoder, CancellationToken ct)
+    public async Task<List<SpeechSegment>> DetectSpeechAsync(IAsyncEnumerable<float[]> pcm, CancellationToken ct)
     {
         var frames = new List<(double TimeSeconds, float Probability)>();
         // Zero-initialized recurrent state and context are Silero's documented starting point
@@ -97,7 +96,7 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
         var frameIndex = 0L;
         var leftover = Array.Empty<float>();
 
-        await foreach (var rawChunk in _audio.StreamPcmAsync(file, inputDecoder, ct))
+        await foreach (var rawChunk in pcm)
         {
             ct.ThrowIfCancellationRequested();
             var chunk = leftover.Length == 0 ? rawChunk : Concat(leftover, rawChunk);
@@ -111,7 +110,6 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
                 offset += FrameSamples;
             }
             leftover = chunk[offset..];
-            progress?.Invoke(frameIndex * (double)FrameSamples / SampleRate);
         }
         // Any trailing partial frame (< 32 ms) at true EOF is dropped; far below the precision
         // chapter marks need.

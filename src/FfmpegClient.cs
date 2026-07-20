@@ -248,24 +248,110 @@ public sealed partial class FfmpegClient : IAudioSource
         return samples;
     }
 
-    /// <summary>Chunk size for <see cref="StreamPcmAsync"/>: 65536 samples is ~4 s of 16 kHz
+    /// <summary>Chunk size for <see cref="ReadRawPcmAsync"/>: 65536 samples is ~4 s of 16 kHz
     /// audio, 256 KB per chunk - large enough to keep per-chunk overhead low, small enough that
     /// the whole file is never held in memory at once.</summary>
     private const int StreamChunkSamples = 65536;
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<float[]> StreamPcmAsync(
-        string file, string? inputDecoder, [EnumeratorCancellation] CancellationToken ct)
+    public async Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
+        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        Func<IAsyncEnumerable<float[]>, CancellationToken, Task> consumePcm,
+        Action<double>? progress, string? inputDecoder, CancellationToken ct)
     {
-        List<string> args = ["-hide_banner", "-v", "error", "-nostdin"];
+        var silences = new List<Silence>();
+        double? pendingStart = null;
+        double processedSeconds = 0;
+
+        List<string> args = ["-hide_banner", "-nostats", "-nostdin", "-progress", "pipe:2"];
         if (inputDecoder != null)
             args.AddRange(["-c:a", inputDecoder]);
-        args.AddRange(["-i", file, "-ac", "1", "-ar", SampleRate.ToString(), "-f", "f32le", "pipe:1"]);
+        args.AddRange(
+            [
+                "-i", file,
+                // A single decode forked into two independent filter branches instead of two
+                // full-file ffmpeg passes: one through silencedetect (as in
+                // DetectSilencesAsync, discarded to a null muxer - only its stderr log
+                // matters), the other resampled for the VAD model and streamed as raw PCM on
+                // stdout. Explicit -map'd outputs from a filtergraph, so (unlike
+                // DetectSilencesAsync) no automatic stream selection ever needs -vn/-sn/-dn to
+                // keep cover art or subtitle streams out.
+                "-filter_complex",
+                "[0:a]asplit=2[sd][pcm];" +
+                $"[sd]silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}[sdout];" +
+                $"[pcm]aresample={SampleRate},aformat=sample_fmts=flt:channel_layouts=mono[pcmout]",
+                "-map", "[sdout]", "-f", "null", "-",
+                "-map", "[pcmout]", "-f", "f32le", "pipe:1",
+            ]);
 
         using var proc = StartProcess(_ffmpeg, args, redirectStdout: true);
         using var reg = ct.Register(() => TryKill(proc));
 
-        var stream = proc.StandardOutput.BaseStream;
+        var pcmTask = consumePcm(ReadRawPcmAsync(proc.StandardOutput.BaseStream, ct), ct);
+        var stderrTask = PumpSilenceAndProgressAsync(proc, silences, s => pendingStart = s, () => pendingStart,
+            s => { processedSeconds = s; progress?.Invoke(s); }, ct);
+
+        // Await whichever finishes first: a fault in either (VAD model failure, or a
+        // stderr-parsing error) must kill the process so the other task's pipe read reaches
+        // EOF instead of hanging forever on a stdout/stderr pipe nothing writes to or reads
+        // from anymore. A clean finish on one side needs no such nudge - the process closes
+        // both pipes together at real EOF - so this only ever fires on an actual fault.
+        var first = await Task.WhenAny(pcmTask, stderrTask);
+        if (first.IsFaulted || first.IsCanceled)
+            TryKill(proc);
+        await Task.WhenAll(pcmTask, stderrTask);
+
+        await proc.WaitForExitAsync(ct);
+        ct.ThrowIfCancellationRequested();
+        if (proc.ExitCode != 0)
+            throw new AppError($"ffmpeg silence/VAD scan failed for \"{file}\".");
+
+        // Guard against silent early termination: the scan must have covered the whole file.
+        if (processedSeconds < durationSeconds - Math.Max(30, durationSeconds * 0.02))
+            throw new AppError(
+                $"Silence scan of \"{file}\" ended prematurely after {processedSeconds:0.#} of " +
+                $"{durationSeconds:0.#} seconds.");
+
+        // A silence still open at the end of the file gets closed at the file's duration.
+        if (pendingStart is { } open)
+            silences.Add(new Silence(Math.Max(0, open), durationSeconds));
+        return silences;
+    }
+
+    /// <summary>Reads ffmpeg's stderr for <see cref="DetectSilencesAndStreamPcmAsync"/>: silence
+    /// start/end markers (appended to <paramref name="silences"/>) and "-progress pipe:2" time
+    /// markers (forwarded via <paramref name="onProgress"/>).</summary>
+    private static async Task PumpSilenceAndProgressAsync(
+        Process proc, List<Silence> silences, Action<double?> setPendingStart, Func<double?> getPendingStart,
+        Action<double> onProgress, CancellationToken ct)
+    {
+        while (await proc.StandardError.ReadLineAsync(ct) is { } line)
+        {
+            var m = SilenceStartRegex().Match(line);
+            if (m.Success)
+            {
+                setPendingStart(double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture));
+                continue;
+            }
+            m = SilenceEndRegex().Match(line);
+            if (m.Success && getPendingStart() is { } s)
+            {
+                silences.Add(new Silence(Math.Max(0, s),
+                    double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)));
+                setPendingStart(null);
+                continue;
+            }
+            m = ProgressTimeRegex().Match(line);
+            if (m.Success)
+                onProgress(long.Parse(m.Groups[1].Value) / 1_000_000.0);
+        }
+    }
+
+    /// <summary>Reads a stdout stream of raw f32le PCM in bounded-size chunks, for scanning a
+    /// full audiobook without holding the entire decoded file in memory.</summary>
+    private static async IAsyncEnumerable<float[]> ReadRawPcmAsync(
+        Stream stream, [EnumeratorCancellation] CancellationToken ct)
+    {
         var byteBuffer = new byte[StreamChunkSamples * sizeof(float)];
         var filled = 0;
         while (true)
@@ -284,12 +370,6 @@ public sealed partial class FfmpegClient : IAudioSource
         var wholeBytes = filled - filled % sizeof(float);
         if (wholeBytes > 0)
             yield return BytesToFloats(byteBuffer, wholeBytes);
-
-        var stderr = await proc.StandardError.ReadToEndAsync(ct);
-        await proc.WaitForExitAsync(ct);
-        ct.ThrowIfCancellationRequested();
-        if (proc.ExitCode != 0)
-            throw new AppError($"ffmpeg PCM streaming failed for \"{file}\": {stderr.Trim()}");
     }
 
     /// <summary>Converts the first <paramref name="byteCount"/> bytes of an f32le buffer to samples.</summary>

@@ -60,10 +60,26 @@ public sealed class ChapterDetectorTests : IDisposable
         }
 
         /// <inheritdoc/>
-        /// <remarks>Never called in these tests - VAD is scripted directly via <see cref="FakeVad"/>,
-        /// bypassing this streaming decode path entirely.</remarks>
-        public IAsyncEnumerable<float[]> StreamPcmAsync(string file, string? inputDecoder, CancellationToken ct)
-            => throw new NotSupportedException("not scripted for these tests - see FakeVad");
+        /// <remarks>The PCM stream itself is never scripted - VAD is scripted directly via
+        /// <see cref="FakeVad"/>, which ignores the (empty) stream passed to it - but the
+        /// consumer callback must still be invoked, exactly as the real ffmpeg-backed
+        /// implementation does, so FakeVad.CallCount reflects reality.</remarks>
+        public async Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
+            string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+            Func<IAsyncEnumerable<float[]>, CancellationToken, Task> consumePcm,
+            Action<double>? progress, string? inputDecoder, CancellationToken ct)
+        {
+            await consumePcm(EmptyPcm(), ct);
+            return Silences;
+        }
+
+        /// <summary>An empty PCM stream, for <see cref="DetectSilencesAndStreamPcmAsync"/>'s
+        /// fake decode - FakeVad ignores its contents entirely.</summary>
+        private static async IAsyncEnumerable<float[]> EmptyPcm()
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
     }
 
     /// <summary>Voice activity detector returning a fixed, scripted list of speech segments.</summary>
@@ -76,8 +92,7 @@ public sealed class ChapterDetectorTests : IDisposable
         public int CallCount { get; private set; }
 
         /// <inheritdoc/>
-        public Task<List<SpeechSegment>> DetectSpeechAsync(
-            string file, double durationSeconds, Action<double>? progress, string? inputDecoder, CancellationToken ct)
+        public Task<List<SpeechSegment>> DetectSpeechAsync(IAsyncEnumerable<float[]> pcm, CancellationToken ct)
         {
             CallCount++;
             return Task.FromResult(Speech);

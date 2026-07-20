@@ -45,14 +45,28 @@ public interface IAudioSource
         string file, double startSeconds, double? durationSeconds, string? inputDecoder, CancellationToken ct);
 
     /// <summary>
-    /// Streams the whole file as 16 kHz mono 32-bit float PCM in bounded-size chunks, for
-    /// scanning a full audiobook without holding the entire decoded file in memory. Used only
-    /// by <see cref="IVoiceActivityDetector"/>'s full-file VAD pre-pass (--jingle only);
-    /// probing and gap-filling still use <see cref="DecodePcmAsync"/>.
+    /// Scans the whole file for silence periods and, concurrently in the same decode, streams
+    /// it as 16 kHz mono 32-bit float PCM in bounded-size chunks for <paramref
+    /// name="consumePcm"/> (typically <see cref="IVoiceActivityDetector.DetectSpeechAsync"/>) -
+    /// used with --jingle, where both the silence scan and the VAD pre-pass are needed, so one
+    /// full-file decode (via an `asplit` filter forking into a silencedetect branch and a
+    /// resampled-PCM branch) replaces what would otherwise be two independent passes over the
+    /// same audio. Plain silence detection alone still uses <see cref="DetectSilencesAsync"/>.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
+    /// <param name="durationSeconds">Total play time; used to close a trailing silence
+    /// and to detect a prematurely ended scan.</param>
+    /// <param name="minSilenceSeconds">Minimum silence duration to report.</param>
+    /// <param name="noiseDb">Noise floor in dBFS below which audio counts as silence.</param>
+    /// <param name="consumePcm">Callback that consumes the decoded PCM stream; awaited
+    /// concurrently with the silence scan, so it must not return before it has read the stream
+    /// to completion (or the process would stall on a full, unread stdout pipe).</param>
+    /// <param name="progress">Callback receiving the processed play time in seconds.</param>
     /// <param name="inputDecoder">Explicit input decoder to force (e.g. "libfdk_aac"), or null.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Chunks of decoded samples, in chronological order.</returns>
-    IAsyncEnumerable<float[]> StreamPcmAsync(string file, string? inputDecoder, CancellationToken ct);
+    /// <returns>All detected silence periods in chronological order.</returns>
+    Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
+        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        Func<IAsyncEnumerable<float[]>, CancellationToken, Task> consumePcm,
+        Action<double>? progress, string? inputDecoder, CancellationToken ct);
 }

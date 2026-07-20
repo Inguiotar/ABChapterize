@@ -160,7 +160,7 @@ public sealed class FileProcessor
             // Shared like ffmpeg above (one instance for the whole run, safe for concurrent
             // use - see SileroVadDetector's threading remarks); only needed with --jingle,
             // where ChapterDetector runs its full-file VAD pre-pass.
-            using var vad = _options.Jingle ? new SileroVadDetector(ffmpeg) : null;
+            using var vad = _options.Jingle ? new SileroVadDetector() : null;
 
             try
             {
