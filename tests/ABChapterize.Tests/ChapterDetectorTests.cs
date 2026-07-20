@@ -672,6 +672,66 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task OverlappingProbe_ReusesTheCachedTranscript_InsteadOfReDecodingTheOverlap()
+    {
+        // Two silences 6 s apart give overlapping 12 s probe windows ([600, 612] and [606, 618]).
+        // Chapter one is found by the first probe. The second probe must not re-decode the shared
+        // [606, 612] span: with reuse it only decodes the fresh tail, starting ProbeReuseContextSeconds
+        // (2 s) before the overlap border at 610 - so 610 is decoded and the candidate's own start
+        // (606) never is. The detected chapter is unaffected by the optimization.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(601, 606)],
+            s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.Equal([new DetectedChapter(1, 600)], result.Chapters);
+        Assert.Contains(610.0, audio.DecodeStarts);       // fresh tail only (overlap border - 2 s)
+        Assert.DoesNotContain(606.0, audio.DecodeStarts);  // the overlap was reused, not re-decoded
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_RecoversASecondChapter_MissedByTheFirstWindowsEarlyReturn()
+    {
+        // One probe window stops at its first phrase (one chapter per window), so a second phrase
+        // further along the same window is never marked by that probe. Here chapter one's wide
+        // --jingle window [600, 650] also contains chapter two's announcement 40 s in; the probe
+        // returns chapter one and leaves chapter two unseen. The overlapping candidate at 640 must
+        // recover chapter two from the reused transcript - a naive "transcribe only the new tail"
+        // scheme would never see it, since it sits inside the already-transcribed overlap. The tail
+        // decode still lands at the reuse border (648), never at the candidate start (640).
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle"),
+            [new(598, 600), new(638, 640)],
+            s => s.Add(600, Seg(2, " Chapter one."), Seg(40, " Chapter two.")),
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Contains(new DetectedChapter(2, 639.5), result.Chapters);
+        Assert.Contains(648.0, audio.DecodeStarts);
+        Assert.DoesNotContain(640.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_RecoversAPhrase_RejectedByTheEarlierWindowsPhraseTimingRule()
+    {
+        // Without a jingle the phrase must start within 5 s of the triggering silence. Chapter one's
+        // announcement sits 9 s into the first probe's window ([600, 612], phrase at 609), so that
+        // probe rejects it as too late. The next candidate at 606 sees the very same phrase only 3 s
+        // in ([606, 618], phrase at 609) and must accept it. That phrase lives in the
+        // already-transcribed overlap, so only the reused transcript - not a tail-only re-decode -
+        // can surface it. The chapter is recovered and the overlap is not re-decoded (610 is, 606 is
+        // not).
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(603, 606)],
+            s => s.Add(600, Seg(9, " Chapter one.")));
+
+        Assert.Equal([new DetectedChapter(1, 606)], result.Chapters);
+        Assert.Contains(610.0, audio.DecodeStarts);
+        Assert.DoesNotContain(606.0, audio.DecodeStarts);
+    }
+
+    [Fact]
     public void ComputeNonSpeechRegions_MergesRegionsSeparatedByAShortSpeechBlip()
     {
         // A 0.5 s "speech" blip - short enough to be a vocal-like transient inside otherwise

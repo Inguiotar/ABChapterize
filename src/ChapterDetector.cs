@@ -57,6 +57,19 @@ public sealed class ChapterDetector
     /// With --jingle the window is --max-jingle-length seconds instead.</summary>
     private const double ProbeSecondsPlain = 12;
 
+    /// <summary>
+    /// When one probe window overlaps the previous one, the overlapping portion is not
+    /// re-transcribed with Whisper - the prior window's cached transcript is reused for it (see
+    /// the reuse logic in ProbeAsync). Only the not-yet-transcribed tail is decoded and sent to
+    /// Whisper, but starting this many seconds <em>before</em> the overlap border rather than
+    /// exactly at it: Whisper's accuracy near the very start of a decode is poorer (it has no
+    /// left-hand acoustic context), so the tail decode reaches back a little into the already
+    /// cached region as pure context. Segments produced within that reached-back margin are
+    /// discarded in favor of the cached ones, so the margin only improves the fresh tail's
+    /// transcription without double-counting the overlap.
+    /// </summary>
+    private const double ProbeReuseContextSeconds = 2.0;
+
     /// <summary>Without a jingle the phrase must start within this many seconds after the silence.</summary>
     private const double PhraseLatestStart = 5.0;
 
@@ -280,6 +293,17 @@ public sealed class ChapterDetector
         // while a probe is in flight.
         int? lastNumber = null;
 
+        // Transcript cache for Pass 2's overlapping-window reuse. Holds the previous probe's full
+        // window transcript in absolute file time, together with the absolute [from, to) span that
+        // transcript actually covers. When the next candidate's window overlaps this span, the
+        // overlapping segments are reused verbatim instead of being re-run through Whisper - only
+        // the fresh tail is decoded (see ProbeReuseContextSeconds). cacheTo starts at negative
+        // infinity so the very first probe (start 0) never counts as an overlap and always does a
+        // full transcribe - which is also where --lang auto resolves the language from full samples.
+        List<TranscriptSegment> cacheSegmentsAbs = [];
+        var cacheFrom = 0.0;
+        var cacheTo = double.NegativeInfinity;
+
         // Probes a single window and appends any chapter mark found in it to `found`.
         // Returns the chapter number found (or null when the phrase was not found), together
         // with the real silence found to immediately precede the phrase - see
@@ -290,19 +314,76 @@ public sealed class ChapterDetector
         {
             var start = candidate.Start;
             ct.ThrowIfCancellationRequested();
-            var samples = await _audio.DecodePcmAsync(file, start,
-                Math.Min(probeSeconds, info.DurationSeconds - start), info.InputDecoder, ct);
+            var windowEnd = Math.Min(start + probeSeconds, info.DurationSeconds);
 
-            if (profile == null)
+            // This window's full transcript in absolute file time, assembled from the previous
+            // window's cache (overlap reuse), a fresh Whisper decode, or a mix. The whole window is
+            // always represented - both cases of what a reuse-only "search just the new tail" scheme
+            // would silently drop are avoided: a phrase the previous probe rejected under the
+            // per-silence 5 s rule but this window accepts, and a second phrase the previous probe's
+            // one-mark-per-window early return never reached.
+            List<TranscriptSegment> windowSegmentsAbs;
+            string logLabel;
+
+            // A window whose start falls inside the cached span overlaps the previous one.
+            if (start >= cacheFrom && start < cacheTo)
             {
-                (profile, detectedLanguage, detectedProbability) = await ResolveLanguageAsync(samples, ct);
-                _transcriber.ChangeLanguage(profile.Language);
+                if (windowEnd <= cacheTo)
+                {
+                    // Fully contained in the previous window: reuse its transcript wholesale, no
+                    // Whisper at all. The (larger) cache is deliberately left untouched so a later
+                    // candidate starting within it can keep reusing it too.
+                    windowSegmentsAbs = cacheSegmentsAbs
+                        .Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList();
+                    logLabel = $"probe @{FormatTimestamp(start)} (reused)";
+                }
+                else
+                {
+                    // Partial overlap: reuse cached segments up to the overlap border and transcribe
+                    // only the fresh tail, reaching ProbeReuseContextSeconds back into the cache as
+                    // Whisper context (those reached-back segments are dropped in favor of the cache).
+                    var decodeFrom = Math.Max(start, cacheTo - ProbeReuseContextSeconds);
+                    var samples = await _audio.DecodePcmAsync(file, decodeFrom,
+                        windowEnd - decodeFrom, info.InputDecoder, ct);
+                    var fresh = await _transcriber.TranscribeAsync(samples, ct);
+                    windowSegmentsAbs = cacheSegmentsAbs
+                        .Where(s => s.StartSeconds >= start && s.StartSeconds < decodeFrom)
+                        .Concat(ShiftSegments(fresh, decodeFrom))
+                        .ToList();
+                    cacheSegmentsAbs = windowSegmentsAbs;
+                    cacheFrom = start;
+                    cacheTo = windowEnd;
+                    logLabel = $"probe @{FormatTimestamp(start)} (tail from {FormatTimestamp(decodeFrom)})";
+                }
+            }
+            else
+            {
+                // No usable overlap - transcribe the whole window. This is also where --lang auto
+                // resolves the language, once, from the very first probe's full samples.
+                var samples = await _audio.DecodePcmAsync(file, start,
+                    windowEnd - start, info.InputDecoder, ct);
+
+                if (profile == null)
+                {
+                    (profile, detectedLanguage, detectedProbability) = await ResolveLanguageAsync(samples, ct);
+                    _transcriber.ChangeLanguage(profile.Language);
+                }
+
+                var fresh = await _transcriber.TranscribeAsync(samples, ct);
+                windowSegmentsAbs = ShiftSegments(fresh, start);
+                cacheSegmentsAbs = windowSegmentsAbs;
+                cacheFrom = start;
+                cacheTo = windowEnd;
+                logLabel = $"probe @{FormatTimestamp(start)}";
             }
 
-            var segments = await _transcriber.TranscribeAsync(samples, ct);
-            LogTranscript($"probe @{FormatTimestamp(start)}", segments);
+            // FindPhraseMatches and the mark-placement math below work in window-relative time.
+            var segments = ShiftSegments(windowSegmentsAbs, -start);
+            LogTranscript(logLabel, segments);
 
-            foreach (var match in FindPhraseMatches(segments, profile))
+            // profile is resolved on the first probe, which is always a full decode (the cache is
+            // empty then), so it is non-null by the time any transcript-reuse branch above runs.
+            foreach (var match in FindPhraseMatches(segments, profile!))
             {
                 if (!_options.Jingle && match.PhraseStartSeconds > PhraseLatestStart)
                     continue; // without a jingle the phrase must directly follow the silence
@@ -988,6 +1069,22 @@ public sealed class ChapterDetector
                 segments.Select(s =>
                     $"{s.StartSeconds:0.0}-{s.EndSeconds:0.0} (p={s.Probability:0.00}) \"{s.Text.Trim()}\"")));
     }
+
+    /// <summary>
+    /// Returns copies of <paramref name="segments"/> with every timestamp shifted by
+    /// <paramref name="delta"/> seconds. Used to move a probe's transcript between window-relative
+    /// time (what Whisper emits and <c>FindPhraseMatches</c> expects) and absolute file time (how
+    /// Pass 2's overlap cache stores it): a positive delta of the window start makes segments
+    /// absolute, a negative delta makes them window-relative again.
+    /// </summary>
+    /// <param name="segments">The segments to shift.</param>
+    /// <param name="delta">Seconds to add to each segment's start and end time.</param>
+    private static List<TranscriptSegment> ShiftSegments(IEnumerable<TranscriptSegment> segments, double delta) =>
+        segments.Select(s => s with
+        {
+            StartSeconds = s.StartSeconds + delta,
+            EndSeconds = s.EndSeconds + delta,
+        }).ToList();
 
     /// <summary>Trailing note appended to a --verbose detection log line when the segment
     /// confidence is below <see cref="LowConfidenceThreshold"/>.</summary>

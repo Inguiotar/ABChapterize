@@ -133,6 +133,16 @@ The window is 12 seconds normally, or `--max-jingle-length` + 5 seconds with
 (see `--chapter-phrase`), and the chapter number is parsed from digits or from
 number words (see [section 7](#7-languages-and-number-recognition)).
 
+When two consecutive probe windows overlap — common with the wide `--jingle`
+window and closely spaced candidates — the shared span is transcribed only
+once. The second window reuses the first window's cached transcript for the
+overlap and runs Whisper only over the not-yet-seen tail (reaching a couple of
+seconds back across the border for acoustic context), so no audio is ever sent
+through Whisper twice. Matching still runs over the *whole* window, reused part
+included, so nothing a naive tail-only shortcut would drop — a phrase the
+earlier window rejected on timing, or a second announcement its one-mark-per-
+window rule never reached — slips through.
+
 Rules applied to the matches:
 
 - Without `--jingle`, the phrase must start within 5 seconds after the
