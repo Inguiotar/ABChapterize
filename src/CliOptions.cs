@@ -87,11 +87,12 @@ public sealed class CliOptions
     /// True when --max-jingle-length was given the value "auto": <see cref="ChapterDetector"/>
     /// starts probing with the <see cref="MaxJingleSeconds"/> ceiling, then - from the second
     /// jingle mark found (the same reasoning as <see cref="AutoMinSilence"/>: the gap before
-    /// the first mark is not necessarily representative) - tightens the probe window to the
-    /// longest jingle actually observed so far plus margin, capped at the original ceiling.
-    /// Chapters with no jingle (or an ultra-short one) are excluded from that tightening, since
-    /// some audiobooks only play the jingle for some chapters and such a chapter says nothing
-    /// about how long the window needs to be for one that does have a full jingle.
+    /// the first mark is not necessarily representative) - resizes the probe window to 1.25x
+    /// the longest jingle actually observed so far plus margin (both up and down as the
+    /// observed maximum changes), capped at the original ceiling. Chapters with no jingle (or
+    /// an ultra-short one) are excluded from that, since some audiobooks only play the jingle
+    /// for some chapters and such a chapter says nothing about how long the window needs to be
+    /// for one that does have a full jingle.
     /// False (the default) keeps the window fixed at <see cref="MaxJingleSeconds"/> throughout.
     /// </summary>
     public bool AutoMaxJingle { get; private set; }
@@ -678,9 +679,9 @@ public sealed class CliOptions
                                     probed for this duration plus 5 seconds (for the phrase
                                     itself) after each silence. Lower values speed up probing.
                                     With "auto", probing starts at the default ceiling and -
-                                    from the second jingle mark found - tightens to the
-                                    longest jingle actually observed so far plus margin,
-                                    capped at the ceiling. Requires --jingle.
+                                    from the second jingle mark found - resizes to 1.25x the
+                                    longest jingle actually observed so far plus margin
+                                    (capped at the ceiling). Requires --jingle.
           -n, --min-silence-length <seconds|auto>
                                     Minimum silence duration that counts as a potential
                                     chapter break; the silence scan always uses this as its

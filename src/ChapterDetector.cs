@@ -78,6 +78,14 @@ public sealed class ChapterDetector
     private const double MinJingleObservationSeconds = 2.0;
 
     /// <summary>
+    /// With --max-jingle-length auto, each resized probe window is this factor times the
+    /// longest jingle observed so far (plus <see cref="PhraseMarginSeconds"/>), giving a bit of
+    /// headroom for normal length variation between chapters instead of sizing the window to
+    /// exactly the longest jingle seen yet.
+    /// </summary>
+    private const double JingleObservationSafetyFactor = 1.25;
+
+    /// <summary>
     /// With --min-silence-length auto, each chapter mark tightens the Pass 2 probing threshold
     /// to this factor times the length of the silence that triggered it, so probing keeps
     /// following silences close to the length of recent inter-chapter breaks (allowing a bit
@@ -147,10 +155,12 @@ public sealed class ChapterDetector
         var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
         var probeSeconds = _options.Jingle ? jingleCeilingSeconds : ProbeSecondsPlain;
 
-        // With --max-jingle-length auto, the longest jingle observed so far (from the second
-        // mark found - see the AutoMinSilence precedent below for why the first is excluded).
-        // probeSeconds (captured by ProbeAsync below) is tightened towards it, never past the
-        // original ceiling, so later probes decode less audio once a real jingle length is known.
+        // With --max-jingle-length auto, the raw length of the longest jingle observed so far
+        // (from the second mark found - see the AutoMinSilence precedent below for why the
+        // first is excluded; chapters with no/an ultra-short jingle are excluded too, see
+        // MinJingleObservationSeconds). probeSeconds (captured by ProbeAsync below) is resized
+        // to JingleObservationSafetyFactor times this plus margin, never past the original
+        // ceiling, so later probes decode less audio once a real jingle length is known.
         var observedMaxJingleSeconds = 0.0;
 
         // Pass 1: silence scan (one full pass over the file).
@@ -213,23 +223,24 @@ public sealed class ChapterDetector
                 work.ChaptersFound = CountDistinct(found);
 
                 if (_options.Jingle && _options.AutoMaxJingle && start != 0 &&
-                    match.PhraseStartSeconds >= MinJingleObservationSeconds)
+                    match.PhraseStartSeconds >= MinJingleObservationSeconds &&
+                    match.PhraseStartSeconds > observedMaxJingleSeconds)
                 {
                     // match.PhraseStartSeconds is the phrase's offset from this window's own
                     // start, i.e. roughly the jingle's own length (the window starts right at
                     // the end of the triggering silence). Track the longest one seen so far and
-                    // shrink future probe windows towards it, capped at the original ceiling so
-                    // an outlier can never make the window wider than what --max-jingle-length
-                    // was given (or its 45 s default) would allow.
-                    var observed = Math.Min(jingleCeilingSeconds, match.PhraseStartSeconds + PhraseMarginSeconds);
-                    if (observed > observedMaxJingleSeconds)
+                    // resize future probe windows to it plus a safety margin, capped at the
+                    // original ceiling so an outlier can never make the window wider than what
+                    // --max-jingle-length was given (or its 45 s default) would allow. Not
+                    // shrink-only: a later, genuinely longer jingle must widen the window back
+                    // out too, or the safety margin below could never do its job.
+                    observedMaxJingleSeconds = match.PhraseStartSeconds;
+                    var resized = Math.Min(jingleCeilingSeconds,
+                        JingleObservationSafetyFactor * observedMaxJingleSeconds + PhraseMarginSeconds);
+                    if (resized != probeSeconds)
                     {
-                        observedMaxJingleSeconds = observed;
-                        if (observed < probeSeconds)
-                        {
-                            probeSeconds = observed;
-                            _log?.Invoke($"Pass 2: jingle probe window tightened to {probeSeconds:0.#} s");
-                        }
+                        probeSeconds = resized;
+                        _log?.Invoke($"Pass 2: jingle probe window resized to {probeSeconds:0.#} s");
                     }
                 }
                 return match.Number; // one chapter per probe window

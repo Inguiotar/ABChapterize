@@ -326,12 +326,13 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   probing starts at the 45 s ceiling and, from the second jingle mark found
   (the first is excluded for the same reason as `--min-silence-length auto`
   excludes the first silence — the gap before it isn't necessarily
-  representative), self-tightens the probe window to the longest jingle
-  actually observed so far plus the 5-second phrase margin, never past the
-  original ceiling. Chapters with no jingle (or an ultra-short one, under
-  2 seconds) are excluded from this — some audiobooks only play the jingle
-  for some chapters, and such a chapter says nothing about how long the
-  window needs to be for one that does have a full jingle. Same idea as
+  representative), resizes the probe window to 1.25x the longest jingle
+  actually observed so far plus the 5-second phrase margin (both wider and
+  narrower, as that observed maximum changes), never past the original
+  ceiling. Chapters with no jingle (or an ultra-short one, under 2 seconds)
+  are excluded from this — some audiobooks only play the jingle for some
+  chapters, and such a chapter says nothing about how long the window needs
+  to be for one that does have a full jingle. Same idea as
   `--min-silence-length auto`, just for the jingle window instead of the
   silence threshold.
 
