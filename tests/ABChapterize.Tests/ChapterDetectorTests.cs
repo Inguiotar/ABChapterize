@@ -730,6 +730,36 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void ComputeNonSpeechRegions_DropsMergedNarrationCadence_WithNoLongContiguousRun()
+    {
+        // Ordinary narration cadence, no jingle anywhere: short words (0.3 s) separated by short
+        // pauses (0.4-0.7 s). Each speech blip is under the 1 s merge threshold, so the four
+        // inter-word gaps chain-merge into one 3.4 s span - which clears the 2 s floor if the
+        // floor is (wrongly) measured against the merged span. But no single contiguous non-speech
+        // run reaches 2 s (the longest is 0.7 s), so this must be dropped: it is reading rhythm,
+        // not a jingle. This is the false-positive class that flooded Pass 2 with bogus VAD
+        // candidates before the floor was moved onto the longest run.
+        var speech = new List<SpeechSegment>
+        {
+            new(0, 1), new(1.4, 1.7), new(2.4, 2.7), new(3.4, 3.7), new(4.4, 5),
+        };
+        Assert.Empty(ChapterDetector.ComputeNonSpeechRegions(speech));
+    }
+
+    [Fact]
+    public void ComputeNonSpeechRegions_KeepsFragmentedJingle_WithOneLongContiguousRun()
+    {
+        // A genuine jingle fragmented by a single 0.4 s misfire into a 5 s music block and a
+        // trailing 0.6 s tail. The blip merges the two, and although the 0.6 s tail is itself far
+        // below the floor, the 5 s run carries the merged region over it - a real jingle is kept
+        // even when mildly fragmented, because it does contain a long continuous non-speech block.
+        var speech = new List<SpeechSegment> { new(0, 100), new(105, 105.4), new(106, 200) };
+        Assert.Equal(
+            [new ChapterDetector.NonSpeechRegion(100, 106)],
+            ChapterDetector.ComputeNonSpeechRegions(speech));
+    }
+
+    [Fact]
     public void Normalize_SortsAndDropsDuplicatesAndRegressions()
     {
         var raw = new List<DetectedChapter>

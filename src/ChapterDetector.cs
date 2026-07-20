@@ -81,10 +81,11 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// The shortest span this codebase ever treats as "plausibly a real jingle". Used two ways:
-    /// (1) a VAD non-speech region shorter than this (after <see
-    /// cref="ComputeNonSpeechRegions"/>'s short-blip merging) is dropped outright rather than
-    /// ever becoming a candidate - too short to be a jingle at any book's pacing, more likely an
-    /// in-narration breath pause VAD happened to classify as non-speech; (2) with
+    /// (1) a VAD non-speech region whose longest single contiguous run is shorter than this (see
+    /// <see cref="ComputeNonSpeechRegions"/> for why the longest run, not the merged span) is
+    /// dropped outright rather than ever becoming a candidate - too short to be a jingle at any
+    /// book's pacing, more likely an in-narration breath pause VAD happened to classify as
+    /// non-speech; (2) with
     /// --max-jingle-length auto, an observed phrase offset below this is treated as "this chapter
     /// had no jingle (or an ultra-short one)" and excluded from tightening the probe window: some
     /// audiobooks only play the jingle for some chapters, and such a chapter gives no information
@@ -650,24 +651,46 @@ public sealed class ChapterDetector
     /// shorter than <see cref="MergeShortSpeechGapSeconds"/> (a vocal-like transient or a strong
     /// rhythmic passage inside otherwise instrumental music) does not end a jingle - the non-speech
     /// regions on either side of it are merged into one, rather than fragmenting one continuous
-    /// jingle into several too-short regions; and any region that is still shorter than <see
-    /// cref="MinJingleObservationSeconds"/> after merging is dropped outright, being too short to
-    /// ever be a real jingle (more likely an in-narration breath pause VAD classified as
-    /// non-speech). Internal for unit testing.
+    /// jingle into several too-short regions; and any region whose longest single <em>contiguous</em>
+    /// non-speech run falls short of <see cref="MinJingleObservationSeconds"/> is dropped outright.
+    /// <para>
+    /// The floor is deliberately checked against the longest contiguous run, not the merged
+    /// region's wall-clock span: a jingle is defined by containing one genuinely long, unbroken
+    /// music block (surviving fragmentation by a brief misfire because the pieces between misfires
+    /// are still long), whereas ordinary narration cadence produces only short inter-word/clause
+    /// pauses - individually well under the floor, but able to chain-merge across the equally short
+    /// speech between them into a span that clears the floor even though no real jingle-length
+    /// silence exists anywhere in it. Measuring the span there would resurface exactly the
+    /// breath-pause false positives the floor is meant to suppress; measuring the longest run
+    /// keeps genuine (even mildly fragmented) jingles while rejecting stitched-together narration.
+    /// </para>
+    /// Internal for unit testing.
     /// </summary>
     internal static List<NonSpeechRegion> ComputeNonSpeechRegions(List<SpeechSegment> speech)
     {
         var merged = new List<NonSpeechRegion>();
+        // The longest single contiguous non-speech run within each merged region (i.e. the
+        // longest raw gap it was built from, before any speech blips were merged across),
+        // parallel to `merged` by index - kept alongside rather than on NonSpeechRegion itself
+        // so the record's shape stays purely (Start, End) for downstream use and equality.
+        var longestRun = new List<double>();
         for (var i = 1; i < speech.Count; i++)
         {
             var start = speech[i - 1].EndSeconds;
             var end = speech[i].StartSeconds;
+            var run = end - start;
             if (merged.Count > 0 && start - merged[^1].EndSeconds < MergeShortSpeechGapSeconds)
+            {
                 merged[^1] = merged[^1] with { EndSeconds = end };
+                longestRun[^1] = Math.Max(longestRun[^1], run);
+            }
             else
+            {
                 merged.Add(new NonSpeechRegion(start, end));
+                longestRun.Add(run);
+            }
         }
-        return merged.Where(r => r.EndSeconds - r.StartSeconds >= MinJingleObservationSeconds).ToList();
+        return merged.Where((_, i) => longestRun[i] >= MinJingleObservationSeconds).ToList();
     }
 
     /// <summary>
