@@ -36,11 +36,14 @@
   <!-- Auto-incrementing build number, baked in as assembly metadata read by CliOptions and
        surfaced only by the version-info command line option (never in the plain
        Version-based banner/usage text). The counter lives in BuildNumber.txt, tracked in git
-       so it keeps counting up across clones instead of resetting. Only the win-x64 build (the
-       default RuntimeIdentifier, see above) bumps it; linux-x64 (or any other RID) just reads
-       the current value without writing it back, so publishing both platforms for the same
-       release embeds the same build number in each. Build win-x64 first if a release needs a
-       fresh number picked up by both. -->
+       so it keeps counting up across clones instead of resetting. Only an actual publish of
+       win-x64 (the default RuntimeIdentifier, see above) bumps it - _IsPublishing is set by
+       "dotnet publish" and nothing else, which keeps IDE design-time/background builds (which
+       also evaluate with the default RID) from silently racing the counter upward, an effect
+       actually observed with VS Code's C# extension. Plain builds and linux-x64 publishes
+       just read the current value without writing it back, so publishing both platforms for
+       the same release embeds the same build number in each: publish win-x64 first, then
+       linux-x64 picks up the same, freshly bumped number. -->
   <PropertyGroup>
     <BuildNumberFile>$(MSBuildProjectDirectory)\BuildNumber.txt</BuildNumberFile>
   </PropertyGroup>
@@ -52,9 +55,9 @@
        late to be picked up. GetAssemblyAttributes is the actual target that builds up
        @(AssemblyAttribute) (by appending to it, so our items added here survive), and running
        before it lands our items in time for the hash/file-write that follows.
-       Guarded on TargetFramework being set so this only fires for an actual compile, not any
-       property-evaluation-only pass (design-time builds, IDE background restores) that might
-       otherwise bump the counter without a real build happening. -->
+       Guarded on TargetFramework being set so this only fires for an actual compile, not the
+       outer dispatch pass; the increment itself is further guarded on _IsPublishing (see the
+       comment above). -->
   <Target Name="IncrementBuildNumber" BeforeTargets="GetAssemblyAttributes" Condition="'$(TargetFramework)' != ''">
     <ReadLinesFromFile File="$(BuildNumberFile)" Condition="Exists('$(BuildNumberFile)')">
       <Output TaskParameter="Lines" ItemName="_PreviousBuildNumberLine" />
@@ -62,12 +65,14 @@
     <PropertyGroup>
       <_PreviousBuildNumber Condition="'@(_PreviousBuildNumberLine)' != ''">@(_PreviousBuildNumberLine)</_PreviousBuildNumber>
       <_PreviousBuildNumber Condition="'$(_PreviousBuildNumber)' == ''">0</_PreviousBuildNumber>
-      <BuildNumber Condition="'$(RuntimeIdentifier)' == 'win-x64'">$([MSBuild]::Add($(_PreviousBuildNumber), 1))</BuildNumber>
-      <BuildNumber Condition="'$(RuntimeIdentifier)' != 'win-x64'">$(_PreviousBuildNumber)</BuildNumber>
+      <_BumpBuildNumber>false</_BumpBuildNumber>
+      <_BumpBuildNumber Condition="'$(_IsPublishing)' == 'true' and '$(RuntimeIdentifier)' == 'win-x64'">true</_BumpBuildNumber>
+      <BuildNumber Condition="'$(_BumpBuildNumber)' == 'true'">$([MSBuild]::Add($(_PreviousBuildNumber), 1))</BuildNumber>
+      <BuildNumber Condition="'$(_BumpBuildNumber)' != 'true'">$(_PreviousBuildNumber)</BuildNumber>
       <BuildTimestamp>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC</BuildTimestamp>
     </PropertyGroup>
     <WriteLinesToFile File="$(BuildNumberFile)" Lines="$(BuildNumber)" Overwrite="true"
-                       Condition="'$(RuntimeIdentifier)' == 'win-x64'" />
+                       Condition="'$(_BumpBuildNumber)' == 'true'" />
     <ItemGroup>
       <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
         <_Parameter1>BuildNumber</_Parameter1>
