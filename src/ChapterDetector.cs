@@ -329,8 +329,18 @@ public sealed class ChapterDetector
             // would silently drop are avoided: a phrase the previous probe rejected under the
             // per-silence 5 s rule but this window accepts, and a second phrase the previous probe's
             // one-mark-per-window early return never reached.
+            //
+            // --verbose logging only ever shows what Whisper actually transcribed just now, at its
+            // own (0-based) timestamps - never the reused portion restated at window-relative time,
+            // which would make every probe look like a fresh full-window decode even when most of it
+            // was cache. Segments used for phrase matching below (`segments`) are unaffected; only
+            // what gets logged changes.
             List<TranscriptSegment> windowSegmentsAbs;
-            string logLabel;
+            // Set only by the partial-overlap branch below, to the count of reused segments that
+            // precede the fresh tail in windowSegmentsAbs - i.e. the index of the first fresh
+            // segment. Passed to FindPhraseMatches so it can flag a detection that draws on text
+            // from both sides of the cache/fresh boundary (see PhraseMatch.SpansMerge).
+            int? mergeBoundarySegIndex = null;
 
             // A window whose start falls inside the cached span overlaps the previous one.
             if (start >= cacheFrom && start < cacheTo)
@@ -342,7 +352,7 @@ public sealed class ChapterDetector
                     // candidate starting within it can keep reusing it too.
                     windowSegmentsAbs = cacheSegmentsAbs
                         .Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList();
-                    logLabel = $"probe @{FormatTimestamp(start)} (reused)";
+                    _log?.Invoke($"probe @{FormatTimestamp(start)}: fully reused, no new transcription");
                 }
                 else
                 {
@@ -357,14 +367,14 @@ public sealed class ChapterDetector
                     var samples = await _audio.DecodePcmAsync(file, splitPoint,
                         windowEnd - splitPoint, info.InputDecoder, ct);
                     var fresh = await _transcriber.TranscribeAsync(samples, ct);
-                    windowSegmentsAbs = cacheSegmentsAbs
-                        .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint)
-                        .Concat(ShiftSegments(fresh, splitPoint))
-                        .ToList();
+                    var reused = cacheSegmentsAbs
+                        .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint).ToList();
+                    windowSegmentsAbs = reused.Concat(ShiftSegments(fresh, splitPoint)).ToList();
+                    mergeBoundarySegIndex = reused.Count;
                     cacheSegmentsAbs = windowSegmentsAbs;
                     cacheFrom = start;
                     cacheTo = windowEnd;
-                    logLabel = $"probe @{FormatTimestamp(start)} (tail from {FormatTimestamp(splitPoint)})";
+                    LogTranscript($"probe tail @{FormatTimestamp(splitPoint)}", fresh);
                 }
             }
             else
@@ -385,19 +395,22 @@ public sealed class ChapterDetector
                 cacheSegmentsAbs = windowSegmentsAbs;
                 cacheFrom = start;
                 cacheTo = windowEnd;
-                logLabel = $"probe @{FormatTimestamp(start)}";
+                LogTranscript($"probe @{FormatTimestamp(start)}", fresh);
             }
 
             // FindPhraseMatches and the mark-placement math below work in window-relative time.
             var segments = ShiftSegments(windowSegmentsAbs, -start);
-            LogTranscript(logLabel, segments);
 
             // profile is resolved on the first probe, which is always a full decode (the cache is
             // empty then), so it is non-null by the time any transcript-reuse branch above runs.
-            foreach (var match in FindPhraseMatches(segments, profile!))
+            foreach (var match in FindPhraseMatches(segments, profile!, mergeBoundarySegIndex))
             {
                 if (!_options.Jingle && match.PhraseStartSeconds > PhraseLatestStart)
                     continue; // without a jingle the phrase must directly follow the silence
+
+                if (match.SpansMerge)
+                    _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
+                                 "merge from Pass 2's overlap reuse - worth a spot check");
 
                 var phraseAbs = start + match.PhraseStartSeconds;
                 // An in-text pause long enough to itself pass the --min-silence-length
@@ -997,7 +1010,11 @@ public sealed class ChapterDetector
     /// <param name="Number">Parsed chapter number.</param>
     /// <param name="PhraseStartSeconds">Phrase start relative to the window start.</param>
     /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
-    private readonly record struct PhraseMatch(int Number, double PhraseStartSeconds, double Confidence);
+    /// <param name="SpansMerge">True when the text actually used to find the phrase and parse its
+    /// number straddles a Pass 2 overlap's cache/fresh boundary - see <see cref="FindPhraseMatches"/>'s
+    /// <c>mergeBoundarySegIndex</c> parameter.</param>
+    private readonly record struct PhraseMatch(
+        int Number, double PhraseStartSeconds, double Confidence, bool SpansMerge = false);
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -1005,7 +1022,15 @@ public sealed class ChapterDetector
     /// ("Chapter Seven"); when neither yields a number, the words directly preceding the
     /// phrase are tried ("Erstes Kapitel", "Birinci Bölüm").
     /// </summary>
-    private static IEnumerable<PhraseMatch> FindPhraseMatches(List<TranscriptSegment> segments, LanguageProfile profile)
+    /// <param name="segments">The window's transcript segments, in window-relative time.</param>
+    /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
+    /// <param name="mergeBoundarySegIndex">For a window assembled by Pass 2's overlap reuse (see
+    /// ProbeAsync), the index of the first segment that came from the fresh tail decode rather
+    /// than the reused cache; null for a window that is entirely one or the other (a plain probe,
+    /// a fully-reused window, a gap chunk, or a --verify window). Used only to flag
+    /// <see cref="PhraseMatch.SpansMerge"/> - it does not affect which matches are found.</param>
+    private static IEnumerable<PhraseMatch> FindPhraseMatches(
+        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null)
     {
         if (segments.Count == 0)
             yield break;
@@ -1021,10 +1046,18 @@ public sealed class ChapterDetector
             sb.Append(' ');
         }
         var text = sb.ToString();
+        var mergeBoundaryChar = mergeBoundarySegIndex is { } idx && idx > 0 && idx < segments.Count
+            ? segStartChar[idx] : (int?)null;
 
         foreach (Match m in profile.PhraseRegex.Matches(text))
         {
             int number;
+            // The exact character range actually consulted to find the phrase and parse its
+            // number - just the match itself unless a head/tail slice contributed too - used
+            // below to tell whether this detection drew on text from both sides of a Pass 2
+            // overlap's cache/fresh boundary.
+            var consumedStart = m.Index;
+            var consumedEnd = m.Index + m.Length;
             if (profile.PhraseHasNumberGroup && m.Groups.Count > 1 && m.Groups[1].Success)
             {
                 if (!int.TryParse(m.Groups[1].Value, out number))
@@ -1035,7 +1068,11 @@ public sealed class ChapterDetector
                 var tail = text[(m.Index + m.Length)..];
                 if (tail.Length > 80)
                     tail = tail[..80];
-                if (!NumberWordParser.TryExtractNumber(tail, profile.Language, out number))
+                if (NumberWordParser.TryExtractNumber(tail, profile.Language, out number))
+                {
+                    consumedEnd += tail.Length;
+                }
+                else
                 {
                     // No number after the phrase - try the ordinal-first announcement
                     // order ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
@@ -1044,6 +1081,7 @@ public sealed class ChapterDetector
                         head = head[^80..];
                     if (!NumberWordParser.TryExtractNumberBefore(head, profile.Language, out number))
                         continue;
+                    consumedStart -= head.Length;
                 }
             }
 
@@ -1056,7 +1094,9 @@ public sealed class ChapterDetector
                 else
                     break;
             }
-            yield return new PhraseMatch(number, segments[segIndex].StartSeconds, segments[segIndex].Probability);
+            var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
+            yield return new PhraseMatch(
+                number, segments[segIndex].StartSeconds, segments[segIndex].Probability, spansMerge);
         }
     }
 

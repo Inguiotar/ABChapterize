@@ -177,6 +177,21 @@ public sealed class ChapterDetectorTests : IDisposable
         return (result, transcriber, audio);
     }
 
+    /// <summary>Runs the detector with --verbose logging captured, for assertions on what
+    /// DetectAsync actually printed (e.g. that a probe's log only shows freshly transcribed
+    /// segments, not the reused ones restated at window-relative time).</summary>
+    private async Task<(DetectionResult Result, List<string> Log, FakeAudioSource Audio)> DetectWithLogAsync(
+        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script, FakeVad? vad = null)
+    {
+        var audio = new FakeAudioSource { Silences = silences };
+        var transcriber = new ScriptedTranscriber(audio);
+        script(transcriber);
+        var log = new List<string>();
+        var detector = new ChapterDetector(options, audio, transcriber, vad);
+        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), log.Add, CancellationToken.None);
+        return (result, log, audio);
+    }
+
     [Fact]
     public async Task SequentialChapters_AreDetectedAtSilenceEnds()
     {
@@ -771,6 +786,64 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Contains(661.5, audio.DecodeStarts);
         Assert.DoesNotContain(650.0, audio.DecodeStarts);
         Assert.DoesNotContain(640.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_LogsOnlyTheFreshTail_AtItsOwnTimestamps()
+    {
+        // Same split-snapping setup as OverlappingProbe_SnapsTheSplitToASilenceMidpointWithinWindowTwo
+        // (split at 608.3), but this asserts on the --verbose log itself: the tail probe's log line
+        // must show only what was actually decoded from 608.3 onward, at Whisper's own (0-based)
+        // timestamps - not the reused segment restated at window-relative time, and not a span
+        // reaching all the way to the window's nominal end (618).
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(603, 606), new(608, 608.6)],
+            s =>
+            {
+                s.Add(600, Seg(0.5, " Chapter one."));
+                s.Add(608.3, Seg(1.0, " some fresh words"));
+            });
+
+        var tailLine = Assert.Single(log, l => l.StartsWith("probe tail @0:10:08.30"));
+        Assert.Contains($"{1.0:0.0}-{3.0:0.0}", tailLine); // Whisper's own 0-based timestamp for the fresh segment
+        Assert.DoesNotContain("Chapter one", tailLine); // that segment was reused, not re-decoded
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_LogsFullyReusedWindows_WithoutASegmentDump()
+    {
+        // Near the end of the file the probe window is capped at the file's duration (3600 s),
+        // so two close-together candidates can end up with the very same (capped) window end -
+        // window 2 is then fully contained in window 1's cache and no Whisper call happens at
+        // all. The log must say so plainly rather than dumping a (nonexistent) transcript.
+        var (_, log, audio) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(3585, 3590), new(3593, 3595)],
+            s => s.Add(3590, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains("probe @0:59:55.00: fully reused, no new transcription", log);
+        Assert.DoesNotContain(3595.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_FlagsADetectionThatSpansTheCacheFreshMerge()
+    {
+        // The "Chapter" segment (abs 606.5) is reused from window 1's cache; the number word
+        // "one." only exists in window 2's freshly decoded tail (from the 608.3 split point).
+        // Extracting the chapter number therefore has to reach across the cache/fresh boundary -
+        // FindPhraseMatches must flag that detection, and DetectAsync must log it.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(603, 606), new(608, 608.6)],
+            s =>
+            {
+                s.Add(600, Seg(6.5, " Chapter")); // abs 606.5 - reused by window 2
+                s.Add(608.3, Seg(0, " one."));     // abs 608.3 - fresh tail of window 2
+            });
+
+        Assert.Equal([new DetectedChapter(1, 606)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("chapter 1 detection spans the reused/fresh transcript merge"));
     }
 
     [Fact]
