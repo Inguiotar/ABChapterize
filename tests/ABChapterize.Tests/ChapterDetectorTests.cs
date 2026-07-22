@@ -1904,6 +1904,11 @@ public sealed class ChapterDetectorTests : IDisposable
     /// <summary>Runs --verify against the given pre-existing chapter markings and script.</summary>
     private async Task<VerifyResult> VerifyAsync(
         CliOptions options, IReadOnlyList<Chapter> existingChapters, Action<ScriptedTranscriber> script)
+        => (await VerifyWithTranscriberAsync(options, existingChapters, script)).Result;
+
+    /// <summary>Runs --verify, also returning the transcriber for language-detection assertions.</summary>
+    private async Task<(VerifyResult Result, ScriptedTranscriber Transcriber)> VerifyWithTranscriberAsync(
+        CliOptions options, IReadOnlyList<Chapter> existingChapters, Action<ScriptedTranscriber> script)
     {
         var audio = new FakeAudioSource();
         var transcriber = new ScriptedTranscriber(audio);
@@ -1911,7 +1916,8 @@ public sealed class ChapterDetectorTests : IDisposable
         var detector = new ChapterDetector(options, audio, transcriber);
         var info = new MediaInfo(Duration, (long)Duration, existingChapters.Count,
             ExistingChapterList: existingChapters);
-        return await detector.VerifyExistingChaptersAsync(_file, info, new WorkTracker(), null, CancellationToken.None);
+        var result = await detector.VerifyExistingChaptersAsync(_file, info, new WorkTracker(), null, CancellationToken.None);
+        return (result, transcriber);
     }
 
     [Fact]
@@ -1980,5 +1986,33 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.Passed);
         Assert.Equal(1, result.Checked);
+    }
+
+    [Fact]
+    public async Task Verify_WithAutoLanguage_ResolvesLanguageUpfront_BeforeParsingAnyTitle()
+    {
+        // Both markings' titles are only parseable as German ordinals ("Erstes"/"Zweites") - not
+        // as English number words. Resolving the language lazily, only after some marking's
+        // title happened to parse under an "en" placeholder, would never get past the very first
+        // marking here: its title fails to parse as English, so it would be skipped without ever
+        // being decoded - and since decoding is what triggers language detection, "de" would
+        // never be discovered, silently skipping every marking (Checked == 0, a false pass)
+        // instead of verifying the book. Resolving upfront, from the first marking with a
+        // decodable window regardless of its title, must check both.
+        var (result, transcriber) = await VerifyWithTranscriberAsync(
+            Options(),
+            [new Chapter(10, "Erstes Kapitel"), new Chapter(610, "Zweites Kapitel")],
+            s =>
+            {
+                s.DetectedLanguage = ("de", 0.9f);
+                s.Add(0, Seg(10, " Erstes Kapitel."));
+                s.Add(600, Seg(10, " Zweites Kapitel."));
+            });
+
+        Assert.True(result.Passed);
+        Assert.Equal(2, result.Checked);
+        Assert.Equal(0, result.Failed);
+        // Detected once, upfront - not re-detected per marking.
+        Assert.Equal(1, transcriber.DetectLanguageCalls);
     }
 }

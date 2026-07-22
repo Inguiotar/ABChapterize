@@ -1006,12 +1006,30 @@ public sealed class ChapterDetector
     {
         _log = log;
         // With an explicit --lang, the profile is known upfront - no probing needed to resolve
-        // it, so title parsing below always uses the real language. With --lang auto it stays
-        // null until the first marking that actually gets decoded, resolved the same way
-        // DetectAsync resolves its own first probe window.
+        // it. With --lang auto, resolve it upfront too - from the first marking with a
+        // decodable window - rather than lazily inside the loop below: TryParseExpectedNumber
+        // needs the real language to recognize spelled-out numbers, so resolving it only after
+        // some marking's title happened to parse under an "en" placeholder risked wrongly
+        // skipping an earlier marking whose title is only parseable in the book's actual
+        // language. Mirrors DetectAsync's own very-first-probe language resolution.
         LanguageProfile? profile = _options.AutoLanguage ? null : _options.DefaultProfile;
         if (profile != null)
             _transcriber.ChangeLanguage(profile.Language);
+        else
+        {
+            foreach (var marking in info.ExistingChapters)
+            {
+                var windowStart = Math.Max(0, marking.StartSeconds - VerifyMarginBeforeSeconds);
+                var windowLen = Math.Min(VerifyWindowSeconds, info.DurationSeconds - windowStart);
+                if (windowLen <= 0)
+                    continue;
+                var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
+                (profile, _, _) = await ResolveLanguageAsync(samples, ct);
+                _transcriber.ChangeLanguage(profile.Language);
+                break;
+            }
+        }
+
         var checkedCount = 0;
         var failed = 0;
 
@@ -1028,27 +1046,16 @@ public sealed class ChapterDetector
                 continue;
             }
 
-            var placeholderLanguage = profile?.Language ?? "en";
-            if (!TryParseExpectedNumber(marking.Title, placeholderLanguage, out var expected))
+            // profile is guaranteed non-null here: the upfront resolution above breaks on the
+            // very first marking with windowLen > 0, which - the lists being walked in the same
+            // order - is either this marking or one before it.
+            if (!TryParseExpectedNumber(marking.Title, profile!.Language, out var expected))
             {
                 work.Advance(1);
                 continue;
             }
 
             var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
-            if (profile == null)
-            {
-                (profile, _, _) = await ResolveLanguageAsync(samples, ct);
-                _transcriber.ChangeLanguage(profile.Language);
-                // The number may have been parsed above using "en" as a placeholder before the
-                // real language was known; re-parse now in case that made a difference.
-                if (!TryParseExpectedNumber(marking.Title, profile.Language, out expected))
-                {
-                    work.Advance(1);
-                    continue;
-                }
-            }
-
             var segments = await _transcriber.TranscribeAsync(samples, ct);
             LogTranscript($"verify @{FormatTimestamp(marking.StartSeconds)}", segments);
 
