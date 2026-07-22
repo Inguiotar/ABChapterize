@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -16,18 +17,30 @@ namespace ABChapterize;
 public readonly record struct DetectedChapter(int Number, double TimeSeconds, double Confidence = 1.0);
 
 /// <summary>Per-file diagnostic statistics gathered during detection, surfaced per file under
-/// --verbose (or --verbose-transcripts) and aggregated run-wide under --summary.</summary>
+/// --verbose (or --verbose-transcripts) and aggregated run-wide under --summary. The silence and
+/// jingle extremes come in two flavours: one over every detected chapter, and an "inter-chapter"
+/// one that excludes chapter 1 - whose intro-to-first-chapter transition is often atypically long
+/// or short and would otherwise skew the picture of the book's regular chapter breaks.</summary>
 /// <param name="MinPrecedingSilenceSeconds">The shortest silence found directly before a detected
 /// chapter phrase - in --jingle mode the silence leading the jingle (a jingle framed by two
 /// silences counts only its leading one); null when no chapter had a qualifying preceding
 /// silence.</param>
+/// <param name="MinInterChapterSilenceSeconds">As <paramref name="MinPrecedingSilenceSeconds"/>,
+/// but excluding chapter 1; null when no chapter other than 1 had a qualifying silence.</param>
 /// <param name="MaxJingleLengthSeconds">The longest jingle found before a detected chapter phrase
 /// (--jingle mode only); null in plain mode, or when no jingle was measured.</param>
+/// <param name="MaxInterChapterJingleSeconds">As <paramref name="MaxJingleLengthSeconds"/>, but
+/// excluding chapter 1; null when no chapter other than 1 had a measured jingle.</param>
 /// <param name="WhisperAudioSeconds">Total audio decoded and handed to Whisper during detection,
 /// counting re-probed stretches each time they were transcribed; compare against the file's run
 /// length for the fed-in share.</param>
+/// <param name="WhisperTranscribeSeconds">Wall-clock time spent inside the Whisper transcription
+/// calls themselves (not decoding). <see cref="WhisperAudioSeconds"/> divided by this is the
+/// transcription speed relative to real time.</param>
 public readonly record struct DetectionStats(
-    double? MinPrecedingSilenceSeconds, double? MaxJingleLengthSeconds, double WhisperAudioSeconds);
+    double? MinPrecedingSilenceSeconds, double? MinInterChapterSilenceSeconds,
+    double? MaxJingleLengthSeconds, double? MaxInterChapterJingleSeconds,
+    double WhisperAudioSeconds, double WhisperTranscribeSeconds);
 
 /// <summary>Outcome of chapter detection for one file.</summary>
 /// <param name="Chapters">Detected chapters in chronological order; empty when none were found.</param>
@@ -225,6 +238,15 @@ public sealed class ChapterDetector
     /// </summary>
     internal const double AutoLanguageProbabilityThreshold = 0.5;
 
+    /// <summary>
+    /// Minimum length of the leading region (file start to the first detected chapter) for pass 3
+    /// to transcribe it in search of earlier chapters when the first detection is not chapter 1.
+    /// A first chapter within this many seconds of the start is taken as-is - the book simply
+    /// begins mid-series, with no room for a missed earlier chapter, and the intro chapter covers
+    /// the short lead-in regardless.
+    /// </summary>
+    private const double MinLeadingGapSeconds = 10;
+
     /// <summary>How far before a pre-existing chapter marking's own timestamp --verify starts
     /// probing - the marking may sit slightly after the phrase actually started.</summary>
     private const double VerifyMarginBeforeSeconds = 5;
@@ -237,6 +259,14 @@ public sealed class ChapterDetector
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
     private readonly ITranscriber _transcriber;
+
+    /// <summary>Transcriber used for pass 3 (gap filling). The same instance as
+    /// <see cref="_transcriber"/> unless <c>--pass3-model</c> selected a different model, in which
+    /// case it is a <see cref="Pass3TranscriberProxy"/> onto the shared pass-3 model. Everything
+    /// about the detection/marking/statistics logic is identical either way - only which model
+    /// recognizes the gap chunks changes.</summary>
+    private readonly ITranscriber _pass3Transcriber;
+
     private readonly IVoiceActivityDetector? _vad;
 
     /// <summary>Per-file --verbose log sink set by <see cref="DetectAsync"/>; null when not verbose.</summary>
@@ -247,6 +277,11 @@ public sealed class ChapterDetector
     /// re-probed audio counts again, since Whisper processed it again). Reset per file, reported
     /// as a --verbose/--summary statistic.</summary>
     private double _whisperAudioSeconds;
+
+    /// <summary>Wall-clock seconds spent inside the Whisper transcription calls for the current
+    /// file (measured in <see cref="TranscribeCountingAsync"/>, decoding excluded). Reset per file;
+    /// <see cref="_whisperAudioSeconds"/> over this is the transcription speed vs. real time.</summary>
+    private double _whisperTranscribeSeconds;
 
     /// <summary>Per detected chapter number, the length of the silence that preceded its phrase
     /// (in --jingle mode, the silence preceding the jingle - see <see cref="RecordChapterStats"/>).
@@ -265,11 +300,17 @@ public sealed class ChapterDetector
     /// <param name="vad">Voice activity detector used for the --jingle full-file pre-pass
     /// (finds jingle transitions with no detectable amplitude gap); null when --jingle is not
     /// in effect, or in tests that don't exercise that path.</param>
-    public ChapterDetector(CliOptions options, IAudioSource audio, ITranscriber transcriber, IVoiceActivityDetector? vad = null)
+    /// <param name="pass3Transcriber">Transcriber to use for pass 3 (gap filling), when
+    /// <c>--pass3-model</c> asks for a model other than the main one. Null (the default) means
+    /// pass 3 reuses <paramref name="transcriber"/>, i.e. the same single-model behavior as
+    /// before.</param>
+    public ChapterDetector(CliOptions options, IAudioSource audio, ITranscriber transcriber,
+        IVoiceActivityDetector? vad = null, ITranscriber? pass3Transcriber = null)
     {
         _options = options;
         _audio = audio;
         _transcriber = transcriber;
+        _pass3Transcriber = pass3Transcriber ?? transcriber;
         _vad = vad;
     }
 
@@ -286,6 +327,7 @@ public sealed class ChapterDetector
     {
         _log = log;
         _whisperAudioSeconds = 0;
+        _whisperTranscribeSeconds = 0;
         _chapterSilenceSeconds.Clear();
         _chapterJingleSeconds.Clear();
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
@@ -847,6 +889,10 @@ public sealed class ChapterDetector
         {
             work.BeginPhase("Pass 3",
                 (long)(gaps.Sum(g => g.ToSeconds - g.FromSeconds) * bytesPerSecond));
+            // A distinct --pass3-model needs its language set here; the pass-2 transcriber already
+            // carries it, so the common (same-model) case leaves everything untouched.
+            if (!ReferenceEquals(_pass3Transcriber, _transcriber))
+                _pass3Transcriber.ChangeLanguage(profile!.Language);
         }
         foreach (var gap in gaps)
         {
@@ -878,17 +924,26 @@ public sealed class ChapterDetector
 
         // Per-file statistics, aggregated over only the chapters that survived into the final
         // result (a detection that lost out to Normalize, or a spurious number, contributes
-        // nothing). The silence/jingle dictionaries were filled at each mark placement.
-        var finalSilences = chapters
-            .Where(c => _chapterSilenceSeconds.ContainsKey(c.Number))
-            .Select(c => _chapterSilenceSeconds[c.Number]).ToList();
-        var finalJingles = chapters
-            .Where(c => _chapterJingleSeconds.ContainsKey(c.Number))
-            .Select(c => _chapterJingleSeconds[c.Number]).ToList();
+        // nothing). The silence/jingle dictionaries were filled at each mark placement. Each
+        // extreme is computed twice: over all chapters, and over the "inter-chapter" subset that
+        // excludes chapter 1 (whose intro transition is often atypical).
+        double? MinSilence(IEnumerable<DetectedChapter> cs)
+        {
+            var vs = cs.Where(c => _chapterSilenceSeconds.ContainsKey(c.Number))
+                .Select(c => _chapterSilenceSeconds[c.Number]).ToList();
+            return vs.Count > 0 ? vs.Min() : null;
+        }
+        double? MaxJingle(IEnumerable<DetectedChapter> cs)
+        {
+            var vs = cs.Where(c => _chapterJingleSeconds.ContainsKey(c.Number))
+                .Select(c => _chapterJingleSeconds[c.Number]).ToList();
+            return vs.Count > 0 ? vs.Max() : null;
+        }
+        var interChapter = chapters.Where(c => c.Number != 1).ToList();
         var stats = new DetectionStats(
-            finalSilences.Count > 0 ? finalSilences.Min() : null,
-            finalJingles.Count > 0 ? finalJingles.Max() : null,
-            _whisperAudioSeconds);
+            MinSilence(chapters), MinSilence(interChapter),
+            MaxJingle(chapters), MaxJingle(interChapter),
+            _whisperAudioSeconds, _whisperTranscribeSeconds);
 
         return new DetectionResult(
             chapters, missing.Count > 0, missing, lowConfidence,
@@ -1191,10 +1246,17 @@ public sealed class ChapterDetector
     /// </summary>
     /// <param name="samples">16 kHz mono PCM for one probe window or gap chunk.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task<List<TranscriptSegment>> TranscribeCountingAsync(float[] samples, CancellationToken ct)
+    /// <param name="transcriber">Recognizer to use; defaults to the pass-2 transcriber. Pass 3
+    /// passes <see cref="_pass3Transcriber"/> so a distinct <c>--pass3-model</c> can do the gap
+    /// work while the audio and time still count toward the same statistics.</param>
+    private async Task<List<TranscriptSegment>> TranscribeCountingAsync(
+        float[] samples, CancellationToken ct, ITranscriber? transcriber = null)
     {
         _whisperAudioSeconds += samples.Length / (double)FfmpegClient.SampleRate;
-        return await _transcriber.TranscribeAsync(samples, ct);
+        var watch = Stopwatch.StartNew();
+        var segments = await (transcriber ?? _transcriber).TranscribeAsync(samples, ct);
+        _whisperTranscribeSeconds += watch.Elapsed.TotalSeconds;
+        return segments;
     }
 
     /// <summary>
@@ -1265,7 +1327,7 @@ public sealed class ChapterDetector
         var gaps = new List<GapRegion>();
         if (chapters.Count == 0)
             return gaps;
-        if (chapters[0].Number > 1 && chapters[0].TimeSeconds > 30)
+        if (chapters[0].Number > 1 && chapters[0].TimeSeconds > MinLeadingGapSeconds)
             gaps.Add(new GapRegion(0, chapters[0].TimeSeconds));
         for (var i = 1; i < chapters.Count; i++)
         {
@@ -1659,8 +1721,8 @@ public sealed class ChapterDetector
             var chunkEnd = seam ?? naturalEnd;
 
             var samples = await _audio.DecodePcmAsync(file, chunkStart, chunkEnd - chunkStart, info.InputDecoder, ct);
-            var segments = await TranscribeCountingAsync(samples, ct);
-            LogTranscript($"gap chunk @{FormatTimestamp(chunkStart)}", segments);
+            var segments = await TranscribeCountingAsync(samples, ct, _pass3Transcriber);
+            LogTranscript($"transcribed gap chunk @{FormatTimestamp(chunkStart)}", segments);
             var freshAbs = ShiftSegments(segments, chunkStart);
 
             // At a snapped seam the chunks share no audio, so a phrase straddling the seam

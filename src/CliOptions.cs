@@ -50,6 +50,16 @@ public sealed class CliOptions
     /// <summary>Whisper model selector (--model / -m): tiny, base, small, medium, turbo or large.</summary>
     public string Model { get; private set; } = "turbo";
 
+    /// <summary>
+    /// Whisper model selector used for pass 3 (gap filling) only (--pass3-model / -M); defaults
+    /// to <see cref="Model"/> when not given, so pass 3 uses the same model as pass 2 unless the
+    /// user asks for a different one. A lighter model can speed pass 3 up ("I'll likely fix the
+    /// stragglers by hand anyway"), a heavier one ("large") can make one last, best-effort attempt
+    /// at the chapters the main model missed. The pass-3 model is loaded (and downloaded) lazily,
+    /// only when a file actually reaches pass 3.
+    /// </summary>
+    public string Pass3Model { get; private set; } = "turbo";
+
     /// <summary>Discard pre-existing chapter markings instead of skipping the file (--force / -f).</summary>
     public bool Force { get; private set; }
 
@@ -233,7 +243,7 @@ public sealed class CliOptions
     {
         ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--jingle",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
-        ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model",
+        ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
@@ -243,7 +253,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _phraseSet, _modelSet, _maxSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet;
+    private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet;
 
     /// <summary>
     /// File extensions of the container formats that ffmpeg can both read and write chapter
@@ -362,7 +372,7 @@ public sealed class CliOptions
 
         // Semantic validation.
         if (o.Revert && (o.Backup || o.Force || o.Jingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                         || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
+                         || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
@@ -372,9 +382,9 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._jingleLenSet || o._minSilenceSet || o.Jingle || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o.Jingle || o.Verify))
             throw new CliError(
-                "--import skips detection entirely, so --lang, --chapter-phrase, --model, " +
+                "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
                 "--jingle, --max-jingle-length, --min-silence-length and --verify have no effect and cannot be combined with it.");
 
         if (o.Force && o.Verify)
@@ -392,6 +402,14 @@ public sealed class CliOptions
         if (!ModelNames.Contains(o.Model.ToLowerInvariant()))
             throw new CliError($"Invalid model \"{o.Model}\": expected one of {string.Join(", ", ModelNames)}.");
         o.Model = o.Model.ToLowerInvariant();
+
+        // The pass-3 model defaults to the main model, so leaving --pass3-model off means pass 3
+        // uses the same model as pass 2 - the previous, single-model behavior.
+        if (!o._pass3ModelSet)
+            o.Pass3Model = o.Model;
+        else if (!ModelNames.Contains(o.Pass3Model.ToLowerInvariant()))
+            throw new CliError($"Invalid pass-3 model \"{o.Pass3Model}\": expected one of {string.Join(", ", ModelNames)}.");
+        o.Pass3Model = o.Pass3Model.ToLowerInvariant();
 
         if (o.ChapterPhrase.Length == 0)
             throw new CliError("The chapter phrase must not be empty.");
@@ -472,6 +490,7 @@ public sealed class CliOptions
             case "--lang": Language = nextParam(); _langSet = true; return true;
             case "--chapter-phrase": ChapterPhrase = nextParam(); _phraseSet = true; return true;
             case "--model": Model = nextParam(); _modelSet = true; return true;
+            case "--pass3-model": Pass3Model = nextParam(); _pass3ModelSet = true; return true;
             case "--max-chapters": MaxChapters = ParseMax(nextParam()); _maxSet = true; return true;
             case "--title": Title = nextParam(); _titleSet = true; return true;
             case "--intro-title": IntroTitle = nextParam(); _introSet = true; return true;
@@ -668,6 +687,11 @@ public sealed class CliOptions
                                     the phrase. Matching is always case-insensitive.
           -m, --model <name>        Whisper model: tiny, base, small, medium, turbo or large
                                     (default: turbo).
+          -M, --pass3-model <name>  Whisper model for pass 3 (gap filling) only; same choices as
+                                    --model (default: whatever --model is). Use a lighter model to
+                                    speed pass 3 up, or "large" for one last best-effort attempt at
+                                    the chapters the main model missed. Loaded and downloaded lazily,
+                                    only when a file actually reaches pass 3.
           -F, --filter <filter>     Only process matching files. Either "/regexp/" - matched
                                     case-insensitively against the whole path of each file -
                                     or a comma-separated list of permissible file extensions,

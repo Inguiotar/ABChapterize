@@ -39,12 +39,16 @@ public sealed class FileProcessor
     private int _confidenceCount;
 
     /// <summary>Run-wide detection statistics (for --summary), aggregated across every processed
-    /// file: the shortest silence and longest jingle seen before any chapter, and the total audio
-    /// fed to Whisper against the total run length processed. The silence/jingle extremes stay at
-    /// their infinities when no file contributed one.</summary>
+    /// file: the shortest silence and longest jingle seen before any chapter (each both over all
+    /// chapters and over the inter-chapter subset that excludes chapter 1), and the total audio
+    /// fed to Whisper and time spent transcribing it, against the total run length processed. The
+    /// silence/jingle extremes stay at their infinities when no file contributed one.</summary>
     private double _minPrecedingSilence = double.PositiveInfinity;
+    private double _minInterChapterSilence = double.PositiveInfinity;
     private double _maxJingle = double.NegativeInfinity;
+    private double _maxInterChapterJingle = double.NegativeInfinity;
     private double _whisperAudioSecondsTotal;
+    private double _whisperTranscribeSecondsTotal;
     private double _runLengthSecondsTotal;
 
     /// <summary>Creates a processor for the given validated options.</summary>
@@ -147,9 +151,19 @@ public sealed class FileProcessor
                 ? ResolveConcurrency(files.Count, 1)
                 : ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount / 4, 1, 4));
 
+            // A different --pass3-model gets one shared, lazily-loaded instance for the whole run
+            // (see SharedPass3Transcriber); pass 3 is the exception, so serializing it there costs
+            // little and avoids loading a second model per concurrent file. The same model as
+            // --model means no separate instance at all - pass 3 reuses each file's own transcriber.
+            var pass3Differs = _options.Pass3Model != _options.Model;
+            var pass3Shared = pass3Differs
+                ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage)
+                : null;
+
             if (!_options.Quiet)
                 Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({first.RuntimeName} backend" +
                                   (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
+                                  (pass3Differs ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +
                                   $"{files.Count} file(s) to process" +
                                   (hardCap > 1 ? $", up to {hardCap} at a time." : "."));
 
@@ -175,7 +189,12 @@ public sealed class FileProcessor
             {
                 var channel = Channel.CreateUnbounded<ChapterDetector>();
                 foreach (var w in pool)
-                    channel.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w, vad));
+                {
+                    // Each detector gets its own proxy onto the one shared pass-3 model, so every
+                    // concurrent file's pass 3 applies its own language against it (see the proxy).
+                    var pass3 = pass3Shared != null ? new Pass3TranscriberProxy(pass3Shared, initialLanguage) : null;
+                    channel.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w, vad, pass3));
+                }
 
                 await RunConcurrentlyAsync(files, hardCap, ct, async (file, token) =>
                 {
@@ -194,6 +213,8 @@ public sealed class FileProcessor
             {
                 foreach (var w in pool)
                     await w.DisposeAsync();
+                if (pass3Shared != null)
+                    await pass3Shared.DisposeAsync();
             }
         }
 
@@ -215,15 +236,19 @@ public sealed class FileProcessor
             {
                 var extremes = new List<string>();
                 if (!double.IsPositiveInfinity(_minPrecedingSilence))
-                    extremes.Add($"shortest silence before a chapter {_minPrecedingSilence:0.00} s");
+                    extremes.Add($"shortest silence before a chapter {_minPrecedingSilence:0.00} s" +
+                                 FormatInterChapter(double.IsPositiveInfinity(_minInterChapterSilence) ? null : _minInterChapterSilence));
                 if (!double.IsNegativeInfinity(_maxJingle))
-                    extremes.Add($"longest jingle before a chapter {_maxJingle:0.00} s");
+                    extremes.Add($"longest jingle before a chapter {_maxJingle:0.00} s" +
+                                 FormatInterChapter(double.IsNegativeInfinity(_maxInterChapterJingle) ? null : _maxInterChapterJingle));
                 if (extremes.Count > 0)
                     Console.WriteLine(string.Join(", ", extremes));
+                var speed = FormatSpeed(_whisperAudioSecondsTotal, _whisperTranscribeSecondsTotal);
                 Console.WriteLine(
                     $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_whisperAudioSecondsTotal))} " +
                     $"of {FormatTime(TimeSpan.FromSeconds(_runLengthSecondsTotal))} run length " +
-                    $"({100 * _whisperAudioSecondsTotal / _runLengthSecondsTotal:0.0}%)");
+                    $"({100 * _whisperAudioSecondsTotal / _runLengthSecondsTotal:0.0}%)" +
+                    (speed.Length > 0 ? $", {speed}" : ""));
             }
         }
     }
@@ -330,10 +355,24 @@ public sealed class FileProcessor
     private static string FormatPercent(double part, double whole)
         => whole > 0 ? $" ({100 * part / whole:0.0}% of run length)" : "";
 
+    /// <summary>Appends " (inter-chapter Y.YY s)" when the chapter-1-excluded value is present,
+    /// marking the extreme taken over the book's regular chapter breaks alone.</summary>
+    /// <param name="interChapter">The extreme excluding chapter 1, or null when unavailable.</param>
+    private static string FormatInterChapter(double? interChapter)
+        => interChapter is { } v ? $" (inter-chapter {v:0.00} s)" : "";
+
+    /// <summary>Formats the Whisper transcription speed as a "NNN% of real-time" clause (audio
+    /// transcribed over the wall-clock time it took), or empty when it could not be measured.</summary>
+    /// <param name="audioSeconds">Audio handed to Whisper.</param>
+    /// <param name="transcribeSeconds">Wall-clock time spent transcribing it.</param>
+    private static string FormatSpeed(double audioSeconds, double transcribeSeconds)
+        => transcribeSeconds > 0 ? $"transcription speed {100 * audioSeconds / transcribeSeconds:0} % of real-time" : "";
+
     /// <summary>
     /// Builds the per-file statistics log line shown under --verbose (or --verbose-transcripts):
-    /// the shortest silence and, in --jingle mode, the longest jingle preceding a detected
-    /// chapter, plus the total audio fed to Whisper and its share of the file's run length.
+    /// the shortest silence and, in --jingle mode, the longest jingle preceding a detected chapter
+    /// (each with its inter-chapter, chapter-1-excluded counterpart), the total audio fed to
+    /// Whisper and its share of the file's run length, and the transcription speed.
     /// </summary>
     /// <param name="stats">The file's detection statistics.</param>
     /// <param name="runLengthSeconds">The file's run length, for the Whisper-audio share.</param>
@@ -341,11 +380,15 @@ public sealed class FileProcessor
     {
         var parts = new List<string>();
         if (stats.MinPrecedingSilenceSeconds is { } silence)
-            parts.Add($"shortest silence before a chapter {silence:0.00} s");
+            parts.Add($"shortest silence before a chapter {silence:0.00} s" +
+                      FormatInterChapter(stats.MinInterChapterSilenceSeconds));
         if (stats.MaxJingleLengthSeconds is { } jingle)
-            parts.Add($"longest jingle {jingle:0.00} s");
+            parts.Add($"longest jingle {jingle:0.00} s" +
+                      FormatInterChapter(stats.MaxInterChapterJingleSeconds));
         parts.Add($"Whisper audio {FormatTime(TimeSpan.FromSeconds(stats.WhisperAudioSeconds))}" +
                   FormatPercent(stats.WhisperAudioSeconds, runLengthSeconds));
+        if (FormatSpeed(stats.WhisperAudioSeconds, stats.WhisperTranscribeSeconds) is { Length: > 0 } speed)
+            parts.Add(speed);
         return "stats - " + string.Join(", ", parts);
     }
 
@@ -357,11 +400,75 @@ public sealed class FileProcessor
     {
         if (stats.MinPrecedingSilenceSeconds is { } silence)
             _minPrecedingSilence = Math.Min(_minPrecedingSilence, silence);
+        if (stats.MinInterChapterSilenceSeconds is { } interSilence)
+            _minInterChapterSilence = Math.Min(_minInterChapterSilence, interSilence);
         if (stats.MaxJingleLengthSeconds is { } jingle)
             _maxJingle = Math.Max(_maxJingle, jingle);
+        if (stats.MaxInterChapterJingleSeconds is { } interJingle)
+            _maxInterChapterJingle = Math.Max(_maxInterChapterJingle, interJingle);
         _whisperAudioSecondsTotal += stats.WhisperAudioSeconds;
+        _whisperTranscribeSecondsTotal += stats.WhisperTranscribeSeconds;
         _runLengthSecondsTotal += runLengthSeconds;
     }
+
+    /// <summary>
+    /// Turns a detection result's chapters into titled <see cref="Chapter"/>s and, when the first
+    /// one starts past the very beginning, prepends the intro chapter - audiobooks open with a
+    /// prelude, and the mp4 muxer would otherwise snap the first mark to 0:00. Shared by the normal
+    /// write path and the partial-marks path so both lay out chapters identically.
+    /// </summary>
+    /// <param name="result">The file's detection result.</param>
+    /// <returns>The chapters to write and a note (" + intro" or "") for the summary line.</returns>
+    private static (List<Chapter> Chapters, string IntroNote) BuildChapters(DetectionResult result)
+    {
+        var chapters = result.Chapters
+            .Select(c => new Chapter(c.TimeSeconds, $"{result.Profile.Title} {c.Number}"))
+            .ToList();
+        if (chapters.Count > 0 && chapters[0].StartSeconds > 1.0)
+        {
+            chapters.Insert(0, new Chapter(0, result.Profile.IntroTitle));
+            return (chapters, " + intro");
+        }
+        return (chapters, "");
+    }
+
+    /// <summary>Folds a set of written chapter marks into the run-wide confidence stats
+    /// (for --summary). Takes <see cref="_statsLock"/> itself.</summary>
+    /// <param name="chapters">The chapters whose confidences were actually written.</param>
+    private void AccumulateConfidence(IEnumerable<DetectedChapter> chapters)
+    {
+        lock (_statsLock)
+            foreach (var c in chapters)
+            {
+                _confidenceSum += c.Confidence;
+                _confidenceCount++;
+                _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
+                _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
+            }
+    }
+
+    /// <summary>
+    /// Builds the name a file is renamed to when pass 3 leaves an unresolved chapter-sequence gap:
+    /// the original name with a ".missing-marks-&lt;n&gt;-&lt;n&gt;-..." tag (the still-missing
+    /// chapter numbers, "-"-delimited) inserted before the extension, e.g.
+    /// "Book.m4b" with chapters 3 and 7 missing becomes "Book.missing-marks-3-7.m4b". Any such tag
+    /// already present is replaced rather than stacked. Internal for unit testing.
+    /// </summary>
+    /// <param name="file">Path of the file being renamed.</param>
+    /// <param name="missingNumbers">The chapter numbers still missing after pass 3.</param>
+    internal static string MissingMarksPath(string file, IReadOnlyList<int> missingNumbers)
+    {
+        var dir = Path.GetDirectoryName(file) ?? "";
+        var stem = StripMissingMarksTag(Path.GetFileNameWithoutExtension(file));
+        var ext = Path.GetExtension(file);
+        return Path.Combine(dir, $"{stem}.missing-marks-{string.Join("-", missingNumbers)}{ext}");
+    }
+
+    /// <summary>Removes a trailing ".missing-marks-&lt;digits and dashes&gt;" tag from a file
+    /// stem, so re-tagging an already-tagged file replaces the tag instead of appending a second.</summary>
+    /// <param name="stem">File name without directory or extension.</param>
+    private static string StripMissingMarksTag(string stem)
+        => System.Text.RegularExpressions.Regex.Replace(stem, @"\.missing-marks-[0-9-]+$", "");
 
     /// <summary>Processes a single audiobook file and prints its summary line.</summary>
     private async Task ProcessOneAsync(
@@ -438,9 +545,30 @@ public sealed class FileProcessor
             if (result.GapRemains)
             {
                 lock (_statsLock) _warnings++;
+                // Rather than discard the work, commit the marks found so far and flag the file by
+                // name (".missing-marks-<n>-<n>-...") so the still-missing chapters are visible and
+                // a future run can pick them up. (Re-processing such files is a separate TODO item.)
+                AccumulateConfidence(result.Chapters);
+                var (partial, partialIntro) = BuildChapters(result);
+                var target = MissingMarksPath(file, result.MissingNumbers);
+                var missingList = string.Join(", ", result.MissingNumbers);
+                if (_options.DryRun)
+                {
+                    var partialListing = string.Join(Environment.NewLine,
+                        partial.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
+                    _progress.FinishWithSummary(work,
+                        $"{name}: DRY RUN - unresolved chapter sequence gap (missing: {missingList}); " +
+                        $"would write {result.Chapters.Count} partial mark(s){partialIntro} and rename to " +
+                        $"{Path.GetFileName(target)}:{Environment.NewLine}{partialListing}", important: true);
+                    return;
+                }
+                await ffmpeg.WriteChaptersAsync(file, partial, info.DurationSeconds, _options.Backup, ct);
+                File.Move(file, target, overwrite: true);
+                var partialBackup = _options.Backup ? ", backup kept" : "";
                 _progress.FinishWithSummary(work,
-                    $"{name}: WARNING - unresolved chapter sequence gap (missing: " +
-                    $"{string.Join(", ", result.MissingNumbers)}); file unchanged", important: true);
+                    $"{name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
+                    $"wrote {result.Chapters.Count} partial mark(s){partialIntro}, renamed to " +
+                    $"{Path.GetFileName(target)}{partialBackup}", important: true);
                 return;
             }
             if (result.Chapters.Count == 0)
@@ -450,29 +578,9 @@ public sealed class FileProcessor
                 return;
             }
 
-            lock (_statsLock)
-            {
-                foreach (var c in result.Chapters)
-                {
-                    _confidenceSum += c.Confidence;
-                    _confidenceCount++;
-                    _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
-                    _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
-                }
-            }
+            AccumulateConfidence(result.Chapters);
 
-            var chapters = result.Chapters
-                .Select(c => new Chapter(c.TimeSeconds, $"{result.Profile.Title} {c.Number}"))
-                .ToList();
-            // Audiobooks usually start with a prelude, and the mp4 muxer silently moves the
-            // first chapter mark to 0:00. Prepend an intro chapter so the first detected
-            // chapter keeps its real start time.
-            var introNote = "";
-            if (chapters[0].StartSeconds > 1.0)
-            {
-                chapters.Insert(0, new Chapter(0, result.Profile.IntroTitle));
-                introNote = " + intro";
-            }
+            var (chapters, introNote) = BuildChapters(result);
 
             var lowConfidenceNote = result.LowConfidenceNumbers.Count > 0
                 ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +

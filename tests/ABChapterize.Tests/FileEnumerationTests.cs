@@ -84,4 +84,20 @@ public sealed class FileEnumerationTests : IDisposable
         var p = new FileProcessor(parsed, new ProgressRenderer(quiet: true));
         Assert.Equal([file], p.EnumerateTargets([".m4b"]));
     }
+
+    [Fact]
+    public void MissingMarksPath_TagsTheStillMissingChapters_BeforeTheExtension()
+    {
+        var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.m4b"), [3, 7, 8]);
+        Assert.Equal(Path.Combine("lib", "Book.missing-marks-3-7-8.m4b"), path);
+    }
+
+    [Fact]
+    public void MissingMarksPath_ReplacesAnExistingTag_RatherThanStackingIt()
+    {
+        // Re-tagging an already-tagged file (e.g. after a second incomplete run) must not produce
+        // "Book.missing-marks-3-7.missing-marks-7.m4b".
+        var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.missing-marks-3-7.m4b"), [7]);
+        Assert.Equal(Path.Combine("lib", "Book.missing-marks-7.m4b"), path);
+    }
 }

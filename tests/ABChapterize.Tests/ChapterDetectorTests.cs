@@ -183,6 +183,26 @@ public sealed class ChapterDetectorTests : IDisposable
         return (result, transcriber, audio);
     }
 
+    /// <summary>
+    /// Runs the detector with a separate transcriber for pass 3 (as <c>--pass3-model</c> sets up):
+    /// pass 2 uses <paramref name="pass2Script"/>, pass 3 uses <paramref name="pass3Script"/>, both
+    /// keyed off the same fake audio source. Returns the result plus both transcribers, so a test
+    /// can prove that a gap was filled by the pass-3 transcriber rather than the pass-2 one.
+    /// </summary>
+    private async Task<(DetectionResult Result, ScriptedTranscriber Pass2, ScriptedTranscriber Pass3)> DetectWithPass3TranscriberAsync(
+        CliOptions options, List<Silence> silences,
+        Action<ScriptedTranscriber> pass2Script, Action<ScriptedTranscriber> pass3Script)
+    {
+        var audio = new FakeAudioSource { Silences = silences };
+        var pass2 = new ScriptedTranscriber(audio);
+        var pass3 = new ScriptedTranscriber(audio);
+        pass2Script(pass2);
+        pass3Script(pass3);
+        var detector = new ChapterDetector(options, audio, pass2, vad: null, pass3Transcriber: pass3);
+        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), null, CancellationToken.None);
+        return (result, pass2, pass3);
+    }
+
     /// <summary>Runs the detector with --verbose logging captured, for assertions on what
     /// DetectAsync actually printed (e.g. that a probe's log only shows freshly transcribed
     /// segments, not the reused ones restated at window-relative time).</summary>
@@ -352,24 +372,49 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Statistics_ReportTheShortestPrecedingSilence_AndSomeWhisperAudio()
+    public async Task Pass3_UsesTheSeparatePass3Transcriber_WhenOneIsGiven()
     {
-        // Chapter 2 is preceded by a 3 s silence, chapter 3 by a 2 s one; chapter 1 sits at the
-        // file start with none. The per-file shortest-preceding-silence statistic is thus 2 s,
-        // the jingle statistic stays null (plain mode), and audio was fed to Whisper.
+        // Pass 2 finds only chapters 1 and 3 (its transcriber never hears chapter 2), leaving a
+        // sequence gap. Chapter 2 lives *solely* in the pass-3 transcriber's script, so the gap can
+        // only be filled if pass 3 actually routed through it - exactly what --pass3-model sets up.
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options(),
+            [new(595, 600), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(597.5, Seg(2.5, " Chapter two."))); // snapped gap-chunk seam
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.5), new(2, 600), new(3, 1200)], result.Chapters);
+        // The pass-3 transcriber had its language set before it was used (auto-detected "en").
+        Assert.Contains("en", pass3.LanguageChanges);
+    }
+
+    [Fact]
+    public async Task Statistics_ReportShortestPrecedingSilence_WithAndWithoutChapterOne()
+    {
+        // Chapter 1's own (intro) silence is the shortest at 2 s, chapter 2's is 3 s, chapter 3's
+        // 4 s. The overall shortest-preceding-silence statistic is therefore 2 s, but the
+        // inter-chapter figure - which excludes chapter 1's atypical intro transition - is 3 s.
+        // The jingle statistics stay null (plain mode), and audio was fed to Whisper.
         var (result, _, _) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
-            [new(597, 600), new(903, 905)],
+            [new(8, 10), new(597, 600), new(903, 907)],
             s =>
             {
-                s.Add(0, Seg(0.5, " Chapter one."));
-                s.Add(600, Seg(0.3, " Chapter two."));
-                s.Add(905, Seg(0.2, " Chapter three."));
+                s.Add(0, Seg(10.2, " Chapter one.")); // in the file-start window; anchored to the 2 s silence 8-10
+                s.Add(600, Seg(0.3, " Chapter two.")); // preceded by 3 s
+                s.Add(907, Seg(0.2, " Chapter three.")); // preceded by 4 s
             });
 
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
         Assert.Equal(2.0, result.Stats.MinPrecedingSilenceSeconds!.Value, 3);
+        Assert.Equal(3.0, result.Stats.MinInterChapterSilenceSeconds!.Value, 3);
         Assert.Null(result.Stats.MaxJingleLengthSeconds);
+        Assert.Null(result.Stats.MaxInterChapterJingleSeconds);
         Assert.True(result.Stats.WhisperAudioSeconds > 0);
     }
 
@@ -396,6 +441,10 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
         Assert.Equal(4.0, result.Stats.MinPrecedingSilenceSeconds!.Value, 3);
         Assert.Equal(9.0, result.Stats.MaxJingleLengthSeconds!.Value, 3);
+        // Chapter 1 (at the file start) contributes no silence or jingle, so the inter-chapter
+        // figures equal the overall ones here - only chapter 2 was measurable either way.
+        Assert.Equal(4.0, result.Stats.MinInterChapterSilenceSeconds!.Value, 3);
+        Assert.Equal(9.0, result.Stats.MaxInterChapterJingleSeconds!.Value, 3);
     }
 
     [Fact]
@@ -1636,8 +1685,8 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public void FindGaps_SkipsLeadingRegion_WhenFirstChapterIsNearTheStart()
     {
-        // A chapter > 1 within the first 30 s is taken as-is (e.g. a book starting mid-series).
-        var chapters = new List<DetectedChapter> { new(2, 10) };
+        // A chapter > 1 within the first 10 s is taken as-is (e.g. a book starting mid-series).
+        var chapters = new List<DetectedChapter> { new(2, 8) };
         Assert.Empty(ChapterDetector.FindGaps(chapters, Duration));
     }
 

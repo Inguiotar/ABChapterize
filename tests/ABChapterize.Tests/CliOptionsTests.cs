@@ -165,12 +165,37 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--lang", "de")]
     [InlineData("--chapter-phrase", "part")]
     [InlineData("--model", "small")]
+    [InlineData("--pass3-model", "large")]
     [InlineData("--jingle")]
     [InlineData("--min-silence-length", "2")]
     [InlineData("--verify")]
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
     {
         Assert.Throws<CliError>(() => ParseFile([.. new[] { "--import" }, .. extra]));
+    }
+
+    [Fact]
+    public void Pass3Model_DefaultsToTheMainModel()
+    {
+        Assert.Equal("turbo", ParseFile()!.Pass3Model);
+        Assert.Equal("small", ParseFile("--model", "small")!.Pass3Model);
+    }
+
+    [Fact]
+    public void Pass3Model_IsParsed_LongShortAndCaseNormalized()
+    {
+        Assert.Equal("large", ParseFile("--pass3-model", "large")!.Pass3Model);
+        Assert.Equal("large", ParseFile("-M", "LARGE")!.Pass3Model);
+        // Independent of the main model, which keeps its own value.
+        var o = ParseFile("--model", "tiny", "--pass3-model", "large")!;
+        Assert.Equal("tiny", o.Model);
+        Assert.Equal("large", o.Pass3Model);
+    }
+
+    [Fact]
+    public void InvalidPass3Model_IsRejected()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--pass3-model", "gigantic"));
     }
 
     [Fact]
@@ -425,6 +450,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--lang", "de"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--backup"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--verify"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
     }
 
     [Fact]

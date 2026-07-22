@@ -159,6 +159,7 @@ when chapters are written. The most useful knobs:
 | `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase` and `--title` (per-file with `auto`). |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
+| `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model` (default: same as `--model`). Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. Loaded lazily, only if pass 3 runs. |
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
@@ -168,7 +169,7 @@ when chapters are written. The most useful knobs:
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
-| `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (confidence, silence/jingle and Whisper-audio stats) at the end. |
+| `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (confidence, silence/jingle, Whisper-audio and transcription-speed stats) at the end. |
 | `-v`, `--verbose` | Log processing details, each probe/chunk as a `<length>@<time>` header. |
 | `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
@@ -220,8 +221,11 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in chunks whose borders snap to
    silences too (with the transcripts bridged across each seam, so not even
-   a phrase interrupted by a pause right at a border can slip through). If a
-   gap still remains, the file is left unchanged and a warning is printed.
+   a phrase interrupted by a pause right at a border can slip through). Pass 3
+   can use a different model than pass 2 (`--pass3-model`). If a gap still
+   remains, the chapters that *were* found are written and the file is renamed
+   with a `.missing-marks-…` tag listing the still-missing numbers, rather than
+   discarded.
 
 A synthetic "Intro" mark (localized by `--lang`, customizable with
 `--intro-title`) covers everything before the first detected chapter

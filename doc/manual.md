@@ -134,17 +134,24 @@ See the [`-n` reference](#detection-behaviour) for the knob itself.
 ### Pass 3 — gap filling (only when needed)
 
 If the detected chapter numbers have sequence gaps (…7, 9…), or the first
-detected chapter is not chapter 1 even though it starts more than 30 seconds
+detected chapter is not chapter 1 even though it starts more than 10 seconds
 into the file, the regions where the missing chapters must be hiding are
 transcribed *completely*, in roughly 10-minute chunks. This catches
 announcements that were not preceded by a long-enough silence. Marks found
 here are placed the same way as in pass 2.
 
-If a gap *between* detected chapters still remains after pass 3, the file is
-left **unchanged** and a warning is printed — a partially wrong chapter list
-is worse than none. A first chapter number above 1 that cannot be pushed down
-further is tolerated, though: some books simply start mid-series (which is
-also why a first chapter within the first 30 seconds is taken as-is), and the
+If a gap *between* detected chapters still remains after pass 3, the chapters
+that *were* found are still written, but a warning is printed and the file is
+**renamed** to `<name>.missing-marks-<n>-<n>-…<ext>` — the tag listing the
+still-missing chapter numbers, `-`-delimited (e.g.
+`My Book.missing-marks-3-7.m4b`). This flags the file for attention and
+preserves the partial work instead of discarding it, rather than committing a
+silently-complete-looking but partially-wrong chapter list. (Automatically
+resuming such a file on a later run — only re-searching for the tagged
+chapters, and renaming it back once they are all found — is not implemented
+yet.) A first chapter number above 1 that cannot be pushed down further is
+tolerated, not treated as a gap: some books simply start mid-series (which is
+also why a first chapter within the first 10 seconds is taken as-is), and the
 intro chapter covers the leading audio either way.
 
 ### The intro chapter
@@ -295,6 +302,15 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
 : Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default) or
   `large`. `tiny` and `base` are not recommended for real audiobooks; see
   [section 8](#8-whisper-models).
+
+`-M`, `--pass3-model <name>`
+: Whisper model to use for [pass 3](#pass-3--gap-filling-only-when-needed)
+  (gap filling) only; same choices as `--model`, defaulting to whatever
+  `--model` is. Use a lighter model to make pass 3 faster (when you expect to
+  fix any stragglers by hand anyway), or `large` for one last, best-effort
+  attempt at the chapters the main model missed. The pass-3 model is downloaded
+  and loaded lazily — only if and when a file actually reaches pass 3 — so
+  naming a model here costs nothing on files that never need it.
 
 `-n`, `--min-silence-length <seconds|auto>`
 : Minimum silence duration (0.1–60, default: `auto`) that counts as a
@@ -498,9 +514,12 @@ skipped (reported as "skipped").
   one chapter mark was written — the min/max/average Whisper confidence
   across those marks (not every probe attempted, only the ones that produced
   a mark). Also, across all processed files, the shortest silence and (in
-  `--jingle` mode) longest jingle found before any chapter, and the total
+  `--jingle` mode) longest jingle found before any chapter — each reported
+  both counting chapter 1 and, as an "inter-chapter" figure, ignoring it
+  (its lead-in is often unrepresentative) — the total
   audio fed to Whisper as an absolute time and a share of the total run
-  length (over 100 % is normal — re-probed stretches are counted each time).
+  length (over 100 % is normal — re-probed stretches are counted each time),
+  and Whisper's transcription speed as a percentage of real time.
 
 `-d`, `--dry-run`
 : Run full detection but write nothing. Instead of the usual "N chapter(s)
@@ -543,8 +562,8 @@ touching Whisper at all.
   `--export`). If no sidecar file is found, the file is skipped with a
   message suggesting `--export`. Because there is nothing to detect,
   `--import` cannot be combined with any detection option — `--lang`,
-  `--chapter-phrase`, `--model`, `--jingle`, `--max-jingle-length`,
-  `--min-silence-length` — nor with `--revert`. Pre-existing chapter
+  `--chapter-phrase`, `--model`, `--pass3-model`, `--jingle`,
+  `--max-jingle-length`, `--min-silence-length` — nor with `--revert`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters
   have no Whisper confidence, so they never trigger low-confidence
@@ -866,8 +885,10 @@ name, everything the pipeline does:
   list of any earlier chapter numbers not detected yet,
 - the regions transcribed in pass 3, and when each pass finishes,
 - once the file is done, a `stats -` line: the shortest silence and (in
-  `--jingle` mode) longest jingle found before a chapter, and how much audio
-  was fed to Whisper (with its share of the file's run length).
+  `--jingle` mode) longest jingle found before a chapter — each also given as
+  an "inter-chapter" figure that ignores chapter 1's often-unrepresentative
+  lead-in — how much audio was fed to Whisper (with its share of the file's
+  run length), and Whisper's transcription speed as a percentage of real time.
 
 **`--verbose-transcripts`** (`-T`) adds, after each header line, the full
 Whisper transcript for that window — every segment with its timings and
@@ -912,8 +933,10 @@ explicit `--lang` if so), the pauses are shorter than `--min-silence-length`
 
 **Chapters found but some are missing** — if the missing ones are announced
 without a preceding pause, pass 3 usually catches them automatically. If a
-gap remains, the file is left unchanged (see the warning); try a lower
-`--min-silence-length` or a better model.
+gap remains, the partial marks are written and the file is renamed with a
+`.missing-marks-…` tag (see the warning); try a lower `--min-silence-length`,
+a better `--model`, or a heavier `--pass3-model` (e.g. `large`) for one last
+attempt at just the gaps.
 
 **A "chapter" was detected that isn't one** — in-text mentions are filtered
 by the ordering heuristics, but a phrase like "chapter twelve" right after a
@@ -922,8 +945,9 @@ long pause can fool the tool. Use `--backup`, inspect the result, and
 with stubborn cases.
 
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes),
-`--max-jingle-length` (smaller probe windows), a smaller `--model`. Check
-that the startup line reports a GPU backend, not CPU.
+`--max-jingle-length` (smaller probe windows), a smaller `--model` (or a
+smaller `--pass3-model` if only the gap-filling pass drags). Check that the
+startup line reports a GPU backend, not CPU.
 
 **Model download fails** — the error message includes manual installation
 steps; see [section 8](#8-whisper-models). A checksum-mismatch error means
