@@ -78,6 +78,23 @@ public class ProgressRendererTests
     }
 
     [Fact]
+    public void BuildLine_ShowsMuxingInsteadOfChapters_DuringTheMuxingPhase()
+    {
+        // The chapter list is already final by the time muxing runs, so the phase slot shows
+        // "Muxing..." instead of a now-meaningless chapter count, with no separate phase label
+        // after the bar (that would just repeat the same word).
+        var t = new WorkTracker();
+        t.BeginPhase("Muxing", 100);
+        t.SetPhaseProgress(50);
+        t.HighestChapter = 6;
+        var line = ProgressRenderer.BuildLine((t, "book.m4b"));
+
+        Assert.Contains("| Muxing... | book.m4b", line);
+        Assert.DoesNotContain("ch 6", line);
+        Assert.DoesNotContain(" Muxing 50%", line);
+    }
+
+    [Fact]
     public void BuildLine_IsStableWhenNothingChanges()
     {
         // Identical state must produce an identical line - this is exactly what lets the renderer

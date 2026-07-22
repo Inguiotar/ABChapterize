@@ -385,15 +385,20 @@ public sealed partial class FfmpegClient : IAudioSource
     /// Writes chapter markings into the file by remuxing (stream copy) into a temporary file
     /// and atomically swapping it in. The original data is never deleted before the new file
     /// has been written and verified, so audiobooks cannot be lost even without --backup.
+    /// Stream-copy remuxing does no decode/encode work, but still has to shuffle the entire
+    /// file's data through ffmpeg, which on a large audiobook (or a slow disk/network share)
+    /// takes long enough to warrant its own progress reporting.
     /// </summary>
     /// <param name="file">Path of the audio file to modify.</param>
     /// <param name="chapters">Chapter markings sorted by start time.</param>
     /// <param name="durationSeconds">Total duration; used as the end of the last chapter.</param>
     /// <param name="backup">True to keep the original file as "*.bak".</param>
+    /// <param name="progress">Called with ffmpeg's processed play time in seconds, parsed from
+    /// its "-progress" output; null to skip progress reporting.</param>
     /// <param name="ct">Cancellation token.</param>
     public async Task WriteChaptersAsync(
         string file, IReadOnlyList<Chapter> chapters, double durationSeconds,
-        bool backup, CancellationToken ct)
+        bool backup, Action<double>? progress, CancellationToken ct)
     {
         var metaFile = Path.Combine(Path.GetTempPath(), $"abchapterize-{Guid.NewGuid():N}.ffmeta");
         var tmpFile = file + ".abchapterize.tmp" + Path.GetExtension(file);
@@ -408,8 +413,14 @@ public sealed partial class FfmpegClient : IAudioSource
                     // Map only audio and cover art; a pre-existing chapter text track must
                     // not be copied (it would clash with the new chapter markings).
                     "-map", "0:a", "-map", "0:v?", "-map_metadata", "0", "-map_chapters", "1",
-                    "-c", "copy", tmpFile
-                ], null, ct);
+                    "-c", "copy", "-progress", "pipe:1", tmpFile
+                ],
+                line =>
+                {
+                    var m = ProgressTimeRegex().Match(line);
+                    if (m.Success)
+                        progress?.Invoke(long.Parse(m.Groups[1].Value) / 1_000_000.0);
+                }, ct);
             if (exit != 0)
                 throw new AppError($"ffmpeg failed to write chapters for \"{file}\": {stderr.Trim()}");
 

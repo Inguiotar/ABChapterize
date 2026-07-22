@@ -218,6 +218,12 @@ public sealed class ProgressRenderer : IDisposable
         var filled = (int)Math.Round(fraction * barWidth);
         var bar = new string('#', filled).PadRight(barWidth, '-');
 
+        // Muxing has no chapter count of its own to show (the chapters were already decided
+        // by the time it runs) - it gets a plain "Muxing..." in the slot instead, with no
+        // separate phase label after the bar since that would just repeat the same word.
+        if (slot.Tracker.PhaseLabel == "Muxing")
+            return $"[{bar}] {percent,3}% | Muxing... | {slot.Label}";
+
         var phase = slot.Tracker.PhaseLabel is { Length: > 0 } label ? $" {label}" : "";
         // "----" until the first chapter is found (nothing can change during Pass 1 anyway);
         // then the highest detected chapter number, with the count of still-missing earlier

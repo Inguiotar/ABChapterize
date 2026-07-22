@@ -862,6 +862,12 @@ missing. Pass 2's percentage follows the probe position within the file's
 play time, so it can move nonlinearly — and, briefly, backwards, when a
 sequence gap makes the detector re-probe earlier skipped silences.
 
+Once detection finishes, the bar switches to a final `Muxing...` phase while
+the chapter markings are written into the file — worth watching on a large
+file or a slow disk, since this step still has to shuffle the whole file's
+data through ffmpeg even though it only copies streams rather than
+re-encoding them.
+
 With more than one file processed concurrently (see
 [`--jobs`](#parallel-file-processing)), one bar is shown per file currently
 in flight, stacked in a block capped to the terminal's height (a terminal

@@ -344,6 +344,21 @@ public sealed class FileProcessor
     private static string FormatTime(TimeSpan t)
         => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
+    /// <summary>
+    /// Starts the "Muxing" phase on a file's progress bar and returns a callback translating
+    /// ffmpeg's processed play time (what <see cref="FfmpegClient.WriteChaptersAsync"/> reports)
+    /// into the byte-based progress <see cref="WorkTracker"/> expects - the same play-time-to-bytes
+    /// conversion <see cref="ChapterDetector"/> uses for its own phases.
+    /// </summary>
+    /// <param name="work">The file's progress tracker.</param>
+    /// <param name="info">The file's probe result, for its size and duration.</param>
+    private static Action<double> BeginMuxingPhase(WorkTracker work, MediaInfo info)
+    {
+        work.BeginPhase("Muxing", info.SizeBytes);
+        var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
+        return seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond));
+    }
+
     /// <summary>Formats a chapter mark position as h:mm:ss.ff for the --dry-run listing.</summary>
     /// <param name="seconds">Position in seconds.</param>
     private static string FormatTimestamp(double seconds)
@@ -562,7 +577,8 @@ public sealed class FileProcessor
                         $"{Path.GetFileName(target)}:{Environment.NewLine}{partialListing}", important: true);
                     return;
                 }
-                await ffmpeg.WriteChaptersAsync(file, partial, info.DurationSeconds, _options.Backup, ct);
+                await ffmpeg.WriteChaptersAsync(file, partial, info.DurationSeconds, _options.Backup,
+                    BeginMuxingPhase(work, info), ct);
                 File.Move(file, target, overwrite: true);
                 var partialBackup = _options.Backup ? ", backup kept" : "";
                 _progress.FinishWithSummary(work,
@@ -627,7 +643,8 @@ public sealed class FileProcessor
                 return;
             }
 
-            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
+            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
+                BeginMuxingPhase(work, info), ct);
 
             var backupNote = _options.Backup ? ", backup kept" : "";
             _progress.FinishWithSummary(work,
@@ -726,7 +743,8 @@ public sealed class FileProcessor
                 return;
             }
 
-            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup, ct);
+            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
+                BeginMuxingPhase(work, info), ct);
 
             var backupNote = _options.Backup ? ", backup kept" : "";
             _progress.FinishWithSummary(work,
