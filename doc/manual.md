@@ -133,15 +133,24 @@ The window is 12 seconds normally, or `--max-jingle-length` + 5 seconds with
 (see `--chapter-phrase`), and the chapter number is parsed from digits or from
 number words (see [section 7](#7-languages-and-number-recognition)).
 
-When two consecutive probe windows overlap — common with the wide `--jingle`
-window and closely spaced candidates — the shared span is transcribed only
-once. The second window reuses the first window's cached transcript for the
-overlap and runs Whisper only over the not-yet-seen tail (reaching a couple of
-seconds back across the border for acoustic context), so no audio is ever sent
-through Whisper twice. Matching still runs over the *whole* window, reused part
-included, so nothing a naive tail-only shortcut would drop — a phrase the
-earlier window rejected on timing, or a second announcement its one-mark-per-
-window rule never reached — slips through.
+The full list of probe windows — every start *and* every end — is planned
+before the first probe runs. When two consecutive windows would overlap
+(common with the wide `--jingle` window and closely spaced candidates), the
+plan snaps their shared border to the mid-point of the nearest silence
+anywhere within the second window (with `--jingle`, a VAD non-speech region
+serves as fallback target): the first window's decode simply ends at that
+seam — be it before or beyond its natural end — and the second window's fresh
+decode starts exactly there. Consecutive transcripts thus stitch together at
+a mid-silence cut that can never split a word, no audio is ever sent through
+Whisper twice, and no stretch is ever left out. Only when the second window
+contains no silence at all does the border stay where it fell — and no
+silence there means no chapter transition there either, so nothing detection
+cares about can be garbled. (Pass 1 keeps even sub-threshold silences down to
+0.5 s in memory purely as seam targets for this.) Matching still runs over
+the *whole* window, reused part included, so nothing a naive tail-only
+shortcut would drop — a phrase the earlier window rejected on timing, a
+second announcement its one-mark-per-window rule never reached, or an
+announcement straddling the seam itself — slips through.
 
 Rules applied to the matches:
 

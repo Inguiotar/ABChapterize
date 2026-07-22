@@ -59,10 +59,11 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// The shortest silence Pass 1 retains in memory (see the <c>allSilences</c>/<c>silences</c>
-    /// split in <see cref="DetectAsync"/>) for use as an overlap split point (see
-    /// <see cref="FindOverlapSplitPoint"/>), regardless of how high --min-silence-length is set.
+    /// split in <see cref="DetectAsync"/>) for use as a window-seam snap target (see
+    /// <see cref="PlanWindowEnds"/> and <see cref="FindOverlapSplitPoint"/>), regardless of how
+    /// high --min-silence-length is set.
     /// Only silences at or above --min-silence-length are ever reported as Pass 2 candidates or
-    /// logged; this lower floor exists purely so a silence-mid-point split point is available
+    /// logged; this lower floor exists purely so a silence-mid-point seam is available
     /// even when the nearest real silence around an overlap border is shorter than the book's
     /// candidate threshold. Kept low enough to catch ordinary clause pauses without noticeably
     /// growing Pass 1's silence list.
@@ -296,6 +297,18 @@ public sealed class ChapterDetector
             candidates = candidates.OrderBy(c => c.Start).ToList();
         }
 
+        // The full Pass 2 window list - every start and, crucially, every end - is planned
+        // before the first probe runs: overlapping neighbors get their shared border snapped to
+        // a silence mid-point up front (see PlanWindowEnds), moving the earlier window's decode
+        // end itself - possibly beyond its natural end - rather than merely choosing where to
+        // stop reusing cache after the fact. The plan is recomputed at every point below that
+        // resizes probeSeconds, since window length depends on it.
+        double[] plannedEnds = [];
+        void ReplanWindows() => plannedEnds = PlanWindowEnds(
+            candidates.Select(c => c.Start).ToList(), probeSeconds, info.DurationSeconds,
+            allSilences, nonSpeechRegions, _options.Jingle);
+        ReplanWindows();
+
         // Pass 2 progress is position-based: the bar shows how far into the file's play time the
         // current candidate lies, not how many probes have run. Probe costs vary wildly (full
         // window decode vs. reused overlap vs. skipped candidate), so a fixed per-probe byte
@@ -322,9 +335,14 @@ public sealed class ChapterDetector
         // window transcript in absolute file time, together with the absolute [from, to) span that
         // transcript actually covers. When the next candidate's window overlaps this span, the
         // overlapping segments are reused verbatim instead of being re-run through Whisper - only
-        // the fresh tail is decoded (see ProbeReuseContextSeconds). cacheTo starts at negative
-        // infinity so the very first probe (start 0) never counts as an overlap and always does a
-        // full transcribe - which is also where --lang auto resolves the language from full samples.
+        // the fresh tail beyond the planned seam is decoded. The cache-span test below (start
+        // inside [cacheFrom, cacheTo)) doubles as the seam-stitching check: it holds exactly when
+        // the previous window really was decoded up to the seam this window's plan relies on, and
+        // when it does not (e.g. that window was skipped by the adaptive threshold), the probe
+        // falls back to decoding its full window from the candidate start - nothing is ever left
+        // covered by neither decode. cacheTo starts at negative infinity so the very first probe
+        // (start 0) never counts as an overlap and always does a full transcribe - which is also
+        // where --lang auto resolves the language from full samples.
         List<TranscriptSegment> cacheSegmentsAbs = [];
         var cacheFrom = 0.0;
         var cacheTo = double.NegativeInfinity;
@@ -333,16 +351,19 @@ public sealed class ChapterDetector
         // Returns the chapter number found (or null when the phrase was not found), together
         // with the real silence found to immediately precede the phrase - see
         // FindRealAnchorSilence - for the caller to use when tightening --min-silence-length
-        // instead of blindly trusting this probe's own triggering candidate.
+        // instead of blindly trusting this probe's own triggering candidate. windowEnd is the
+        // window's *planned* end (see PlanWindowEnds) - possibly snapped away from the natural
+        // start + probeSeconds - while the candidate start stays the semantic anchor for the
+        // phrase-timing rule, mark placement and progress, all of which are relative to the
+        // triggering silence, not to whatever seam the plan chose.
         async Task<(int? Number, Silence? RealAnchorSilence)> ProbeAsync(
-            (double Start, Silence? Silence, NonSpeechRegion? VadRegion) candidate)
+            (double Start, Silence? Silence, NonSpeechRegion? VadRegion) candidate, double windowEnd)
         {
             var start = candidate.Start;
             ct.ThrowIfCancellationRequested();
             // Position-based Pass 2 progress (see BeginPhase above); reported here rather than
             // only in the candidate loop so gap re-probes show their (backwards) position too.
             work.SetPhaseProgress((long)(start * bytesPerSecond));
-            var windowEnd = Math.Min(start + probeSeconds, info.DurationSeconds);
 
             // This window's full transcript in absolute file time, assembled from the previous
             // window's cache (overlap reuse), a fresh Whisper decode, or a mix. The whole window is
@@ -377,14 +398,19 @@ public sealed class ChapterDetector
                 }
                 else
                 {
-                    // Partial overlap: snap the cut between the reused cache and the fresh tail to
-                    // a silence (or, in --jingle mode, a VAD non-speech region) mid-point instead of
-                    // the arbitrary overlap border, so it never falls mid-word - see
-                    // FindOverlapSplitPoint. Falls back to the border itself, with no reach-back
-                    // margin, when neither exists: that almost certainly means there is no chapter
-                    // transition in the overlap at all.
+                    // Partial overlap: cut between the reused cache and the fresh tail decode.
+                    // Under the up-front window plan the cache normally ends exactly at a seam
+                    // snapped to a silence mid-point, and this restricted search simply re-finds
+                    // that seam at distance zero - so the fresh decode starts right where the
+                    // previous window's decode stopped, stitching the two transcripts together
+                    // word-safely with nothing re-decoded and nothing dropped. It genuinely
+                    // decides only for overlaps the plan did not anticipate (probe-window
+                    // resizes between planning and probing), where it snaps to the best seam
+                    // still covered by the cache; the border fallback means no seam exists,
+                    // which also means no chapter transition sits in the overlap.
                     var splitPoint = FindOverlapSplitPoint(
-                        start, cacheTo, windowEnd, allSilences, nonSpeechRegions, _options.Jingle);
+                        start, cacheTo, windowEnd, allSilences, nonSpeechRegions, _options.Jingle,
+                        allowBeyondBorder: false);
                     var samples = await _audio.DecodePcmAsync(file, splitPoint,
                         windowEnd - splitPoint, info.InputDecoder, ct);
                     var fresh = await _transcriber.TranscribeAsync(samples, ct);
@@ -509,6 +535,7 @@ public sealed class ChapterDetector
                         if (!reprobing && adaptedWindowSeconds.Value != probeSeconds)
                         {
                             probeSeconds = adaptedWindowSeconds.Value;
+                            ReplanWindows();
                             _log?.Invoke($"Pass 2: jingle probe window resized to {probeSeconds:0.#} s");
                         }
                     }
@@ -534,8 +561,9 @@ public sealed class ChapterDetector
         var threshold = _options.MinSilenceSeconds;
         var skippedSinceLastMark = new List<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)>();
 
-        foreach (var candidate in candidates)
+        for (var ci = 0; ci < candidates.Count; ci++)
         {
+            var candidate = candidates[ci];
             work.SetPhaseProgress((long)(candidate.Start * bytesPerSecond));
 
             if (_options.AutoMinSilence && candidate.Silence is { } candidateSilence &&
@@ -555,7 +583,7 @@ public sealed class ChapterDetector
                 continue;
             }
 
-            var (number, realAnchorSilence) = await ProbeAsync(candidate);
+            var (number, realAnchorSilence) = await ProbeAsync(candidate, plannedEnds[ci]);
 
             if (number is not { } n || n <= (lastNumber ?? 0))
                 continue; // no match, or a duplicate/regression (e.g. an in-text mention)
@@ -569,12 +597,22 @@ public sealed class ChapterDetector
                     if (_options.Jingle && _options.AutoMaxJingle && probeSeconds != jingleCeilingSeconds)
                     {
                         probeSeconds = jingleCeilingSeconds;
+                        ReplanWindows();
                         _log?.Invoke($"Pass 2: jingle probe window reset to {probeSeconds:0.#} s for the re-probe");
                     }
                     reprobing = true;
-                    foreach (var skipped in skippedSinceLastMark)
+                    // The skipped candidates form their own little window sequence at the
+                    // (possibly ceiling-reset) width, planned exactly like the main list so
+                    // adjacent re-probe windows get snapped shared borders too. probeSeconds
+                    // cannot change mid-re-probe (the resize inside ProbeAsync is gated on
+                    // !reprobing), so this plan stays valid for the whole sequence.
+                    var reprobeEnds = PlanWindowEnds(
+                        skippedSinceLastMark.Select(c => c.Start).ToList(), probeSeconds,
+                        info.DurationSeconds, allSilences, nonSpeechRegions, _options.Jingle);
+                    for (var si = 0; si < skippedSinceLastMark.Count; si++)
                     {
-                        var (gapNumber, gapAnchorSilence) = await ProbeAsync(skipped);
+                        var skipped = skippedSinceLastMark[si];
+                        var (gapNumber, gapAnchorSilence) = await ProbeAsync(skipped, reprobeEnds[si]);
                         // A gap mark's anchor silence was, by definition, short enough to have
                         // been skipped - fold it into the running minimum so the threshold can
                         // never again sit above it. Only genuine gap-fillers count; a duplicate
@@ -595,6 +633,7 @@ public sealed class ChapterDetector
                         adaptedWindowSeconds is { } restoredWindow && probeSeconds != restoredWindow)
                     {
                         probeSeconds = restoredWindow;
+                        ReplanWindows();
                         _log?.Invoke($"Pass 2: jingle probe window restored to {probeSeconds:0.#} s");
                     }
                 }
@@ -1016,57 +1055,108 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Finds where to cut an overlapping pair of Pass 2 probe windows so the split never falls
-    /// mid-word: the mid-point of the nearest silence in window 2 that starts at or before the
-    /// border (window 1's end), falling back to a VAD non-speech region under the same rules in
-    /// --jingle mode when no silence qualifies, and finally to the border itself (no snap, no
-    /// reach-back) when neither exists - which almost certainly means there is no chapter
-    /// transition in the overlap to begin with, so a mid-word cut there is not a real risk.
+    /// Finds where to cut between two adjacent Pass 2 probe windows so the seam never falls
+    /// mid-word: the mid-point of the nearest qualifying silence, falling back to a VAD
+    /// non-speech region under the same rules in --jingle mode when no silence qualifies, and
+    /// finally to the border itself (no snap) when neither exists - which almost certainly
+    /// means there is no chapter transition near the border to begin with, so a mid-word cut
+    /// there is not a real risk. A candidate target's mid-point must lie inside window 2 -
+    /// strictly after <paramref name="windowStart"/>, and before <paramref name="windowEnd"/>
+    /// (inclusive at planning time, where a seam at window 2's very end just means window 1
+    /// swallows it whole; strict at reuse time, so the fresh tail decode is never empty).
     /// <para>
-    /// The starts-at-or-before-the-border restriction is load-bearing: everything left of the
-    /// split is served from window 1's cached transcript, which only covers audio up to the
-    /// border - window 1's decode is done and cannot be extended retroactively. A silence
-    /// starting beyond the border would put the seam past the covered region, silently dropping
-    /// the speech between the border and the seam from both windows' transcripts. A silence
-    /// merely <em>straddling</em> the border is fine: its mid-point may lie past the border, but
-    /// the uncovered stretch is then part of the silence itself, so no speech is lost. And when
-    /// only fully-beyond silences exist, the overlap itself contains none - exactly the
-    /// no-transition-in-the-overlap situation the border fallback is justified for.
+    /// Two callers with different rules, selected via <paramref name="allowBeyondBorder"/>.
+    /// <see cref="PlanWindowEnds"/> (true) plans the whole window list before anything is
+    /// decoded, so it may place the seam anywhere within window 2 - window 1's decode is simply
+    /// extended (or shortened) to end exactly at it. The reuse-time call inside a probe (false)
+    /// runs after window 1 is already decoded: everything left of the seam is served from
+    /// window 1's cached transcript, which cannot be extended retroactively, so there the
+    /// target must <em>start</em> at or before the border. A target merely straddling the
+    /// border is still fine (the stretch past the border is inside the silence itself, so no
+    /// speech is lost), but one entirely beyond it would leave [border, seam) in neither
+    /// transcript. Under the up-front plan the border normally <em>is</em> a snapped target's
+    /// mid-point already, which the restricted search then re-finds at distance zero; it only
+    /// genuinely decides for overlaps the plan did not anticipate (probe-window resizes
+    /// between planning and probing).
     /// </para>
     /// </summary>
-    /// <param name="windowStart">Start of window 2 (the new probe's window).</param>
-    /// <param name="border">The original, unsnapped overlap border - window 1's end.</param>
+    /// <param name="windowStart">Start of window 2 (the later window's candidate start).</param>
+    /// <param name="border">The unsnapped border - window 1's (planned or decoded) end.</param>
     /// <param name="windowEnd">End of window 2.</param>
     /// <param name="allSilences">Every silence Pass 1 found, down to <see
     /// cref="MinStoredSilenceSeconds"/> - not just the ones at or above --min-silence-length.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
     /// <param name="jingle">True when --jingle is in effect, enabling the VAD region fallback.</param>
+    /// <param name="allowBeyondBorder">True at planning time (the border itself moves to the
+    /// seam); false at reuse time (the cache ends at the border, see above).</param>
     private static double FindOverlapSplitPoint(
         double windowStart, double border, double windowEnd,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, bool jingle)
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, bool jingle,
+        bool allowBeyondBorder)
     {
-        var silenceSplit = allSilences
-            .Where(s => s.StartSeconds >= windowStart && s.EndSeconds <= windowEnd &&
-                        s.StartSeconds <= border)
-            .Select(s => (double?)((s.StartSeconds + s.EndSeconds) / 2))
+        // At planning time a seam exactly at windowEnd is allowed: window 1 then swallows
+        // window 2 whole, and window 2 is served entirely from its cache. At reuse time the
+        // bound stays strict so the fresh tail decode [seam, windowEnd) can never be empty.
+        double? Nearest(IEnumerable<(double Start, double End)> targets) => targets
+            .Where(t => allowBeyondBorder || t.Start <= border)
+            .Select(t => (double?)((t.Start + t.End) / 2))
+            .Where(mid => mid > windowStart && (allowBeyondBorder ? mid <= windowEnd : mid < windowEnd))
             .OrderBy(mid => Math.Abs(mid!.Value - border))
             .FirstOrDefault();
-        if (silenceSplit is { } ss)
-            return ss;
 
-        if (jingle)
+        var split = Nearest(allSilences.Select(s => (s.StartSeconds, s.EndSeconds)));
+        if (split is null && jingle)
+            split = Nearest(nonSpeechRegions.Select(r => (r.StartSeconds, r.EndSeconds)));
+        return split ?? border;
+    }
+
+    /// <summary>
+    /// Plans the end of every Pass 2 probe window up front, before any window is decoded. Each
+    /// window naturally spans <paramref name="probeSeconds"/> from its candidate start (clamped
+    /// to the file end), but when the next candidate's window overlaps it, their shared border
+    /// is snapped to the nearest silence (or, with --jingle, VAD non-speech region) mid-point
+    /// anywhere within that next window - see <see cref="FindOverlapSplitPoint"/> - and this
+    /// window's decode ends exactly there, be that before or beyond its natural end. The next
+    /// probe's fresh decode then starts at the very same seam (its cached-transcript reuse
+    /// re-finds the seam as the cache's end), so consecutive decodes stitch together
+    /// word-safely at a mid-silence cut with no dead (never-transcribed) stretch and no
+    /// re-decoded overlap between them. After planning, a raw-border joint remains only where
+    /// window 2 contains no snap target at all - and no silence in window 2 means no chapter
+    /// transition near the border either, so a mid-word cut there costs nothing.
+    /// <para>
+    /// Computed right to left, so the search range for each shared border is the next window's
+    /// <em>final</em> (already snapped) span. A next window that ends at or before this
+    /// window's natural end (possible near the file end, or when its own border snap pulled its
+    /// end far in) has no shared border to snap - it is served wholesale from this window's
+    /// cached transcript instead. Window length depends on probeSeconds, so callers recompute
+    /// the plan whenever that resizes (--max-jingle-length auto, the gap re-probe's ceiling
+    /// reset and restore). Internal for unit testing.
+    /// </para>
+    /// </summary>
+    /// <param name="starts">Candidate window starts, ascending.</param>
+    /// <param name="probeSeconds">Current probe window length in seconds.</param>
+    /// <param name="durationSeconds">Total play time; window ends are clamped to it.</param>
+    /// <param name="allSilences">Every silence Pass 1 found, down to <see
+    /// cref="MinStoredSilenceSeconds"/>.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
+    /// <param name="jingle">True when --jingle is in effect, enabling the VAD region fallback.</param>
+    internal static double[] PlanWindowEnds(
+        IReadOnlyList<double> starts, double probeSeconds, double durationSeconds,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, bool jingle)
+    {
+        var ends = new double[starts.Count];
+        for (var i = starts.Count - 1; i >= 0; i--)
         {
-            var regionSplit = nonSpeechRegions
-                .Where(r => r.StartSeconds >= windowStart && r.EndSeconds <= windowEnd &&
-                            r.StartSeconds <= border)
-                .Select(r => (double?)((r.StartSeconds + r.EndSeconds) / 2))
-                .OrderBy(mid => Math.Abs(mid!.Value - border))
-                .FirstOrDefault();
-            if (regionSplit is { } rs)
-                return rs;
+            var naturalEnd = Math.Min(starts[i] + probeSeconds, durationSeconds);
+            ends[i] = naturalEnd;
+            if (i == starts.Count - 1 || starts[i + 1] >= naturalEnd || ends[i + 1] <= naturalEnd)
+                continue;
+            var seam = FindOverlapSplitPoint(starts[i + 1], naturalEnd, ends[i + 1],
+                allSilences, nonSpeechRegions, jingle, allowBeyondBorder: true);
+            if (seam > starts[i])
+                ends[i] = seam;
         }
-
-        return border;
+        return ends;
     }
 
     /// <summary>

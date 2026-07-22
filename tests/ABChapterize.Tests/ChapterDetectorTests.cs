@@ -45,6 +45,11 @@ public sealed class ChapterDetectorTests : IDisposable
         /// <summary>Start positions of all decode requests, in call order.</summary>
         public List<double> DecodeStarts { get; } = [];
 
+        /// <summary>All decode requests as (start, duration), in call order - durations included
+        /// so tests can assert that a planned window end (e.g. a snapped shared border) actually
+        /// shortened or extended the decode itself, not just where the next decode started.</summary>
+        public List<(double Start, double? Duration)> DecodeWindows { get; } = [];
+
         /// <inheritdoc/>
         public Task<List<Silence>> DetectSilencesAsync(
             string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
@@ -56,6 +61,7 @@ public sealed class ChapterDetectorTests : IDisposable
             string file, double startSeconds, double? durationSeconds, string? inputDecoder, CancellationToken ct)
         {
             DecodeStarts.Add(startSeconds);
+            DecodeWindows.Add((startSeconds, durationSeconds));
             return Task.FromResult(new float[16000]);
         }
 
@@ -855,13 +861,15 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task OverlappingProbe_SnapsTheSplitToASilenceMidpointWithinWindowTwo()
     {
-        // Window 1 (candidate 600, --min-silence-length 1.5) spans [600, 612]; window 2
-        // (candidate 606) spans [606, 618] and overlaps it. A short 0.6 s silence at
+        // Window 1 (candidate 600, --min-silence-length 1.5) naturally spans [600, 612];
+        // window 2 (candidate 606) spans [606, 618] and overlaps it. A short 0.6 s silence at
         // [608, 608.6] is well below the 1.5 s candidate threshold - it never becomes a Pass 2
         // candidate of its own - but is still retained down to the 0.5 s floor
-        // (MinStoredSilenceSeconds) purely for overlap snapping, and it lies fully inside
-        // window 2. FindOverlapSplitPoint must snap the cut to its mid-point (608.3) instead of
-        // falling back to the raw border (612).
+        // (MinStoredSilenceSeconds) purely as a seam target, and it lies inside window 2.
+        // The up-front window plan (PlanWindowEnds) must move the shared border to its
+        // mid-point (608.3) before anything is decoded: window 1's decode itself ends there
+        // (8.3 s instead of the natural 12), and window 2's fresh tail starts exactly there -
+        // never at the raw border (612) or the candidate start (606).
         var (_, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
@@ -870,17 +878,22 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Contains(608.3, audio.DecodeStarts);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 8.3) < 0.01);
     }
 
     [Fact]
     public async Task OverlappingProbe_SnapsTheSplitToAVadRegion_WhenNoSilenceQualifies()
     {
-        // Window 1 (candidate 600, --jingle) spans [600, 650]; window 2 (candidate 640) spans
-        // [640, 690]. Neither silence lies fully within window 2, but a 7 s VAD non-speech
-        // region at [648, 655] straddles the border (starts at 648 <= 650) - so
-        // FindOverlapSplitPoint must fall back to (jingle mode only) the region's mid-point
-        // (651.5) rather than the raw border (650). The mid-point lying slightly *past* the
-        // border is fine: the uncovered [650, 651.5) stretch is inside the region itself.
+        // --jingle, three overlapping windows: candidate 600 (natural span [600, 650]),
+        // candidate 640, and the VAD candidate the [648, 655] non-speech region itself spawns
+        // at 648. No silence offers a seam anywhere, so the plan snaps every shared border to
+        // the region's mid-point (651.5, jingle mode only): window 640's end lands there, and
+        // window 600's border search - seeing window 640 end at 651.5 - accepts the very same
+        // seam at its neighbor's end, extending window 600's decode to 651.5 and leaving
+        // window 640 fully contained in its cache (no decode of its own). The VAD candidate's
+        // fresh tail then starts exactly at the seam: 651.5 is decoded, the raw border (650)
+        // and the swallowed candidate start (640) never are.
         var (_, _, audio) = await DetectFullAsync(
             Options("--jingle"),
             [new(598, 600), new(638, 640)],
@@ -893,33 +906,34 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task OverlappingProbe_NeverSnapsToASilenceEntirelyBeyondTheBorder()
+    public async Task OverlappingProbe_SnapsBeyondTheBorder_ByExtendingWindowOnesDecode()
     {
-        // Window 1 spans [600, 612], window 2 [606, 618] (border 612). The only silence fully
-        // inside window 2 lies entirely *beyond* the border ([613, 614]) - snapping the split to
-        // its mid-point (613.5) would leave [612, 613.5) in neither transcript: window 1's cache
-        // ends at 612 and cannot be extended retroactively, so the speech at [612, 613) would be
-        // silently dropped. The split must fall back to the border itself instead; with no
-        // silence in the overlap there is no chapter transition in it either, so the border cut
-        // is safe.
+        // Window 1 naturally spans [600, 612], window 2 [606, 618] (border 612). The only seam
+        // target lies entirely *beyond* the border ([613, 614], mid-point 613.5). Because the
+        // whole window list - snapped shared borders included - is planned before Pass 2
+        // decodes anything (PlanWindowEnds), window 1's decode is simply *extended* to 613.5 up
+        // front and window 2's fresh tail starts exactly there: the plan moved the border
+        // itself, so no [612, 613.5) hole can exist and nothing is cut mid-word at 612.
         var (_, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(613, 614)],
             s => s.Add(600, Seg(0.5, " Chapter one.")));
 
-        Assert.Contains(612.0, audio.DecodeStarts);
-        Assert.DoesNotContain(613.5, audio.DecodeStarts);
+        Assert.Contains(613.5, audio.DecodeStarts);
+        Assert.DoesNotContain(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 13.5) < 0.01);
     }
 
     [Fact]
     public async Task OverlappingProbe_SnapsToASilenceStraddlingTheBorder()
     {
         // Same windows ([600, 612] and [606, 618]), but the 1 s silence at [611.6, 612.6]
-        // straddles the border: it starts before 612, so its mid-point (612.1) is a valid
-        // split even though it lies a hair past the border - the uncovered [612, 612.1)
-        // stretch is inside the silence, no speech is lost. (At 1 s the silence is also below
-        // the 1.5 s candidate threshold, so it is retained purely as a snap target.)
+        // straddles the border: its mid-point (612.1) lies a hair past 612, and the plan
+        // simply extends window 1's decode to end there - the seam sits mid-silence, nothing
+        // is cut mid-word and nothing is left undecoded. (At 1 s the silence is also below
+        // the 1.5 s candidate threshold, so it is retained purely as a seam target.)
         var (_, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(611.6, 612.6)],
@@ -987,6 +1001,82 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Equal([new DetectedChapter(1, 606)], result.Chapters);
         Assert.Contains(log, l => l.Contains("chapter 1 detection spans the reused/fresh transcript merge"));
+    }
+
+    [Fact]
+    public void PlanWindowEnds_KeepsNaturalEnds_WhenNoWindowsOverlap()
+    {
+        var ends = ChapterDetector.PlanWindowEnds(
+            [0, 600, 1200], 12, 3600, [new(608, 608.6)], [], jingle: false);
+        Assert.Equal([12, 612, 1212], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_SnapsASharedBorder_ToTheSeamNearestTheBorder()
+    {
+        // Both [604, 605] (mid 604.5) and [610, 611] (mid 610.5) lie within window 2
+        // ([603, 615]); the shared border (window 1's natural end, 612) snaps to the nearer
+        // mid-point, shortening window 1's decode.
+        var ends = ChapterDetector.PlanWindowEnds(
+            [600, 603], 12, 3600, [new(604, 605), new(610, 611)], [], jingle: false);
+        Assert.Equal([610.5, 615], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_ExtendsAWindow_WhenTheOnlySeamLiesBeyondItsNaturalEnd()
+    {
+        // The only target ([613, 614]) sits past window 1's natural end (612) - the plan may
+        // move the border itself, so window 1 is extended to the mid-point (613.5) and the
+        // next window's fresh decode will start exactly there. No hole, no mid-word cut.
+        var ends = ChapterDetector.PlanWindowEnds(
+            [600, 606], 12, 3600, [new(613, 614)], [], jingle: false);
+        Assert.Equal([613.5, 618], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_FallsBackToTheNaturalEnd_WhenNoSeamTargetExists()
+    {
+        // The only silences lie at or before window 2's start - nothing inside (606, 618] to
+        // snap to, so the shared border stays the natural end: the raw-border joint is the
+        // only kind of overlap the plan leaves behind.
+        var ends = ChapterDetector.PlanWindowEnds(
+            [600, 606], 12, 3600, [new(595, 600), new(601, 606)], [], jingle: false);
+        Assert.Equal([612, 618], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_PlansAChain_AgainstEachNeighborsFinalSpan()
+    {
+        // Right-to-left planning: window 3 keeps its natural end (624); window 2's border
+        // (618) snaps to [616, 617]'s mid-point inside window 3; window 1's border (612) then
+        // snaps to [610, 611]'s mid-point inside window 2's *final* - already snapped -
+        // span [606, 616.5].
+        var ends = ChapterDetector.PlanWindowEnds(
+            [600, 606, 612], 12, 3600, [new(610, 611), new(616, 617)], [], jingle: false);
+        Assert.Equal([610.5, 616.5, 624], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_LeavesABorderAlone_WhenTheNextWindowEndsWithinThisOne()
+    {
+        // Clamped to the file end, both windows end at 3600, so the later one is fully
+        // contained in the earlier - there is no shared border to snap even though a target
+        // would be available; the contained window is served from cache instead.
+        var ends = ChapterDetector.PlanWindowEnds(
+            [3590, 3595], 12, 3600, [new(3596, 3597)], [], jingle: false);
+        Assert.Equal([3600, 3600], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_UsesVadRegions_OnlyInJingleMode()
+    {
+        // A VAD non-speech region is a valid seam target with --jingle, but plain mode has no
+        // VAD data worth trusting - the same layout must snap only in jingle mode.
+        List<ChapterDetector.NonSpeechRegion> regions = [new(608, 609)];
+        var plain = ChapterDetector.PlanWindowEnds([600, 606], 12, 3600, [], regions, jingle: false);
+        var jingle = ChapterDetector.PlanWindowEnds([600, 606], 12, 3600, [], regions, jingle: true);
+        Assert.Equal([612, 618], plain);
+        Assert.Equal([608.5, 618], jingle);
     }
 
     [Fact]
