@@ -114,7 +114,12 @@ Where a chapter announcement is found, the mark is placed at the end of the
 silence that precedes it. With `--jingle` the mark goes to the start of the
 jingle instead: 0.5 seconds before the preceding silence's end when there is
 one (so it lands inside the silence, not the previous chapter's narration), or
-exactly at the jingle's start when the jingle abuts speech directly. In-text
+exactly at the jingle's start when the jingle abuts speech directly. The
+transcript itself arbitrates where that start really is, so the mark stays
+correct even when the previous chapter's closing words run right up to the
+jingle, when the jingle's music contains vocal-like passages, or when the
+announcement's own timestamp comes back blurred across a long quiet jingle
+(the machinery is documented in the source). In-text
 mentions ("…as we learned in chapter three…") are rejected by requiring the
 announcement to follow a real pause; out-of-order detections and duplicates of
 an already-marked chapter are dropped, keeping the earliest position. Each

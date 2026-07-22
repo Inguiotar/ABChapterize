@@ -838,6 +838,128 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task TrailingNarrationSwallowedIntoTheRegionHead_IsTrimmedOff_MarkAtTrueJingleStart()
+    {
+        // Real-world failure (Perry Rhodan "Die Dritte Macht", chapters 18/21, 2026-07-22): the
+        // previous chapter's short final sentence gets chopped by VAD into sub-second fragments
+        // (blips 640.8-641.6 and 642.4-643.2) whose gaps the ComputeNonSpeechRegions merge
+        // bridges, dragging the jingle region's start back to 640 - into what is still narration.
+        // The transcript proves those blips are spoken text (a segment covering them ends before
+        // the phrase), so the jingle's true leading edge is the last narration blip's end (643.2)
+        // and the mark must land there, not at the naive region start 640 inside the sentence.
+        var result = await DetectAsync(
+            Options("--jingle", "--min-silence-length", "1.5"),
+            [],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(640, new TranscriptSegment(0.6, 3.4, " Then all was quiet.", 1.0),
+                    Seg(15, " Chapter two.")); // region candidate window [640, ...], phrase at 655
+            },
+            new FakeVad { Speech = [new(0, 640), new(640.8, 641.6), new(642.4, 643.2), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 643.2)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task LeadingSilenceFollowedBySwallowedNarration_IsDroppedWithTheNarration_MarkAtTrueJingleStart()
+    {
+        // The exact chapter-10 shape from the same book: a genuine silencedetect silence
+        // (639.9-641.1) sits right at the region's start - but *narration* resumes after it
+        // (blips 641.2-642.0 and 642.8-643.6, a short final sentence) before the jingle begins.
+        // Anchoring to that silence would land the mark "a bit too early within speech". Once the
+        // narration blips are trimmed off the region head, the silence no longer reaches the
+        // adjusted start (643.6) and must be discarded with them; the mark belongs at 643.6.
+        // (The 1.2 s silence is below the 1.5 s candidate threshold, so the region's own
+        // candidate at 640 - not a silence candidate - probes this transition.)
+        var result = await DetectAsync(
+            Options("--jingle", "--min-silence-length", "1.5"),
+            [new(639.9, 641.1)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(640, new TranscriptSegment(1.2, 3.7, " It all ended.", 1.0),
+                    Seg(15, " Chapter two.")); // phrase at 655
+            },
+            new FakeVad { Speech = [new(0, 640), new(641.2, 642.0), new(642.8, 643.6), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 643.6)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task JingleSplitByAnUntranscribedVocal_IsBridgedBackToItsRealStart()
+    {
+        // The chapter-20 shape: a vocal-like passage in the jingle's own music (blip 645-646.2,
+        // just over the 1 s merge limit) splits one continuous jingle into two VAD regions
+        // ([640, 645] and [646.2, 660]). The phrase (655) selects the later fragment, whose start
+        // sits mid-jingle. Whisper transcribed no words over the splitting blip - by the
+        // only-speech-in-a-jingle-is-the-phrase rule that makes it music, so the region must be
+        // bridged backward across it and the mark placed at the true jingle start (640).
+        var result = await DetectAsync(
+            Options("--jingle", "--min-silence-length", "1.5"),
+            [],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(640, Seg(15, " Chapter two.")); // phrase at 655, inside the later fragment
+            },
+            new FakeVad { Speech = [new(0, 640), new(645, 646.2), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task TranscribedSpeechBetweenTwoRegions_BlocksTheBridge_MarkAtTheLaterRegion()
+    {
+        // The bridge's negative case: an in-text pause region ([643, 645]) ends shortly before
+        // the real jingle region ([646.5, 660]), but the speech between them (blip 645-646.5,
+        // "He nodded.") IS transcribed narration - the previous chapter simply ends on a short
+        // sentence framed by pauses. Bridging across it would cut that sentence into the next
+        // chapter, so the transcript must block the bridge and the mark stays at the real
+        // jingle's own start (646.5).
+        var result = await DetectAsync(
+            Options("--jingle", "--min-silence-length", "1.5"),
+            [],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(643, new TranscriptSegment(2.2, 3.6, " He nodded.", 1.0),
+                    Seg(12, " Chapter two.")); // phrase at 655
+            },
+            new FakeVad { Speech = [new(0, 643), new(645, 646.5), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 646.5)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PhraseSmearedAcrossTheJingle_IsRescuedByItsSegmentSpan_MarkAtJingleStart()
+    {
+        // The chapter-14 shape: with a long near-silent jingle between the last narration and
+        // the announcement, Whisper smears the phrase's segment across the whole jingle - its
+        // start timestamp (638) pulled back before the VAD region (640-660) even begins, so
+        // plain containment finds no region and the mark would fall back to the false in-text
+        // pause that triggered the probe (610-613, marking at 612.5). The segment's span betrays
+        // the smear: it overlaps the region by 18 s, so the region is rescued as the jingle and
+        // the mark lands at its start (640).
+        var result = await DetectAsync(
+            Options("--jingle", "--min-silence-length", "1.5"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+            },
+            new FakeVad { Speech = [new(0, 640), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
     {
         // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs

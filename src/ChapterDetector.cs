@@ -146,6 +146,27 @@ public sealed class ChapterDetector
     private const double LeadingSilenceStartToleranceSeconds = 1.5;
 
     /// <summary>
+    /// Longest stretch of VAD-speech "glue" the anchor-time jingle edge adjustment (see
+    /// <see cref="AdjustJingleRegion"/>) will step across at the jingle's leading edge - both
+    /// when trimming trailing-narration blips off the front of a merged region and when bridging
+    /// backward across an untranscribed music vocal to an earlier region the same jingle was
+    /// split into. Real trailing-narration fragments and mid-jingle vocals alike run well under
+    /// this (observed up to ~1.1 s on real audio); anything longer separating two non-speech
+    /// stretches is treated as genuine narration territory the jingle cannot extend across.
+    /// </summary>
+    private const double JingleGlueMaxSeconds = 3.0;
+
+    /// <summary>
+    /// Minimum overlap between a VAD non-speech region and the matched phrase's own transcript
+    /// segment span for the smeared-phrase rescue (see <see cref="FindSmearedJingleRegion"/>) to
+    /// accept that region as the jingle. Deliberately jingle-scale (matching
+    /// <see cref="MinJingleObservationSeconds"/>): a correctly timed announcement's short segment
+    /// barely grazes a following pause region (well under this), while a segment Whisper smeared
+    /// across the jingle - the failure this rescues - overlaps it by many seconds.
+    /// </summary>
+    private const double SmearedPhraseMinOverlapSeconds = 2.0;
+
+    /// <summary>
     /// Slack allowed when deciding a Whisper segment <em>starts with</em> a stored silence or VAD
     /// non-speech region (see <see cref="TrimLeadingNonSpeech"/>). Whisper timestamps a segment
     /// from where its decoded audio block begins, which can be a touch before silencedetect's or
@@ -376,14 +397,17 @@ public sealed class ChapterDetector
         var storedSilenceFloor = Math.Min(_options.MinSilenceSeconds, MinStoredSilenceSeconds);
         List<Silence> allSilences;
         var nonSpeechRegions = new List<NonSpeechRegion>();
+        // The raw VAD speech segments behind nonSpeechRegions, kept for the anchor-time jingle
+        // edge adjustment (see AdjustJingleRegion): the merged regions alone no longer say where
+        // the speech blips inside them lie. Empty when VAD is off.
+        var speechSegments = new List<SpeechSegment>();
         if (_options.Jingle && _vad is { } vad)
         {
-            List<SpeechSegment> speech = [];
             allSilences = await _audio.DetectSilencesAndStreamPcmAsync(
                 file, info.DurationSeconds, storedSilenceFloor, SilenceNoiseDb,
-                async (pcm, innerCt) => speech = await vad.DetectSpeechAsync(pcm, innerCt),
+                async (pcm, innerCt) => speechSegments = await vad.DetectSpeechAsync(pcm, innerCt),
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
-            nonSpeechRegions = ComputeNonSpeechRegions(speech);
+            nonSpeechRegions = ComputeNonSpeechRegions(speechSegments);
         }
         else
         {
@@ -397,9 +421,9 @@ public sealed class ChapterDetector
         _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= " +
                      $"{_options.MinSilenceSeconds:0.#} s found" + (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
         if (_options.Jingle && _vad != null)
-            // speech.Count and nonSpeechRegions.Count always differ by exactly one (a non-speech
-            // region is the gap between two consecutive speech segments) before the merge/filter
-            // cleanup below can drop some, and always differ by at most one afterwards - the
+            // speechSegments.Count and nonSpeechRegions.Count always differ by exactly one (a
+            // non-speech region is the gap between two consecutive speech segments) before the
+            // merge/filter cleanup below can drop some, and always differ by at most one afterwards - the
             // region count alone is the actionable number, so only it is logged.
             _log?.Invoke($"Pass 1: {nonSpeechRegions.Count} non-speech region(s) found");
 
@@ -422,7 +446,7 @@ public sealed class ChapterDetector
         {
             foreach (var region in nonSpeechRegions)
             {
-                var jingleStart = JingleStart(region, silences);
+                var jingleStart = JingleStart(region, silences, speechSegments);
                 if (jingleStart != region.StartSeconds)
                     continue;
                 var length = region.EndSeconds - jingleStart;
@@ -589,10 +613,11 @@ public sealed class ChapterDetector
             // Correct segment starts that Whisper timestamped from a leading silence/jingle
             // before shifting to window-relative time (the cache keeps the raw absolute timings
             // its reuse math relies on). FindPhraseMatches and the mark-placement math below
-            // then work in window-relative time.
-            var segments = ShiftSegments(
-                TrimLeadingNonSpeech(windowSegmentsAbs, allSilences, nonSpeechRegions, _options.Jingle),
-                -start);
+            // then work in window-relative time; the absolute trimmed transcript is kept for
+            // ResolveJingleAnchor's narration-aware jingle edge adjustment.
+            var trimmedAbs = TrimLeadingNonSpeech(
+                windowSegmentsAbs, allSilences, nonSpeechRegions, _options.Jingle);
+            var segments = ShiftSegments(trimmedAbs, -start);
 
             var marks = new List<(int Number, Silence? MarkSilence, double Confidence)>();
             // Window-local continuation of lastNumber: several accepted marks within one
@@ -633,7 +658,8 @@ public sealed class ChapterDetector
                         phraseAbs <= cvr.EndSeconds + JinglePhraseMatchToleranceSeconds
                         ? candidate.VadRegion : null;
                     (markSilence, markRegion) = ResolveJingleAnchor(
-                        phraseAbs, start, allSilences, nonSpeechRegions, candidateRegion);
+                        phraseAbs, start + match.PhraseEndSeconds, start, allSilences,
+                        nonSpeechRegions, candidateRegion, speechSegments, trimmedAbs);
                     if (markSilence == null && markRegion == null)
                         markSilence = candidate.Silence;
                     time = ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds);
@@ -913,7 +939,7 @@ public sealed class ChapterDetector
             // the numbers bounding it (or 1 up to the first detected number, for a leading gap).
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
                 MissingNumbersInGap(chapters, gap),
-                allSilences, nonSpeechRegions, bytesPerSecond, work, profile!, chapters, ct);
+                allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work, profile!, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters);
             work.HighestChapter = highest;
@@ -1168,11 +1194,20 @@ public sealed class ChapterDetector
     /// lead-in, placing the mark just before the phrase instead of at the true jingle start
     /// (confirmed on real audio: chapters whose region ran 5-15 s before the only silence in it).
     /// </para>
+    /// <para>
+    /// For the same reason, no VAD speech blip may sit between the region's start and the
+    /// silence's start: the lead-in hush directly abuts the end of the previous narration, so a
+    /// blip in between means the silence follows some other sound (the jingle's opening sting,
+    /// say) rather than leading the region - anchoring to it would cut that opening off into the
+    /// previous chapter.
+    /// </para>
     /// </summary>
-    private static Silence? LeadingSilence(NonSpeechRegion region, List<Silence> silences)
+    private static Silence? LeadingSilence(
+        NonSpeechRegion region, List<Silence> silences, List<SpeechSegment> speech)
         => silences
             .Where(s => s.EndSeconds > region.StartSeconds && s.EndSeconds <= region.EndSeconds
-                     && s.StartSeconds <= region.StartSeconds + LeadingSilenceStartToleranceSeconds)
+                     && s.StartSeconds <= region.StartSeconds + LeadingSilenceStartToleranceSeconds
+                     && !speech.Any(b => b.StartSeconds > region.StartSeconds && b.StartSeconds < s.StartSeconds))
             .OrderBy(s => s.EndSeconds)
             .Cast<Silence?>()
             .FirstOrDefault();
@@ -1182,8 +1217,9 @@ public sealed class ChapterDetector
     /// <see cref="LeadingSilence"/> (when present), or the region's own start when no such
     /// silence exists - see "Why both detectors are required" in the design notes.
     /// </summary>
-    private static double JingleStart(NonSpeechRegion region, List<Silence> silences)
-        => LeadingSilence(region, silences)?.EndSeconds ?? region.StartSeconds;
+    private static double JingleStart(
+        NonSpeechRegion region, List<Silence> silences, List<SpeechSegment> speech)
+        => LeadingSilence(region, silences, speech)?.EndSeconds ?? region.StartSeconds;
 
     /// <summary>
     /// Resolves the anchor for placing a --jingle chapter mark, independent of whichever silence
@@ -1206,6 +1242,8 @@ public sealed class ChapterDetector
     /// </para>
     /// </summary>
     /// <param name="phraseAbs">Absolute phrase start time.</param>
+    /// <param name="phraseEndAbs">Absolute end of the transcript segment the phrase was found
+    /// in, for the smeared-phrase rescue (see <see cref="FindSmearedJingleRegion"/>).</param>
     /// <param name="earliestAnchor">Earliest time an anchor may lie at: the probe window start
     /// (Pass 2) or <c>phraseAbs - lookback</c> (Pass 3).</param>
     /// <param name="silences">Every silence Pass 1 stored, down to
@@ -1215,20 +1253,166 @@ public sealed class ChapterDetector
     /// <param name="candidateVadRegion">The region a VAD candidate carries, if this probe was
     /// triggered by one; used directly instead of re-deriving it. Null for silence candidates
     /// and for Pass 3.</param>
+    /// <param name="speech">The raw VAD speech segments behind the regions, for the jingle edge
+    /// adjustment and the leading-silence blip gate.</param>
+    /// <param name="transcriptAbs">The window's transcript in absolute file time (untrimmed), so
+    /// the edge adjustment can tell trailing narration from mid-jingle music vocals.</param>
     /// <returns><c>AnchorSilence</c>: the silence leading the jingle (or, when no jingle region
     /// was found, the silence directly preceding the phrase), or null for a silence-less jingle.
-    /// <c>VadRegion</c>: the jingle region the phrase belongs to, or null when none was found.
+    /// <c>VadRegion</c>: the jingle region the phrase belongs to - its start already corrected
+    /// by <see cref="AdjustJingleRegion"/>, so callers can use it for the mark and the jingle
+    /// length directly - or null when none was found.
     /// The region is returned even when <c>AnchorSilence</c> also is (the "silence then jingle"
     /// shape), so a caller can measure the jingle; the mark itself is unaffected because
     /// <see cref="ComputeJingleMark"/> already prefers the silence over the region.</returns>
     private static (Silence? AnchorSilence, NonSpeechRegion? VadRegion) ResolveJingleAnchor(
-        double phraseAbs, double earliestAnchor, List<Silence> silences,
-        List<NonSpeechRegion> nonSpeechRegions, NonSpeechRegion? candidateVadRegion)
+        double phraseAbs, double phraseEndAbs, double earliestAnchor, List<Silence> silences,
+        List<NonSpeechRegion> nonSpeechRegions, NonSpeechRegion? candidateVadRegion,
+        List<SpeechSegment> speech, List<TranscriptSegment> transcriptAbs)
     {
-        var jingleRegion = candidateVadRegion ?? FindJingleRegionForPhrase(earliestAnchor, phraseAbs, nonSpeechRegions);
+        var jingleRegion = candidateVadRegion
+            ?? FindJingleRegionForPhrase(earliestAnchor, phraseAbs, nonSpeechRegions)
+            ?? FindSmearedJingleRegion(earliestAnchor, phraseAbs, phraseEndAbs, nonSpeechRegions);
         if (jingleRegion is { } jr)
-            return (LeadingSilence(jr, silences), jr);
+        {
+            var adjusted = AdjustJingleRegion(jr, nonSpeechRegions, speech, transcriptAbs, phraseAbs);
+            return (LeadingSilence(adjusted, silences, speech), adjusted);
+        }
         return (FindRealAnchorSilence(earliestAnchor, phraseAbs, silences), null);
+    }
+
+    /// <summary>
+    /// Whether a VAD speech blip at the leading edge of a jingle is a fragment of the previous
+    /// chapter's <em>trailing narration</em>, as opposed to a vocal-like transient in the
+    /// jingle's own music: it is narration exactly when Whisper transcribed words over it that
+    /// end before <paramref name="narrationBound"/>. This rests on the observation that the only
+    /// real speech ever occurring <em>inside</em> a jingle is the chapter announcement itself -
+    /// so transcribed non-phrase words over a blip mean narration, and an untranscribed blip
+    /// means music (Whisper does not silently skip genuine narration). The phrase's own segment
+    /// never qualifies because it ends after the bound.
+    /// </summary>
+    /// <param name="blip">The VAD speech segment to classify.</param>
+    /// <param name="transcriptAbs">The window's transcript in absolute file time.</param>
+    /// <param name="narrationBound">Latest a narration segment may end: the phrase start, or
+    /// just past the region start when the phrase timestamp is known to lie even earlier (the
+    /// smeared-phrase case) - see <see cref="AdjustJingleRegion"/>.</param>
+    private static bool IsTrailingNarrationBlip(
+        SpeechSegment blip, List<TranscriptSegment> transcriptAbs, double narrationBound)
+        => transcriptAbs.Any(t => !string.IsNullOrWhiteSpace(t.Text)
+                                  && t.EndSeconds <= narrationBound
+                                  && t.StartSeconds < blip.EndSeconds
+                                  && t.EndSeconds > blip.StartSeconds);
+
+    /// <summary>
+    /// Corrects the leading edge of the jingle region a mark is about to anchor to, using the
+    /// transcript to arbitrate what the two blind detectors cannot decide alone. Two symmetric
+    /// defects of <see cref="ComputeNonSpeechRegions"/>'s fixed 1 s speech-gap merge are undone
+    /// here, where the transcript is finally available:
+    /// <list type="bullet">
+    /// <item><b>Swallowed trailing narration:</b> a short final sentence of the previous chapter
+    /// ("Dann war nichts mehr.") that VAD chopped into sub-second fragments gets merged into the
+    /// region's head, dragging its start back into speech. Each leading blip that overlaps
+    /// transcribed narration (see <see cref="IsTrailingNarrationBlip"/>) moves the jingle start
+    /// forward past it.</item>
+    /// <item><b>Split jingle:</b> a vocal-like transient in the music just over the merge limit
+    /// splits one jingle into two regions, so a mark at the selected region's start lands
+    /// mid-jingle. When another region ends within <see cref="JingleGlueMaxSeconds"/> before the
+    /// (possibly just-trimmed) start and no transcribed narration lies in between - per the
+    /// only-speech-in-a-jingle-is-the-phrase observation, an untranscribed blip there is music -
+    /// the jingle extends back to that region's start, repeatedly if it was split more than
+    /// once. Trimmed narration blocks the bridge automatically: the trim leaves them inside the
+    /// gap the bridge would have to cross.</item>
+    /// </list>
+    /// Only the start moves; the end (irrelevant to mark placement, and clipped at the phrase
+    /// wherever lengths are measured) stays as merged.
+    /// </summary>
+    /// <param name="region">The jingle region selected for the phrase.</param>
+    /// <param name="nonSpeechRegions">All VAD non-speech regions, chronological.</param>
+    /// <param name="speech">The raw VAD speech segments behind the regions.</param>
+    /// <param name="transcriptAbs">The window's transcript in absolute file time.</param>
+    /// <param name="phraseAbs">Absolute phrase start time.</param>
+    private static NonSpeechRegion AdjustJingleRegion(
+        NonSpeechRegion region, List<NonSpeechRegion> nonSpeechRegions,
+        List<SpeechSegment> speech, List<TranscriptSegment> transcriptAbs, double phraseAbs)
+    {
+        // Narration must end by the phrase - except when the phrase timestamp itself lies before
+        // the region (the smeared-phrase rescue selected it), where "just past the region start"
+        // is the honest bound: Whisper's segment ends overhang real speech by up to about the
+        // same jitter the leading-silence proximity check absorbs.
+        var narrationBound = Math.Max(phraseAbs, region.StartSeconds + LeadingSilenceStartToleranceSeconds);
+
+        var start = region.StartSeconds;
+        foreach (var blip in speech)
+        {
+            if (blip.StartSeconds <= region.StartSeconds || blip.EndSeconds >= region.EndSeconds)
+                continue;
+            // Blips are only trimmed near the current start (deeper ones are past the jingle's
+            // onset - e.g. the announcement itself, spoken over the music) and never across the
+            // phrase.
+            if (blip.StartSeconds - start > JingleGlueMaxSeconds || blip.EndSeconds >= phraseAbs)
+                break;
+            if (!IsTrailingNarrationBlip(blip, transcriptAbs, narrationBound))
+                break;
+            start = blip.EndSeconds;
+        }
+
+        // Bridge backward across untranscribed music vocals to earlier fragments of the same
+        // jingle. nonSpeechRegions is chronological, so the last region ending at or before the
+        // current start is the bridge candidate.
+        while (true)
+        {
+            NonSpeechRegion? previous = null;
+            foreach (var r in nonSpeechRegions)
+                if (r.EndSeconds <= start)
+                    previous = r;
+                else
+                    break;
+            if (previous is not { } prev)
+                break;
+            var gap = start - prev.EndSeconds;
+            if (gap <= 0 || gap > JingleGlueMaxSeconds)
+                break;
+            var narrationInGap = transcriptAbs.Any(t => !string.IsNullOrWhiteSpace(t.Text)
+                                                        && t.EndSeconds <= narrationBound
+                                                        && t.StartSeconds < start
+                                                        && t.EndSeconds > prev.EndSeconds);
+            if (narrationInGap)
+                break;
+            start = prev.StartSeconds;
+        }
+
+        return start == region.StartSeconds ? region : region with { StartSeconds = start };
+    }
+
+    /// <summary>
+    /// Rescue lookup for the jingle region when plain containment (<see
+    /// cref="FindJingleRegionForPhrase"/>) finds nothing because Whisper timestamped the phrase
+    /// <em>before</em> the region even starts: with a long silence/jingle between the last
+    /// narration and the announcement, Whisper sometimes smears the phrase's segment across the
+    /// whole jingle, its start pulled back to the end of the narration. The segment's span
+    /// betrays this - it then overlaps the jingle region by many seconds - so the last region
+    /// overlapping [phrase start, phrase segment end] by at least
+    /// <see cref="SmearedPhraseMinOverlapSeconds"/> is accepted as the jingle. A correctly
+    /// timed announcement's segment at most grazes a following pause region (well under the
+    /// threshold), so the classic shapes never take this path.
+    /// </summary>
+    /// <param name="windowStart">Earliest a qualifying region may end, as in
+    /// <see cref="FindJingleRegionForPhrase"/>.</param>
+    /// <param name="phraseAbsSeconds">Absolute phrase start (the segment start).</param>
+    /// <param name="phraseEndAbsSeconds">Absolute end of the phrase's transcript segment.</param>
+    /// <param name="regions">All VAD non-speech regions, chronological.</param>
+    private static NonSpeechRegion? FindSmearedJingleRegion(
+        double windowStart, double phraseAbsSeconds, double phraseEndAbsSeconds,
+        List<NonSpeechRegion> regions)
+    {
+        NonSpeechRegion? found = null;
+        foreach (var r in regions)
+        {
+            var overlap = Math.Min(r.EndSeconds, phraseEndAbsSeconds) - Math.Max(r.StartSeconds, phraseAbsSeconds);
+            if (r.EndSeconds > windowStart && overlap >= SmearedPhraseMinOverlapSeconds)
+                found = r;
+        }
+        return found;
     }
 
     /// <summary>
@@ -1602,12 +1786,18 @@ public sealed class ChapterDetector
     /// <summary>A phrase match inside a transcribed window.</summary>
     /// <param name="Number">Parsed chapter number.</param>
     /// <param name="PhraseStartSeconds">Phrase start relative to the window start.</param>
+    /// <param name="PhraseEndSeconds">End of the transcript segment the phrase was found in,
+    /// relative to the window start. Whisper can smear that segment across a whole jingle (its
+    /// start pulled seconds before the words are spoken), so the span [start, end] - not the
+    /// start alone - is what the smeared-phrase rescue in <see cref="ResolveJingleAnchor"/>
+    /// matches against VAD regions.</param>
     /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
     /// <param name="SpansMerge">True when the text actually used to find the phrase and parse its
     /// number straddles a Pass 2 overlap's cache/fresh boundary - see <see cref="FindPhraseMatches"/>'s
     /// <c>mergeBoundarySegIndex</c> parameter.</param>
     private readonly record struct PhraseMatch(
-        int Number, double PhraseStartSeconds, double Confidence, bool SpansMerge = false);
+        int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
+        bool SpansMerge = false);
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -1689,7 +1879,8 @@ public sealed class ChapterDetector
             }
             var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
             yield return new PhraseMatch(
-                number, segments[segIndex].StartSeconds, segments[segIndex].Probability, spansMerge);
+                number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
+                segments[segIndex].Probability, spansMerge);
         }
     }
 
@@ -1712,13 +1903,17 @@ public sealed class ChapterDetector
     /// <param name="allSilences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/> - used both as seam targets and to pinpoint each
     /// mark at the end of the silence directly preceding its phrase.</param>
+    /// <param name="speechSegments">The raw VAD speech segments behind
+    /// <paramref name="nonSpeechRegions"/> (empty when VAD is off), for the jingle edge
+    /// adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
     /// <param name="knownChapters">Chapters already detected outside this region, so the
     /// per-mark progress numbers and still-missing log notes reflect the whole file rather
     /// than just this region's finds.</param>
     private async Task<List<DetectedChapter>> TranscribeRegionAsync(
         string file, MediaInfo info, double fromSeconds, double toSeconds,
         IReadOnlyList<int> expectedNumbers,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, double bytesPerSecond,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
+        List<SpeechSegment> speechSegments, double bytesPerSecond,
         WorkTracker work, LanguageProfile profile, IReadOnlyList<DetectedChapter> knownChapters,
         CancellationToken ct)
     {
@@ -1797,7 +1992,8 @@ public sealed class ChapterDetector
                     // pause that merely happens to fall within the lookback.
                     var lookback = _options.MaxJingleSeconds + PhraseMarginSeconds;
                     var (anchorSilence, vadRegion) = ResolveJingleAnchor(
-                        phraseAbs, phraseAbs - lookback, allSilences, nonSpeechRegions, candidateVadRegion: null);
+                        phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
+                        nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
                     time = ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds);
                     (statSilence, statRegion) = (anchorSilence, vadRegion);
                 }
