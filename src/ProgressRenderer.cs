@@ -20,8 +20,13 @@ public sealed class WorkTracker
     /// <summary>Short name of the current phase (e.g. "Pass 1"); shown directly after the bar.</summary>
     public string PhaseLabel { get; private set; } = "";
 
-    /// <summary>Number of chapters discovered so far; shown next to the progress bar.</summary>
-    public int ChaptersFound { get; set; }
+    /// <summary>Highest chapter number detected so far; 0 while none has been found yet
+    /// (rendered as "----", since a zero count carries no information during e.g. Pass 1).</summary>
+    public int HighestChapter { get; set; }
+
+    /// <summary>How many chapter numbers below <see cref="HighestChapter"/> are still
+    /// undetected (gaps that Pass 3 will chase); rendered as "(-N)" after the chapter number.</summary>
+    public int MissingChapters { get; set; }
 
     /// <summary>Starts a new phase: resets the bar to 0 % and sets its label and total work.</summary>
     /// <param name="label">Phase name shown after the bar.</param>
@@ -201,7 +206,7 @@ public sealed class ProgressRenderer : IDisposable
     /// <summary>
     /// Builds one progress bar line for a single active file. Internal for unit testing: the
     /// per-tick redraw is skipped only when this exact string is unchanged (see <see
-    /// cref="Render"/>), so the tests assert that the percent number and chapter count both take
+    /// cref="Render"/>), so the tests assert that the percent number and chapter display both take
     /// part in the string and therefore always trigger a redraw when they change.
     /// </summary>
     internal static string BuildLine((WorkTracker Tracker, string Label) slot)
@@ -214,7 +219,13 @@ public sealed class ProgressRenderer : IDisposable
         var bar = new string('#', filled).PadRight(barWidth, '-');
 
         var phase = slot.Tracker.PhaseLabel is { Length: > 0 } label ? $" {label}" : "";
-        return $"[{bar}]{phase} {percent,3}% | {slot.Tracker.ChaptersFound} ch | {slot.Label}";
+        // "----" until the first chapter is found (nothing can change during Pass 1 anyway);
+        // then the highest detected chapter number, with the count of still-missing earlier
+        // chapters - the ones Pass 3 would have to chase - as e.g. "ch 6(-2)".
+        var chapters = slot.Tracker.HighestChapter is var highest and > 0
+            ? $"ch {highest}" + (slot.Tracker.MissingChapters is var missing and > 0 ? $"(-{missing})" : "")
+            : "----";
+        return $"[{bar}]{phase} {percent,3}% | {chapters} | {slot.Label}";
     }
 
     /// <summary>

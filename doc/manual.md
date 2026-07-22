@@ -172,16 +172,21 @@ By default (`--min-silence-length auto`), probing does not visit every
 silence from pass 1 unconditionally. It starts at the 1.5 s floor as usual
 and stays there until the *second* chapter mark is found - the silence
 before the first mark is typically the intro/title silence, often longer
-than the breaks between chapters, so it is never used to tighten. From the
-second mark on, every mark tightens the threshold to 90% of its own
-triggering silence's length, re-tightening again on every subsequent mark —
-so once real inter-chapter breaks establish a typical length, clearly
-shorter in-chapter pauses stop being probed, while breaks close to (or
-longer than) that length still are. If a chapter number is then
-found out of sequence (a gap), the threshold immediately resets to the 1.5 s
-floor and every silence skipped since the last mark is re-probed right away,
-before falling through to pass 3 — so pass 3's full transcription is only
-needed if that still fails to find the missing chapter(s). Giving
+than the breaks between chapters, so it is never used to tighten. The second
+mark raises the threshold to 75% of its own anchor silence's length (a 25%
+safety margin, mirroring `--max-jingle-length auto`'s margin on the jingle
+side). From then on the threshold only ever moves *down*: each further
+mark whose anchor silence is shorter lowers it to 75% of that length, while
+a longer silence never raises it back up — a threshold above a silence that
+has already proven to precede a chapter would, by definition, skip exactly
+that kind of break. So once real inter-chapter breaks establish their
+length, clearly shorter in-chapter pauses stop being probed, while breaks
+close to (or longer than) that length still are. If a chapter number is then
+found out of sequence (a gap), every silence skipped since the last mark is
+re-probed unconditionally right away, and any chapter recovered that way
+folds its own (shorter) anchor silence into the threshold — all before
+falling through to pass 3, so pass 3's full transcription is only needed if
+that still fails to find the missing chapter(s). Giving
 `--min-silence-length` an explicit numeric value disables all of this and
 probes every silence at or above it, same as before this feature existed.
 
@@ -354,10 +359,11 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
 : Minimum silence duration (0.1–60, default: `auto`) that counts as a
   potential chapter break; the silence scan always uses this as its floor
   (1.5 by default, and as `auto`'s floor). By default (`auto`), pass 2
-  self-tightens the probing threshold to 90% of each mark's triggering
-  silence length as chapters are found, resetting to the floor whenever a
-  sequence gap turns up, so far fewer Whisper probes are needed without a
-  fixed guess — see [Pass 2 — probing](#pass-2--probing). An explicit
+  self-tightens the probing threshold to 75% of the *shortest* anchor
+  silence observed so far as chapters are found (raised once at the second
+  mark, only ever lowered after that), re-probing everything it skipped
+  whenever a sequence gap turns up, so far fewer Whisper probes are needed
+  without a fixed guess — see [Pass 2 — probing](#pass-2--probing). An explicit
   numeric value disables this and probes every silence at or above it
   instead; this is still the main manual speed knob if `auto`'s heuristic
   doesn't suit a particular audiobook: if the pauses are unusually generous
@@ -381,9 +387,14 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   (the first is excluded for the same reason as `--min-silence-length auto`
   excludes the first silence — the gap before it isn't necessarily
   representative), resizes the probe window to 1.25x the longest jingle
-  actually observed so far plus the 5-second phrase margin (both wider and
-  narrower, as that observed maximum changes), never past the original
-  ceiling. For a silence-less jingle (found via the VAD pre-pass), the
+  actually observed so far plus the 5-second phrase margin, never past the
+  original ceiling. The second mark narrows the window down from the
+  ceiling; after that it only ever widens again (when a longer jingle
+  turns up) — the exact mirror of `--min-silence-length auto`'s
+  lower-only threshold, and for the mirrored reason: a window below an
+  already observed jingle length would be too short for exactly the kind
+  of jingle this book has proven to play. For a silence-less jingle (found
+  via the VAD pre-pass), the
   observed length comes from the VAD region's own boundaries rather than the
   distance to the announcement, which can otherwise include a bit of
   post-jingle silence before the phrase starts. Chapters with no jingle (or
@@ -394,8 +405,10 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   window instead of the silence threshold. Once the window narrows, VAD
   regions longer than it stop being probed too — the same speedup pass 2
   already gets from tightened silence candidates — but a later sequence gap
-  resets the window back to the ceiling and retries everything skipped,
-  exactly like `--min-silence-length auto`'s own gap recovery.
+  temporarily resets the window back to the ceiling, retries everything
+  skipped at that full width (exactly like `--min-silence-length auto`'s
+  own gap recovery), and then returns to the adapted width, including
+  whatever the recovered chapters' own jingles just taught it.
 
 ### Auto language detection
 
@@ -858,12 +871,21 @@ the written file keeps the original xHE-AAC stream untouched.
 ## 12. Output, progress and logging
 
 **Normal mode** shows a live progress bar per file (phase, percentage,
-chapters found so far) that is replaced by a one-line result when the file is
+chapter state) that is replaced by a one-line result when the file is
 done:
 
 ```
 My Audiobook.m4b: 23 chapter(s) written (1-23) + intro
 ```
+
+The chapter state reads `----` until the first chapter is found (all of
+pass 1, where nothing can change anyway), then shows the highest chapter
+number detected so far — `ch 6` — with any not-yet-detected earlier
+chapters (the gaps pass 3 would have to chase) as a bracketed negative
+count: `ch 6(-2)` means chapter 6 is marked but two below it are still
+missing. Pass 2's percentage follows the probe position within the file's
+play time, so it can move nonlinearly — and, briefly, backwards, when a
+sequence gap makes the detector re-probe earlier skipped silences.
 
 With more than one file processed concurrently (see
 [`--jobs`](#parallel-file-processing)), one bar is shown per file currently
@@ -891,7 +913,8 @@ name, everything the pipeline does:
   (`p=0.87`) — both the probe windows and the full-transcription chunks of
   pass 3,
 - every accepted chapter detection with the exact mark position and
-  confidence, flagged `LOW CONFIDENCE` below 0.5,
+  confidence, flagged `LOW CONFIDENCE` below 0.5, plus a `still missing:`
+  list of any earlier chapter numbers not detected yet,
 - the regions transcribed in pass 3.
 
 This is the primary diagnosis tool: it shows verbatim what the recognizer

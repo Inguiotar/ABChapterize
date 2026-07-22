@@ -312,8 +312,8 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task AutoMinSilence_TightensThreshold_AndSkipsShorterSilences()
     {
         // Default --min-silence-length auto. Chapter 2's triggering silence is 5 s, tightening
-        // the threshold to 4.5 s; the 3 s silence at 700-703 falls below it and must not be
-        // probed at all, but the 5 s silence at 900-905 still is, finding chapter 3.
+        // the threshold to 3.75 s (0.75x); the 3 s silence at 700-703 falls below it and must
+        // not be probed at all, but the 5 s silence at 900-905 still is, finding chapter 3.
         var (result, _, audio) = await DetectFullAsync(
             Options(),
             [new(595, 600), new(700, 703), new(900, 905)],
@@ -363,9 +363,9 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task AutoMinSilence_ResetsThreshold_AndRetriesSkippedSilences_OnSequenceGap()
     {
         // Same setup, but chapter 3's phrase only lives in the skipped 700-703 silence and the
-        // next probed silence yields chapter 4 instead - a sequence gap. The adaptive threshold
-        // must reset to the 1.5 s floor and re-probe what it skipped since chapter 2, finding
-        // chapter 3 there and closing the gap without needing pass 3 at all.
+        // next probed silence yields chapter 4 instead - a sequence gap. The detector must
+        // re-probe what it skipped since chapter 2 unconditionally, finding chapter 3 there and
+        // closing the gap without needing pass 3 at all.
         var (result, _, audio) = await DetectFullAsync(
             Options(),
             [new(595, 600), new(700, 703), new(900, 905)],
@@ -382,6 +382,82 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(1, 0.5), new(2, 600), new(3, 703), new(4, 905)],
             result.Chapters);
         Assert.Contains(703, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task AutoMinSilence_NeverRaisesTheThreshold_AboveAnEarlierAnchorSilence()
+    {
+        // Chapter 2's 4 s anchor silence sets the threshold to 3 s (0.75x). Chapter 3's anchor
+        // is much longer (8 s) - it must NOT raise the threshold to 6 s: a threshold above an
+        // already observed inter-chapter silence would skip exactly the kind of break that has
+        // proven to precede this book's chapters. Chapter 4's 3.5 s silence (above 3 s, below
+        // the wrongly-raised 6 s) must therefore still be probed and found - and since chapter 4
+        // is the last one, no later mark could ever trigger a gap recovery for it, so a raised
+        // threshold would lose it silently and for good.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(596, 600), new(892, 900), new(1196.5, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(900, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(1200.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task AutoMinSilence_LowersTheThreshold_WhenAnAnchorSilenceComesInShorter()
+    {
+        // Chapter 2's 5 s anchor silence sets the threshold to 3.75 s (0.75x); chapter 3's
+        // shorter 4 s anchor (still above 3.75 s, so it is probed) must lower it further to
+        // 3 s - the threshold follows the *shortest* observed inter-chapter break down.
+        // Chapter 4's 3.2 s silence sits between the two (3 < 3.2 < 3.75), so it is only
+        // probed - and chapter 4, being last, only ever found - if the lowering happened.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(595, 600), new(896, 900), new(1196.8, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(900, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(1200.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task AutoMinSilence_AfterAGapRecovery_TheThresholdAccountsForTheGapMarksShorterSilence()
+    {
+        // Chapter 2 (5 s anchor) tightens the threshold to 3.75 s; chapter 3's 3 s silence is
+        // skipped, chapter 4 is found -> sequence gap -> re-probe recovers chapter 3. Its 3 s
+        // anchor must fold into the threshold (0.75 x 3 = 2.25 s), so chapter 5's 2.5 s
+        // silence - below chapter 2's 3.75 s but above 2.25 s - is still probed and found.
+        // Chapter 5 is the last mark, so nothing could recover it if it were skipped.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(595, 600), new(697, 700), new(895, 900), new(1197.5, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(700, Seg(0.3, " Chapter three."));
+                s.Add(900, Seg(0.3, " Chapter four."));
+                s.Add(1200, Seg(0.3, " Chapter five."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4, 5], result.Chapters.Select(c => c.Number));
+        Assert.Contains(700.0, audio.DecodeStarts);
+        Assert.Contains(1200.0, audio.DecodeStarts);
     }
 
     [Fact]
@@ -517,7 +593,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // visibly misbehave if the false pause were mistaken for chapter two's anchor:
         //
         //   * --min-silence-length: the false pause is 3 s, so the buggy path tightens the
-        //     threshold to 2.7 s (0.9x). Chapter three's genuine 2 s inter-chapter silence
+        //     threshold to 2.25 s (0.75x). Chapter three's genuine 2 s inter-chapter silence
         //     (1000-1002) would then be skipped and lost. The correct path takes chapter two's
         //     anchor from the VAD region (Silence = null), tightens nothing, and finds chapter
         //     three - so the result must be [1, 2, 3], not [1, 2].
@@ -621,17 +697,43 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoMaxJingle_NeverNarrowsTheWindow_AfterALongerJingleWasObserved()
+    {
+        // The mirror image of the monotonic --min-silence-length rule: chapter 2's 8 s jingle
+        // sizes the window to 15 s (1.25 x 8 + 5); chapter 3's shorter 4 s jingle must NOT
+        // narrow it back down to 10 s - a window below an already observed jingle length would
+        // be too short for exactly the kind of jingle this book has proven to play. Chapter 4's
+        // 12 s jingle region (over the wrongly-narrowed 10 s, under the correct 15 s) must
+        // therefore still be probed and found - and being the last chapter, it could never be
+        // recovered by a gap re-probe if it were skipped.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle", "--max-jingle-length", "auto"),
+            [],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(8, " Chapter two."));
+                s.Add(1000, Seg(4, " Chapter three."));
+                s.Add(1400, Seg(12, " Chapter four."));
+            },
+            new FakeVad { Speech = [new(0, 600), new(608, 1000), new(1004, 1400), new(1412, 3600)] });
+
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(1400.0, audio.DecodeStarts);
+    }
+
+    [Fact]
     public async Task AutoMinSilence_NeverSkipsVadCandidates_AndTheyDoNotMistightenTheThreshold()
     {
-        // Chapter two's 5 s triggering silence tightens the threshold to 4.5 s (0.9x). Chapter
+        // Chapter two's 5 s triggering silence tightens the threshold to 3.75 s (0.75x). Chapter
         // three is then found via a silence-less, VAD-only candidate (region length 3 s) -
         // since it carries no Silence, it must always be probed regardless of the threshold
         // (that's exactly what lets VAD catch silence-less chapters). It must also not disturb
-        // the threshold itself: the following 4.4 s silence - just below 4.5 s - must still be
+        // the threshold itself: the following 3.7 s silence - just below 3.75 s - must still be
         // skipped, proving the threshold is unchanged by the silence-less mark.
         var (result, _, audio) = await DetectFullAsync(
             Options("--jingle"),
-            [new(595, 600), new(800, 804.4)],
+            [new(595, 600), new(800, 803.7)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
@@ -642,7 +744,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
         Assert.Contains(700.0, audio.DecodeStarts);
-        Assert.DoesNotContain(804.4, audio.DecodeStarts);
+        Assert.DoesNotContain(803.7, audio.DecodeStarts);
     }
 
     [Fact]
@@ -805,7 +907,8 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(608.3, Seg(1.0, " some fresh words"));
             });
 
-        var tailLine = Assert.Single(log, l => l.StartsWith("probe tail @0:10:08.30"));
+        // The label carries the actually decoded length: split at 608.3, window end 618 -> 9.7 s.
+        var tailLine = Assert.Single(log, l => l.StartsWith($"probe tail {9.7:0.#} s @0:10:08.30"));
         Assert.Contains($"{1.0:0.0}-{3.0:0.0}", tailLine); // Whisper's own 0-based timestamp for the fresh segment
         Assert.DoesNotContain("Chapter one", tailLine); // that segment was reused, not re-decoded
     }

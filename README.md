@@ -204,12 +204,12 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    (`--min-silence-length auto`), starting from the second mark found (the
    silence before the first mark is usually the intro/title silence, often
    longer than the breaks between chapters, so it's not used to tighten),
-   every mark tightens the probing threshold to 90% of the length of the
-   silence that triggered it, so shorter in-chapter pauses stop being probed
-   once real inter-chapter breaks are established; the threshold resets to
-   the 1.5 s floor - and everything skipped since the last mark is
-   re-probed - the moment a
-   sequence gap turns up. An explicit `--min-silence-length` value disables
+   the probing threshold sits at 75% of the *shortest* chapter-break
+   silence observed so far — raised once, then only ever lowered — so
+   shorter in-chapter pauses stop being probed once real inter-chapter
+   breaks are established; everything skipped since the last mark is
+   re-probed the moment a sequence gap turns up. An explicit
+   `--min-silence-length` value disables
    this and probes every silence at or above it instead.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
