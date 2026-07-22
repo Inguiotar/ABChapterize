@@ -1017,12 +1017,22 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Finds where to cut an overlapping pair of Pass 2 probe windows so the split never falls
-    /// mid-word: the mid-point of the nearest silence found anywhere in window 2 (the overlap
-    /// portion and the rest of the window past the original border - searching both directions
-    /// from it), falling back to a VAD non-speech region under the same rule in --jingle mode
-    /// when no silence qualifies, and finally to the original border itself (no snap, no
+    /// mid-word: the mid-point of the nearest silence in window 2 that starts at or before the
+    /// border (window 1's end), falling back to a VAD non-speech region under the same rules in
+    /// --jingle mode when no silence qualifies, and finally to the border itself (no snap, no
     /// reach-back) when neither exists - which almost certainly means there is no chapter
     /// transition in the overlap to begin with, so a mid-word cut there is not a real risk.
+    /// <para>
+    /// The starts-at-or-before-the-border restriction is load-bearing: everything left of the
+    /// split is served from window 1's cached transcript, which only covers audio up to the
+    /// border - window 1's decode is done and cannot be extended retroactively. A silence
+    /// starting beyond the border would put the seam past the covered region, silently dropping
+    /// the speech between the border and the seam from both windows' transcripts. A silence
+    /// merely <em>straddling</em> the border is fine: its mid-point may lie past the border, but
+    /// the uncovered stretch is then part of the silence itself, so no speech is lost. And when
+    /// only fully-beyond silences exist, the overlap itself contains none - exactly the
+    /// no-transition-in-the-overlap situation the border fallback is justified for.
+    /// </para>
     /// </summary>
     /// <param name="windowStart">Start of window 2 (the new probe's window).</param>
     /// <param name="border">The original, unsnapped overlap border - window 1's end.</param>
@@ -1036,7 +1046,8 @@ public sealed class ChapterDetector
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, bool jingle)
     {
         var silenceSplit = allSilences
-            .Where(s => s.StartSeconds >= windowStart && s.EndSeconds <= windowEnd)
+            .Where(s => s.StartSeconds >= windowStart && s.EndSeconds <= windowEnd &&
+                        s.StartSeconds <= border)
             .Select(s => (double?)((s.StartSeconds + s.EndSeconds) / 2))
             .OrderBy(mid => Math.Abs(mid!.Value - border))
             .FirstOrDefault();
@@ -1046,7 +1057,8 @@ public sealed class ChapterDetector
         if (jingle)
         {
             var regionSplit = nonSpeechRegions
-                .Where(r => r.StartSeconds >= windowStart && r.EndSeconds <= windowEnd)
+                .Where(r => r.StartSeconds >= windowStart && r.EndSeconds <= windowEnd &&
+                            r.StartSeconds <= border)
                 .Select(r => (double?)((r.StartSeconds + r.EndSeconds) / 2))
                 .OrderBy(mid => Math.Abs(mid!.Value - border))
                 .FirstOrDefault();

@@ -876,18 +876,58 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task OverlappingProbe_SnapsTheSplitToAVadRegion_WhenNoSilenceQualifies()
     {
         // Window 1 (candidate 600, --jingle) spans [600, 650]; window 2 (candidate 640) spans
-        // [640, 690]. Neither silence lies fully within window 2, but a 3 s VAD non-speech
-        // region at [660, 663] does - so FindOverlapSplitPoint must fall back to (jingle mode
-        // only) the region's mid-point (661.5) rather than the raw border (650).
+        // [640, 690]. Neither silence lies fully within window 2, but a 7 s VAD non-speech
+        // region at [648, 655] straddles the border (starts at 648 <= 650) - so
+        // FindOverlapSplitPoint must fall back to (jingle mode only) the region's mid-point
+        // (651.5) rather than the raw border (650). The mid-point lying slightly *past* the
+        // border is fine: the uncovered [650, 651.5) stretch is inside the region itself.
         var (_, _, audio) = await DetectFullAsync(
             Options("--jingle"),
             [new(598, 600), new(638, 640)],
             s => s.Add(600, Seg(2, " Chapter one.")),
-            new FakeVad { Speech = [new(0, 660), new(663, 3600)] });
+            new FakeVad { Speech = [new(0, 648), new(655, 3600)] });
 
-        Assert.Contains(661.5, audio.DecodeStarts);
+        Assert.Contains(651.5, audio.DecodeStarts);
         Assert.DoesNotContain(650.0, audio.DecodeStarts);
         Assert.DoesNotContain(640.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_NeverSnapsToASilenceEntirelyBeyondTheBorder()
+    {
+        // Window 1 spans [600, 612], window 2 [606, 618] (border 612). The only silence fully
+        // inside window 2 lies entirely *beyond* the border ([613, 614]) - snapping the split to
+        // its mid-point (613.5) would leave [612, 613.5) in neither transcript: window 1's cache
+        // ends at 612 and cannot be extended retroactively, so the speech at [612, 613) would be
+        // silently dropped. The split must fall back to the border itself instead; with no
+        // silence in the overlap there is no chapter transition in it either, so the border cut
+        // is safe.
+        var (_, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(603, 606), new(613, 614)],
+            s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(612.0, audio.DecodeStarts);
+        Assert.DoesNotContain(613.5, audio.DecodeStarts);
+        Assert.DoesNotContain(606.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task OverlappingProbe_SnapsToASilenceStraddlingTheBorder()
+    {
+        // Same windows ([600, 612] and [606, 618]), but the 1 s silence at [611.6, 612.6]
+        // straddles the border: it starts before 612, so its mid-point (612.1) is a valid
+        // split even though it lies a hair past the border - the uncovered [612, 612.1)
+        // stretch is inside the silence, no speech is lost. (At 1 s the silence is also below
+        // the 1.5 s candidate threshold, so it is retained purely as a snap target.)
+        var (_, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(603, 606), new(611.6, 612.6)],
+            s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(612.1, audio.DecodeStarts);
+        Assert.DoesNotContain(612.0, audio.DecodeStarts);
+        Assert.DoesNotContain(606.0, audio.DecodeStarts);
     }
 
     [Fact]
