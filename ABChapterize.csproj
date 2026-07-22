@@ -27,10 +27,12 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
-  <!-- The unit test project under tests\ has its own csproj; keep its sources out of
-       the default compile globs of this project. -->
+  <!-- The unit test project under tests\ and the throwaway vadprobe diagnostic tool under
+       tools\ each have their own csproj; keep their sources out of the default compile globs
+       of this project. -->
   <ItemGroup>
     <Compile Remove="tests/**" />
+    <Compile Remove="tools/**" />
   </ItemGroup>
 
   <!-- Auto-incrementing build number, baked in as assembly metadata read by CliOptions and

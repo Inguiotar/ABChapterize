@@ -813,6 +813,31 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task LateSilenceDeepInsideAJingleRegion_IsNotMistakenForTheLeadIn_MarkAtJingleStart()
+    {
+        // Real-world failure (Perry Rhodan "Die Dritte Macht", chapters 4/12/16, 2026-07-22): a
+        // long, otherwise-unbroken jingle region (640-660) whose music never dips below the
+        // silencedetect noise floor except for one ordinary breath-pause silence (654.5-655)
+        // sitting deep inside it, right before the announcement - far from the region's own
+        // start. LeadingSilence must not mistake that unrelated pause for the region's lead-in
+        // hush: the mark belongs at the jingle's own start (640), not 0.5 s before the pause
+        // (654.5) or the phrase. The 610-613 false in-text pause triggers the probe, exactly as
+        // in the sibling tests above.
+        var result = await DetectAsync(
+            Options("--jingle"),
+            [new(610, 613), new(654.5, 655)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(42, " Chapter two.")); // window [613, ...], phrase at 655
+            },
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(660, 3600)] }); // jingle region 640-660, unbroken
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
     {
         // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs

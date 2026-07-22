@@ -135,6 +135,17 @@ public sealed class ChapterDetector
     private const double JinglePhraseMatchToleranceSeconds = 0.5;
 
     /// <summary>
+    /// How far a candidate <see cref="LeadingSilence"/> may start after its VAD non-speech
+    /// region's own start and still count as leading it, rather than being an unrelated silence
+    /// deep inside a long region (see that method's remarks). A true lead-in silence and its
+    /// region begin at essentially the same instant regardless of how long the hush runs, so
+    /// this only needs to absorb detector-to-detector jitter (VAD's frame granularity vs.
+    /// silencedetect's own onset timing) - observed well under 1 s on real audio, against
+    /// false-candidate gaps of several seconds or more.
+    /// </summary>
+    private const double LeadingSilenceStartToleranceSeconds = 1.5;
+
+    /// <summary>
     /// Slack allowed when deciding a Whisper segment <em>starts with</em> a stored silence or VAD
     /// non-speech region (see <see cref="TrimLeadingNonSpeech"/>). Whisper timestamps a segment
     /// from where its decoded audio block begins, which can be a touch before silencedetect's or
@@ -1145,10 +1156,23 @@ public sealed class ChapterDetector
     /// rather than inside it). Picks the earliest-ending silence when more than one overlaps the
     /// region's leading edge. This is the geometry that distinguishes a genuine "silence then
     /// jingle" transition from a false in-text pause that merely triggered a probe.
+    /// <para>
+    /// Crucially, the candidate must also <em>start</em> within <see
+    /// cref="LeadingSilenceStartToleranceSeconds"/> of the region's own start - not merely end
+    /// somewhere inside it. A genuine lead-in hush and the region both begin at essentially the
+    /// same moment (VAD stops seeing speech right as the hush starts, same as silencedetect),
+    /// so their starts always line up to within each detector's own timing jitter, however long
+    /// the hush itself runs. Without this check, a long region whose music never dips below the
+    /// noise floor - except for one ordinary breath-pause silence sitting right before the
+    /// announcement, deep inside the region - would have that unrelated pause mistaken for the
+    /// lead-in, placing the mark just before the phrase instead of at the true jingle start
+    /// (confirmed on real audio: chapters whose region ran 5-15 s before the only silence in it).
+    /// </para>
     /// </summary>
     private static Silence? LeadingSilence(NonSpeechRegion region, List<Silence> silences)
         => silences
-            .Where(s => s.EndSeconds > region.StartSeconds && s.EndSeconds <= region.EndSeconds)
+            .Where(s => s.EndSeconds > region.StartSeconds && s.EndSeconds <= region.EndSeconds
+                     && s.StartSeconds <= region.StartSeconds + LeadingSilenceStartToleranceSeconds)
             .OrderBy(s => s.EndSeconds)
             .Cast<Silence?>()
             .FirstOrDefault();
