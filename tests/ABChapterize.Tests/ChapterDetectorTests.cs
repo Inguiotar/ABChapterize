@@ -1254,6 +1254,80 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void TrimLeadingNonSpeech_ChainsThroughALeadingSilenceAndItsJingle()
+    {
+        // Whisper timestamped the "Chapter two" segment from where the pause before the jingle
+        // began (830.3), lumping the silence and the jingle music into the segment's head. The
+        // real speech onset is the far end of that non-speech run: silence [830.3, 831.0] hands
+        // off to the abutting jingle region [830.5, 836], so the corrected start is 836.
+        var segments = new List<TranscriptSegment> { new(830.3, 850, " Chapter two.", 1.0) };
+        var trimmed = ChapterDetector.TrimLeadingNonSpeech(
+            segments, [new(830.3, 831.0)], [new(830.5, 836)], jingle: true);
+        Assert.Equal(836, trimmed[0].StartSeconds);
+        Assert.Equal(850, trimmed[0].EndSeconds); // the end is never touched
+    }
+
+    [Fact]
+    public void TrimLeadingNonSpeech_LeavesASegmentThatOpensWithSpeech()
+    {
+        // The nearest silence ([45, 49]) ends before the segment starts (50) - it does not lead
+        // the segment, so the start is untouched.
+        var segments = new List<TranscriptSegment> { new(50, 60, " already talking.", 1.0) };
+        var trimmed = ChapterDetector.TrimLeadingNonSpeech(
+            segments, [new(45, 49)], [], jingle: false);
+        Assert.Equal(50, trimmed[0].StartSeconds);
+    }
+
+    [Fact]
+    public void TrimLeadingNonSpeech_UsesJingleRegions_OnlyInJingleMode()
+    {
+        // A VAD non-speech region leads the segment, but only --jingle mode trusts VAD data:
+        // in plain mode the region is ignored and the start stays put.
+        var segments = new List<TranscriptSegment> { new(830, 850, " Chapter two.", 1.0) };
+        var plain = ChapterDetector.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: false);
+        var jingle = ChapterDetector.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: true);
+        Assert.Equal(830, plain[0].StartSeconds);
+        Assert.Equal(835, jingle[0].StartSeconds);
+    }
+
+    [Fact]
+    public void TrimLeadingNonSpeech_ToleratesASilenceThatStartsJustAfterTheSegment()
+    {
+        // Whisper's segment start (830) can sit a hair before silencedetect's frame-precise
+        // onset (830.4); the small tolerance still recognises the silence as leading it.
+        var segments = new List<TranscriptSegment> { new(830, 840, " Chapter two.", 1.0) };
+        var trimmed = ChapterDetector.TrimLeadingNonSpeech(
+            segments, [new(830.4, 835)], [], jingle: false);
+        Assert.Equal(835, trimmed[0].StartSeconds);
+    }
+
+    [Fact]
+    public async Task JingleMark_IsAnchoredFromTheRealOnset_WhenWhisperTimestampsFromTheLeadingSilence()
+    {
+        // The reported bug: Whisper emits the "Chapter two" announcement as one segment that
+        // opens with the pause before the jingle and the jingle itself, so its timestamp (830.3)
+        // sits back in that non-speech - well before the real spoken phrase (836). A false
+        // in-text pause earlier in chapter one ([820, 823]) is the candidate whose wide jingle
+        // window reaches the announcement. Taken at face value the segment start would resolve
+        // to no jingle region and no preceding silence, dumping the mark 0.5 s before that false
+        // pause (822.5) - back in chapter one's narration. Correcting the start to the real onset
+        // (836) instead finds the jingle region [830.5, 836], whose leading silence [830.3, 831.0]
+        // is the true anchor: the mark lands 0.5 s before its end, at 830.5.
+        var result = await DetectAsync(
+            Options("--jingle"),
+            [new(595, 600), new(820, 823), new(830.3, 831.0)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(823, new TranscriptSegment(7.3, 27.3, " Chapter two.", 1.0)); // abs [830.3, 850.3]
+            },
+            new FakeVad { Speech = [new(0, 830.5), new(836, 3600)] });
+
+        Assert.Contains(new DetectedChapter(2, 830.5), result.Chapters);
+        Assert.DoesNotContain(result.Chapters, c => c.Number == 2 && c.TimeSeconds < 830);
+    }
+
+    [Fact]
     public async Task Pass3_SnapsChunkBordersToSeams_AndBridgesAPhraseAcrossTheSeam()
     {
         // Pass 2 finds chapters 1 and 3, so pass 3 transcribes [0.5, 1200]. The first chunk's

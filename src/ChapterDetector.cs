@@ -106,6 +106,16 @@ public sealed class ChapterDetector
     private const double JinglePhraseMatchToleranceSeconds = 0.5;
 
     /// <summary>
+    /// Slack allowed when deciding a Whisper segment <em>starts with</em> a stored silence or VAD
+    /// non-speech region (see <see cref="TrimLeadingNonSpeech"/>). Whisper timestamps a segment
+    /// from where its decoded audio block begins, which can be a touch before silencedetect's or
+    /// VAD's frame-precise onset; without this slack a silence starting a hair after the segment's
+    /// timestamp would not be recognised as leading it. Kept small so it only absorbs that
+    /// boundary jitter and never trims a segment that genuinely opens with speech.
+    /// </summary>
+    private const double SegmentLeadTrimToleranceSeconds = 0.5;
+
+    /// <summary>
     /// The shortest span this codebase ever treats as "plausibly a real jingle". Used two ways:
     /// (1) a VAD non-speech region whose longest single contiguous run is shorter than this (see
     /// <see cref="ComputeNonSpeechRegions"/> for why the longest run, not the merged span) is
@@ -488,8 +498,13 @@ public sealed class ChapterDetector
                 LogTranscript($"probe {windowEnd - start:0.#}s@{FormatTimestamp(start)}", fresh);
             }
 
-            // FindPhraseMatches and the mark-placement math below work in window-relative time.
-            var segments = ShiftSegments(windowSegmentsAbs, -start);
+            // Correct segment starts that Whisper timestamped from a leading silence/jingle
+            // before shifting to window-relative time (the cache keeps the raw absolute timings
+            // its reuse math relies on). FindPhraseMatches and the mark-placement math below
+            // then work in window-relative time.
+            var segments = ShiftSegments(
+                TrimLeadingNonSpeech(windowSegmentsAbs, allSilences, nonSpeechRegions, _options.Jingle),
+                -start);
 
             var marks = new List<(int Number, Silence? MarkSilence, double Confidence)>();
             // Window-local continuation of lastNumber: several accepted marks within one
@@ -1504,6 +1519,9 @@ public sealed class ChapterDetector
                 ? previousChunkAbs.Where(s => s.EndSeconds > chunkStart - Pass3BridgeSeconds).ToList()
                 : [];
             List<TranscriptSegment> matchSegments = carried.Count > 0 ? [.. carried, .. freshAbs] : freshAbs;
+            // Same leading silence/jingle correction Pass 2 applies, so a phrase Whisper
+            // timestamped from the pause before it is anchored from its real onset here too.
+            matchSegments = TrimLeadingNonSpeech(matchSegments, allSilences, nonSpeechRegions, _options.Jingle);
 
             // Unlike Pass 2 there is no window-relative timing rule here, so matching simply
             // runs in absolute file time: a match's PhraseStartSeconds is already absolute.
@@ -1591,6 +1609,66 @@ public sealed class ChapterDetector
             StartSeconds = s.StartSeconds + delta,
             EndSeconds = s.EndSeconds + delta,
         }).ToList();
+
+    /// <summary>
+    /// Advances each transcript segment's start past any run of silence and/or jingle (VAD
+    /// non-speech) that Whisper lumped into the head of the segment, so the timestamp points at
+    /// the actual speech onset. Whisper timestamps a segment from where its decoded audio block
+    /// begins; for the segment that carries a chapter announcement after a pause and/or a jingle,
+    /// that is the start of the leading non-speech, not of the spoken phrase. Left uncorrected,
+    /// the phrase's apparent start sits back in the previous chapter's trailing audio, which both
+    /// mis-places the mark (the anchor logic keys off the phrase start) and feeds the
+    /// --min-silence-length / --max-jingle-length auto mechanisms a mis-measured (wrong, usually
+    /// shorter) silence. Both detectors' findings are available here - silencedetect down to
+    /// <see cref="MinStoredSilenceSeconds"/>, plus VAD regions with --jingle - so the real onset
+    /// is the far end of the contiguous run of non-speech intervals that begins at (or a hair
+    /// before, see <see cref="SegmentLeadTrimToleranceSeconds"/>) the segment's timestamp, chained
+    /// through directly abutting intervals (a silence immediately followed by its jingle). The run
+    /// is never followed past the segment's own end - a segment that matched a phrase always has
+    /// some speech in it, so a leading run consuming the whole segment would be spurious.
+    /// Segments are in absolute file time, matching the silence/region lists. Internal for unit
+    /// testing.
+    /// </summary>
+    /// <param name="segmentsAbs">The window's transcript segments, in absolute file time.</param>
+    /// <param name="allSilences">Every silence Pass 1 stored, down to
+    /// <see cref="MinStoredSilenceSeconds"/>.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
+    /// <param name="jingle">True when --jingle is in effect, enabling the region intervals.</param>
+    internal static List<TranscriptSegment> TrimLeadingNonSpeech(
+        List<TranscriptSegment> segmentsAbs, List<Silence> allSilences,
+        List<NonSpeechRegion> nonSpeechRegions, bool jingle)
+    {
+        // The non-speech intervals a segment start can be advanced through: every stored silence
+        // plus, with --jingle, every VAD non-speech region.
+        var intervals = allSilences.Select(s => (s.StartSeconds, s.EndSeconds));
+        if (jingle)
+            intervals = intervals.Concat(nonSpeechRegions.Select(r => (r.StartSeconds, r.EndSeconds)));
+        var nonSpeech = intervals.ToList();
+
+        return segmentsAbs.Select(seg =>
+        {
+            var onset = seg.StartSeconds;
+            // Chase the run: any interval that begins at or just before the current onset and
+            // extends past it (without spilling beyond the segment) pushes the onset to its end.
+            // Re-scan until stable so a silence directly abutting a jingle is chained through.
+            bool advanced;
+            do
+            {
+                advanced = false;
+                foreach (var (from, to) in nonSpeech)
+                {
+                    if (from <= onset + SegmentLeadTrimToleranceSeconds
+                        && to > onset + SegmentLeadTrimToleranceSeconds
+                        && to <= seg.EndSeconds)
+                    {
+                        onset = to;
+                        advanced = true;
+                    }
+                }
+            } while (advanced);
+            return onset > seg.StartSeconds ? seg with { StartSeconds = onset } : seg;
+        }).ToList();
+    }
 
     /// <summary>Trailing note appended to a --verbose detection log line when the segment
     /// confidence is below <see cref="LowConfidenceThreshold"/>.</summary>

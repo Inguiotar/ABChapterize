@@ -163,6 +163,15 @@ Rules applied to the matches:
   preceding silence, independent of which silence triggered the probe. A
   second chapter announced deeper in a wide window is marked immediately
   rather than waiting for a later probe of its own.
+- Before those timestamps are trusted, each segment's start is corrected for a
+  quirk of Whisper: it timestamps a segment from where its audio block begins,
+  so an announcement that follows a pause (and, with `--jingle`, the jingle
+  music) is timed from the *start* of that silence rather than of the spoken
+  words. The stored silences and VAD non-speech regions tell exactly how long
+  that leading non-speech runs, so the segment's start is advanced past it to
+  the real speech onset. Without this the announcement would appear to begin
+  seconds early — back in the previous chapter's audio — mis-placing the mark
+  and feeding the auto mechanisms below a mis-measured silence.
 - Without `--jingle`, the phrase must start within 5 seconds after the
   triggering silence — announcements come right after the pause — *or*
   within 5 seconds after a candidate-grade silence (at least
