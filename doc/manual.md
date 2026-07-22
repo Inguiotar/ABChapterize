@@ -133,8 +133,9 @@ The window is 12 seconds normally, or `--max-jingle-length` + 5 seconds with
 (see `--chapter-phrase`), and the chapter number is parsed from digits or from
 number words (see [section 7](#7-languages-and-number-recognition)).
 
-The full list of probe windows — every start *and* every end — is planned
-before the first probe runs. When two consecutive windows would overlap
+Each probe window's end is decided on the fly, right before that window is
+transcribed — so it always reflects the current (possibly auto-adapted)
+window size, with no stale up-front plan. When two consecutive windows would overlap
 (common with the wide `--jingle` window and closely spaced candidates), the
 plan snaps their shared border to the mid-point of the nearest silence
 anywhere within the second window (with `--jingle`, a VAD non-speech region

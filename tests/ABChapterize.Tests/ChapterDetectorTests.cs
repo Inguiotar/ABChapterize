@@ -964,7 +964,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // [608, 608.6] is well below the 1.5 s candidate threshold - it never becomes a Pass 2
         // candidate of its own - but is still retained down to the 0.5 s floor
         // (MinStoredSilenceSeconds) purely as a seam target, and it lies inside window 2.
-        // The up-front window plan (PlanWindowEnds) must move the shared border to its
+        // The window-end plan (PlanWindowEnd) must move the shared border to its
         // mid-point (608.3) before anything is decoded: window 1's decode itself ends there
         // (8.3 s instead of the natural 12), and window 2's fresh tail starts exactly there -
         // never at the raw border (612) or the candidate start (606). Chapter one is scripted
@@ -1010,10 +1010,9 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task OverlappingProbe_SnapsBeyondTheBorder_ByExtendingWindowOnesDecode()
     {
         // Window 1 naturally spans [600, 612], window 2 [606, 618] (border 612). The only seam
-        // target lies entirely *beyond* the border ([613, 614], mid-point 613.5). Because the
-        // whole window list - snapped shared borders included - is planned before Pass 2
-        // decodes anything (PlanWindowEnds), window 1's decode is simply *extended* to 613.5 up
-        // front and window 2's fresh tail starts exactly there: the plan moved the border
+        // target lies entirely *beyond* the border ([613, 614], mid-point 613.5). Because
+        // window 1's end is planned before window 1 is decoded (PlanWindowEnd), its decode is
+        // simply *extended* to 613.5 and window 2's fresh tail starts exactly there: the plan moved the border
         // itself, so no [612, 613.5) hole can exist and nothing is cut mid-word at 612.
         // Chapter one is scripted at low confidence so the overlap-sequence skip stays out
         // of the way and window 2 is actually probed.
@@ -1067,7 +1066,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         // The label carries the actually decoded length: split at 608.3, window end 618 -> 9.7 s.
-        var tailLine = Assert.Single(log, l => l.StartsWith($"probe tail {9.7:0.#} s @0:10:08.30"));
+        var tailLine = Assert.Single(log, l => l.StartsWith($"probe tail {9.7:0.#}s@0:10:08.30"));
         Assert.Contains($"{1.0:0.0}-{3.0:0.0}", tailLine); // Whisper's own 0-based timestamp for the fresh segment
         Assert.DoesNotContain("Chapter one", tailLine); // that segment was reused, not re-decoded
     }
@@ -1111,122 +1110,126 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public void PlanWindowEnds_KeepsNaturalEnds_WhenNoWindowsOverlap()
+    public void PlanWindowEnd_KeepsTheNaturalEnd_WhenTheWindowsDoNotOverlap()
     {
-        var ends = ChapterDetector.PlanWindowEnds(
-            [0, 600, 1200], 12, 3600, [new(608, 608.6)], [], jingle: false);
-        Assert.Equal([12, 612, 1212], ends);
+        // The next window starts far past this one's natural end (612), and the only stored
+        // silence ([608, 608.6], mid 608.3) lies before it - nothing in the (612, 617]
+        // forward search either, so the window keeps its natural length.
+        var end = ChapterDetector.PlanWindowEnd(
+            600, 1200, 12, 3600, [new(608, 608.6)], [], jingle: false);
+        Assert.Equal(612, end);
     }
 
     [Fact]
-    public void PlanWindowEnds_SnapsASharedBorder_ToTheSeamNearestTheBorder()
+    public void PlanWindowEnd_SnapsASharedBorder_ToTheSeamNearestTheBorder()
     {
         // Both [604, 605] (mid 604.5) and [610, 611] (mid 610.5) lie within window 2
         // ([603, 615]); the shared border (window 1's natural end, 612) snaps to the nearer
         // mid-point, shortening window 1's decode.
-        var ends = ChapterDetector.PlanWindowEnds(
-            [600, 603], 12, 3600, [new(604, 605), new(610, 611)], [], jingle: false);
-        Assert.Equal([610.5, 615], ends);
+        var end = ChapterDetector.PlanWindowEnd(
+            600, 603, 12, 3600, [new(604, 605), new(610, 611)], [], jingle: false);
+        Assert.Equal(610.5, end);
     }
 
     [Fact]
-    public void PlanWindowEnds_ExtendsAWindow_WhenTheOnlySeamLiesBeyondItsNaturalEnd()
+    public void PlanWindowEnd_ExtendsAWindow_WhenTheOnlySeamLiesBeyondItsNaturalEnd()
     {
         // The only target ([613, 614]) sits past window 1's natural end (612) - the plan may
         // move the border itself, so window 1 is extended to the mid-point (613.5) and the
         // next window's fresh decode will start exactly there. No hole, no mid-word cut.
-        var ends = ChapterDetector.PlanWindowEnds(
-            [600, 606], 12, 3600, [new(613, 614)], [], jingle: false);
-        Assert.Equal([613.5, 618], ends);
+        var end = ChapterDetector.PlanWindowEnd(
+            600, 606, 12, 3600, [new(613, 614)], [], jingle: false);
+        Assert.Equal(613.5, end);
     }
 
     [Fact]
-    public void PlanWindowEnds_FallsBackToTheNaturalEnd_WhenNoSeamTargetExists()
+    public void PlanWindowEnd_FallsBackToTheNaturalEnd_WhenNoSeamTargetExists()
     {
         // The only silences lie at or before window 2's start - nothing inside (606, 618] to
         // snap to, so the shared border stays the natural end: the raw-border joint is the
         // only kind of overlap the plan leaves behind.
-        var ends = ChapterDetector.PlanWindowEnds(
-            [600, 606], 12, 3600, [new(595, 600), new(601, 606)], [], jingle: false);
-        Assert.Equal([612, 618], ends);
+        var end = ChapterDetector.PlanWindowEnd(
+            600, 606, 12, 3600, [new(595, 600), new(601, 606)], [], jingle: false);
+        Assert.Equal(612, end);
     }
 
     [Fact]
-    public void PlanWindowEnds_PlansAChain_AgainstEachNeighborsFinalSpan()
+    public void PlanWindowEnd_SnapsEachBorder_AgainstTheNextWindowsNaturalSpan()
     {
-        // Right-to-left planning: window 3 keeps its natural end (624); window 2's border
-        // (618) snaps to [616, 617]'s mid-point inside window 3; window 1's border (612) then
-        // snaps to [610, 611]'s mid-point inside window 2's *final* - already snapped -
-        // span [606, 616.5].
-        var ends = ChapterDetector.PlanWindowEnds(
-            [600, 606, 612], 12, 3600, [new(610, 611), new(616, 617)], [], jingle: false);
-        Assert.Equal([610.5, 616.5, 624], ends);
+        // On-the-fly planning searches the next window's *natural* span: window 1's border
+        // (612) snaps to [610, 611]'s mid-point (nearest inside window 2's [606, 618]);
+        // window 2's border (618) snaps to [616, 617]'s mid-point inside window 3's
+        // [612, 624] - each end decided independently, right before its own probe.
+        List<Silence> silences = [new(610, 611), new(616, 617)];
+        var first = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, silences, [], jingle: false);
+        var second = ChapterDetector.PlanWindowEnd(606, 612, 12, 3600, silences, [], jingle: false);
+        Assert.Equal(610.5, first);
+        Assert.Equal(616.5, second);
     }
 
     [Fact]
-    public void PlanWindowEnds_LeavesABorderAlone_WhenTheNextWindowEndsWithinThisOne()
+    public void PlanWindowEnd_LeavesABorderAlone_WhenTheNextWindowEndsWithinThisOne()
     {
         // Clamped to the file end, both windows end at 3600, so the later one is fully
         // contained in the earlier - there is no shared border to snap even though a target
         // would be available; the contained window is served from cache instead.
-        var ends = ChapterDetector.PlanWindowEnds(
-            [3590, 3595], 12, 3600, [new(3596, 3597)], [], jingle: false);
-        Assert.Equal([3600, 3600], ends);
+        var end = ChapterDetector.PlanWindowEnd(
+            3590, 3595, 12, 3600, [new(3596, 3597)], [], jingle: false);
+        Assert.Equal(3600, end);
     }
 
     [Fact]
-    public void PlanWindowEnds_UsesVadRegions_OnlyInJingleMode()
+    public void PlanWindowEnd_UsesVadRegions_OnlyInJingleMode()
     {
         // A VAD non-speech region is a valid seam target with --jingle, but plain mode has no
         // VAD data worth trusting - the same layout must snap only in jingle mode.
         List<ChapterDetector.NonSpeechRegion> regions = [new(608, 609)];
-        var plain = ChapterDetector.PlanWindowEnds([600, 606], 12, 3600, [], regions, jingle: false);
-        var jingle = ChapterDetector.PlanWindowEnds([600, 606], 12, 3600, [], regions, jingle: true);
-        Assert.Equal([612, 618], plain);
-        Assert.Equal([608.5, 618], jingle);
+        var plain = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: false);
+        var jingle = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: true);
+        Assert.Equal(612, plain);
+        Assert.Equal(608.5, jingle);
     }
 
     [Fact]
-    public void PlanWindowEnds_ExtendsAStandAloneEnd_ToASeamShortlyAfterIt()
+    public void PlanWindowEnd_ExtendsAStandAloneEnd_ToASeamShortlyAfterIt()
     {
-        // Window 1's end (12) does not lie inside window 2 ([600, 612]) - no shared border -
-        // but a silence sits just past it: the end is extended to its mid-point (13.5) so the
-        // decode stops word-safely. Window 2's own (last) end has no target within its 5 s
-        // forward search and keeps its natural length.
-        var ends = ChapterDetector.PlanWindowEnds(
-            [0, 600], 12, 3600, [new(13, 14)], [], jingle: false);
-        Assert.Equal([13.5, 612], ends);
+        // This window's end (12) does not lie inside the next window ([600, 612]) - no shared
+        // border - but a silence sits just past it: the end is extended to its mid-point
+        // (13.5) so the decode stops word-safely.
+        var end = ChapterDetector.PlanWindowEnd(
+            0, 600, 12, 3600, [new(13, 14)], [], jingle: false);
+        Assert.Equal(13.5, end);
     }
 
     [Fact]
-    public void PlanWindowEnds_KeepsAStandAloneEnd_WhenNoSeamLiesWithinTheForwardSearch()
+    public void PlanWindowEnd_KeepsAStandAloneEnd_WhenNoSeamLiesWithinTheForwardSearch()
     {
         // Neither a target whose mid-point lies before the natural end (extension only - the
         // window must never shrink below its natural span) nor one past the 5 s search limit
         // ([18, 19], mid-point 18.5 > 17) may move the end: it stays at the natural 12.
-        var ends = ChapterDetector.PlanWindowEnds(
-            [0], 12, 3600, [new(8, 9), new(18, 19)], [], jingle: false);
-        Assert.Equal([12], ends);
+        var end = ChapterDetector.PlanWindowEnd(
+            0, null, 12, 3600, [new(8, 9), new(18, 19)], [], jingle: false);
+        Assert.Equal(12, end);
     }
 
     [Fact]
-    public void PlanWindowEnds_StandAloneEndSnap_UsesVadRegionsOnlyInJingleMode()
+    public void PlanWindowEnd_StandAloneEndSnap_UsesVadRegionsOnlyInJingleMode()
     {
         List<ChapterDetector.NonSpeechRegion> regions = [new(13, 14)];
-        var plain = ChapterDetector.PlanWindowEnds([0], 12, 3600, [], regions, jingle: false);
-        var jingle = ChapterDetector.PlanWindowEnds([0], 12, 3600, [], regions, jingle: true);
-        Assert.Equal([12], plain);
-        Assert.Equal([13.5], jingle);
+        var plain = ChapterDetector.PlanWindowEnd(0, null, 12, 3600, [], regions, jingle: false);
+        var jingle = ChapterDetector.PlanWindowEnd(0, null, 12, 3600, [], regions, jingle: true);
+        Assert.Equal(12, plain);
+        Assert.Equal(13.5, jingle);
     }
 
     [Fact]
-    public void PlanWindowEnds_StandAloneEndSnap_StopsAtTheFileEnd()
+    public void PlanWindowEnd_StandAloneEndSnap_StopsAtTheFileEnd()
     {
         // The natural end is already clamped to the file end - there is no room to extend
         // into, so the forward search must come up empty regardless of nearby targets.
-        var ends = ChapterDetector.PlanWindowEnds(
-            [3592], 12, 3600, [new(3596, 3598)], [], jingle: false);
-        Assert.Equal([3600], ends);
+        var end = ChapterDetector.PlanWindowEnd(
+            3592, null, 12, 3600, [new(3596, 3598)], [], jingle: false);
+        Assert.Equal(3600, end);
     }
 
     [Fact]

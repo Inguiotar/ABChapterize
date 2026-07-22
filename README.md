@@ -201,7 +201,7 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
    Seven") or precedes
    it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). Window borders are
-   planned up front and snapped to silence mid-points so no decode ever cuts
+   snapped to silence mid-points so no decode ever cuts
    a word in half, and each detection is pinpointed to its own preceding
    silence right away — a confident mark even skips the remaining windows
    that overlap its own. By default
