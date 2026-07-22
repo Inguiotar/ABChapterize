@@ -143,7 +143,11 @@ detected chapter is not chapter 1 even though it starts more than 10 seconds
 into the file, the regions where the missing chapters must be hiding are
 transcribed *completely*, in roughly 10-minute chunks. This catches
 announcements that were not preceded by a long-enough silence. Marks found
-here are placed the same way as in pass 2.
+here are placed the same way as in pass 2. If a chunk still leaves an
+expected chapter unaccounted for, a stored silence (or, with `--jingle`, a
+VAD non-speech region) inside it that the chunk's own transcript skipped
+over entirely gets a second, closer look before the chapter is given up as
+missing — documented in the source.
 
 If a gap *between* detected chapters still remains after pass 3, the chapters
 that *were* found are still written, but a warning is printed and the file is

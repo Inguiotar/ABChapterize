@@ -287,30 +287,35 @@ public sealed class ChapterDetector
     /// cref="VerifyMarginBeforeSeconds"/> before the marking.</summary>
     private const double VerifyWindowSeconds = 60;
 
-    /// <summary>Minimum gap between two transcribed segments inside a --verify window (or
-    /// before the first/after the last one) that is worth a focused re-transcription attempt of
-    /// just that stretch on its own. Whisper's single-shot decoding of the full window can
-    /// silently skip a stretch of audio altogether - typically silence or a jingle straddling
-    /// the actual chapter phrase - rather than transcribing it as empty speech; since the
-    /// original detection run already found the phrase somewhere in this same audio, a gap this
-    /// size is more likely that decoding artifact than genuine silence.</summary>
-    private const double VerifyGapRetranscribeSeconds = 3.0;
+    /// <summary>
+    /// Minimum length, both for a gap between transcribed segments (or before the first/after
+    /// the last one) to be worth a focused re-transcription attempt, and - for Pass 3's version
+    /// of the same fallback (see <see cref="ScanGapRetriesAsync"/>) - for a silence or, with
+    /// --jingle, VAD non-speech region overlapping that gap to count as "plausibly the real
+    /// jingle/scene transition" rather than an ordinary in-narration pause. Whisper's single-shot
+    /// decoding of a long window can silently skip a stretch of audio altogether - typically
+    /// silence or a jingle straddling the actual chapter phrase - rather than transcribing it as
+    /// empty speech; since detection's own original run already found the phrase somewhere in
+    /// this same audio, a gap this size is more likely that decoding artifact than genuine
+    /// silence with nothing in it.
+    /// </summary>
+    private const double GapRetryThresholdSeconds = 3.0;
 
-    /// <summary>Context padding added to each side of a --verify gap before re-transcribing it,
-    /// so the phrase is not cut off if it starts or ends right at the gap boundary.</summary>
-    private const double VerifyGapPaddingSeconds = 2.0;
+    /// <summary>Context padding added to each side of a gap before re-transcribing it, so the
+    /// phrase is not cut off if it starts or ends right at the gap boundary.</summary>
+    private const double GapRetryPaddingSeconds = 2.0;
 
-    /// <summary>Length of each sub-chunk a padded --verify gap is scanned in, rather than
+    /// <summary>Length of each sub-chunk a padded gap is scanned in, rather than
     /// re-transcribing it in one call. A single call spanning a long, mostly non-speech stretch
     /// (silence or a jingle around a short phrase) risks the same failure it was meant to
     /// recover from: Whisper can judge the whole call's audio as non-speech on average and
     /// return only a token leading segment, even where a short, tightly-scoped call over just
     /// the phrase itself succeeds easily.</summary>
-    private const double VerifyGapChunkSeconds = 8.0;
+    private const double GapRetryChunkSeconds = 8.0;
 
-    /// <summary>Overlap between consecutive --verify gap sub-chunks, so a phrase that straddles
-    /// a chunk boundary is still fully contained within at least one of them.</summary>
-    private const double VerifyGapChunkOverlapSeconds = 2.0;
+    /// <summary>Overlap between consecutive gap-retry sub-chunks, so a phrase that straddles a
+    /// chunk boundary is still fully contained within at least one of them.</summary>
+    private const double GapRetryChunkOverlapSeconds = 2.0;
 
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
@@ -1111,10 +1116,10 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Second-chance confirmation for a --verify window whose first-pass transcript missed the
-    /// expected phrase: every gap of at least <see cref="VerifyGapRetranscribeSeconds"/> between
+    /// expected phrase: every gap of at least <see cref="GapRetryThresholdSeconds"/> between
     /// transcribed segments (including before the first and after the last one) is padded by
-    /// <see cref="VerifyGapPaddingSeconds"/> on each side and re-scanned in short, overlapping
-    /// <see cref="VerifyGapChunkSeconds"/> sub-chunks, each independently re-decoded and
+    /// <see cref="GapRetryPaddingSeconds"/> on each side and re-scanned in short, overlapping
+    /// <see cref="GapRetryChunkSeconds"/> sub-chunks, each independently re-decoded and
     /// re-transcribed and checked for the phrase - stopping at the first chunk that confirms it.
     /// Scanning in small chunks rather than re-transcribing the whole padded gap in one call
     /// matters: a single call spanning a long, mostly non-speech stretch (silence or a jingle
@@ -1150,18 +1155,18 @@ public sealed class ChapterDetector
         {
             var gapStart = boundaries[i];
             var gapEnd = boundaries[i + 1];
-            if (gapEnd - gapStart < VerifyGapRetranscribeSeconds)
+            if (gapEnd - gapStart < GapRetryThresholdSeconds)
                 continue;
 
-            var sliceStart = Math.Max(0, gapStart - VerifyGapPaddingSeconds);
-            var sliceEnd = Math.Min(windowLen, gapEnd + VerifyGapPaddingSeconds);
+            var sliceStart = Math.Max(0, gapStart - GapRetryPaddingSeconds);
+            var sliceEnd = Math.Min(windowLen, gapEnd + GapRetryPaddingSeconds);
 
-            var chunkStep = VerifyGapChunkSeconds - VerifyGapChunkOverlapSeconds;
+            var chunkStep = GapRetryChunkSeconds - GapRetryChunkOverlapSeconds;
             for (var chunkStart = sliceStart; chunkStart < sliceEnd; chunkStart += chunkStep)
             {
                 var absStart = windowStart + chunkStart;
                 var len = Math.Min(
-                    Math.Min(VerifyGapChunkSeconds, sliceEnd - chunkStart), info.DurationSeconds - absStart);
+                    Math.Min(GapRetryChunkSeconds, sliceEnd - chunkStart), info.DurationSeconds - absStart);
                 if (len <= 0)
                     continue;
 
@@ -2086,45 +2091,18 @@ public sealed class ChapterDetector
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans a Pass 3 chunk seam " +
                                  "(bridged from the previous chunk) - worth a spot check");
-                double time;
-                // The silence/jingle the mark anchored to, hoisted out of the branches below so
-                // the per-file statistics can be recorded once, uniformly (see RecordChapterStats).
-                Silence? statSilence = null;
-                NonSpeechRegion? statRegion = null;
-                if (_options.Jingle)
-                {
-                    // Same VAD-region-primary anchor resolution as Pass 2 (ResolveJingleAnchor),
-                    // just against a fixed lookback since a gap chunk has no meaningful probe
-                    // window start of its own; ComputeJingleMark then decides the mark exactly as
-                    // Pass 2 would. Resolving from the region rather than the nearest silence keeps
-                    // Pass 3 from anchoring a silence-less jingle transition to a false in-text
-                    // pause that merely happens to fall within the lookback.
-                    var lookback = _options.MaxJingleSeconds + PhraseMarginSeconds;
-                    var (anchorSilence, vadRegion) = ResolveJingleAnchor(
-                        phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
-                        nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
-                    time = ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds);
-                    (statSilence, statRegion) = (anchorSilence, vadRegion);
-                }
-                else
-                {
-                    // Pinpoint the mark at the end of the silence directly preceding the
-                    // phrase - the same "the chapter starts where the break ends" placement
-                    // Pass 2 uses - falling back to the phrase start when none is close enough.
-                    var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStart, phraseAbs, allSilences);
-                    time = anchor?.EndSeconds ?? phraseAbs;
-                    statSilence = anchor;
-                }
-                found.Add(new DetectedChapter(match.Number, time, match.Confidence));
-                RecordChapterStats(match.Number, statSilence, statRegion, phraseAbs);
-                remaining.Remove(match.Number);
-                var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found));
-                work.HighestChapter = highest;
-                work.MissingChapters = missingNumbers.Count;
-                _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)} " +
-                             $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
-                             MissingNote(missingNumbers));
+                RecordGapChapterMatch(match, matchSegments, found, remaining, knownChapters,
+                    allSilences, nonSpeechRegions, speechSegments, work);
             }
+
+            // A chunk whose normal transcript still leaves some expected number(s) unaccounted
+            // for gets one more look: long inner gaps that line up with a real silence/jingle
+            // (not just an ordinary narration pause) are re-scanned in small chunks, the same
+            // fallback --verify uses for the same underlying Whisper failure mode.
+            if (remaining.Count > 0)
+                await ScanGapRetriesAsync(file, info, chunkStart, chunkEnd, freshAbs, profile,
+                    found, remaining, knownChapters, allSilences, nonSpeechRegions, speechSegments, work, ct);
+
             work.Advance((long)((chunkEnd - chunkStart) * bytesPerSecond));
 
             // Every chapter this gap was meant to recover is found - the rest of the region can
@@ -2147,6 +2125,166 @@ public sealed class ChapterDetector
             chunkStart = seam ?? chunkEnd - GapChunkOverlapSeconds;
         }
         return found;
+    }
+
+    /// <summary>
+    /// Records one phrase match found while scanning a Pass 3 gap chunk (its normal transcript,
+    /// or <see cref="ScanGapRetriesAsync"/>'s fallback) as a detected chapter: resolves where the
+    /// mark itself goes (silence-before-phrase, or with --jingle its VAD region), records the
+    /// chapter's per-file statistics, updates <paramref name="found"/>/<paramref
+    /// name="remaining"/> and the progress bar's chapter state, and logs it. Shared between both
+    /// callers so the mark-placement logic - the same rules <see cref="TranscribeRegionAsync"/>'s
+    /// doc comment describes - stays in exactly one place.
+    /// </summary>
+    /// <param name="match">The confirmed phrase match, in absolute file time.</param>
+    /// <param name="matchSegments">The transcript the match was found in (absolute file time),
+    /// for --jingle's VAD edge adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
+    /// <param name="found">Chapters found in this gap so far; appended to.</param>
+    /// <param name="remaining">Still-missing chapter numbers for this gap; the match's number is
+    /// removed from it.</param>
+    /// <param name="knownChapters">Chapters already detected outside this gap, so the progress
+    /// bar's chapter state reflects the whole file.</param>
+    /// <param name="allSilences">Every silence Pass 1 stored, for anchor resolution.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when VAD is off), for
+    /// --jingle's anchor resolution.</param>
+    /// <param name="speechSegments">Raw VAD speech segments, for --jingle's edge adjustment.</param>
+    /// <param name="work">The file's progress tracker.</param>
+    private void RecordGapChapterMatch(
+        PhraseMatch match, List<TranscriptSegment> matchSegments,
+        List<DetectedChapter> found, HashSet<int> remaining, IReadOnlyList<DetectedChapter> knownChapters,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
+        WorkTracker work)
+    {
+        var phraseAbs = match.PhraseStartSeconds;
+        double time;
+        // The silence/jingle the mark anchored to, hoisted out of the branches below so the
+        // per-file statistics can be recorded once, uniformly (see RecordChapterStats).
+        Silence? statSilence = null;
+        NonSpeechRegion? statRegion = null;
+        if (_options.Jingle)
+        {
+            // Same VAD-region-primary anchor resolution as Pass 2 (ResolveJingleAnchor), just
+            // against a fixed lookback since a gap chunk has no meaningful probe window start of
+            // its own; ComputeJingleMark then decides the mark exactly as Pass 2 would. Resolving
+            // from the region rather than the nearest silence keeps this from anchoring a
+            // silence-less jingle transition to a false in-text pause that merely happens to fall
+            // within the lookback.
+            var lookback = _options.MaxJingleSeconds + PhraseMarginSeconds;
+            var (anchorSilence, vadRegion) = ResolveJingleAnchor(
+                phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
+                nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
+            time = ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds);
+            (statSilence, statRegion) = (anchorSilence, vadRegion);
+        }
+        else
+        {
+            // Pinpoint the mark at the end of the silence directly preceding the phrase - the
+            // same "the chapter starts where the break ends" placement Pass 2 uses - falling
+            // back to the phrase start when none is close enough.
+            var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStart, phraseAbs, allSilences);
+            time = anchor?.EndSeconds ?? phraseAbs;
+            statSilence = anchor;
+        }
+        found.Add(new DetectedChapter(match.Number, time, match.Confidence));
+        RecordChapterStats(match.Number, statSilence, statRegion, phraseAbs);
+        remaining.Remove(match.Number);
+        var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found));
+        work.HighestChapter = highest;
+        work.MissingChapters = missingNumbers.Count;
+        _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)} " +
+                     $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
+                     MissingNote(missingNumbers));
+    }
+
+    /// <summary>
+    /// Second-chance scan for a Pass 3 gap chunk that, after its normal transcript, still has
+    /// missing chapter numbers (<paramref name="remaining"/>): every stored silence, or with
+    /// --jingle also every VAD non-speech region, at least <see cref="GapRetryThresholdSeconds"/>
+    /// long and entirely inside this chunk that <em>none</em> of the chunk's own fresh segments
+    /// (not the bridged tail carried in from the previous chunk, already covered by its own
+    /// pass) actually covers - i.e. Whisper produced no speech at all over that stretch - is
+    /// padded by <see cref="GapRetryPaddingSeconds"/> on each side and re-scanned in short,
+    /// overlapping <see cref="GapRetryChunkSeconds"/> sub-chunks, the same technique --verify
+    /// uses to recover a phrase Whisper silently dropped from a single call spanning a mostly
+    /// non-speech stretch. Scoped to the silence/region's own bounds rather than the whole raw
+    /// stretch between the two segments bracketing it: that stretch can span most of a 600 s
+    /// Pass 3 chunk when narration is sparse, and re-scanning all of it in small sub-chunks would
+    /// make an already-expensive fallback far more expensive still, whereas a genuine jingle or
+    /// scene-transition silence is normally just seconds to at most tens of seconds long.
+    /// Confirmed matches are recorded via <see cref="RecordGapChapterMatch"/> exactly like the
+    /// chunk's normal ones; scanning stops as soon as nothing is left to find.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file, for its duration and input decoder.</param>
+    /// <param name="chunkStart">Absolute start of the Pass 3 chunk just transcribed.</param>
+    /// <param name="chunkEnd">Absolute end of that chunk.</param>
+    /// <param name="freshAbs">That chunk's own transcript segments (absolute file time),
+    /// excluding any bridged tail from the previous chunk.</param>
+    /// <param name="profile">Language profile for phrase/number matching.</param>
+    /// <param name="found">Chapters found in this gap so far; appended to via <see
+    /// cref="RecordGapChapterMatch"/>.</param>
+    /// <param name="remaining">Still-missing chapter numbers for this gap.</param>
+    /// <param name="knownChapters">Chapters already detected outside this gap.</param>
+    /// <param name="allSilences">Every silence Pass 1 stored - both for anchor resolution and as
+    /// retry candidates.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when VAD is off).</param>
+    /// <param name="speechSegments">Raw VAD speech segments, for --jingle's edge adjustment.</param>
+    /// <param name="work">The file's progress tracker.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ScanGapRetriesAsync(
+        string file, MediaInfo info, double chunkStart, double chunkEnd,
+        List<TranscriptSegment> freshAbs, LanguageProfile profile,
+        List<DetectedChapter> found, HashSet<int> remaining, IReadOnlyList<DetectedChapter> knownChapters,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
+        WorkTracker work, CancellationToken ct)
+    {
+        IEnumerable<(double Start, double End)> candidates = allSilences
+            .Where(s => s.EndSeconds - s.StartSeconds >= GapRetryThresholdSeconds &&
+                        s.StartSeconds >= chunkStart && s.EndSeconds <= chunkEnd)
+            .Select(s => (s.StartSeconds, s.EndSeconds));
+        if (_options.Jingle)
+            candidates = candidates.Concat(nonSpeechRegions
+                .Where(r => r.EndSeconds - r.StartSeconds >= GapRetryThresholdSeconds &&
+                            r.StartSeconds >= chunkStart && r.EndSeconds <= chunkEnd)
+                .Select(r => (r.StartSeconds, r.EndSeconds)));
+
+        foreach (var (silStart, silEnd) in candidates.OrderBy(c => c.Start))
+        {
+            if (remaining.Count == 0)
+                break;
+            // An ordinary sentence that merely straddles a real pause still has its own segment
+            // covering the pause and needs no second look - only a stretch with nothing
+            // transcribed over it at all is a candidate for having been dropped outright.
+            if (freshAbs.Any(s => s.StartSeconds < silEnd && s.EndSeconds > silStart))
+                continue;
+
+            var sliceStart = Math.Max(chunkStart, silStart - GapRetryPaddingSeconds);
+            var sliceEnd = Math.Min(chunkEnd, silEnd + GapRetryPaddingSeconds);
+            var subStep = GapRetryChunkSeconds - GapRetryChunkOverlapSeconds;
+            for (var subStart = sliceStart; subStart < sliceEnd && remaining.Count > 0; subStart += subStep)
+            {
+                var len = Math.Min(
+                    Math.Min(GapRetryChunkSeconds, sliceEnd - subStart), info.DurationSeconds - subStart);
+                if (len <= 0)
+                    continue;
+
+                var subSamples = await _audio.DecodePcmAsync(file, subStart, len, info.InputDecoder, ct);
+                var subSegments = await TranscribeCountingAsync(subSamples, ct, _pass3Transcriber);
+                LogTranscript($"gap retry {len:0.#}s@{FormatTimestamp(subStart)}", subSegments);
+                var subAbs = TrimLeadingNonSpeech(
+                    ShiftSegments(subSegments, subStart), allSilences, nonSpeechRegions, _options.Jingle);
+
+                foreach (var match in FindPhraseMatches(subAbs, profile))
+                {
+                    if (!remaining.Contains(match.Number) || knownChapters.Any(k => k.Number == match.Number))
+                        continue;
+                    RecordGapChapterMatch(match, subAbs, found, remaining, knownChapters,
+                        allSilences, nonSpeechRegions, speechSegments, work);
+                    if (remaining.Count == 0)
+                        break;
+                }
+            }
+        }
     }
 
     /// <summary>

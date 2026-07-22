@@ -1721,6 +1721,62 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Pass3_RetriesAStoredSilenceItsOwnChunkTranscriptSkippedEntirely()
+    {
+        // Same shape as the test above (chapter 1 at 0.5, chapter 3 pinned to the silence
+        // [495, 500]), but this time the gap chunk's own transcript has nothing at all covering
+        // the stored silence [200, 206] - Whisper silently dropped chapter 2's phrase there
+        // rather than mis-hearing it. The gap retry re-scans padded around just that silence
+        // ([198, 208]) rather than the whole [2.5, 494.5] stretch between the chunk's two
+        // segments, and finds the phrase in the first 8 s sub-chunk (starting at 198).
+        var (result, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(495, 500), new(200, 206)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(500, Seg(0.3, " Chapter three."));
+                // Pass 3's gap chunk [0.5, 500]: re-hears both endpoints, nothing in between.
+                s.Add(0.5, Seg(0, " Chapter one."), Seg(494, " Chapter three."));
+                // Gap retry around the qualifying silence, padded to [198, 208].
+                s.Add(198, Seg(2, " Chapter 2."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.5), new(2, 200), new(3, 500)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("chapter 2 found in gap"));
+    }
+
+    [Fact]
+    public async Task Pass3_GapRetryStaysScopedToTheSilence_NotTheWholeStretchBetweenSegments()
+    {
+        // Same shape again, but the two segments bracketing the qualifying silence [200, 206]
+        // are now far apart (the chunk's own transcript is sparse, as real narration sometimes
+        // is over a full 600 s Pass 3 chunk) - the raw stretch between them spans almost the
+        // whole [0.5, 500] chunk. The retry must stay scoped to just the silence's own bounds
+        // (padded to [198, 208]), not fan out across that whole stretch: only decode starts near
+        // 198 are expected, never something like 50 or 300 that a naive "scan the whole gap"
+        // approach would also have visited.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(495, 500), new(200, 206)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(500, Seg(0.3, " Chapter three."));
+                s.Add(0.5, Seg(0, " Chapter one."), Seg(494, " Chapter three."));
+                s.Add(198, Seg(2, " Chapter 2."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.5), new(2, 200), new(3, 500)], result.Chapters);
+        Assert.DoesNotContain(audio.DecodeStarts, d => d is > 210 and < 490);
+        // The one qualifying silence needs at most two 8 s sub-chunks (198 and 204) to cover its
+        // padded [198, 208] span - nowhere near what scanning the ~492 s raw gap would take.
+        Assert.True(audio.DecodeStarts.Count <= 6);
+    }
+
+    [Fact]
     public void ComputeNonSpeechRegions_MergesRegionsSeparatedByAShortSpeechBlip()
     {
         // A 0.5 s "speech" blip - short enough to be a vocal-like transient inside otherwise
