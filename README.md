@@ -168,7 +168,7 @@ when chapters are written. The most useful knobs:
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
-| `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (and confidence stats) at the end. |
+| `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (confidence, silence/jingle and Whisper-audio stats) at the end. |
 | `-v`, `--verbose` | Log processing details, each probe/chunk as a `<length>@<time>` header. |
 | `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |

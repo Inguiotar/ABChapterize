@@ -299,24 +299,103 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void MissingNumbersInGap_ReturnsTheChapterNumbersBoundingEachGap()
+    {
+        var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
+        var gaps = ChapterDetector.FindGaps(chapters, Duration); // (0, 500) and (900, 2000)
+        Assert.Equal([1], ChapterDetector.MissingNumbersInGap(chapters, gaps[0]));    // leading gap: 1
+        Assert.Equal([4, 5], ChapterDetector.MissingNumbersInGap(chapters, gaps[1])); // 3 -> 6: 4, 5
+    }
+
+    [Fact]
     public async Task RegionBeforeFirstChapter_IsSearched_WhenItStartsAboveOne()
     {
-        // Only chapter 2 is found by the probes, so pass 3 transcribes the file start
-        // and finds chapter 1 in the middle of the audio. The first chunk's border (natural
-        // end 600) has no seam target within reach, so the unsnapped fallback keeps the
-        // 10-second overlap: the second chunk must start at 590, not at 600.
+        // Only chapter 2 is found by the probes, so pass 3 transcribes the file start looking for
+        // chapter 1. It is not in the first chunk [0, 600] but past its end, so the search must
+        // continue into the second chunk: that chunk's border (natural end 600) has no seam target
+        // within reach, so the unsnapped fallback keeps the 10-second overlap and the second chunk
+        // starts at 590, not 600 - and that is where chapter 1 (phrase at 610) is found. (Were
+        // chapter 1 already in the first chunk, the gap's sole missing number would be complete and
+        // pass 3 would stop before decoding the second chunk at all - see GapCompletes_* below.)
         var (result, _, audio) = await DetectFullAsync(
             Options(),
             [new(1195, 1200)],
             s =>
             {
                 s.Add(1200, Seg(0.2, " Chapter two."));
-                s.Add(0, Seg(10, " Chapter one.")); // also serves as the pass-3 chunk at 0
+                s.Add(590, Seg(20, " Chapter one.")); // pass-3 chunk 2 (window start 590), phrase at 610
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 610), new(2, 1200)], result.Chapters);
+        Assert.Contains(590.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task GapCompletes_WhenAllExpectedChaptersAreFound_StopsBeforeTheNextChunk()
+    {
+        // Same leading-gap setup as above, but chapter 1's phrase sits in the *first* pass-3 chunk
+        // [0, 600] (at 10). The gap's sole missing number is then complete after that chunk, so
+        // transcription stops immediately - the second chunk at 590 is never decoded.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(1195, 1200)],
+            s =>
+            {
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(0, Seg(10, " Chapter one.")); // pass-3 chunk 1 [0, 600], phrase at 10
             });
 
         Assert.False(result.GapRemains);
         Assert.Equal([new(1, 10), new(2, 1200)], result.Chapters);
-        Assert.Contains(590.0, audio.DecodeStarts);
+        Assert.DoesNotContain(590.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task Statistics_ReportTheShortestPrecedingSilence_AndSomeWhisperAudio()
+    {
+        // Chapter 2 is preceded by a 3 s silence, chapter 3 by a 2 s one; chapter 1 sits at the
+        // file start with none. The per-file shortest-preceding-silence statistic is thus 2 s,
+        // the jingle statistic stays null (plain mode), and audio was fed to Whisper.
+        var (result, _, _) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(597, 600), new(903, 905)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(905, Seg(0.2, " Chapter three."));
+            });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Equal(2.0, result.Stats.MinPrecedingSilenceSeconds!.Value, 3);
+        Assert.Null(result.Stats.MaxJingleLengthSeconds);
+        Assert.True(result.Stats.WhisperAudioSeconds > 0);
+    }
+
+    [Fact]
+    public async Task Statistics_InJingleMode_MeasureTheJingle_AndCountOnlyTheLeadingSilence()
+    {
+        // Chapter 2's transition is framed [silence 638-642][jingle][silence 648-650][phrase],
+        // the whole 640-651 stretch being one VAD non-speech region. The jingle is measured from
+        // the leading silence's end (642) up to the phrase (snapped to the region end 651): 9 s.
+        // Only the *leading* 4 s silence counts toward the silence statistic; the 2 s silence
+        // between jingle and phrase is ignored, so the shortest preceding silence is 4 s, not 2 s.
+        var (result, _, _) = await DetectFullAsync(
+            Options("--jingle", "--min-silence-length", "1.5"),
+            [new(638, 642), new(648, 650)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                // The region has a leading silence, so its transition is probed from that silence's
+                // end (642), not the region start; the phrase (650) then snaps to the region end 651.
+                s.Add(642, Seg(8, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 640), new(651, 3600)] }); // non-speech region 640-651
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Equal(4.0, result.Stats.MinPrecedingSilenceSeconds!.Value, 3);
+        Assert.Equal(9.0, result.Stats.MaxJingleLengthSeconds!.Value, 3);
     }
 
     [Fact]
@@ -1096,7 +1175,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         // The label carries the actually decoded length: split at 608.3, window end 618 -> 9.7 s.
-        var tailLine = Assert.Single(log, l => l.StartsWith($"probe tail {9.7:0.#}s@0:10:08.30"));
+        var tailLine = Assert.Single(log, l => l.StartsWith($"probe {9.7:0.#}s@0:10:08.30 (tail)"));
         Assert.Contains($"{1.0:0.0}-{3.0:0.0}", tailLine); // Whisper's own 0-based timestamp for the fresh segment
         Assert.DoesNotContain("Chapter one", tailLine); // that segment was reused, not re-decoded
     }

@@ -38,6 +38,15 @@ public sealed class FileProcessor
     private double _confidenceSum;
     private int _confidenceCount;
 
+    /// <summary>Run-wide detection statistics (for --summary), aggregated across every processed
+    /// file: the shortest silence and longest jingle seen before any chapter, and the total audio
+    /// fed to Whisper against the total run length processed. The silence/jingle extremes stay at
+    /// their infinities when no file contributed one.</summary>
+    private double _minPrecedingSilence = double.PositiveInfinity;
+    private double _maxJingle = double.NegativeInfinity;
+    private double _whisperAudioSecondsTotal;
+    private double _runLengthSecondsTotal;
+
     /// <summary>Creates a processor for the given validated options.</summary>
     /// <param name="options">Validated command line options.</param>
     /// <param name="progress">Renderer for progress bars and summary lines.</param>
@@ -202,6 +211,20 @@ public sealed class FileProcessor
                 Console.WriteLine(
                     $"Confidence of written chapter marks: min {_confidenceMin:0.00}, " +
                     $"max {_confidenceMax:0.00}, avg {_confidenceSum / _confidenceCount:0.00}");
+            if (_runLengthSecondsTotal > 0)
+            {
+                var extremes = new List<string>();
+                if (!double.IsPositiveInfinity(_minPrecedingSilence))
+                    extremes.Add($"shortest silence before a chapter {_minPrecedingSilence:0.00} s");
+                if (!double.IsNegativeInfinity(_maxJingle))
+                    extremes.Add($"longest jingle before a chapter {_maxJingle:0.00} s");
+                if (extremes.Count > 0)
+                    Console.WriteLine(string.Join(", ", extremes));
+                Console.WriteLine(
+                    $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_whisperAudioSecondsTotal))} " +
+                    $"of {FormatTime(TimeSpan.FromSeconds(_runLengthSecondsTotal))} run length " +
+                    $"({100 * _whisperAudioSecondsTotal / _runLengthSecondsTotal:0.0}%)");
+            }
         }
     }
 
@@ -301,6 +324,45 @@ public sealed class FileProcessor
     private static string FormatTimestamp(double seconds)
         => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff");
 
+    /// <summary>Formats a "(NN.N% of run length)" share, or empty when the run length is unknown.</summary>
+    /// <param name="part">The measured quantity (seconds).</param>
+    /// <param name="whole">The file's or run's total length (seconds).</param>
+    private static string FormatPercent(double part, double whole)
+        => whole > 0 ? $" ({100 * part / whole:0.0}% of run length)" : "";
+
+    /// <summary>
+    /// Builds the per-file statistics log line shown under --verbose (or --verbose-transcripts):
+    /// the shortest silence and, in --jingle mode, the longest jingle preceding a detected
+    /// chapter, plus the total audio fed to Whisper and its share of the file's run length.
+    /// </summary>
+    /// <param name="stats">The file's detection statistics.</param>
+    /// <param name="runLengthSeconds">The file's run length, for the Whisper-audio share.</param>
+    private static string FormatFileStats(DetectionStats stats, double runLengthSeconds)
+    {
+        var parts = new List<string>();
+        if (stats.MinPrecedingSilenceSeconds is { } silence)
+            parts.Add($"shortest silence before a chapter {silence:0.00} s");
+        if (stats.MaxJingleLengthSeconds is { } jingle)
+            parts.Add($"longest jingle {jingle:0.00} s");
+        parts.Add($"Whisper audio {FormatTime(TimeSpan.FromSeconds(stats.WhisperAudioSeconds))}" +
+                  FormatPercent(stats.WhisperAudioSeconds, runLengthSeconds));
+        return "stats - " + string.Join(", ", parts);
+    }
+
+    /// <summary>Folds one processed file's detection statistics into the run-wide totals for the
+    /// --summary report. Must be called while holding <see cref="_statsLock"/>.</summary>
+    /// <param name="stats">The file's detection statistics.</param>
+    /// <param name="runLengthSeconds">The file's run length, summed toward the run-wide share.</param>
+    private void AccumulateStats(DetectionStats stats, double runLengthSeconds)
+    {
+        if (stats.MinPrecedingSilenceSeconds is { } silence)
+            _minPrecedingSilence = Math.Min(_minPrecedingSilence, silence);
+        if (stats.MaxJingleLengthSeconds is { } jingle)
+            _maxJingle = Math.Max(_maxJingle, jingle);
+        _whisperAudioSecondsTotal += stats.WhisperAudioSeconds;
+        _runLengthSecondsTotal += runLengthSeconds;
+    }
+
     /// <summary>Processes a single audiobook file and prints its summary line.</summary>
     private async Task ProcessOneAsync(
         string file, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
@@ -369,7 +431,9 @@ public sealed class FileProcessor
             {
                 _processed++;
                 _processingTime += watch.Elapsed;
+                AccumulateStats(result.Stats, info.DurationSeconds);
             }
+            log?.Invoke(FormatFileStats(result.Stats, info.DurationSeconds));
 
             if (result.GapRemains)
             {

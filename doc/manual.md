@@ -497,7 +497,10 @@ skipped (reported as "skipped").
   skipped, warnings, total and average processing time, and — when at least
   one chapter mark was written — the min/max/average Whisper confidence
   across those marks (not every probe attempted, only the ones that produced
-  a mark).
+  a mark). Also, across all processed files, the shortest silence and (in
+  `--jingle` mode) longest jingle found before any chapter, and the total
+  audio fed to Whisper as an absolute time and a share of the total run
+  length (over 100 % is normal — re-probed stretches are counted each time).
 
 `-d`, `--dry-run`
 : Run full detection but write nothing. Instead of the usual "N chapter(s)
@@ -861,7 +864,10 @@ name, everything the pipeline does:
 - every accepted chapter detection with the exact mark position and
   confidence, flagged `LOW CONFIDENCE` below 0.5, plus a `still missing:`
   list of any earlier chapter numbers not detected yet,
-- the regions transcribed in pass 3.
+- the regions transcribed in pass 3, and when each pass finishes,
+- once the file is done, a `stats -` line: the shortest silence and (in
+  `--jingle` mode) longest jingle found before a chapter, and how much audio
+  was fed to Whisper (with its share of the file's run length).
 
 **`--verbose-transcripts`** (`-T`) adds, after each header line, the full
 Whisper transcript for that window — every segment with its timings and
