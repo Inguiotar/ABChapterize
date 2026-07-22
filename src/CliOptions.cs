@@ -81,15 +81,28 @@ public sealed class CliOptions
     /// </summary>
     public bool Verify { get; private set; }
 
-    /// <summary>A jingle may precede the chapter phrase; mark chapters 0.5 s before it (--jingle / -j).</summary>
-    public bool Jingle { get; private set; }
+    /// <summary>
+    /// Anchors the chapter mark to a jingle/pause preceding the announcement instead of the
+    /// default fixed offset (--mark-before-jingle / -j): 0.5 s before a leading silence, or -
+    /// absent one - at a silence-less jingle's own VAD-detected start. This is the exact
+    /// placement rule this tool's original "--jingle" mode used, preserved unchanged; only its
+    /// name and default-off/on status changed, since the VAD pre-pass and widened jingle
+    /// probing this placement relies on now run unconditionally (see
+    /// <see cref="RunVadPrePass"/>). Without this option, see <see cref="ChapterDetector"/>'s
+    /// <c>DefaultMarkLeadSeconds</c> for the placement used instead.
+    /// <para><b>Experimental.</b></para>
+    /// </summary>
+    public bool MarkBeforeJingle { get; private set; }
 
     /// <summary>
-    /// Maximum expected jingle duration in seconds (--max-jingle-length / -X, default 45).
-    /// With --jingle, the probe window after each silence spans this duration plus a flat
-    /// 5-second margin for the chapter phrase itself. This is always the ceiling used until
-    /// a real jingle length has been observed; see <see cref="AutoMaxJingle"/> for the
-    /// default self-tightening behavior applied on top of it during probing.
+    /// Maximum expected jingle duration in seconds (--max-jingle-length / -X, default 45), or 0
+    /// to say no jingle is expected at all. Above 0, the probe window after each silence spans
+    /// this duration plus a flat 5-second margin for the chapter phrase itself, and VAD
+    /// non-speech regions can add extra probe candidates for silence-less jingles; at 0,
+    /// neither happens - Pass 2 falls back to its original fixed probe window, exactly as if
+    /// jingle support did not exist. This is always the ceiling used until a real jingle length
+    /// has been observed; see <see cref="AutoMaxJingle"/> for the default self-tightening
+    /// behavior applied on top of it during probing.
     /// </summary>
     public double MaxJingleSeconds { get; private set; } = 45;
 
@@ -106,6 +119,16 @@ public sealed class CliOptions
     /// False (the default) keeps the window fixed at <see cref="MaxJingleSeconds"/> throughout.
     /// </summary>
     public bool AutoMaxJingle { get; private set; }
+
+    /// <summary>
+    /// True whenever the Silero VAD pre-pass should run over a file: either
+    /// <see cref="MarkBeforeJingle"/> needs its jingle/VAD-region anchor, or
+    /// <see cref="MaxJingleSeconds"/> is above 0 and Pass 2 may need to widen its probe window
+    /// or add VAD-region candidates for a possible jingle. False only when neither applies -
+    /// <see cref="MarkBeforeJingle"/> is off and <see cref="MaxJingleSeconds"/> is exactly 0 -
+    /// which reproduces this tool's original, pre-jingle-support behavior exactly.
+    /// </summary>
+    public bool RunVadPrePass => MarkBeforeJingle || MaxJingleSeconds > 0;
 
     /// <summary>
     /// Minimum silence duration in seconds that counts as a potential chapter break
@@ -241,7 +264,7 @@ public sealed class CliOptions
     /// <summary>Maps every short option letter to its long option name.</summary>
     private static readonly Dictionary<char, string> ShortOptions = new()
     {
-        ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--jingle",
+        ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--mark-before-jingle",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
@@ -371,21 +394,18 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.Jingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
+        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                          || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
-        if (o._jingleLenSet && !o.Jingle)
-            throw new CliError("--max-jingle-length requires --jingle.");
-
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o.Jingle || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o.MarkBeforeJingle || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
-                "--jingle, --max-jingle-length, --min-silence-length and --verify have no effect and cannot be combined with it.");
+                "--mark-before-jingle, --max-jingle-length, --min-silence-length and --verify have no effect and cannot be combined with it.");
 
         if (o.Force && o.Verify)
             throw new CliError(
@@ -461,7 +481,7 @@ public sealed class CliOptions
             case "--backup": Backup = true; return true;
             case "--revert": Revert = true; return true;
             case "--force": Force = true; return true;
-            case "--jingle": Jingle = true; return true;
+            case "--mark-before-jingle": MarkBeforeJingle = true; return true;
             case "--quiet": Quiet = true; return true;
             case "--verbose": Verbose = true; return true;
             case "--verbose-transcripts": VerboseTranscripts = Verbose = true; return true;
@@ -543,17 +563,19 @@ public sealed class CliOptions
     }
 
     /// <summary>
-    /// Parses the --max-jingle-length parameter into a number of seconds between 1 and 600,
-    /// or "auto". "auto" resolves to the 45 s default ceiling plus <see cref="AutoMaxJingle"/>
-    /// set, telling <see cref="ChapterDetector"/> to self-tighten the probe window as real
-    /// jingle lengths are observed.
+    /// Parses the --max-jingle-length parameter into 0 (no jingle expected - see
+    /// <see cref="RunVadPrePass"/>), a number of seconds between 1 and 600, or "auto". "auto"
+    /// resolves to the 45 s default ceiling plus <see cref="AutoMaxJingle"/> set, telling
+    /// <see cref="ChapterDetector"/> to self-tighten the probe window as real jingle lengths
+    /// are observed.
     /// </summary>
     private static (double Seconds, bool Auto) ParseJingleLength(string value)
     {
         if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
             return (45, true);
-        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 1 || s > 600)
-            throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected seconds between 1 and 600, or \"auto\".");
+        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) ||
+            (s != 0 && (s < 1 || s > 600)))
+            throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected 0, seconds between 1 and 600, or \"auto\".");
         return (s, false);
     }
 
@@ -709,22 +731,29 @@ public sealed class CliOptions
                                     through full detection, same as --force would. A file
                                     already rejected by --max-chapters skips verification and
                                     stays bogus. Cannot be combined with --force or --import.
-          -j, --jingle              A short jingle may precede the chapter phrase. Both a
-                                    silence scan and a voice-activity (VAD) pre-pass run over
-                                    the whole file, so jingles are found whether or not they
-                                    are preceded by a silence: when a silence precedes the
-                                    jingle, the chapter mark is placed 0.5 seconds before it;
-                                    when the jingle abuts speech with no silence (or is itself
-                                    the only thing separating chapters), the mark is placed at
-                                    the start of the jingle instead.
+          -j, --mark-before-jingle  [EXPERIMENTAL] A short jingle may precede the chapter
+                                    phrase; anchor the mark to it instead of the default fixed
+                                    offset (see --max-jingle-length below). A silence scan and
+                                    a voice-activity (VAD) pre-pass already run over the whole
+                                    file regardless of this option, so jingles are found
+                                    whether or not they are preceded by a silence: when a
+                                    silence precedes the jingle, the chapter mark is placed 0.5
+                                    seconds before it; when the jingle abuts speech with no
+                                    silence (or is itself the only thing separating chapters),
+                                    the mark is placed at the start of the jingle instead.
+                                    Without this option, the mark is always placed 0.25 seconds
+                                    before the chapter phrase, no matter what precedes it.
           -X, --max-jingle-length <seconds|auto>
-                                    Maximum expected jingle duration (default: 45). Audio is
-                                    probed for this duration plus 5 seconds (for the phrase
-                                    itself) after each silence. Lower values speed up probing.
-                                    With "auto", probing starts at the default ceiling and -
-                                    from the second jingle mark found - resizes to 1.25x the
-                                    longest jingle actually observed so far plus margin
-                                    (capped at the ceiling). Requires --jingle.
+                                    Maximum expected jingle duration (default: 45), or 0 if no
+                                    jingle is expected at all. Above 0, audio is probed for
+                                    this duration plus 5 seconds (for the phrase itself) after
+                                    each silence; at 0, probing uses its original fixed window
+                                    instead, and the VAD pre-pass is skipped entirely unless
+                                    --mark-before-jingle still needs it. Lower values speed up
+                                    probing. With "auto", probing starts at the default ceiling
+                                    and - from the second jingle mark found - resizes to 1.25x
+                                    the longest jingle actually observed so far plus margin
+                                    (capped at the ceiling).
           -n, --min-silence-length <seconds|auto>
                                     Minimum silence duration that counts as a potential
                                     chapter break; the silence scan always uses this as its
@@ -760,7 +789,7 @@ public sealed class CliOptions
                                     review or correction. Combinable with --dry-run.
           -I, --import              Skip Whisper detection; write chapters from a previously
                                     exported sidecar file instead. Cannot be combined with
-                                    --lang, --chapter-phrase, --model, --jingle,
+                                    --lang, --chapter-phrase, --model, --mark-before-jingle,
                                     --max-jingle-length, --min-silence-length or --revert.
           -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
                                     of FFMETADATA for --export/--import. Requires one of them.

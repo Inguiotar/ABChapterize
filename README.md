@@ -22,11 +22,13 @@ Prebuilt binaries for Windows and Linux are available on the
 - **Writes marks in place, safely** — chapters are written by stream-copy
   remuxing into a temporary file that is verified before it atomically replaces
   the original. Your audiobook cannot be lost, even without `--backup`.
-- **Jingle-aware** — if your audiobook plays a jingle before each announcement,
-  the mark is placed *before* the jingle, where the chapter really starts. A
-  bundled voice-activity model (Silero VAD) catches jingles even when they
-  abut speech with no silence on either side, which a plain amplitude scan
-  would miss entirely.
+- **Jingle-aware probing, by default** — Pass 2's probe window is sized to
+  catch a jingle (a music sting) before the announcement, and a bundled
+  voice-activity model (Silero VAD) finds jingles even when they abut speech
+  with no silence on either side, which a plain amplitude scan would miss
+  entirely. `--mark-before-jingle` (experimental) anchors the written mark to
+  the jingle/silence itself instead of the default fixed offset before the
+  phrase.
 - **Self-healing** — when the detected chapter numbers have gaps (e.g. chapter 12
   was announced without a pause before it), the suspicious regions are
   transcribed in full to find the missing ones.
@@ -114,8 +116,13 @@ abchapterize --recurse "D:\Audiobooks (mixed languages)"
 # automatically with --lang de:
 abchapterize --lang de buch.m4b
 
-# The publisher plays a jingle before each chapter announcement:
-abchapterize --jingle hoerbuch.m4b
+# The publisher plays a jingle before each chapter announcement — jingle-aware
+# probing (and the VAD pre-pass) run by default, no flag needed:
+abchapterize hoerbuch.m4b
+
+# ...want the mark anchored to the jingle/silence itself instead of the
+# default fixed offset before the phrase? (experimental):
+abchapterize --mark-before-jingle hoerbuch.m4b
 
 # Redo files that already have (wrong) chapter marks:
 abchapterize --force badly-marked.m4b
@@ -164,8 +171,8 @@ when chapters are written. The most useful knobs:
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are left alone, marks that don't are discarded and the file goes through full detection. Cannot combine with `--force` or `--import`. |
-| `-j`, `--jingle` | A jingle precedes announcements. Marks go 0.5 s before the jingle when a silence precedes it, or at the jingle's own start when it doesn't (found via a bundled voice-activity model — see [How it works](#how-it-works)). |
-| `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45). |
+| `-j`, `--mark-before-jingle` | **Experimental.** Anchor the mark to a preceding jingle/silence instead of the default fixed offset before the phrase — this tool's original mark-placement rule (see [How it works](#how-it-works)). |
+| `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
@@ -186,7 +193,8 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
 1. **Pass 1 — silence scan:** ffmpeg finds every silence longer than
    `--min-silence-length` (default, and floor with `auto`: 1.5 s below
    −35 dBFS) in one quick pass.
-1b. **VAD pre-pass (`--jingle` only):** a bundled voice-activity model
+1b. **VAD pre-pass (default; skipped only with `--max-jingle-length 0` and no
+   `--mark-before-jingle`):** a bundled voice-activity model
    ([Silero VAD](https://github.com/snakers4/silero-vad)) scans the whole file
    for speech vs. non-speech. A jingle is music, which reads as non-speech to
    a speech detector just like silence does — so this catches jingles the
@@ -204,9 +212,8 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    Seven") or precedes
    it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). Window borders are
    snapped to silence mid-points so no decode ever cuts
-   a word in half, and each detection is pinpointed to its own preceding
-   silence right away — a confident mark even skips the remaining windows
-   that overlap its own. By default
+   a word in half, and each detection is pinpointed right away — a confident
+   mark even skips the remaining windows that overlap its own. By default
    (`--min-silence-length auto`), starting from the second mark found (the
    silence before the first mark is usually the intro/title silence, often
    longer than the breaks between chapters, so it's not used to tighten),
@@ -239,8 +246,9 @@ keeps its exact position.
   your audiobook's pauses vary too much for that to help, an explicit
   threshold like `-n 2.5` still works — far fewer Whisper probes, much faster
   run, but chapters go missing if it's set too high.
-- **Jingles:** if you know the jingle is short, say so: `-j -X 15` shrinks the
-  probe window and speeds things up.
+- **Jingles:** if you know the jingle is short, `-X 15` narrows the probe
+  window and speeds things up; if there's no jingle at all, `-X 0` narrows it
+  all the way back down and skips the VAD pre-pass too.
 - **Accuracy vs. speed:** `--model turbo` (default) is a good balance;
   `large` is the most accurate and slowest. Going smaller than `small` is
   not advisable for real audiobooks: chapter detection stands or falls with

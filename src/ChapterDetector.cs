@@ -22,13 +22,14 @@ public readonly record struct DetectedChapter(int Number, double TimeSeconds, do
 /// one that excludes chapter 1 - whose intro-to-first-chapter transition is often atypically long
 /// or short and would otherwise skew the picture of the book's regular chapter breaks.</summary>
 /// <param name="MinPrecedingSilenceSeconds">The shortest silence found directly before a detected
-/// chapter phrase - in --jingle mode the silence leading the jingle (a jingle framed by two
-/// silences counts only its leading one); null when no chapter had a qualifying preceding
+/// chapter phrase - when the VAD pre-pass ran, the silence leading the jingle (a jingle framed
+/// by two silences counts only its leading one); null when no chapter had a qualifying preceding
 /// silence.</param>
 /// <param name="MinInterChapterSilenceSeconds">As <paramref name="MinPrecedingSilenceSeconds"/>,
 /// but excluding chapter 1; null when no chapter other than 1 had a qualifying silence.</param>
 /// <param name="MaxJingleLengthSeconds">The longest jingle found before a detected chapter phrase
-/// (--jingle mode only); null in plain mode, or when no jingle was measured.</param>
+/// (only measured when the VAD pre-pass ran); null when the pre-pass did not run, or when no
+/// jingle was measured.</param>
 /// <param name="MaxInterChapterJingleSeconds">As <paramref name="MaxJingleLengthSeconds"/>, but
 /// excluding chapter 1; null when no chapter other than 1 had a measured jingle.</param>
 /// <param name="WhisperAudioSeconds">Total audio decoded and handed to Whisper during detection,
@@ -82,8 +83,10 @@ public sealed class ChapterDetector
     /// <summary>Noise floor in dBFS for silence detection.</summary>
     private const int SilenceNoiseDb = -35;
 
-    /// <summary>Probe window length in seconds when no jingle is expected.
-    /// With --jingle the window is --max-jingle-length seconds instead.</summary>
+    /// <summary>Probe window length in seconds when --max-jingle-length is 0 (no jingle
+    /// expected). Above 0, the window is --max-jingle-length seconds (plus
+    /// <see cref="PhraseMarginSeconds"/>) instead, regardless of whether the VAD pre-pass
+    /// itself ends up running - see <see cref="CliOptions.RunVadPrePass"/>.</summary>
     private const double ProbeSecondsPlain = 12;
 
     /// <summary>
@@ -103,7 +106,7 @@ public sealed class ChapterDetector
     /// <summary>
     /// How far past a Pass 2 window's natural end <see cref="PlanWindowEnd"/> searches for a
     /// seam when that end does not lie inside the next window (no shared border to snap): the
-    /// nearest silence - or, with --jingle, VAD non-speech region - mid-point within this many
+    /// nearest silence - or, when the VAD pre-pass ran, VAD non-speech region - mid-point within this many
     /// seconds after the natural end becomes the window's end, so even a stand-alone window
     /// stops at a word-safe cut instead of possibly mid-word (a mid-word tail is exactly what
     /// makes Whisper garble a window's final phrase). Extension only: a target before the
@@ -112,15 +115,27 @@ public sealed class ChapterDetector
     /// </summary>
     private const double WindowEndSnapSearchSeconds = 5.0;
 
-    /// <summary>Without a jingle the phrase must start within this many seconds after the silence.</summary>
+    /// <summary>Without a VAD pre-pass, the phrase must start within this many seconds after
+    /// the silence that triggered its probe (or a closer anchor silence still within the
+    /// window) to be accepted as a real chapter announcement rather than an unrelated in-text
+    /// mention.</summary>
     private const double PhraseLatestStart = 5.0;
 
     /// <summary>Flat margin added to --max-jingle-length so the phrase after the jingle
     /// still fits into the probe window.</summary>
     private const double PhraseMarginSeconds = 5.0;
 
-    /// <summary>Chapter marks are placed this many seconds before a jingle (per specification).</summary>
+    /// <summary>With --mark-before-jingle, chapter marks are placed this many seconds before
+    /// a jingle (per specification).</summary>
     private const double JingleLeadSeconds = 0.5;
+
+    /// <summary>
+    /// Without --mark-before-jingle, the chapter mark is placed this many seconds before the
+    /// detected phrase itself, no matter what precedes it (no silence/jingle anchor is
+    /// consulted for the timestamp at all - only for the --min-silence-length/
+    /// --max-jingle-length auto statistics, which keep working exactly as before).
+    /// </summary>
+    private const double DefaultMarkLeadSeconds = 0.25;
 
     /// <summary>
     /// Slack allowed when matching a VAD non-speech region (the jingle) to a Whisper phrase: the
@@ -192,7 +207,7 @@ public sealed class ChapterDetector
     private const double MinJingleObservationSeconds = 2.0;
 
     /// <summary>
-    /// With --jingle, a VAD "speech" segment shorter than this, sandwiched between two non-speech
+    /// When the VAD pre-pass ran, a VAD "speech" segment shorter than this, sandwiched between two non-speech
     /// regions, does not end the surrounding jingle - the two regions are merged and the blip is
     /// treated as VAD noise rather than a genuine return to narration. Silero VAD is not reliable
     /// on jingle music: a vocal-like transient or a strong rhythmic passage can cross its speech
@@ -237,7 +252,7 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// How far around a Pass 3 chunk's natural border the seam search reaches, in both
-    /// directions: the border snaps to the nearest silence - or, with --jingle, VAD non-speech
+    /// directions: the border snaps to the nearest silence - or, when the VAD pre-pass ran, VAD non-speech
     /// region - mid-point within this range, and the next chunk then starts exactly at that
     /// seam, with no overlap and nothing decoded twice. Bounded so a chunk can grow to at most
     /// <see cref="GapChunkSeconds"/> plus this: whisper.cpp has no hard input-length cap (it
@@ -290,8 +305,8 @@ public sealed class ChapterDetector
     /// <summary>
     /// Minimum length, both for a gap between transcribed segments (or before the first/after
     /// the last one) to be worth a focused re-transcription attempt, and - for Pass 3's version
-    /// of the same fallback (see <see cref="ScanGapRetriesAsync"/>) - for a silence or, with
-    /// --jingle, VAD non-speech region overlapping that gap to count as "plausibly the real
+    /// of the same fallback (see <see cref="ScanGapRetriesAsync"/>) - for a silence or, when the
+    /// VAD pre-pass ran, VAD non-speech region overlapping that gap to count as "plausibly the real
     /// jingle/scene transition" rather than an ordinary in-narration pause. Whisper's single-shot
     /// decoding of a long window can silently skip a stretch of audio altogether - typically
     /// silence or a jingle straddling the actual chapter phrase - rather than transcribing it as
@@ -345,22 +360,24 @@ public sealed class ChapterDetector
     private double _whisperTranscribeSeconds;
 
     /// <summary>Per detected chapter number, the length of the silence that preceded its phrase
-    /// (in --jingle mode, the silence preceding the jingle - see <see cref="RecordChapterStats"/>).
-    /// Keyed by number so a re-detection overwrites; filtered to the surviving chapters when the
-    /// per-file minimum is computed. Reset per file.</summary>
+    /// (when the VAD pre-pass ran, the silence preceding the jingle - see
+    /// <see cref="RecordChapterStats"/>). Keyed by number so a re-detection overwrites; filtered
+    /// to the surviving chapters when the per-file minimum is computed. Reset per file.</summary>
     private readonly Dictionary<int, double> _chapterSilenceSeconds = [];
 
     /// <summary>Per detected chapter number, the length of the jingle that preceded its phrase
-    /// (--jingle mode only). Reset per file; feeds the per-file maximum-jingle statistic.</summary>
+    /// (only measured when the VAD pre-pass ran). Reset per file; feeds the per-file
+    /// maximum-jingle statistic.</summary>
     private readonly Dictionary<int, double> _chapterJingleSeconds = [];
 
     /// <summary>Creates a detector bound to the given tools and options.</summary>
     /// <param name="options">Validated command line options.</param>
     /// <param name="audio">Audio source used for silence detection and PCM decoding.</param>
     /// <param name="transcriber">Loaded speech recognizer.</param>
-    /// <param name="vad">Voice activity detector used for the --jingle full-file pre-pass
-    /// (finds jingle transitions with no detectable amplitude gap); null when --jingle is not
-    /// in effect, or in tests that don't exercise that path.</param>
+    /// <param name="vad">Voice activity detector used for the full-file VAD pre-pass (finds
+    /// jingle transitions with no detectable amplitude gap); null when
+    /// <see cref="CliOptions.RunVadPrePass"/> is false, or in tests that don't exercise that
+    /// path.</param>
     /// <param name="pass3Transcriber">Transcriber to use for pass 3 (gap filling), when
     /// <c>--pass3-model</c> asks for a model other than the main one. Null (the default) means
     /// pass 3 reuses <paramref name="transcriber"/>, i.e. the same single-model behavior as
@@ -393,7 +410,7 @@ public sealed class ChapterDetector
         _chapterJingleSeconds.Clear();
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
-        var probeSeconds = _options.Jingle ? jingleCeilingSeconds : ProbeSecondsPlain;
+        var probeSeconds = _options.MaxJingleSeconds > 0 ? jingleCeilingSeconds : ProbeSecondsPlain;
 
         // With --max-jingle-length auto, the adapted probe window: JingleObservationSafetyFactor
         // times the longest real inter-chapter jingle observed so far, plus PhraseMarginSeconds,
@@ -410,13 +427,14 @@ public sealed class ChapterDetector
         // the whole point of the reset is that every re-probe runs at the ceiling.
         var reprobing = false;
 
-        // Pass 1: silence scan (one full pass over the file). With --jingle, a VAD pre-pass
-        // runs concurrently over the very same decode (see DetectSilencesAndStreamPcmAsync) -
-        // silencedetect alone never produces a Pass 2 candidate at a chapter transition where
-        // the jingle abuts speech on both sides with no amplitude gap; VAD sees that transition
-        // as a non-speech region (music, like silence, reads as non-speech to a speech
-        // detector) regardless of amplitude, so it can catch what silencedetect misses. See
-        // ComputeJingleMark for how the two detectors' findings combine to place the mark.
+        // Pass 1: silence scan (one full pass over the file). When the VAD pre-pass is enabled
+        // (see CliOptions.RunVadPrePass), it runs concurrently over the very same decode (see
+        // DetectSilencesAndStreamPcmAsync) - silencedetect alone never produces a Pass 2
+        // candidate at a chapter transition where the jingle abuts speech on both sides with no
+        // amplitude gap; VAD sees that transition as a non-speech region (music, like silence,
+        // reads as non-speech to a speech detector) regardless of amplitude, so it can catch
+        // what silencedetect misses. See ComputeJingleMark for how the two detectors' findings
+        // combine to place the mark with --mark-before-jingle.
         work.BeginPhase("Pass 1", info.SizeBytes);
         // The scan itself always goes down to MinStoredSilenceSeconds (or --min-silence-length
         // itself, if that is lower still) so short silences are available for overlap-border
@@ -430,7 +448,7 @@ public sealed class ChapterDetector
         // edge adjustment (see AdjustJingleRegion): the merged regions alone no longer say where
         // the speech blips inside them lie. Empty when VAD is off.
         var speechSegments = new List<SpeechSegment>();
-        if (_options.Jingle && _vad is { } vad)
+        if (_vad is { } vad)
         {
             allSilences = await _audio.DetectSilencesAndStreamPcmAsync(
                 file, info.DurationSeconds, storedSilenceFloor, SilenceNoiseDb,
@@ -449,7 +467,7 @@ public sealed class ChapterDetector
 
         _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= " +
                      $"{_options.MinSilenceSeconds:0.#} s found" + (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
-        if (_options.Jingle && _vad != null)
+        if (_vad != null)
             // speechSegments.Count and nonSpeechRegions.Count always differ by exactly one (a
             // non-speech region is the gap between two consecutive speech segments) before the
             // merge/filter cleanup below can drop some, and always differ by at most one afterwards - the
@@ -471,7 +489,7 @@ public sealed class ChapterDetector
         // own MinJingleObservationSeconds filter, kept here as well as a defensive invariant;
         // the upper bound (regions too long to ever be this book's jingle) is rechecked against
         // the (possibly since-narrowed) probe window inside the Pass 2 loop below.
-        if (_options.Jingle)
+        if (_vad != null)
         {
             foreach (var region in nonSpeechRegions)
             {
@@ -497,7 +515,7 @@ public sealed class ChapterDetector
         double WindowEndFor(IReadOnlyList<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)> list, int index)
             => PlanWindowEnd(list[index].Start,
                 index + 1 < list.Count ? list[index + 1].Start : null,
-                probeSeconds, info.DurationSeconds, allSilences, nonSpeechRegions, _options.Jingle);
+                probeSeconds, info.DurationSeconds, allSilences, nonSpeechRegions, _vad != null);
 
         // Pass 2 progress is position-based: the bar shows how far into the file's play time the
         // current candidate lies, not how many probes have run. Probe costs vary wildly (full
@@ -603,7 +621,7 @@ public sealed class ChapterDetector
                     // seam still covered by the cache; the border fallback means no seam
                     // exists, which also means no chapter transition sits in the overlap.
                     var splitPoint = FindOverlapSplitPoint(
-                        start, cacheTo, windowEnd, allSilences, nonSpeechRegions, _options.Jingle,
+                        start, cacheTo, windowEnd, allSilences, nonSpeechRegions, _vad != null,
                         allowBeyondBorder: false);
                     var samples = await _audio.DecodePcmAsync(file, splitPoint,
                         windowEnd - splitPoint, info.InputDecoder, ct);
@@ -645,7 +663,7 @@ public sealed class ChapterDetector
             // then work in window-relative time; the absolute trimmed transcript is kept for
             // ResolveJingleAnchor's narration-aware jingle edge adjustment.
             var trimmedAbs = TrimLeadingNonSpeech(
-                windowSegmentsAbs, allSilences, nonSpeechRegions, _options.Jingle);
+                windowSegmentsAbs, allSilences, nonSpeechRegions, _vad != null);
             var segments = ShiftSegments(trimmedAbs, -start);
 
             var marks = new List<(int Number, Silence? MarkSilence, double Confidence)>();
@@ -667,14 +685,16 @@ public sealed class ChapterDetector
                 var phraseAbs = start + match.PhraseStartSeconds;
                 // The silence the mark is placed into (feeds the --min-silence-length auto
                 // tightening; null when the mark sits on a VAD region or on nothing at all)
-                // and, with --jingle, the region it sits on (feeds --max-jingle-length auto).
+                // and, when the VAD pre-pass ran, the region it sits on (feeds
+                // --max-jingle-length auto). Recorded for the auto mechanisms regardless of
+                // --mark-before-jingle - only the final `time` below depends on that option.
                 Silence? markSilence;
                 NonSpeechRegion? markRegion = null;
                 double time;
-                if (_options.Jingle)
+                if (_vad != null)
                 {
-                    // With --jingle, anchor to the VAD jingle region ending at the phrase, not to
-                    // whichever silence triggered this probe: a false in-text pause earlier in the
+                    // Anchor to the VAD jingle region ending at the phrase, not to whichever
+                    // silence triggered this probe: a false in-text pause earlier in the
                     // previous chapter does not lead that region, so it must not become the anchor
                     // (which would mark at the pause and feed the auto mechanisms a bogus jingle
                     // length). See ResolveJingleAnchor. The candidate's own VAD region is used
@@ -691,15 +711,17 @@ public sealed class ChapterDetector
                         nonSpeechRegions, candidateRegion, speechSegments, trimmedAbs);
                     if (markSilence == null && markRegion == null)
                         markSilence = candidate.Silence;
-                    time = ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds);
+                    time = _options.MarkBeforeJingle
+                        ? ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds)
+                        : Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
                 }
                 else if (match.PhraseStartSeconds <= PhraseLatestStart)
                 {
-                    // The classic shape: the phrase directly follows the triggering silence,
-                    // whose end (the candidate start) is where the mark belongs. A match at
-                    // the very start of the file has no triggering silence; the phrase
-                    // position itself is the mark there.
-                    time = Math.Max(0, start + (start == 0 ? match.PhraseStartSeconds : 0));
+                    // The classic shape: the phrase directly follows the triggering silence.
+                    // Without --mark-before-jingle the mark always goes DefaultMarkLeadSeconds
+                    // before the phrase itself, regardless of what precedes it; markSilence is
+                    // still recorded for the --min-silence-length auto tightening.
+                    time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
                     markSilence = candidate.Silence;
                 }
                 else
@@ -712,14 +734,12 @@ public sealed class ChapterDetector
                     // the same 5 s the classic rule grants, and the silence must be at least
                     // --min-silence-length long - a shorter breath pause in front of an in-text
                     // mention ("Chapter eight had been hard.") must not qualify as an anchor.
-                    // The mark is pinpointed at that silence's end, exactly where a probe
-                    // triggered by the silence itself would have placed it.
                     var anchor = FindRealAnchorSilence(start, phraseAbs, allSilences);
                     if (anchor is not { } a
                         || phraseAbs - a.EndSeconds > PhraseLatestStart
                         || a.EndSeconds - a.StartSeconds < _options.MinSilenceSeconds)
                         continue;
-                    time = a.EndSeconds;
+                    time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
                     markSilence = a;
                 }
 
@@ -738,7 +758,7 @@ public sealed class ChapterDetector
                              $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
                              MissingNote(missingNumbers));
 
-                if (_options.Jingle && _options.AutoMaxJingle && found.Count > 1)
+                if (_vad != null && _options.AutoMaxJingle && found.Count > 1)
                 {
                     // found.Count > 1 means this is at least the second mark found, so its
                     // anchor is a real inter-chapter jingle - not the intro-to-chapter-1 gap,
@@ -837,7 +857,7 @@ public sealed class ChapterDetector
                 {
                     _log?.Invoke($"sequence gap between chapter {previousNumber} and {n}, " +
                                  $"re-probing {skippedSinceLastMark.Count} skipped candidate(s) unconditionally");
-                    if (_options.Jingle && _options.AutoMaxJingle && probeSeconds != jingleCeilingSeconds)
+                    if (_vad != null && _options.AutoMaxJingle && probeSeconds != jingleCeilingSeconds)
                     {
                         probeSeconds = jingleCeilingSeconds;
                         _log?.Invoke($"jingle probe window reset to {probeSeconds:0.#} s for the re-probe");
@@ -874,7 +894,7 @@ public sealed class ChapterDetector
                     reprobing = false;
                     // Re-probing done: bring the jingle window back down from the ceiling to the
                     // adapted value, including anything the re-probed marks just taught us.
-                    if (_options.Jingle && _options.AutoMaxJingle &&
+                    if (_vad != null && _options.AutoMaxJingle &&
                         adaptedWindowSeconds is { } restoredWindow && probeSeconds != restoredWindow)
                     {
                         probeSeconds = restoredWindow;
@@ -1231,8 +1251,8 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// A gap between two consecutive <see cref="SpeechSegment"/>s found by the VAD pre-pass -
-    /// i.e. a region VAD considers non-speech, flanked by speech on both sides. With --jingle,
-    /// a silence-less jingle transition shows up as one of these (music, like silence, reads
+    /// i.e. a region VAD considers non-speech, flanked by speech on both sides. A silence-less
+    /// jingle transition shows up as one of these (music, like silence, reads
     /// as non-speech to a speech detector). Deliberately does not cover leading/trailing
     /// non-speech at the very start/end of the file - the synthetic file-start candidate
     /// (Start = 0) already covers a jingle-before-chapter-1 edge case without it.
@@ -1336,14 +1356,18 @@ public sealed class ChapterDetector
         => LeadingSilence(region, silences, speech)?.EndSeconds ?? region.StartSeconds;
 
     /// <summary>
-    /// Resolves the anchor for placing a --jingle chapter mark, independent of whichever silence
-    /// happened to trigger the probe. The jingle is the VAD non-speech region the phrase belongs
-    /// to (see <see cref="FindJingleRegionForPhrase"/> - by containment, so the announcement being
-    /// spoken <em>inside</em> the jingle does not lose the region); a silencedetect silence is
-    /// accepted as the anchor <em>only</em> when it <see cref="LeadingSilence">leads that region</see>
-    /// (its end lies inside it) - the classic "silence then jingle" transition, where the mark goes
-    /// 0.5 s before the silence. When the region has no leading silence (a silence-less jingle) the
-    /// region itself is the anchor and the mark goes at the jingle start with no lead.
+    /// Resolves the jingle/silence anchor for a matched phrase, independent of whichever silence
+    /// happened to trigger the probe - used whenever the VAD pre-pass ran, both to place the
+    /// mark with --mark-before-jingle and to feed the --min-silence-length/--max-jingle-length
+    /// auto mechanisms and per-file statistics regardless of that option. The jingle is the VAD
+    /// non-speech region the phrase belongs to (see <see cref="FindJingleRegionForPhrase"/> - by
+    /// containment, so the announcement being spoken <em>inside</em> the jingle does not lose the
+    /// region); a silencedetect silence is accepted as the anchor <em>only</em> when it
+    /// <see cref="LeadingSilence">leads that region</see> (its end lies inside it) - the classic
+    /// "silence then jingle" transition, where --mark-before-jingle places the mark 0.5 s before
+    /// the silence. When the region has no leading silence (a silence-less jingle) the region
+    /// itself is the anchor and --mark-before-jingle places the mark at the jingle start with no
+    /// lead.
     /// <para>
     /// Crucially, a false in-text pause earlier in the previous chapter's narration does
     /// <em>not</em> lead the jingle region, so it is never mistaken for the anchor even when it
@@ -1530,23 +1554,25 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Records, for one detected chapter, the length of the silence and (in --jingle mode) the
-    /// jingle that preceded its phrase - the raw material for the per-file minimum-silence and
-    /// maximum-jingle statistics. Keyed by chapter number, so a later re-detection of the same
-    /// chapter simply overwrites; the per-file aggregate is then taken over only the chapters that
-    /// survive into the final result. The silence recorded is the one the mark anchored to: in
-    /// plain mode the silence directly before the phrase; in --jingle mode the silence leading the
-    /// jingle (a jingle framed between two silences contributes only its <em>leading</em> one, per
-    /// <see cref="ResolveJingleAnchor"/>), or none for a silence-less jingle. The jingle length is
-    /// measured from its true start (the leading silence's end, else the region start) up to the
-    /// phrase, clipped at the region end so an announcement spoken inside the jingle - or a
-    /// merge-inflated region end - never overstates it, matching the --max-jingle-length auto
-    /// observation.
+    /// Records, for one detected chapter, the length of the silence and (when the VAD pre-pass
+    /// ran) the jingle that preceded its phrase - the raw material for the per-file
+    /// minimum-silence and maximum-jingle statistics. This runs regardless of
+    /// --mark-before-jingle, since the auto mechanisms and statistics stay meaningful even when
+    /// marks are placed at the default fixed offset. Keyed by chapter number, so a later
+    /// re-detection of the same chapter simply overwrites; the per-file aggregate is then taken
+    /// over only the chapters that survive into the final result. The silence recorded is the
+    /// one the mark anchored to: without a VAD pre-pass, the silence directly before the phrase;
+    /// with one, the silence leading the jingle (a jingle framed between two silences
+    /// contributes only its <em>leading</em> one, per <see cref="ResolveJingleAnchor"/>), or none
+    /// for a silence-less jingle. The jingle length is measured from its true start (the leading
+    /// silence's end, else the region start) up to the phrase, clipped at the region end so an
+    /// announcement spoken inside the jingle - or a merge-inflated region end - never overstates
+    /// it, matching the --max-jingle-length auto observation.
     /// </summary>
     /// <param name="number">The detected chapter number.</param>
     /// <param name="precedingSilence">The silence the mark anchored to, or null when none.</param>
     /// <param name="jingleRegion">The jingle region preceding the phrase, or null (always null
-    /// outside --jingle mode).</param>
+    /// when the VAD pre-pass did not run).</param>
     /// <param name="phraseAbs">Absolute phrase start time, the clip point for the jingle length.</param>
     private void RecordChapterStats(
         int number, Silence? precedingSilence, NonSpeechRegion? jingleRegion, double phraseAbs)
@@ -1582,9 +1608,9 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Computes where to place a --jingle chapter mark, given the phrase time and the
+    /// Computes where --mark-before-jingle places a chapter mark, given the phrase time and the
     /// silence/VAD non-speech region the caller has already resolved to truly precede it (Pass
-    /// 2's ProbeAsync and Pass 3's TranscribeRegionAsync each resolve these their own way, but
+    /// 2's ProbeAsync and Pass 3's RecordGapChapterMatch each resolve these their own way, but
     /// share this decision): a preceding silence takes priority (mark 0.5 s before it, clamped
     /// to the silence's own length so the lead can never overshoot into the previous chapter's
     /// trailing narration); absent one, a preceding VAD non-speech region places the mark at
@@ -1701,10 +1727,11 @@ public sealed class ChapterDetector
     /// Finds the silence that truly precedes a matched phrase, independent of which candidate
     /// silence actually triggered the probe. A probe window can span the trailing speech of the
     /// previous chapter, an unrelated in-text pause long enough to itself have passed the
-    /// --min-silence-length threshold, the real inter-chapter silence, the jingle (with
-    /// --jingle) and finally the phrase - so trusting the probe's own triggering silence, both
-    /// for the jingle-mode mark position and for the --min-silence-length/--max-jingle-length
-    /// auto mechanisms, would anchor to the wrong (earlier, false) silence whenever that
+    /// --min-silence-length threshold, the real inter-chapter silence, the jingle (when the VAD
+    /// pre-pass ran) and finally the phrase - so trusting the probe's own triggering silence,
+    /// both for the --mark-before-jingle mark position and for the --min-silence-length/
+    /// --max-jingle-length auto mechanisms, would anchor to the wrong (earlier, false) silence
+    /// whenever that
     /// happens. Returns null when no silence between the window start and the phrase was found,
     /// meaning the triggering silence (ending exactly at windowStart) was the real one after all.
     /// </summary>
@@ -1722,7 +1749,7 @@ public sealed class ChapterDetector
     /// <summary>
     /// Finds where to cut between two adjacent Pass 2 probe windows so the seam never falls
     /// mid-word: the mid-point of the nearest qualifying silence, falling back to a VAD
-    /// non-speech region under the same rules in --jingle mode when no silence qualifies, and
+    /// non-speech region under the same rules when the VAD pre-pass ran and no silence qualifies, and
     /// finally to the border itself (no snap) when neither exists - which almost certainly
     /// means there is no chapter transition near the border to begin with, so a mid-word cut
     /// there is not a real risk. A candidate target's mid-point must lie inside window 2 -
@@ -1750,8 +1777,9 @@ public sealed class ChapterDetector
     /// <param name="windowEnd">End of window 2.</param>
     /// <param name="allSilences">Every silence Pass 1 found, down to <see
     /// cref="MinStoredSilenceSeconds"/> - not just the ones at or above --min-silence-length.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
-    /// <param name="jingle">True when --jingle is in effect, enabling the VAD region fallback.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
+    /// <param name="jingle">True when the VAD pre-pass ran (VAD non-speech regions are
+    /// populated), enabling the VAD region fallback.</param>
     /// <param name="allowBeyondBorder">True at planning time (the border itself moves to the
     /// seam); false at reuse time (the cache ends at the border, see above).</param>
     private static double FindOverlapSplitPoint(
@@ -1770,7 +1798,7 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// The nearest word-safe seam to <paramref name="border"/>: the mid-point of a silence -
-    /// or, with --jingle, of a VAD non-speech region when no silence qualifies - within
+    /// or, when the VAD pre-pass ran, of a VAD non-speech region when no silence qualifies - within
     /// (<paramref name="earliestExclusive"/>, <paramref name="latestInclusive"/>], or null when
     /// neither kind of target has its mid-point in that range. No word straddles the mid-point
     /// of a silence, which is what makes it the safest place to cut audio that is transcribed
@@ -1792,8 +1820,9 @@ public sealed class ChapterDetector
     /// seam must already be covered by a cached transcript.</param>
     /// <param name="allSilences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
-    /// <param name="jingle">True when --jingle is in effect, enabling the VAD region fallback.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
+    /// <param name="jingle">True when the VAD pre-pass ran (VAD non-speech regions are
+    /// populated), enabling the VAD region fallback.</param>
     private static double? FindNearestSeam(
         double border, double earliestExclusive, double latestInclusive, bool upperInclusive,
         double? targetStartAtOrBefore,
@@ -1820,7 +1849,7 @@ public sealed class ChapterDetector
     /// with no pre-computed bulk plan to go stale). The window naturally spans
     /// <paramref name="probeSeconds"/> from its candidate start (clamped to the file end), but
     /// when the next candidate's window overlaps it, their shared border is snapped to the
-    /// nearest silence (or, with --jingle, VAD non-speech region) mid-point anywhere within
+    /// nearest silence (or, when the VAD pre-pass ran, VAD non-speech region) mid-point anywhere within
     /// that next window's natural span - see <see cref="FindOverlapSplitPoint"/> - and this
     /// window's decode ends exactly there, be that before or beyond its natural end. The next
     /// probe's fresh decode then starts at the very same seam (its cached-transcript reuse
@@ -1844,8 +1873,9 @@ public sealed class ChapterDetector
     /// <param name="durationSeconds">Total play time; window ends are clamped to it.</param>
     /// <param name="allSilences">Every silence Pass 1 found, down to <see
     /// cref="MinStoredSilenceSeconds"/>.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
-    /// <param name="jingle">True when --jingle is in effect, enabling the VAD region fallback.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
+    /// <param name="jingle">True when the VAD pre-pass ran (VAD non-speech regions are
+    /// populated), enabling the VAD region fallback.</param>
     internal static double PlanWindowEnd(
         double start, double? nextStart, double probeSeconds, double durationSeconds,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, bool jingle)
@@ -2001,7 +2031,7 @@ public sealed class ChapterDetector
     /// <summary>
     /// Fully transcribes a region of the file and returns all chapter starts found in it. Used
     /// to close sequence gaps left by the silence-probe fast path (Pass 3). Every chunk border
-    /// is snapped to the nearest silence (or, with --jingle, VAD non-speech region) mid-point
+    /// is snapped to the nearest silence (or, when the VAD pre-pass ran, VAD non-speech region) mid-point
     /// within <see cref="Pass3SeamSearchSeconds"/> of its natural position; consecutive chunks
     /// then abut exactly at that word-safe seam - no overlap, nothing decoded twice - and a
     /// phrase straddling the seam itself is still found by carrying the previous chunk's
@@ -2049,7 +2079,7 @@ public sealed class ChapterDetector
                     Math.Max(chunkStart, naturalEnd - Pass3SeamSearchSeconds),
                     Math.Min(naturalEnd + Pass3SeamSearchSeconds, toSeconds),
                     upperInclusive: true, targetStartAtOrBefore: null,
-                    allSilences, nonSpeechRegions, _options.Jingle)
+                    allSilences, nonSpeechRegions, _vad != null)
                 : null;
             var chunkEnd = seam ?? naturalEnd;
 
@@ -2069,7 +2099,7 @@ public sealed class ChapterDetector
             List<TranscriptSegment> matchSegments = carried.Count > 0 ? [.. carried, .. freshAbs] : freshAbs;
             // Same leading silence/jingle correction Pass 2 applies, so a phrase Whisper
             // timestamped from the pause before it is anchored from its real onset here too.
-            matchSegments = TrimLeadingNonSpeech(matchSegments, allSilences, nonSpeechRegions, _options.Jingle);
+            matchSegments = TrimLeadingNonSpeech(matchSegments, allSilences, nonSpeechRegions, _vad != null);
 
             // Unlike Pass 2 there is no window-relative timing rule here, so matching simply
             // runs in absolute file time: a match's PhraseStartSeconds is already absolute.
@@ -2130,24 +2160,25 @@ public sealed class ChapterDetector
     /// <summary>
     /// Records one phrase match found while scanning a Pass 3 gap chunk (its normal transcript,
     /// or <see cref="ScanGapRetriesAsync"/>'s fallback) as a detected chapter: resolves where the
-    /// mark itself goes (silence-before-phrase, or with --jingle its VAD region), records the
-    /// chapter's per-file statistics, updates <paramref name="found"/>/<paramref
-    /// name="remaining"/> and the progress bar's chapter state, and logs it. Shared between both
-    /// callers so the mark-placement logic - the same rules <see cref="TranscribeRegionAsync"/>'s
-    /// doc comment describes - stays in exactly one place.
+    /// mark itself goes (a fixed offset before the phrase by default, or with
+    /// --mark-before-jingle its VAD region), records the chapter's per-file statistics, updates
+    /// <paramref name="found"/>/<paramref name="remaining"/> and the progress bar's chapter
+    /// state, and logs it. Shared between both callers so the mark-placement logic - the same
+    /// rules <see cref="TranscribeRegionAsync"/>'s doc comment describes - stays in exactly one
+    /// place.
     /// </summary>
     /// <param name="match">The confirmed phrase match, in absolute file time.</param>
     /// <param name="matchSegments">The transcript the match was found in (absolute file time),
-    /// for --jingle's VAD edge adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
+    /// for the VAD edge adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
     /// <param name="found">Chapters found in this gap so far; appended to.</param>
     /// <param name="remaining">Still-missing chapter numbers for this gap; the match's number is
     /// removed from it.</param>
     /// <param name="knownChapters">Chapters already detected outside this gap, so the progress
     /// bar's chapter state reflects the whole file.</param>
     /// <param name="allSilences">Every silence Pass 1 stored, for anchor resolution.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when VAD is off), for
-    /// --jingle's anchor resolution.</param>
-    /// <param name="speechSegments">Raw VAD speech segments, for --jingle's edge adjustment.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when the VAD pre-pass did
+    /// not run), for the jingle anchor resolution.</param>
+    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
     /// <param name="work">The file's progress tracker.</param>
     private void RecordGapChapterMatch(
         PhraseMatch match, List<TranscriptSegment> matchSegments,
@@ -2161,28 +2192,30 @@ public sealed class ChapterDetector
         // per-file statistics can be recorded once, uniformly (see RecordChapterStats).
         Silence? statSilence = null;
         NonSpeechRegion? statRegion = null;
-        if (_options.Jingle)
+        if (_vad != null)
         {
             // Same VAD-region-primary anchor resolution as Pass 2 (ResolveJingleAnchor), just
             // against a fixed lookback since a gap chunk has no meaningful probe window start of
-            // its own; ComputeJingleMark then decides the mark exactly as Pass 2 would. Resolving
-            // from the region rather than the nearest silence keeps this from anchoring a
-            // silence-less jingle transition to a false in-text pause that merely happens to fall
-            // within the lookback.
+            // its own; ComputeJingleMark then decides the mark exactly as Pass 2 would when
+            // --mark-before-jingle is set. Resolving from the region rather than the nearest
+            // silence keeps this from anchoring a silence-less jingle transition to a false
+            // in-text pause that merely happens to fall within the lookback.
             var lookback = _options.MaxJingleSeconds + PhraseMarginSeconds;
             var (anchorSilence, vadRegion) = ResolveJingleAnchor(
                 phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
                 nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
-            time = ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds);
+            time = _options.MarkBeforeJingle
+                ? ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds)
+                : Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
             (statSilence, statRegion) = (anchorSilence, vadRegion);
         }
         else
         {
-            // Pinpoint the mark at the end of the silence directly preceding the phrase - the
-            // same "the chapter starts where the break ends" placement Pass 2 uses - falling
-            // back to the phrase start when none is close enough.
+            // Without a VAD pre-pass, the mark always goes DefaultMarkLeadSeconds before the
+            // phrase itself; the preceding silence (if any close enough) is still located
+            // purely to feed the --min-silence-length auto tightening via RecordChapterStats.
             var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStart, phraseAbs, allSilences);
-            time = anchor?.EndSeconds ?? phraseAbs;
+            time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
             statSilence = anchor;
         }
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
@@ -2198,8 +2231,8 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Second-chance scan for a Pass 3 gap chunk that, after its normal transcript, still has
-    /// missing chapter numbers (<paramref name="remaining"/>): every stored silence, or with
-    /// --jingle also every VAD non-speech region, at least <see cref="GapRetryThresholdSeconds"/>
+    /// missing chapter numbers (<paramref name="remaining"/>): every stored silence, or, when
+    /// the VAD pre-pass ran, also every VAD non-speech region, at least <see cref="GapRetryThresholdSeconds"/>
     /// long and entirely inside this chunk that <em>none</em> of the chunk's own fresh segments
     /// (not the bridged tail carried in from the previous chunk, already covered by its own
     /// pass) actually covers - i.e. Whisper produced no speech at all over that stretch - is
@@ -2227,8 +2260,8 @@ public sealed class ChapterDetector
     /// <param name="knownChapters">Chapters already detected outside this gap.</param>
     /// <param name="allSilences">Every silence Pass 1 stored - both for anchor resolution and as
     /// retry candidates.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when VAD is off).</param>
-    /// <param name="speechSegments">Raw VAD speech segments, for --jingle's edge adjustment.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when the VAD pre-pass did not run).</param>
+    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
     /// <param name="work">The file's progress tracker.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ScanGapRetriesAsync(
@@ -2242,7 +2275,7 @@ public sealed class ChapterDetector
             .Where(s => s.EndSeconds - s.StartSeconds >= GapRetryThresholdSeconds &&
                         s.StartSeconds >= chunkStart && s.EndSeconds <= chunkEnd)
             .Select(s => (s.StartSeconds, s.EndSeconds));
-        if (_options.Jingle)
+        if (_vad != null)
             candidates = candidates.Concat(nonSpeechRegions
                 .Where(r => r.EndSeconds - r.StartSeconds >= GapRetryThresholdSeconds &&
                             r.StartSeconds >= chunkStart && r.EndSeconds <= chunkEnd)
@@ -2272,7 +2305,7 @@ public sealed class ChapterDetector
                 var subSegments = await TranscribeCountingAsync(subSamples, ct, _pass3Transcriber);
                 LogTranscript($"gap retry {len:0.#}s@{FormatTimestamp(subStart)}", subSegments);
                 var subAbs = TrimLeadingNonSpeech(
-                    ShiftSegments(subSegments, subStart), allSilences, nonSpeechRegions, _options.Jingle);
+                    ShiftSegments(subSegments, subStart), allSilences, nonSpeechRegions, _vad != null);
 
                 foreach (var match in FindPhraseMatches(subAbs, profile))
                 {
@@ -2335,7 +2368,7 @@ public sealed class ChapterDetector
     /// mis-places the mark (the anchor logic keys off the phrase start) and feeds the
     /// --min-silence-length / --max-jingle-length auto mechanisms a mis-measured (wrong, usually
     /// shorter) silence. Both detectors' findings are available here - silencedetect down to
-    /// <see cref="MinStoredSilenceSeconds"/>, plus VAD regions with --jingle - so the real onset
+    /// <see cref="MinStoredSilenceSeconds"/>, plus VAD regions when the VAD pre-pass ran - so the real onset
     /// is the far end of the contiguous run of non-speech intervals that begins at (or a hair
     /// before, see <see cref="SegmentLeadTrimToleranceSeconds"/>) the segment's timestamp, chained
     /// through directly abutting intervals (a silence immediately followed by its jingle). The run
@@ -2347,14 +2380,14 @@ public sealed class ChapterDetector
     /// <param name="segmentsAbs">The window's transcript segments, in absolute file time.</param>
     /// <param name="allSilences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
-    /// <param name="jingle">True when --jingle is in effect, enabling the region intervals.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
+    /// <param name="jingle">True when the VAD pre-pass ran, enabling the region intervals.</param>
     internal static List<TranscriptSegment> TrimLeadingNonSpeech(
         List<TranscriptSegment> segmentsAbs, List<Silence> allSilences,
         List<NonSpeechRegion> nonSpeechRegions, bool jingle)
     {
         // The non-speech intervals a segment start can be advanced through: every stored silence
-        // plus, with --jingle, every VAD non-speech region.
+        // plus, when the VAD pre-pass ran, every VAD non-speech region.
         var intervals = allSilences.Select(s => (s.StartSeconds, s.EndSeconds));
         if (jingle)
             intervals = intervals.Concat(nonSpeechRegions.Select(r => (r.StartSeconds, r.EndSeconds)));

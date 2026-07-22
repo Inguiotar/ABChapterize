@@ -51,8 +51,12 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal("turbo", o.Model);
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.True(o.AutoMinSilence);
+        Assert.Equal(45, o.MaxJingleSeconds);
+        // Jingle-aware probing (the VAD pre-pass) runs by default now, even without
+        // --mark-before-jingle - only --max-jingle-length 0 turns it off.
+        Assert.True(o.RunVadPrePass);
         Assert.False(o.TargetIsDirectory);
-        Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.Jingle | o.Quiet | o.Verbose
+        Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.MarkBeforeJingle | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
         Assert.Null(o.Jobs);
     }
@@ -166,7 +170,8 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--chapter-phrase", "part")]
     [InlineData("--model", "small")]
     [InlineData("--pass3-model", "large")]
-    [InlineData("--jingle")]
+    [InlineData("--mark-before-jingle")]
+    [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
     [InlineData("--verify")]
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
@@ -220,9 +225,9 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void ImportWithMaxJingleLength_RequiresJingle_ButStillRejectsImport()
+    public void ImportWithMaxJingleLength_IsStillAnError_EvenWithoutMarkBeforeJingle()
     {
-        Assert.Throws<CliError>(() => ParseFile("--import", "--jingle", "--max-jingle-length", "30"));
+        Assert.Throws<CliError>(() => ParseFile("--import", "--max-jingle-length", "30"));
     }
 
     [Fact]
@@ -307,7 +312,7 @@ public sealed class CliOptionsTests : IDisposable
     public void CollapsedShortFlags_AllApply()
     {
         var o = ParseDir("-rbfjqvs")!;
-        Assert.True(o.Recurse && o.Backup && o.Force && o.Jingle && o.Quiet && o.Verbose && o.Summary);
+        Assert.True(o.Recurse && o.Backup && o.Force && o.MarkBeforeJingle && o.Quiet && o.Verbose && o.Summary);
     }
 
     [Fact]
@@ -451,6 +456,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--backup"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--verify"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--mark-before-jingle"));
     }
 
     [Fact]
@@ -468,28 +474,54 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void MaxJingleLength_WithoutJingle_IsAnError()
+    public void MaxJingleLength_NoLongerRequiresMarkBeforeJingle()
     {
-        Assert.Throws<CliError>(() => ParseFile("--max-jingle-length", "30"));
+        var o = ParseFile("--max-jingle-length", "30")!;
+        Assert.Equal(30, o.MaxJingleSeconds);
+        Assert.False(o.MarkBeforeJingle);
     }
 
     [Fact]
     public void JingleParameters_AreParsed()
     {
-        var o = ParseFile("--jingle", "--max-jingle-length", "30.5")!;
-        Assert.True(o.Jingle);
+        var o = ParseFile("--mark-before-jingle", "--max-jingle-length", "30.5")!;
+        Assert.True(o.MarkBeforeJingle);
         Assert.Equal(30.5, o.MaxJingleSeconds);
     }
 
+    [Fact]
+    public void MaxJingleLength_ZeroIsAccepted()
+    {
+        var o = ParseFile("--max-jingle-length", "0")!;
+        Assert.Equal(0, o.MaxJingleSeconds);
+    }
+
     [Theory]
-    [InlineData("0")]
+    // Without --mark-before-jingle, RunVadPrePass tracks whether MaxJingleSeconds > 0: only
+    // the (default-off) --mark-before-jingle plus --max-jingle-length 0 combination keeps it
+    // running for the jingle-anchor placement despite no jingle being expected.
+    [InlineData(0, false, false)]
+    [InlineData(45, false, true)]
+    [InlineData(0, true, true)]
+    [InlineData(45, true, true)]
+    public void RunVadPrePass_ReflectsMarkBeforeJingleAndMaxJingleLength(
+        double maxJingleSeconds, bool markBeforeJingle, bool expectedVad)
+    {
+        var args = new List<string> { "--max-jingle-length", maxJingleSeconds.ToString() };
+        if (markBeforeJingle)
+            args.Add("--mark-before-jingle");
+        var o = ParseFile([.. args])!;
+        Assert.Equal(expectedVad, o.RunVadPrePass);
+    }
+
+    [Theory]
     [InlineData("0.5")]
     [InlineData("-3")]
     [InlineData("601")]
     [InlineData("abc")]
     public void InvalidJingleLengths_AreRejected(string value)
     {
-        Assert.Throws<CliError>(() => ParseFile("--jingle", "--max-jingle-length", value));
+        Assert.Throws<CliError>(() => ParseFile("--mark-before-jingle", "--max-jingle-length", value));
     }
 
     [Theory]

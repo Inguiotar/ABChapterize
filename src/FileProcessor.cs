@@ -181,9 +181,9 @@ public sealed class FileProcessor
             }
 
             // Shared like ffmpeg above (one instance for the whole run, safe for concurrent
-            // use - see SileroVadDetector's threading remarks); only needed with --jingle,
-            // where ChapterDetector runs its full-file VAD pre-pass.
-            using var vad = _options.Jingle ? new SileroVadDetector() : null;
+            // use - see SileroVadDetector's threading remarks); only needed when
+            // ChapterDetector runs its full-file VAD pre-pass (see RunVadPrePass).
+            using var vad = _options.RunVadPrePass ? new SileroVadDetector() : null;
 
             try
             {
@@ -385,7 +385,7 @@ public sealed class FileProcessor
 
     /// <summary>
     /// Builds the per-file statistics log line shown under --verbose (or --verbose-transcripts):
-    /// the shortest silence and, in --jingle mode, the longest jingle preceding a detected chapter
+    /// the shortest silence and, when the VAD pre-pass ran, the longest jingle preceding a detected chapter
     /// (each with its inter-chapter, chapter-1-excluded counterpart), the total audio fed to
     /// Whisper and its share of the file's run length, and the transcription speed.
     /// </summary>

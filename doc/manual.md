@@ -71,15 +71,16 @@ naming one directly as the target is an error.
 
 ## 3. How detection works
 
-Detection runs in up to three Whisper-transcription passes per file, plus an
-optional voice-activity (VAD) pre-pass with `--jingle`. This section is an
+Detection runs in up to three Whisper-transcription passes per file, plus a
+voice-activity (VAD) pre-pass that runs by default (skipped only with
+`--max-jingle-length 0` and no `--mark-before-jingle`). This section is an
 overview of what each pass does; the machinery that keeps it accurate and
 fast — how probe windows are sized and stitched together word-safely, how
-each mark is pinpointed to the exact silence, the transcript caching and the
+each mark is pinpointed to its exact position, the transcript caching and the
 self-tuning that cut the number of Whisper calls — is documented in the
 source. Only what affects using the tool is covered here.
 
-### Pass 1 — silence scan (and VAD pre-pass with `--jingle`)
+### Pass 1 — silence scan (and VAD pre-pass)
 
 ffmpeg's `silencedetect` filter finds every silence of at least
 `--min-silence-length` seconds (default, and floor with `auto`: 1.5) below
@@ -90,7 +91,7 @@ error instead of silently reporting "no chapters".
 
 `silencedetect` is amplitude-only: a jingle (a short music sting) that abuts
 the narration with no detectable gap around it produces no silence at all, so
-it never gives pass 2 a candidate near that transition. With `--jingle`, a
+it never gives pass 2 a candidate near that transition. By default, a
 voice-activity detection pre-pass runs over the same decode using a bundled
 model — [Silero VAD](https://github.com/snakers4/silero-vad), MIT-licensed,
 embedded in the executable (~2.2 MB, no separate download; see
@@ -98,28 +99,35 @@ embedded in the executable (~2.2 MB, no separate download; see
 non-speech to a speech detector, the same as silence, so a jingle shows up as
 a non-speech region flanked by speech even when there is no amplitude gap
 around it, and pass 2 gets a candidate at every such jingle that has no
-leading silence of its own.
+leading silence of its own. This pre-pass is skipped only when
+`--max-jingle-length 0` says no jingle is expected at all and
+`--mark-before-jingle` is not given either — reproducing this tool's
+original, pre-jingle-detection behavior exactly (see the `-X` and `-j`
+references below).
 
 ### Pass 2 — probing
 
 A short window of audio is transcribed with Whisper at the start of the file,
-after the end of every detected silence, and (with `--jingle`) at every
-silence-less jingle the VAD pre-pass found. The window is 12 seconds normally,
-or `--max-jingle-length` + 5 seconds with `--jingle`. Each transcript is
-matched against the chapter phrase (see `--chapter-phrase`), and the chapter
-number is parsed from digits or number words
+after the end of every detected silence, and — whenever the VAD pre-pass ran
+(the default; see [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) — at every
+silence-less jingle it found too. The window is `--max-jingle-length` + 5
+seconds (50 seconds with the default 45 s ceiling), or a fixed 12 seconds when
+`--max-jingle-length 0` says no jingle is expected. Each transcript is matched
+against the chapter phrase (see `--chapter-phrase`), and the chapter number is
+parsed from digits or number words
 (see [section 7](#7-languages-and-number-recognition)).
 
-Where a chapter announcement is found, the mark is placed at the end of the
-silence that precedes it. With `--jingle` the mark goes to the start of the
-jingle instead: 0.5 seconds before the preceding silence's end when there is
-one (so it lands inside the silence, not the previous chapter's narration), or
-exactly at the jingle's start when the jingle abuts speech directly. The
-transcript itself arbitrates where that start really is, so the mark stays
-correct even when the previous chapter's closing words run right up to the
-jingle, when the jingle's music contains vocal-like passages, or when the
-announcement's own timestamp comes back blurred across a long quiet jingle
-(the machinery is documented in the source). In-text
+Where a chapter announcement is found, the mark is placed 0.25 seconds before
+it, no matter what precedes it — a silence, a jingle, or nothing at all.
+`--mark-before-jingle` (**experimental**) anchors the mark to a preceding
+jingle/silence instead, the way this tool originally always placed marks: 0.5
+seconds before a leading silence's end (so it lands inside the silence, not
+the previous chapter's narration), or exactly at a silence-less jingle's own
+VAD-detected start. The transcript itself arbitrates where that start really
+is, so the mark stays correct even when the previous chapter's closing words
+run right up to the jingle, when the jingle's music contains vocal-like
+passages, or when the announcement's own timestamp comes back blurred across a
+long quiet jingle (the machinery is documented in the source). In-text
 mentions ("…as we learned in chapter three…") are rejected by requiring the
 announcement to follow a real pause; out-of-order detections and duplicates of
 an already-marked chapter are dropped, keeping the earliest position. Each
@@ -144,10 +152,10 @@ into the file, the regions where the missing chapters must be hiding are
 transcribed *completely*, in roughly 10-minute chunks. This catches
 announcements that were not preceded by a long-enough silence. Marks found
 here are placed the same way as in pass 2. If a chunk still leaves an
-expected chapter unaccounted for, a stored silence (or, with `--jingle`, a
-VAD non-speech region) inside it that the chunk's own transcript skipped
-over entirely gets a second, closer look before the chapter is given up as
-missing — documented in the source.
+expected chapter unaccounted for, a stored silence (or, when the VAD
+pre-pass ran, a VAD non-speech region) inside it that the chunk's own
+transcript skipped over entirely gets a second, closer look before the
+chapter is given up as missing — documented in the source.
 
 If a gap *between* detected chapters still remains after pass 3, the chapters
 that *were* found are still written, but a warning is printed and the file is
@@ -336,45 +344,56 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   and consistent, `-n 2.5` can cut the number of probes further still, but
   chapters go missing if it's set too high.
 
-`-j`, `--jingle`
-: Declare that a jingle (music sting) may precede each chapter announcement.
-  Probe windows are widened to `--max-jingle-length` + 5 seconds, a VAD
-  pre-pass runs to catch jingles with no detectable silence around them (see
-  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass-with---jingle)), and
-  chapter marks are placed at the jingle's start instead of at the
-  announcement — 0.5 seconds
-  *before* it when a silence precedes it, or exactly at its start when it
-  doesn't.
+`-j`, `--mark-before-jingle`
+: **Experimental.** Anchor the chapter mark to a jingle/silence preceding the
+  announcement instead of the default fixed offset (see `--max-jingle-length`
+  below): 0.5 seconds *before* a leading silence's end when there is one, or
+  exactly at a silence-less jingle's own VAD-detected start when there isn't
+  — this tool's original mark-placement rule, preserved unchanged; only its
+  name and default-off status changed. The probe-window widening and VAD
+  pre-pass this placement relies on (see
+  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) already run by default
+  regardless of this option. Without `--mark-before-jingle`, a mark is
+  always placed 0.25 seconds before the chapter phrase, no matter what
+  precedes it.
 
 `-X`, `--max-jingle-length <seconds|auto>`
-: Longest expected jingle (1–600, default: 45). Requires `--jingle`. Lower
-  values shrink the probe windows and speed up detection. With `auto`,
-  probing starts at the 45 s ceiling and, from the second jingle mark found
-  (the first is excluded for the same reason as `--min-silence-length auto`
-  excludes the first silence — the gap before it isn't necessarily
-  representative), resizes the probe window to 1.25x the longest jingle
-  actually observed so far plus the 5-second phrase margin, never past the
-  original ceiling. The second mark narrows the window down from the
-  ceiling; after that it only ever widens again (when a longer jingle
-  turns up) — the exact mirror of `--min-silence-length auto`'s
-  lower-only threshold, and for the mirrored reason: a window below an
-  already observed jingle length would be too short for exactly the kind
-  of jingle this book has proven to play. For a silence-less jingle (found
-  via the VAD pre-pass), the
-  observed length comes from the VAD region's own boundaries rather than the
-  distance to the announcement, which can otherwise include a bit of
-  post-jingle silence before the phrase starts. Chapters with no jingle (or
-  an ultra-short one, under 2 seconds) are excluded from this — some
-  audiobooks only play the jingle for some chapters, and such a chapter says
-  nothing about how long the window needs to be for one that does have a
-  full jingle. Same idea as `--min-silence-length auto`, just for the jingle
-  window instead of the silence threshold. Once the window narrows, VAD
-  regions longer than it stop being probed too — the same speedup pass 2
-  already gets from tightened silence candidates — but a later sequence gap
-  temporarily resets the window back to the ceiling, retries everything
-  skipped at that full width (exactly like `--min-silence-length auto`'s
-  own gap recovery), and then returns to the adapted width, including
-  whatever the recovered chapters' own jingles just taught it.
+: Longest expected jingle (0, or 1–600, default: 45). Above 0, probe windows
+  are `--max-jingle-length` + 5 seconds wide and a VAD pre-pass runs (see
+  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) to add candidates for
+  jingles with no detectable silence around them. `0` says no jingle is
+  expected at all: probe windows fall back to a fixed 12 seconds, and the
+  VAD pre-pass is skipped entirely unless `--mark-before-jingle` still needs
+  it for mark placement — reproducing this tool's original,
+  pre-jingle-detection behavior. Lower values (still above 0) shrink the
+  probe windows and speed up detection further. With `auto`, probing starts
+  at the 45 s ceiling and, from the second jingle mark found (the first is
+  excluded for the same reason as `--min-silence-length auto` excludes the
+  first silence — the gap before it isn't necessarily representative),
+  resizes the probe window to 1.25x the longest jingle actually observed so
+  far plus the 5-second phrase margin, never past the original ceiling. The
+  second mark narrows the window down from the ceiling; after that it only
+  ever widens again (when a longer jingle turns up) — the exact mirror of
+  `--min-silence-length auto`'s lower-only threshold, and for the mirrored
+  reason: a window below an already observed jingle length would be too
+  short for exactly the kind of jingle this book has proven to play. For a
+  silence-less jingle (found via the VAD pre-pass), the observed length
+  comes from the VAD region's own boundaries rather than the distance to
+  the announcement, which can otherwise include a bit of post-jingle
+  silence before the phrase starts. Chapters with no jingle (or an
+  ultra-short one, under 2 seconds) are excluded from this — some
+  audiobooks only play the jingle for some chapters, and such a chapter
+  says nothing about how long the window needs to be for one that does
+  have a full jingle. Same idea as `--min-silence-length auto`, just for
+  the jingle window instead of the silence threshold. Once the window
+  narrows, VAD regions longer than it stop being probed too — the same
+  speedup pass 2 already gets from tightened silence candidates — but a
+  later sequence gap temporarily resets the window back to the ceiling,
+  retries everything skipped at that full width (exactly like
+  `--min-silence-length auto`'s own gap recovery), and then returns to the
+  adapted width, including whatever the recovered chapters' own jingles
+  just taught it. `auto` implies a nonzero ceiling, so it cannot mean "no
+  jingle expected."
 
 ### Auto language detection
 
@@ -529,8 +548,9 @@ skipped (reported as "skipped").
   skipped, warnings, total and average processing time, and — when at least
   one chapter mark was written — the min/max/average Whisper confidence
   across those marks (not every probe attempted, only the ones that produced
-  a mark). Also, across all processed files, the shortest silence and (in
-  `--jingle` mode) longest jingle found before any chapter — each reported
+  a mark). Also, across all processed files, the shortest silence and (when
+  the VAD pre-pass ran, which it does by default) longest jingle found
+  before any chapter — each reported
   both counting chapter 1 and, as an "inter-chapter" figure, ignoring it
   (its lead-in is often unrepresentative) — the total
   audio fed to Whisper as an absolute time and a share of the total run
@@ -578,7 +598,7 @@ touching Whisper at all.
   `--export`). If no sidecar file is found, the file is skipped with a
   message suggesting `--export`. Because there is nothing to detect,
   `--import` cannot be combined with any detection option — `--lang`,
-  `--chapter-phrase`, `--model`, `--pass3-model`, `--jingle`,
+  `--chapter-phrase`, `--model`, `--pass3-model`, `--mark-before-jingle`,
   `--max-jingle-length`, `--min-silence-length` — nor with `--revert`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters
@@ -907,8 +927,9 @@ name, everything the pipeline does:
   confidence, flagged `LOW CONFIDENCE` below 0.5, plus a `still missing:`
   list of any earlier chapter numbers not detected yet,
 - the regions transcribed in pass 3, and when each pass finishes,
-- once the file is done, a `stats -` line: the shortest silence and (in
-  `--jingle` mode) longest jingle found before a chapter — each also given as
+- once the file is done, a `stats -` line: the shortest silence and (when
+  the VAD pre-pass ran, which it does by default) longest jingle found
+  before a chapter — each also given as
   an "inter-chapter" figure that ignores chapter 1's often-unrepresentative
   lead-in — how much audio was fed to Whisper (with its share of the file's
   run length), and Whisper's transcription speed as a percentage of real time.
@@ -951,8 +972,8 @@ actually transcribed. Typical causes: the announcements use a different word
 check the "language used" note in the result line - the auto-detection may
 have picked the wrong language or fallen back to `en`; pin it with an
 explicit `--lang` if so), the pauses are shorter than `--min-silence-length`
-(lower `-n`), or a jingle sits between the pause and the announcement (add
-`--jingle`).
+(lower `-n`), or the jingle runs longer than the default 45 s ceiling (raise
+`--max-jingle-length`).
 
 **Chapters found but some are missing** — if the missing ones are announced
 without a preceding pause, pass 3 usually catches them automatically. If a
@@ -968,7 +989,8 @@ long pause can fool the tool. Use `--backup`, inspect the result, and
 with stubborn cases.
 
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes),
-`--max-jingle-length` (smaller probe windows), a smaller `--model` (or a
+`--max-jingle-length` (smaller probe windows, or `0` if there's no jingle at
+all), a smaller `--model` (or a
 smaller `--pass3-model` if only the gap-filling pass drags). Check that the
 startup line reports a GPU backend, not CPU.
 

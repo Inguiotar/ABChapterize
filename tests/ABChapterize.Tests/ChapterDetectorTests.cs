@@ -222,7 +222,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task SequentialChapters_AreDetectedAtSilenceEnds()
     {
         var result = await DetectAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -233,7 +233,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal(
-            [new(1, 0.5), new(2, 600), new(3, 1200)],
+            [new(1, 0.25), new(2, 600.05), new(3, 1199.95)],
             result.Chapters);
     }
 
@@ -241,7 +241,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task NumberWords_BeforeThePhrase_AreUnderstood()
     {
         var result = await DetectAsync(
-            Options("--lang", "de"),
+            Options("--lang", "de", "--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
@@ -249,25 +249,25 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Zweites Kapitel."));
             });
 
-        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
     }
 
     [Fact]
     public async Task RegexPhrase_WithCaptureGroup_ParsesTheNumber()
     {
         var result = await DetectAsync(
-            Options("-c", @"/chapter (\d+)/"),
+            Options("-c", @"/chapter (\d+)/", "--max-jingle-length", "0"),
             [new(595, 600)],
             s => s.Add(600, Seg(0.3, " Chapter 12 begins.")));
 
-        Assert.Equal([new(12, 600)], result.Chapters);
+        Assert.Equal([new(12, 600.05)], result.Chapters);
     }
 
     [Fact]
     public async Task PhraseTooLongAfterSilence_IsIgnored_WithoutJingle()
     {
         var result = await DetectAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
@@ -275,7 +275,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(6.0, " Chapter two.")); // starts later than 5 s after the silence
             });
 
-        Assert.Equal([new DetectedChapter(1, 0.5)], result.Chapters);
+        Assert.Equal([new DetectedChapter(1, 0.25)], result.Chapters);
         Assert.False(result.GapRemains);
     }
 
@@ -287,7 +287,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // pass-3 chunk's border (natural end 600.5) snaps to the [595, 600] silence's mid-point
         // (597.5), so the second chunk starts exactly there - that is where the phrase is heard.
         var result = await DetectAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -298,7 +298,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal(
-            [new(1, 0.5), new(2, 600), new(3, 1200)],
+            [new(1, 0.25), new(2, 599.75), new(3, 1199.95)],
             result.Chapters);
     }
 
@@ -306,7 +306,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task UnresolvedSequenceGap_IsReported()
     {
         var result = await DetectAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -338,7 +338,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // chapter 1 already in the first chunk, the gap's sole missing number would be complete and
         // pass 3 would stop before decoding the second chunk at all - see GapCompletes_* below.)
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(1195, 1200)],
             s =>
             {
@@ -347,7 +347,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 610), new(2, 1200)], result.Chapters);
+        Assert.Equal([new(1, 609.75), new(2, 1199.95)], result.Chapters);
         Assert.Contains(590.0, audio.DecodeStarts);
     }
 
@@ -358,7 +358,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // [0, 600] (at 10). The gap's sole missing number is then complete after that chunk, so
         // transcription stops immediately - the second chunk at 590 is never decoded.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(1195, 1200)],
             s =>
             {
@@ -367,7 +367,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 10), new(2, 1200)], result.Chapters);
+        Assert.Equal([new(1, 9.75), new(2, 1199.95)], result.Chapters);
         Assert.DoesNotContain(590.0, audio.DecodeStarts);
     }
 
@@ -378,7 +378,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // sequence gap. Chapter 2 lives *solely* in the pass-3 transcriber's script, so the gap can
         // only be filled if pass 3 actually routed through it - exactly what --pass3-model sets up.
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
             pass2 =>
             {
@@ -388,7 +388,7 @@ public sealed class ChapterDetectorTests : IDisposable
             pass3 => pass3.Add(597.5, Seg(2.5, " Chapter two."))); // snapped gap-chunk seam
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.5), new(2, 600), new(3, 1200)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
         // The pass-3 transcriber had its language set before it was used (auto-detected "en").
         Assert.Contains("en", pass3.LanguageChanges);
     }
@@ -427,7 +427,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Only the *leading* 4 s silence counts toward the silence statistic; the 2 s silence
         // between jingle and phrase is ignored, so the shortest preceding silence is 4 s, not 2 s.
         var (result, _, _) = await DetectFullAsync(
-            Options("--jingle", "--min-silence-length", "1.5"),
+            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [new(638, 642), new(648, 650)],
             s =>
             {
@@ -454,7 +454,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the threshold to 3.75 s (0.75x); the 3 s silence at 700-703 falls below it and must
         // not be probed at all, but the 5 s silence at 900-905 still is, finding chapter 3.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(700, 703), new(900, 905)],
             s =>
             {
@@ -465,7 +465,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal(
-            [new(1, 0.5), new(2, 600), new(3, 905)],
+            [new(1, 0.25), new(2, 600.05), new(3, 904.95)],
             result.Chapters);
         Assert.DoesNotContain(703, audio.DecodeStarts);
     }
@@ -481,7 +481,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Tightening must only start once the second mark is found, using its own (genuine
         // inter-chapter) triggering silence instead.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(10, 40), new(595, 600), new(900, 905)],
             s =>
             {
@@ -492,7 +492,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal(
-            [new(1, 40), new(2, 600), new(3, 905)],
+            [new(1, 40.05), new(2, 600.05), new(3, 904.95)],
             result.Chapters);
         Assert.Contains(600.0, audio.DecodeStarts);
         Assert.Contains(905.0, audio.DecodeStarts);
@@ -506,7 +506,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-probe what it skipped since chapter 2 unconditionally, finding chapter 3 there and
         // closing the gap without needing pass 3 at all.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(700, 703), new(900, 905)],
             s =>
             {
@@ -518,7 +518,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal(
-            [new(1, 0.5), new(2, 600), new(3, 703), new(4, 905)],
+            [new(1, 0.25), new(2, 600.05), new(3, 703.05), new(4, 904.95)],
             result.Chapters);
         Assert.Contains(703, audio.DecodeStarts);
     }
@@ -534,7 +534,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // is the last one, no later mark could ever trigger a gap recovery for it, so a raised
         // threshold would lose it silently and for good.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(596, 600), new(892, 900), new(1196.5, 1200)],
             s =>
             {
@@ -558,7 +558,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Chapter 4's 3.2 s silence sits between the two (3 < 3.2 < 3.75), so it is only
         // probed - and chapter 4, being last, only ever found - if the lowering happened.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(896, 900), new(1196.8, 1200)],
             s =>
             {
@@ -582,7 +582,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // silence - below chapter 2's 3.75 s but above 2.25 s - is still probed and found.
         // Chapter 5 is the last mark, so nothing could recover it if it were skipped.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(697, 700), new(895, 900), new(1197.5, 1200)],
             s =>
             {
@@ -605,7 +605,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // With an explicit numeric --min-silence-length, adaptive tightening is off: every
         // silence from pass 1 is probed regardless of length or what was found before it.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(700, 703), new(900, 905)],
             s =>
             {
@@ -614,7 +614,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(905, Seg(0.2, " Chapter three."));
             });
 
-        Assert.Equal([new(1, 0.5), new(2, 600), new(3, 905)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 600.05), new(3, 904.95)], result.Chapters);
         Assert.Contains(703, audio.DecodeStarts);
     }
 
@@ -624,7 +624,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // "chapter two" spoken inside chapter 3's probe window is a regression and must
         // not override the already detected chapter sequence.
         var result = await DetectAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -635,7 +635,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.Equal(
-            [new(1, 0.5), new(2, 600), new(3, 1200)],
+            [new(1, 0.25), new(2, 600.05), new(3, 1199.95)],
             result.Chapters);
     }
 
@@ -645,13 +645,17 @@ public sealed class ChapterDetectorTests : IDisposable
         // Probe window at 600: jingle until 615, short silence 615-618, phrase at 618.2.
         // The mark belongs 0.5 s before the end of the silence directly preceding the phrase.
         var result = await DetectAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(595, 600), new(615, 618)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(600, Seg(18.2, " Chapter two."));
-            });
+            },
+            // VAD runs (as it always does with --mark-before-jingle in production) but finds no
+            // non-speech region of its own here - continuous speech throughout - so the anchor
+            // falls back to the plain silence-based rule exactly as it would without VAD at all.
+            new FakeVad { Speech = [new(0, 3600)] });
 
         Assert.Contains(new DetectedChapter(2, 617.5), result.Chapters);
     }
@@ -666,7 +670,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // must land at the jingle's own start, with no lead, since there is no absorbable
         // silence to place the usual 0.5 s lead in.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [],
             s =>
             {
@@ -688,7 +692,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // must not add a second, duplicate candidate (dedup): the silence path stays primary,
         // and the mark lands 0.5 s before it exactly as it would without VAD at all.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(695, 700)],
             s =>
             {
@@ -702,6 +706,72 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultMode_PlacesMarkAtAFixedOffsetBeforeThePhrase_AndWidensTheProbeWindow()
+    {
+        // No options at all: --mark-before-jingle is off (so the mark is not anchored to the
+        // triggering silence at all) but --max-jingle-length keeps its 45 s default, so Pass 2's
+        // probe window is jingle-ceiling-wide (50 s) even though nothing jingle-related was
+        // named explicitly - jingle-aware probing is now the unconditional default. The mark
+        // still lands at a flat 0.25 s before the phrase, "no matter what exists there".
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 50) < 0.01);
+    }
+
+    [Fact]
+    public async Task MaxJingleLengthZero_NarrowsTheProbeWindowBackToPlain_ButKeepsTheNewOffset()
+    {
+        // The same layout as DefaultMode_PlacesMarkAtAFixedOffsetBeforeThePhrase_..., but with
+        // --max-jingle-length 0: "no jingle expected at all" narrows Pass 2's probe window back
+        // to the plain 12 s width - this is what makes the option "essentially plain-mode" - yet
+        // the mark placement formula is unaffected either way, since it never depended on the
+        // probe width to begin with.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 12) < 0.01);
+    }
+
+    [Fact]
+    public async Task MarkBeforeJingleWithMaxJingleLengthZero_StillAnchorsViaVad_ButKeepsTheNarrowWindow()
+    {
+        // --mark-before-jingle turns on the VAD pre-pass and its 0.5 s jingle-anchor placement,
+        // but --max-jingle-length 0 says no jingle is expected, so Pass 2's probe window must
+        // stay at the plain 12 s width rather than widening to the jingle ceiling - the two
+        // options are independent: one controls mark placement, the other the probe width.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--mark-before-jingle", "--max-jingle-length", "0"),
+            [new(695, 700)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(700, Seg(3.2, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
+
+        Assert.Contains(new DetectedChapter(2, 699.5), result.Chapters);
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 700 && w.Duration is { } d && Math.Abs(d - 12) < 0.01);
+    }
+
+    [Fact]
     public async Task SilencelessJingle_TriggeredByAFalseInTextPause_MarksAtJingleNotThePause()
     {
         // A false in-text pause (silence 610-613, >= the 1.5 s floor) sits in the narration
@@ -711,7 +781,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // pause (612.5). The pause does not lead the jingle's VAD region, so it must not be
         // mistaken for the anchor.
         var result = await DetectAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(610, 613)],
             s =>
             {
@@ -741,7 +811,7 @@ public sealed class ChapterDetectorTests : IDisposable
         //     and narrows it to ~11 s. The spurious 20 s music-bed region at 700-720 must then
         //     be skipped (too long to be this book's jingle) rather than probed.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle", "--max-jingle-length", "auto"),
+            Options("--mark-before-jingle", "--max-jingle-length", "auto"),
             [new(610, 613), new(1000, 1002)],
             s =>
             {
@@ -773,7 +843,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // lands at its start (640); without the tolerance it would be missed and the transition
         // would wrongly fall back to the false in-text pause at 610-613 (marking at 612.5).
         var result = await DetectAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(610, 613)],
             s =>
             {
@@ -799,7 +869,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (its end overshoots the phrase) and fall back to placing the mark 0.5 s before the
         // phrase (644.5) - seconds late, and on the wrong side of the jingle.
         var result = await DetectAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(610, 613)],
             s =>
             {
@@ -824,7 +894,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (654.5) or the phrase. The 610-613 false in-text pause triggers the probe, exactly as
         // in the sibling tests above.
         var result = await DetectAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(610, 613), new(654.5, 655)],
             s =>
             {
@@ -848,7 +918,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the phrase), so the jingle's true leading edge is the last narration blip's end (643.2)
         // and the mark must land there, not at the naive region start 640 inside the sentence.
         var result = await DetectAsync(
-            Options("--jingle", "--min-silence-length", "1.5"),
+            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [],
             s =>
             {
@@ -874,7 +944,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (The 1.2 s silence is below the 1.5 s candidate threshold, so the region's own
         // candidate at 640 - not a silence candidate - probes this transition.)
         var result = await DetectAsync(
-            Options("--jingle", "--min-silence-length", "1.5"),
+            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [new(639.9, 641.1)],
             s =>
             {
@@ -898,7 +968,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // only-speech-in-a-jingle-is-the-phrase rule that makes it music, so the region must be
         // bridged backward across it and the mark placed at the true jingle start (640).
         var result = await DetectAsync(
-            Options("--jingle", "--min-silence-length", "1.5"),
+            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [],
             s =>
             {
@@ -921,7 +991,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // chapter, so the transcript must block the bridge and the mark stays at the real
         // jingle's own start (646.5).
         var result = await DetectAsync(
-            Options("--jingle", "--min-silence-length", "1.5"),
+            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [],
             s =>
             {
@@ -946,7 +1016,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the smear: it overlaps the region by 18 s, so the region is rescued as the jingle and
         // the mark lands at its start (640).
         var result = await DetectAsync(
-            Options("--jingle", "--min-silence-length", "1.5"),
+            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -972,7 +1042,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // window wide enough to probe it. A false pause (770-773) triggers the probe so the jingle
         // is resolved by region lookup.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle", "--max-jingle-length", "auto"),
+            Options("--mark-before-jingle", "--max-jingle-length", "auto"),
             [new(770, 773)],
             s =>
             {
@@ -1003,7 +1073,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // jingle, at 53.2) is heard by that very first probe; the region candidate at 50 is
         // then skipped as part of chapter one's overlap sequence.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle", "--max-jingle-length", "auto"),
+            Options("--mark-before-jingle", "--max-jingle-length", "auto"),
             [],
             s =>
             {
@@ -1027,7 +1097,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // therefore still be probed and found - and being the last chapter, it could never be
         // recovered by a gap re-probe if it were skipped.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle", "--max-jingle-length", "auto"),
+            Options("--mark-before-jingle", "--max-jingle-length", "auto"),
             [],
             s =>
             {
@@ -1052,7 +1122,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the threshold itself: the following 3.7 s silence - just below 3.75 s - must still be
         // skipped, proving the threshold is unchanged by the silence-less mark.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(595, 600), new(800, 803.7)],
             s =>
             {
@@ -1071,7 +1141,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task LowConfidenceSegment_CarriesConfidence_AndIsFlagged()
     {
         var result = await DetectAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
@@ -1080,7 +1150,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.Equal(
-            [new(1, 0.5, 0.95), new(2, 600, 0.2)],
+            [new(1, 0.25, 0.95), new(2, 600.05, 0.2)],
             result.Chapters);
         Assert.Equal([2], result.LowConfidenceNumbers);
     }
@@ -1089,7 +1159,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task HighConfidenceSegments_YieldNoLowConfidenceFlags()
     {
         var result = await DetectAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
@@ -1103,7 +1173,7 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task NoSpeechAnywhere_YieldsNoChapters()
     {
-        var result = await DetectAsync(Options(), [new(595, 600)], _ => { });
+        var result = await DetectAsync(Options("--max-jingle-length", "0"), [new(595, 600)], _ => { });
         Assert.Empty(result.Chapters);
         Assert.False(result.GapRemains);
     }
@@ -1121,11 +1191,11 @@ public sealed class ChapterDetectorTests : IDisposable
         // that is where the fresh tail decode starts, and the candidate's own start (606) never is.
         // The detected chapter is unaffected by the optimization.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(601, 606)],
             s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
-        Assert.Equal([new DetectedChapter(1, 600, 0.3)], result.Chapters);
+        Assert.Equal([new DetectedChapter(1, 600.25, 0.3)], result.Chapters);
         Assert.Contains(612.0, audio.DecodeStarts);        // fresh tail only (fallback: the border itself)
         Assert.DoesNotContain(606.0, audio.DecodeStarts);  // the overlap was reused, not re-decoded
     }
@@ -1138,11 +1208,11 @@ public sealed class ChapterDetectorTests : IDisposable
         // fresh tail decode at the border (612), no decode at the candidate start (606), and
         // this works with an explicit --min-silence-length (no adaptive skipping involved).
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(601, 606)],
             s => s.Add(600, Seg(0.5, " Chapter one.")));
 
-        Assert.Equal([new DetectedChapter(1, 600)], result.Chapters);
+        Assert.Equal([new DetectedChapter(1, 600.25)], result.Chapters);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
     }
@@ -1177,7 +1247,7 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task WideJingleWindow_MarksASecondChapterImmediately_AndSkipsItsOverlapSequence()
     {
-        // Chapter one's wide --jingle window [600, 650] also contains chapter two's
+        // Chapter one's wide VAD-widened window [600, 650] also contains chapter two's
         // announcement 40 s in. Both marks must come out of this single probe: segment
         // timestamps plus the stored silence list pinpoint chapter two at its own preceding
         // silence ([638, 640], mark 0.5 s before its end) even though the window was triggered
@@ -1185,7 +1255,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // sequence, so the candidate at 640 is never probed at all - neither its start (640)
         // nor the shared border (650) is ever decoded.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(598, 600), new(638, 640)],
             s => s.Add(600, Seg(2, " Chapter one."), Seg(40, " Chapter two.")),
             new FakeVad { Speech = [new(0, 3600)] });
@@ -1207,11 +1277,11 @@ public sealed class ChapterDetectorTests : IDisposable
         // overlapping candidate at 606 entirely: neither the border (612) nor the candidate
         // start (606) is ever decoded again.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(603, 606)],
             s => s.Add(600, Seg(9, " Chapter one.")));
 
-        Assert.Equal([new DetectedChapter(1, 606)], result.Chapters);
+        Assert.Equal([new DetectedChapter(1, 608.75)], result.Chapters);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
     }
@@ -1224,7 +1294,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ("Chapter two had been hard.") must not qualify as a deep-detection anchor, so no
         // chapter two mark may appear anywhere.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(605, 605.6)],
             s =>
             {
@@ -1232,7 +1302,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(9, " Chapter two."));
             });
 
-        Assert.Equal([new DetectedChapter(1, 0.5)], result.Chapters);
+        Assert.Equal([new DetectedChapter(1, 0.25)], result.Chapters);
         Assert.False(result.GapRemains);
     }
 
@@ -1245,7 +1315,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 0.75 x 6 = 4.5 s: chapter three's 2.5 s silence ([897.5, 900]) is only probed - and
         // chapter three, being last, only ever found - if the mark's own silence was used.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(594, 600), new(605, 608), new(897.5, 900)],
             s =>
             {
@@ -1256,7 +1326,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal(
-            [new(1, 0.5), new(2, 608), new(3, 900)],
+            [new(1, 0.25), new(2, 608.15), new(3, 900.05)],
             result.Chapters);
         Assert.Contains(900.0, audio.DecodeStarts);
     }
@@ -1290,10 +1360,11 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task OverlappingProbe_SnapsTheSplitToAVadRegion_WhenNoSilenceQualifies()
     {
-        // --jingle, three overlapping windows: candidate 600 (natural span [600, 650]),
-        // candidate 640, and the VAD candidate the [648, 655] non-speech region itself spawns
-        // at 648. No silence offers a seam anywhere, so the plan snaps every shared border to
-        // the region's mid-point (651.5, jingle mode only): window 640's end lands there, and
+        // With the VAD pre-pass running, three overlapping windows: candidate 600 (natural
+        // span [600, 650]), candidate 640, and the VAD candidate the [648, 655] non-speech
+        // region itself spawns at 648. No silence offers a seam anywhere, so the plan snaps
+        // every shared border to the region's mid-point (651.5, only while the VAD pre-pass
+        // ran): window 640's end lands there, and
         // window 600's border search - seeing window 640 end at 651.5 - accepts the very same
         // seam at its neighbor's end, extending window 600's decode to 651.5 and leaving
         // window 640 fully contained in its cache (no decode of its own). The VAD candidate's
@@ -1301,7 +1372,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // and the swallowed candidate start (640) never are. Chapter one is scripted at low
         // confidence so the overlap-sequence skip stays out of the way.
         var (_, _, audio) = await DetectFullAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(598, 600), new(638, 640)],
             s => s.Add(600, Seg(2, " Chapter one.", confidence: 0.3)),
             new FakeVad { Speech = [new(0, 648), new(655, 3600)] });
@@ -1362,7 +1433,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // not a span reaching all the way to the window's nominal end (618). Chapter one is scripted
         // at low confidence so the overlap-sequence skip stays out of the way.
         var (_, log, _) = await DetectWithLogAsync(
-            Options("--verbose-transcripts", "--min-silence-length", "1.5"),
+            Options("--verbose-transcripts", "--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
             s =>
             {
@@ -1404,7 +1475,7 @@ public sealed class ChapterDetectorTests : IDisposable
         List<Silence> silences = [new(595, 600)];
         Action<ScriptedTranscriber> script = s => s.Add(0, Seg(0.5, " Chapter one."));
 
-        var (_, plain, _) = await DetectWithLogAsync(Options(), silences, script);
+        var (_, plain, _) = await DetectWithLogAsync(Options("--max-jingle-length", "0"), silences, script);
         var (_, full, _) = await DetectWithLogAsync(Options("-T"), silences, script);
 
         var plainHeader = Assert.Single(plain, l => l.StartsWith("probe ") && l.Contains("@0:00:00.00"));
@@ -1427,7 +1498,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Extracting the chapter number therefore has to reach across the cache/fresh boundary -
         // FindPhraseMatches must flag that detection, and DetectAsync must log it.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
             s =>
             {
@@ -1435,7 +1506,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(608.3, Seg(0, " one."));     // abs 608.3 - fresh tail of window 2
             });
 
-        Assert.Equal([new DetectedChapter(1, 606)], result.Chapters);
+        Assert.Equal([new DetectedChapter(1, 606.25)], result.Chapters);
         Assert.Contains(log, l => l.Contains("chapter 1 detection spans the reused/fresh transcript merge"));
     }
 
@@ -1511,8 +1582,9 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public void PlanWindowEnd_UsesVadRegions_OnlyInJingleMode()
     {
-        // A VAD non-speech region is a valid seam target with --jingle, but plain mode has no
-        // VAD data worth trusting - the same layout must snap only in jingle mode.
+        // A VAD non-speech region is a valid seam target when the VAD pre-pass ran, but
+        // without it there's no VAD data worth trusting - the same layout must snap only
+        // when the region is present.
         List<ChapterDetector.NonSpeechRegion> regions = [new(608, 609)];
         var plain = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: false);
         var jingle = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: true);
@@ -1570,7 +1642,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // seam target only) sits within the 5 s forward search past the natural end (612) -
         // the decode itself must run 13.6 s, up to the mid-point (613.6).
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(613.2, 614)],
             s =>
             {
@@ -1578,7 +1650,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 13.6) < 0.01);
     }
@@ -1611,8 +1683,8 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public void TrimLeadingNonSpeech_UsesJingleRegions_OnlyInJingleMode()
     {
-        // A VAD non-speech region leads the segment, but only --jingle mode trusts VAD data:
-        // in plain mode the region is ignored and the start stays put.
+        // A VAD non-speech region leads the segment, but only when the VAD pre-pass ran is
+        // that data trusted: without it the region is ignored and the start stays put.
         var segments = new List<TranscriptSegment> { new(830, 850, " Chapter two.", 1.0) };
         var plain = ChapterDetector.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: false);
         var jingle = ChapterDetector.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: true);
@@ -1644,7 +1716,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (836) instead finds the jingle region [830.5, 836], whose leading silence [830.3, 831.0]
         // is the true anchor: the mark lands 0.5 s before its end, at 830.5.
         var result = await DetectAsync(
-            Options("--jingle"),
+            Options("--mark-before-jingle"),
             [new(595, 600), new(820, 823), new(830.3, 831.0)],
             s =>
             {
@@ -1670,22 +1742,22 @@ public sealed class ChapterDetectorTests : IDisposable
         // decodes must reflect the snapped borders: [0.5, 598.5] and [598.5, 1197.5] (the
         // second border snaps to [1195, 1200]'s mid-point).
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(598, 599), new(1195, 1200)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(1200, Seg(0.2, " Chapter three."));
-                s.Add(0.5, Seg(596.5, " Chapter"));  // chunk 1: ends at abs 599, just before the seam
-                s.Add(598.5, Seg(0.3, " two."));     // chunk 2: the number, just after the seam
+                s.Add(0.25, Seg(596.75, " Chapter"));  // chunk 1: ends at abs 599, just before the seam
+                s.Add(598.5, Seg(0.3, " two."));       // chunk 2: the number, just after the seam
             });
 
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
-        Assert.Contains(new DetectedChapter(2, 597), result.Chapters); // pinpointed at the phrase start
+        Assert.Contains(new DetectedChapter(2, 596.75), result.Chapters); // pinpointed at the phrase start
         Assert.Contains(log, l => l.Contains("chapter 2 detection spans a Pass 3 chunk seam"));
         Assert.Contains(audio.DecodeWindows,
-            w => w.Start == 0.5 && w.Duration is { } d && Math.Abs(d - 598) < 0.01);
+            w => w.Start == 0.25 && w.Duration is { } d && Math.Abs(d - 598.25) < 0.01);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 598.5 && w.Duration is { } d && Math.Abs(d - 599) < 0.01);
     }
@@ -1701,20 +1773,20 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-detection is new information: both must be ignored outright, with no log line and
         // without nudging chapter 3's mark from 500 down to 495.
         var (result, log, _) = await DetectWithLogAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(495, 500)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(500, Seg(0.3, " Chapter three."));
-                // Pass 3's gap chunk, decoded from 0.5: re-hears chapter 1 at its own start,
-                // a genuine chapter 2 in the middle, and chapter 3 again near the end (earlier
-                // than its real mark).
-                s.Add(0.5, Seg(0, " Chapter one."), Seg(200, " Chapter two."), Seg(494.5, " Chapter three."));
+                // Pass 3's gap chunk, decoded from 0.25 (chapter 1's mark): re-hears chapter 1
+                // at its own start, a genuine chapter 2 in the middle, and chapter 3 again near
+                // the end (earlier than its real mark).
+                s.Add(0.25, Seg(0.25, " Chapter one."), Seg(200.25, " Chapter two."), Seg(494.75, " Chapter three."));
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.5), new(2, 200.5), new(3, 500)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 200.25), new(3, 500.05)], result.Chapters);
         Assert.DoesNotContain(log, l => l.Contains("chapter 1 found in gap"));
         Assert.DoesNotContain(log, l => l.Contains("chapter 3 found in gap"));
         Assert.Contains(log, l => l.Contains("chapter 2 found in gap"));
@@ -1730,7 +1802,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ([198, 208]) rather than the whole [2.5, 494.5] stretch between the chunk's two
         // segments, and finds the phrase in the first 8 s sub-chunk (starting at 198).
         var (result, log, _) = await DetectWithLogAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(495, 500), new(200, 206)],
             s =>
             {
@@ -1743,7 +1815,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.5), new(2, 200), new(3, 500)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 199.75), new(3, 500.05)], result.Chapters);
         Assert.Contains(log, l => l.Contains("chapter 2 found in gap"));
     }
 
@@ -1758,7 +1830,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 198 are expected, never something like 50 or 300 that a naive "scan the whole gap"
         // approach would also have visited.
         var (result, _, audio) = await DetectFullAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(495, 500), new(200, 206)],
             s =>
             {
@@ -1769,7 +1841,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.5), new(2, 200), new(3, 500)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 199.75), new(3, 500.05)], result.Chapters);
         Assert.DoesNotContain(audio.DecodeStarts, d => d is > 210 and < 490);
         // The one qualifying silence needs at most two 8 s sub-chunks (198 and 204) to cover its
         // padded [198, 208] span - nowhere near what scanning the ~492 s raw gap would take.
@@ -1900,7 +1972,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // confidence from the first probe window, so the whole file - including the gap-fill
         // pass - must be parsed as German ("Erstes Kapitel" / "Zweites Kapitel").
         var (result, transcriber) = await DetectWithTranscriberAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
@@ -1909,7 +1981,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Zweites Kapitel."));
             });
 
-        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Equal("de", result.Profile.Language);
         Assert.Equal("Kapitel", result.Profile.Title);
         Assert.Equal("de", result.DetectedLanguage);
@@ -1922,7 +1994,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task AutoLanguage_FallsBackToEnglish_WhenDetectionIsBelowThreshold()
     {
         var (result, _) = await DetectWithTranscriberAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
@@ -1931,7 +2003,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Equal("en", result.Profile.Language);
         Assert.Equal("Chapter", result.Profile.Title);
         Assert.Equal("tr", result.DetectedLanguage); // the raw guess is still reported
@@ -1942,7 +2014,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task ExplicitLang_NeverCallsLanguageDetection()
     {
         var (result, transcriber) = await DetectWithTranscriberAsync(
-            Options("--lang", "de"),
+            Options("--lang", "de", "--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
@@ -1950,7 +2022,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Zweites Kapitel."));
             });
 
-        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Equal(0, transcriber.DetectLanguageCalls);
         Assert.Null(result.DetectedLanguage);
         Assert.Equal("de", result.Profile.Language);
@@ -1983,7 +2055,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Markings at 10 s and 610 s; --verify probes 10 s before each, so windows start at 0 and 600.
         var result = await VerifyAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
             s =>
             {
@@ -2000,7 +2072,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Verify_Fails_WhenThePhraseIsNotFoundNearby()
     {
         var result = await VerifyAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
             s => s.Add(0, Seg(10, " Chapter 1."))); // nothing scripted near the second marking
 
@@ -2013,7 +2085,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Verify_Fails_WhenTheNumberNearbyDoesNotMatch()
     {
         var result = await VerifyAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 1")],
             s => s.Add(0, Seg(10, " Chapter 2."))); // wrong number for this marking
 
@@ -2027,7 +2099,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // "Intro" has no digit and no recognizable number word, so it cannot be checked;
         // with nothing else to disprove, verification passes trivially.
-        var result = await VerifyAsync(Options(), [new Chapter(0, "Intro")], _ => { });
+        var result = await VerifyAsync(Options("--max-jingle-length", "0"), [new Chapter(0, "Intro")], _ => { });
 
         Assert.True(result.Passed);
         Assert.Equal(0, result.Checked);
@@ -2058,7 +2130,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // instead of verifying the book. Resolving upfront, from the first marking with a
         // decodable window regardless of its title, must check both.
         var (result, transcriber, _) = await VerifyWithTranscriberAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Erstes Kapitel"), new Chapter(610, "Zweites Kapitel")],
             s =>
             {
@@ -2081,7 +2153,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // tracker should read the highest *confirmed* number, with the unconfirmed one below it
         // counted as a "(-N)" gap - not the highest pre-existing marking regardless of outcome.
         var (_, _, tracker) = await VerifyWithTranscriberAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2"), new Chapter(1210, "Chapter 3")],
             s =>
             {
@@ -2103,7 +2175,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // this same audio found it. A focused re-transcribe of just that gap (padded by
         // VerifyGapPaddingSeconds on each side) should recover the phrase and confirm the mark.
         var result = await VerifyAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 2")],
             s =>
             {
@@ -2128,7 +2200,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (which, per the real failure this feature fixes, is exactly the case Whisper can miss
         // by judging a long mixed chunk as non-speech on average).
         var result = await VerifyAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 2")],
             s =>
             {
@@ -2151,7 +2223,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Same shape as the recovery case above, but the phrase genuinely is not there - the
         // gap retry must not manufacture a false confirmation.
         var result = await VerifyAsync(
-            Options(),
+            Options("--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 2")],
             s => s.Add(0,
                 new TranscriptSegment(0, 9.1, " Something before."),
