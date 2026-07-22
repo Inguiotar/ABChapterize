@@ -659,26 +659,56 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task AutoMaxJingle_ObservesLengthFromVadBoundaries_NotPhraseOffset()
+    public async Task JinglePhraseSpokenInsideTheJingle_MarksAtJingleStart_NotJustBeforeThePhrase()
     {
-        // Chapter two's phrase starts 20 s into its probe window, but the VAD region itself
-        // (the true jingle) is only 5 s long. If the resize wrongly used the phrase-relative
-        // offset (20 s) instead of the VAD boundaries, the window would resize to ~30 s and
-        // still probe chapter three's 15 s-long region; using the correct 5 s observation
-        // resizes to ~11 s instead, so that region must be skipped (too long to be this
-        // book's jingle) and chapter three must not be found.
-        var (result, _, audio) = await DetectFullAsync(
-            Options("--jingle", "--max-jingle-length", "auto"),
-            [],
+        // The real-world failure this fix addresses: the "Chapter N" announcement is spoken
+        // *over* the jingle, so Whisper timestamps the phrase (645) *inside* the VAD non-speech
+        // region (640-650), which therefore ends 5 s *after* the phrase - the jingle region
+        // envelops the announcement. The probe is triggered by a false in-text pause (610-613)
+        // whose wide window reaches the phrase, so the jingle must be resolved by region lookup
+        // rather than from the triggering candidate. The mark must land at the jingle's own
+        // start (640), found by containment; an end-alignment lookup would drop the region
+        // (its end overshoots the phrase) and fall back to placing the mark 0.5 s before the
+        // phrase (644.5) - seconds late, and on the wrong side of the jingle.
+        var result = await DetectAsync(
+            Options("--jingle"),
+            [new(610, 613)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
-                s.Add(800, Seg(20, " Chapter two."));
+                s.Add(613, Seg(32, " Chapter two.")); // window [613, ...], phrase at 645
             },
-            new FakeVad { Speech = [new(0, 800), new(805, 900), new(915, 3600)] });
+            new FakeVad { Speech = [new(0, 640), new(650, 3600)] }); // jingle region 640-650 envelops 645
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
+    {
+        // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs
+        // to 825 - inflated because the short "Chapter two" announcement, spoken over the music,
+        // got merged back into the region (the ComputeNonSpeechRegions short-speech-gap merge).
+        // The phrase (at 805) sits inside that region. --max-jingle-length auto must measure the
+        // jingle up to the phrase (min(regionEnd, phrase) - regionStart = 5 s), not the full 25 s
+        // region span: 5 s resizes the window to ~11 s, so chapter three's 15 s decoy region at
+        // 900 is skipped (too long for this book's jingle); the inflated 25 s would have kept the
+        // window wide enough to probe it. A false pause (770-773) triggers the probe so the jingle
+        // is resolved by region lookup.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--jingle", "--max-jingle-length", "auto"),
+            [new(770, 773)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(773, Seg(32, " Chapter two.")); // window [773, ...], phrase at 805
+            },
+            new FakeVad { Speech = [new(0, 800), new(825, 900), new(915, 3600)] });
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
-        Assert.DoesNotContain(900.0, audio.DecodeStarts);
+        Assert.Contains(new DetectedChapter(2, 800), result.Chapters); // jingle start, clipped length fed to auto
+        Assert.DoesNotContain(900.0, audio.DecodeStarts);              // window narrowed to ~11 s, decoy skipped
     }
 
     [Fact]

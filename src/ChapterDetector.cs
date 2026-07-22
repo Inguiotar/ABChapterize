@@ -606,13 +606,15 @@ public sealed class ChapterDetector
                     // falls into (see above) - using the raw offset from this probe's own
                     // window start would inflate the observation whenever a false, earlier
                     // in-text pause was what actually triggered this probe. When the anchor is
-                    // a VAD region (no leading silence), its own boundaries give a more
-                    // accurate jingle length than the phrase-relative estimate, since the
-                    // phrase can start a moment after the jingle actually ends.
+                    // a VAD region (no leading silence), the length runs from the region start
+                    // to the phrase, clipped at the region end: the announcement is often spoken
+                    // inside the jingle (so the phrase precedes the region end), and the region
+                    // end can itself be inflated when ComputeNonSpeechRegions' short-speech-gap
+                    // merge swallowed that announcement - either way the phrase bounds the jingle.
                     var observedLength = markSilence is { } ras
                         ? phraseAbs - ras.EndSeconds
                         : markRegion is { } rvr
-                            ? rvr.EndSeconds - rvr.StartSeconds
+                            ? Math.Min(rvr.EndSeconds, phraseAbs) - rvr.StartSeconds
                             : phraseAbs - start;
                     if (observedLength >= MinJingleObservationSeconds)
                     {
@@ -1049,12 +1051,13 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Resolves the anchor for placing a --jingle chapter mark, independent of whichever silence
-    /// happened to trigger the probe. The jingle is the VAD non-speech region ending at the
-    /// phrase; a silencedetect silence is accepted as the anchor <em>only</em> when it
-    /// <see cref="LeadingSilence">leads that region</see> (its end lies inside it) - the classic
-    /// "silence then jingle" transition, where the mark goes 0.5 s before the silence. When the
-    /// region has no leading silence (a silence-less jingle) the region itself is the anchor and
-    /// the mark goes at the jingle start with no lead.
+    /// happened to trigger the probe. The jingle is the VAD non-speech region the phrase belongs
+    /// to (see <see cref="FindJingleRegionForPhrase"/> - by containment, so the announcement being
+    /// spoken <em>inside</em> the jingle does not lose the region); a silencedetect silence is
+    /// accepted as the anchor <em>only</em> when it <see cref="LeadingSilence">leads that region</see>
+    /// (its end lies inside it) - the classic "silence then jingle" transition, where the mark goes
+    /// 0.5 s before the silence. When the region has no leading silence (a silence-less jingle) the
+    /// region itself is the anchor and the mark goes at the jingle start with no lead.
     /// <para>
     /// Crucially, a false in-text pause earlier in the previous chapter's narration does
     /// <em>not</em> lead the jingle region, so it is never mistaken for the anchor even when it
@@ -1080,7 +1083,7 @@ public sealed class ChapterDetector
         double phraseAbs, double earliestAnchor, List<Silence> silences,
         List<NonSpeechRegion> nonSpeechRegions, NonSpeechRegion? candidateVadRegion)
     {
-        var jingleRegion = candidateVadRegion ?? FindLastRegionEndingWithin(earliestAnchor, phraseAbs, nonSpeechRegions);
+        var jingleRegion = candidateVadRegion ?? FindJingleRegionForPhrase(earliestAnchor, phraseAbs, nonSpeechRegions);
         if (jingleRegion is { } jr)
         {
             var leading = LeadingSilence(jr, silences);
@@ -1117,19 +1120,34 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Finds the VAD non-speech region (the jingle) that ends at a matched phrase, the same way
-    /// <see cref="FindRealAnchorSilence"/> does for silencedetect silences. The region's end is
-    /// matched against the phrase with <see cref="JinglePhraseMatchToleranceSeconds"/> of slack,
-    /// so a region ending a hair after the phrase (VAD and Whisper time boundaries slightly
-    /// differently) is still recognised rather than missed. Returns null when none was found in
-    /// the window.
+    /// Finds the VAD non-speech region (the jingle) a matched phrase belongs to, by
+    /// <em>containment</em> rather than end-alignment: the last region that contains the phrase
+    /// (<c>Start &lt;= phrase &lt;= End</c>) or brackets it within
+    /// <see cref="JinglePhraseMatchToleranceSeconds"/> at either edge (VAD and Whisper time their
+    /// boundaries slightly differently). This is deliberately robust to the "Kapitel N"
+    /// announcement being spoken <em>inside</em> the jingle - Whisper then timestamps the phrase
+    /// before the VAD region ends, so an end-alignment test would drop the region and the mark
+    /// would fall back onto an unrelated earlier in-text pause, landing the chapter seconds early
+    /// (the failure that motivated this). Because the mark is taken from the region's
+    /// <see cref="JingleStart">start</see>, where the region <em>ends</em> - possibly inflated by
+    /// <see cref="ComputeNonSpeechRegions"/>'s short-speech-gap merge swallowing the announcement -
+    /// never affects placement. A region that starts after the phrase (a post-announcement pause)
+    /// is excluded. Returns null when no region qualifies within the window.
     /// </summary>
-    private static NonSpeechRegion? FindLastRegionEndingWithin(
+    /// <param name="windowStart">Earliest a qualifying region may end (the probe window start or
+    /// the Pass 3 lookback start); a region entirely before it is ignored.</param>
+    /// <param name="phraseAbsSeconds">Absolute phrase start in seconds.</param>
+    /// <param name="regions">All VAD non-speech regions, in chronological order.</param>
+    private static NonSpeechRegion? FindJingleRegionForPhrase(
         double windowStart, double phraseAbsSeconds, List<NonSpeechRegion> regions)
     {
-        var latestEnd = phraseAbsSeconds + JinglePhraseMatchToleranceSeconds;
-        var region = regions.LastOrDefault(r => r.EndSeconds > windowStart && r.EndSeconds <= latestEnd);
-        return region == default ? null : region;
+        var latestStart = phraseAbsSeconds + JinglePhraseMatchToleranceSeconds;
+        var earliestEnd = phraseAbsSeconds - JinglePhraseMatchToleranceSeconds;
+        NonSpeechRegion? found = null;
+        foreach (var r in regions)
+            if (r.EndSeconds > windowStart && r.StartSeconds <= latestStart && r.EndSeconds >= earliestEnd)
+                found = r;
+        return found;
     }
 
     /// <summary>
