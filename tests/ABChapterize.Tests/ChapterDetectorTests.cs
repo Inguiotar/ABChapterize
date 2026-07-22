@@ -2064,6 +2064,32 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Verify_ScansAGapInSeveralChunks_AndFindsThePhraseInALaterOne()
+    {
+        // The padded gap [7.1, 30.1] is scanned in overlapping 8s chunks stepped by 6s (8s minus
+        // 2s overlap): 7.1, 13.1, 19.1, 25.1. The phrase sits only in the third chunk - proving
+        // this is a genuine multi-chunk scan, not a lucky single re-transcribe of the whole gap
+        // (which, per the real failure this feature fixes, is exactly the case Whisper can miss
+        // by judging a long mixed chunk as non-speech on average).
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Chapter 2")],
+            s =>
+            {
+                s.Add(0,
+                    new TranscriptSegment(0, 9.1, " Something before."),
+                    new TranscriptSegment(28.1, 44.2, " Something after."));
+                s.Add(7.1, Seg(0, " still nothing here."));
+                s.Add(13.1, Seg(0, " nor here."));
+                s.Add(19.1, Seg(3, " Chapter 2."));
+            });
+
+        Assert.True(result.Passed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(0, result.Failed);
+    }
+
+    [Fact]
     public async Task Verify_StillFails_WhenTheGapRetryAlsoFindsNothing()
     {
         // Same shape as the recovery case above, but the phrase genuinely is not there - the

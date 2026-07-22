@@ -300,6 +300,18 @@ public sealed class ChapterDetector
     /// so the phrase is not cut off if it starts or ends right at the gap boundary.</summary>
     private const double VerifyGapPaddingSeconds = 2.0;
 
+    /// <summary>Length of each sub-chunk a padded --verify gap is scanned in, rather than
+    /// re-transcribing it in one call. A single call spanning a long, mostly non-speech stretch
+    /// (silence or a jingle around a short phrase) risks the same failure it was meant to
+    /// recover from: Whisper can judge the whole call's audio as non-speech on average and
+    /// return only a token leading segment, even where a short, tightly-scoped call over just
+    /// the phrase itself succeeds easily.</summary>
+    private const double VerifyGapChunkSeconds = 8.0;
+
+    /// <summary>Overlap between consecutive --verify gap sub-chunks, so a phrase that straddles
+    /// a chunk boundary is still fully contained within at least one of them.</summary>
+    private const double VerifyGapChunkOverlapSeconds = 2.0;
+
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
     private readonly ITranscriber _transcriber;
@@ -1100,15 +1112,17 @@ public sealed class ChapterDetector
     /// <summary>
     /// Second-chance confirmation for a --verify window whose first-pass transcript missed the
     /// expected phrase: every gap of at least <see cref="VerifyGapRetranscribeSeconds"/> between
-    /// transcribed segments (including before the first and after the last one) is re-decoded
-    /// and re-transcribed on its own, narrowly scoped and padded by <see
-    /// cref="VerifyGapPaddingSeconds"/> on each side, and checked again for the phrase - stopping
-    /// at the first gap that confirms it. A single long Whisper call over the whole window can
-    /// silently skip a stretch of audio (typically silence or a jingle straddling the phrase)
-    /// rather than transcribing it as empty speech, even though the same audio, decoded on its
-    /// own at the smaller scale detection normally probes at, transcribes it correctly - as
-    /// detection's own original run over this same audio already proved by finding the phrase
-    /// there in the first place.
+    /// transcribed segments (including before the first and after the last one) is padded by
+    /// <see cref="VerifyGapPaddingSeconds"/> on each side and re-scanned in short, overlapping
+    /// <see cref="VerifyGapChunkSeconds"/> sub-chunks, each independently re-decoded and
+    /// re-transcribed and checked for the phrase - stopping at the first chunk that confirms it.
+    /// Scanning in small chunks rather than re-transcribing the whole padded gap in one call
+    /// matters: a single call spanning a long, mostly non-speech stretch (silence or a jingle
+    /// around a short phrase) risks the very same failure it exists to recover from, since
+    /// Whisper can judge that whole call's audio as non-speech on average and return only a
+    /// token leading segment - as observed in practice - even though the same audio, decoded on
+    /// its own at a scale close to a single phrase, transcribes it correctly, exactly as
+    /// detection's own original run over this same audio already did.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file, for its duration and input decoder.</param>
@@ -1141,16 +1155,22 @@ public sealed class ChapterDetector
 
             var sliceStart = Math.Max(0, gapStart - VerifyGapPaddingSeconds);
             var sliceEnd = Math.Min(windowLen, gapEnd + VerifyGapPaddingSeconds);
-            var absStart = windowStart + sliceStart;
-            var len = Math.Min(sliceEnd - sliceStart, info.DurationSeconds - absStart);
-            if (len <= 0)
-                continue;
 
-            var gapSamples = await _audio.DecodePcmAsync(file, absStart, len, info.InputDecoder, ct);
-            var gapSegments = await _transcriber.TranscribeAsync(gapSamples, ct);
-            LogTranscript($"verify gap retry {len:0.#}s@{FormatTimestamp(absStart)}", gapSegments);
-            if (FindPhraseMatches(gapSegments, profile).Any(m => m.Number == expected))
-                return true;
+            var chunkStep = VerifyGapChunkSeconds - VerifyGapChunkOverlapSeconds;
+            for (var chunkStart = sliceStart; chunkStart < sliceEnd; chunkStart += chunkStep)
+            {
+                var absStart = windowStart + chunkStart;
+                var len = Math.Min(
+                    Math.Min(VerifyGapChunkSeconds, sliceEnd - chunkStart), info.DurationSeconds - absStart);
+                if (len <= 0)
+                    continue;
+
+                var gapSamples = await _audio.DecodePcmAsync(file, absStart, len, info.InputDecoder, ct);
+                var gapSegments = await _transcriber.TranscribeAsync(gapSamples, ct);
+                LogTranscript($"verify gap retry {len:0.#}s@{FormatTimestamp(absStart)}", gapSegments);
+                if (FindPhraseMatches(gapSegments, profile).Any(m => m.Number == expected))
+                    return true;
+            }
         }
         return false;
     }

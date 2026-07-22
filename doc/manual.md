@@ -449,9 +449,9 @@ skipped (reported as "skipped").
   chapter phrase and the expected chapter number, reusing the same
   transcription machinery as normal detection rather than a plain
   string/fingerprint comparison. If the phrase isn't found on the first
-  pass, a long unrecognized stretch inside the window gets one more,
-  narrower attempt on its own before the mark is given up as unconfirmed —
-  documented in the source. Marks that all check out are left
+  pass, any long unrecognized stretch inside the window gets a further,
+  closer look in small overlapping chunks before the mark is given up as
+  unconfirmed — documented in the source. Marks that all check out are left
   untouched, same as a skip without `--verify`. If any mark fails, all of
   the file's existing marks are discarded and it goes through full
   detection, same as `--force` would — a single bad mark is enough to
