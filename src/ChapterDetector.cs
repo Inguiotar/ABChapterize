@@ -287,6 +287,19 @@ public sealed class ChapterDetector
     /// cref="VerifyMarginBeforeSeconds"/> before the marking.</summary>
     private const double VerifyWindowSeconds = 60;
 
+    /// <summary>Minimum gap between two transcribed segments inside a --verify window (or
+    /// before the first/after the last one) that is worth a focused re-transcription attempt of
+    /// just that stretch on its own. Whisper's single-shot decoding of the full window can
+    /// silently skip a stretch of audio altogether - typically silence or a jingle straddling
+    /// the actual chapter phrase - rather than transcribing it as empty speech; since the
+    /// original detection run already found the phrase somewhere in this same audio, a gap this
+    /// size is more likely that decoding artifact than genuine silence.</summary>
+    private const double VerifyGapRetranscribeSeconds = 3.0;
+
+    /// <summary>Context padding added to each side of a --verify gap before re-transcribing it,
+    /// so the phrase is not cut off if it starts or ends right at the gap boundary.</summary>
+    private const double VerifyGapPaddingSeconds = 2.0;
+
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
     private readonly ITranscriber _transcriber;
@@ -1065,6 +1078,9 @@ public sealed class ChapterDetector
 
             checkedCount++;
             var confirmed = FindPhraseMatches(segments, profile).Any(m => m.Number == expected);
+            if (!confirmed)
+                confirmed = await TryConfirmViaGapRetranscribeAsync(
+                    file, info, windowStart, windowLen, segments, profile, expected, ct);
             _log?.Invoke(confirmed
                 ? $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} confirmed"
                 : $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
@@ -1079,6 +1095,64 @@ public sealed class ChapterDetector
         }
 
         return new VerifyResult(failed == 0, checkedCount, failed);
+    }
+
+    /// <summary>
+    /// Second-chance confirmation for a --verify window whose first-pass transcript missed the
+    /// expected phrase: every gap of at least <see cref="VerifyGapRetranscribeSeconds"/> between
+    /// transcribed segments (including before the first and after the last one) is re-decoded
+    /// and re-transcribed on its own, narrowly scoped and padded by <see
+    /// cref="VerifyGapPaddingSeconds"/> on each side, and checked again for the phrase - stopping
+    /// at the first gap that confirms it. A single long Whisper call over the whole window can
+    /// silently skip a stretch of audio (typically silence or a jingle straddling the phrase)
+    /// rather than transcribing it as empty speech, even though the same audio, decoded on its
+    /// own at the smaller scale detection normally probes at, transcribes it correctly - as
+    /// detection's own original run over this same audio already proved by finding the phrase
+    /// there in the first place.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file, for its duration and input decoder.</param>
+    /// <param name="windowStart">Absolute start of the --verify window already transcribed.</param>
+    /// <param name="windowLen">Length of that window in seconds.</param>
+    /// <param name="segments">That window's first-pass transcript segments, window-relative.</param>
+    /// <param name="profile">Language profile for phrase/number matching.</param>
+    /// <param name="expected">The chapter number this marking is expected to confirm.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<bool> TryConfirmViaGapRetranscribeAsync(
+        string file, MediaInfo info, double windowStart, double windowLen,
+        List<TranscriptSegment> segments, LanguageProfile profile, int expected, CancellationToken ct)
+    {
+        var boundaries = new List<double> { 0 };
+        foreach (var s in segments.OrderBy(s => s.StartSeconds))
+        {
+            boundaries.Add(s.StartSeconds);
+            boundaries.Add(s.EndSeconds);
+        }
+        boundaries.Add(windowLen);
+
+        // Consecutive pairs at even indices are the gaps between segments (odd indices are the
+        // segments themselves): [0, seg0.Start], [seg0.End, seg1.Start], ..., [segN.End, windowLen].
+        for (var i = 0; i + 1 < boundaries.Count; i += 2)
+        {
+            var gapStart = boundaries[i];
+            var gapEnd = boundaries[i + 1];
+            if (gapEnd - gapStart < VerifyGapRetranscribeSeconds)
+                continue;
+
+            var sliceStart = Math.Max(0, gapStart - VerifyGapPaddingSeconds);
+            var sliceEnd = Math.Min(windowLen, gapEnd + VerifyGapPaddingSeconds);
+            var absStart = windowStart + sliceStart;
+            var len = Math.Min(sliceEnd - sliceStart, info.DurationSeconds - absStart);
+            if (len <= 0)
+                continue;
+
+            var gapSamples = await _audio.DecodePcmAsync(file, absStart, len, info.InputDecoder, ct);
+            var gapSegments = await _transcriber.TranscribeAsync(gapSamples, ct);
+            LogTranscript($"verify gap retry {len:0.#}s@{FormatTimestamp(absStart)}", gapSegments);
+            if (FindPhraseMatches(gapSegments, profile).Any(m => m.Number == expected))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

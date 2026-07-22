@@ -2037,4 +2037,47 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal(3, tracker.HighestChapter);
         Assert.Equal(1, tracker.MissingChapters);
     }
+
+    [Fact]
+    public async Task Verify_RetriesLongGapsBetweenSegments_AndConfirmsIfThePhraseIsThere()
+    {
+        // Reproduces a real failure: the first-pass transcript of the --verify window has a
+        // ~19 s gap between two segments (9.1-28.1, window-relative) where Whisper silently
+        // skipped the chapter phrase entirely, even though detection's own original run over
+        // this same audio found it. A focused re-transcribe of just that gap (padded by
+        // VerifyGapPaddingSeconds on each side) should recover the phrase and confirm the mark.
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Chapter 2")],
+            s =>
+            {
+                s.Add(0,
+                    new TranscriptSegment(0, 9.1, " Something before."),
+                    new TranscriptSegment(28.1, 44.2, " Something after."));
+                // Gap [9.1, 28.1] padded by 2s on each side -> re-decoded from windowStart + 7.1.
+                s.Add(7.1, Seg(5, " Chapter 2."));
+            });
+
+        Assert.True(result.Passed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(0, result.Failed);
+    }
+
+    [Fact]
+    public async Task Verify_StillFails_WhenTheGapRetryAlsoFindsNothing()
+    {
+        // Same shape as the recovery case above, but the phrase genuinely is not there - the
+        // gap retry must not manufacture a false confirmation.
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Chapter 2")],
+            s => s.Add(0,
+                new TranscriptSegment(0, 9.1, " Something before."),
+                new TranscriptSegment(28.1, 44.2, " Something after.")));
+        // No script entry for the gap retry decode (~7.1) - ScriptedTranscriber returns [].
+
+        Assert.False(result.Passed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(1, result.Failed);
+    }
 }
