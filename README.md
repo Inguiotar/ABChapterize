@@ -200,7 +200,11 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    number is parsed from digits or from numbers written out as words (0-999,
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
    Seven") or precedes
-   it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). By default
+   it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). Window borders are
+   planned up front and snapped to silence mid-points so no decode ever cuts
+   a word in half, and each detection is pinpointed to its own preceding
+   silence right away — a confident mark even skips the remaining windows
+   that overlap its own. By default
    (`--min-silence-length auto`), starting from the second mark found (the
    silence before the first mark is usually the intro/title silence, often
    longer than the breaks between chapters, so it's not used to tighten),
@@ -213,8 +217,10 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    this and probes every silence at or above it instead.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
-   hiding are transcribed completely. If a gap still remains, the file is left
-   unchanged and a warning is printed.
+   hiding are transcribed completely, in chunks whose borders snap to
+   silences too (with the transcripts bridged across each seam, so not even
+   a phrase interrupted by a pause right at a border can slip through). If a
+   gap still remains, the file is left unchanged and a warning is printed.
 
 A synthetic "Intro" mark (localized by `--lang`, customizable with
 `--intro-title`) covers everything before the first detected chapter

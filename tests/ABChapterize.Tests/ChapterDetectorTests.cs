@@ -263,7 +263,9 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task SequenceGap_IsResolved_ByFullTranscription()
     {
         // The probe after the first silence hears nothing, so pass 2 yields chapters 1 and 3;
-        // pass 3 must transcribe the region in between and find chapter 2 at 600 s.
+        // pass 3 must transcribe the region in between and find chapter 2 at 600 s. The first
+        // pass-3 chunk's border (natural end 600.5) snaps to the [595, 600] silence's mid-point
+        // (597.5), so the second chunk starts exactly there - that is where the phrase is heard.
         var result = await DetectAsync(
             Options(),
             [new(595, 600), new(1195, 1200)],
@@ -271,7 +273,7 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(1200, Seg(0.2, " Chapter three."));
-                s.Add(590.5, Seg(9.5, " Chapter two.")); // gap chunk starting at 0.5 + 590
+                s.Add(597.5, Seg(2.5, " Chapter two.")); // gap chunk starting at the snapped seam
             });
 
         Assert.False(result.GapRemains);
@@ -300,8 +302,10 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task RegionBeforeFirstChapter_IsSearched_WhenItStartsAboveOne()
     {
         // Only chapter 2 is found by the probes, so pass 3 transcribes the file start
-        // and finds chapter 1 in the middle of the audio.
-        var result = await DetectAsync(
+        // and finds chapter 1 in the middle of the audio. The first chunk's border (natural
+        // end 600) has no seam target within reach, so the unsnapped fallback keeps the
+        // 10-second overlap: the second chunk must start at 590, not at 600.
+        var (result, _, audio) = await DetectFullAsync(
             Options(),
             [new(1195, 1200)],
             s =>
@@ -312,6 +316,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([new(1, 10), new(2, 1200)], result.Chapters);
+        Assert.Contains(590.0, audio.DecodeStarts);
     }
 
     [Fact]
@@ -688,12 +693,16 @@ public sealed class ChapterDetectorTests : IDisposable
         // would narrow to ~8.75 s (1.25 * 3 + 5), and chapter two's own, much longer (20 s)
         // silence-less jingle region (600-620) would then be skipped outright (too long for that
         // wrongly-narrowed window) - so chapter two must still be found.
+        // The file-start window [0, 50] abuts the jingle region and gets its end forward-snapped
+        // to the region's mid-point (51.5), so chapter one's announcement (right after the
+        // jingle, at 53.2) is heard by that very first probe; the region candidate at 50 is
+        // then skipped as part of chapter one's overlap sequence.
         var (result, _, audio) = await DetectFullAsync(
             Options("--jingle", "--max-jingle-length", "auto"),
             [],
             s =>
             {
-                s.Add(50, Seg(0.3, " Chapter one."));
+                s.Add(0, Seg(53.2, " Chapter one."));
                 s.Add(600, Seg(0.3, " Chapter two."));
             },
             new FakeVad { Speech = [new(0, 50), new(53, 600), new(620, 3600)] });
@@ -798,33 +807,78 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task OverlappingProbe_ReusesTheCachedTranscript_InsteadOfReDecodingTheOverlap()
     {
         // Two silences 6 s apart give overlapping 12 s probe windows ([600, 612] and [606, 618]).
-        // Chapter one is found by the first probe. The second probe must not re-decode the shared
-        // [606, 612] span: neither silence lies fully within window 2 ([606, 618]), so
+        // Chapter one is found by the first probe - deliberately at low confidence, so the
+        // overlap-sequence skip stays out of the way (a low-confidence mark must not skip the
+        // windows that could re-detect the transition it may have gotten wrong) and the reuse
+        // path is actually exercised. The second probe must not re-decode the shared [606, 612]
+        // span: neither silence lies fully within window 2 ([606, 618]), so
         // FindOverlapSplitPoint falls back to the original border (612, no snap, no reach-back) -
         // that is where the fresh tail decode starts, and the candidate's own start (606) never is.
         // The detected chapter is unaffected by the optimization.
         var (result, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(601, 606)],
-            s => s.Add(600, Seg(0.5, " Chapter one.")));
+            s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
-        Assert.Equal([new DetectedChapter(1, 600)], result.Chapters);
+        Assert.Equal([new DetectedChapter(1, 600, 0.3)], result.Chapters);
         Assert.Contains(612.0, audio.DecodeStarts);        // fresh tail only (fallback: the border itself)
         Assert.DoesNotContain(606.0, audio.DecodeStarts);  // the overlap was reused, not re-decoded
     }
 
     [Fact]
-    public async Task OverlappingProbe_RecoversASecondChapter_MissedByTheFirstWindowsEarlyReturn()
+    public async Task ConfidentMark_SkipsTheRemainingWindowsOfItsOverlapSequence()
     {
-        // One probe window stops at its first phrase (one chapter per window), so a second phrase
-        // further along the same window is never marked by that probe. Here chapter one's wide
-        // --jingle window [600, 650] also contains chapter two's announcement 40 s in; the probe
-        // returns chapter one and leaves chapter two unseen. The overlapping candidate at 640 must
-        // recover chapter two from the reused transcript - a naive "transcribe only the new tail"
-        // scheme would never see it, since it sits inside the already-transcribed overlap. Neither
-        // silence lies fully within window 2 ([640, 690]), and there are no VAD non-speech regions
-        // (one continuous speech segment), so FindOverlapSplitPoint falls back to the original
-        // border (650) - the tail decode lands there, never at the candidate start (640).
+        // Same layout as above, but chapter one is found confidently: the mark settles the
+        // whole overlapping window sequence, so the candidate at 606 is skipped outright - no
+        // fresh tail decode at the border (612), no decode at the candidate start (606), and
+        // this works with an explicit --min-silence-length (no adaptive skipping involved).
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(601, 606)],
+            s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.Equal([new DetectedChapter(1, 600)], result.Chapters);
+        Assert.DoesNotContain(612.0, audio.DecodeStarts);
+        Assert.DoesNotContain(606.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task SequenceSkippedWindow_IsReProbed_WhenASequenceGapTurnsUp()
+    {
+        // Chapter two's confident mark skips the overlapping window at 608 - which is exactly
+        // where chapter three's announcement hides (the "sequence spans two transitions" case
+        // the skip bets against). The later chapter-four mark exposes the gap, and the skipped
+        // window must then be re-probed and chapter three recovered - even with an explicit
+        // --min-silence-length, where the gap re-probe used to be unreachable (nothing was
+        // ever skipped before the sequence skip existed).
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(606, 608), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(608, Seg(0.4, " Chapter three."));
+                s.Add(1200, Seg(0.2, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        // The window at 608 was skipped first and only decoded by the gap re-probe, i.e.
+        // after the probe at 1200 that revealed the gap.
+        Assert.True(audio.DecodeStarts.IndexOf(608) > audio.DecodeStarts.IndexOf(1200));
+    }
+
+    [Fact]
+    public async Task WideJingleWindow_MarksASecondChapterImmediately_AndSkipsItsOverlapSequence()
+    {
+        // Chapter one's wide --jingle window [600, 650] also contains chapter two's
+        // announcement 40 s in. Both marks must come out of this single probe: segment
+        // timestamps plus the stored silence list pinpoint chapter two at its own preceding
+        // silence ([638, 640], mark 0.5 s before its end) even though the window was triggered
+        // by chapter one's silence. The confident marks then settle the overlapping window
+        // sequence, so the candidate at 640 is never probed at all - neither its start (640)
+        // nor the shared border (650) is ever decoded.
         var (result, _, audio) = await DetectFullAsync(
             Options("--jingle"),
             [new(598, 600), new(638, 640)],
@@ -833,29 +887,73 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
         Assert.Contains(new DetectedChapter(2, 639.5), result.Chapters);
-        Assert.Contains(650.0, audio.DecodeStarts);
+        Assert.DoesNotContain(650.0, audio.DecodeStarts);
         Assert.DoesNotContain(640.0, audio.DecodeStarts);
     }
 
     [Fact]
-    public async Task OverlappingProbe_RecoversAPhrase_RejectedByTheEarlierWindowsPhraseTimingRule()
+    public async Task DeepPhrase_WithAQualifyingAnchorSilence_IsAcceptedAndPinpointedRightAway()
     {
-        // Without a jingle the phrase must start within 5 s of the triggering silence. Chapter one's
-        // announcement sits 9 s into the first probe's window ([600, 612], phrase at 609), so that
-        // probe rejects it as too late. The next candidate at 606 sees the very same phrase only 3 s
-        // in ([606, 618], phrase at 609) and must accept it. That phrase lives in the
-        // already-transcribed overlap, so only the reused transcript - not a tail-only re-decode -
-        // can surface it. Neither silence lies fully within window 2 ([606, 618]), so
-        // FindOverlapSplitPoint falls back to the original border (612). The chapter is recovered
-        // and the overlap is not re-decoded (612 is, 606 is not).
+        // Without a jingle the phrase must start within 5 s of the triggering silence - but a
+        // phrase deeper in the window is no longer deferred to a later candidate's own probe:
+        // chapter one's announcement sits 9 s into the window ([600, 612], phrase at 609),
+        // directly after the qualifying [603, 606] silence, so it is accepted right away with
+        // the mark pinpointed at that silence's end (606). The confident mark then skips the
+        // overlapping candidate at 606 entirely: neither the border (612) nor the candidate
+        // start (606) is ever decoded again.
         var (result, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606)],
             s => s.Add(600, Seg(9, " Chapter one.")));
 
         Assert.Equal([new DetectedChapter(1, 606)], result.Chapters);
-        Assert.Contains(612.0, audio.DecodeStarts);
+        Assert.DoesNotContain(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task DeepPhrase_WithOnlyASubThresholdPauseBeforeIt_IsRejected()
+    {
+        // The phrase at 609 is directly preceded by a stored 0.6 s pause ([605, 605.6]) - far
+        // below the 1.5 s candidate threshold. A breath pause in front of an in-text mention
+        // ("Chapter two had been hard.") must not qualify as a deep-detection anchor, so no
+        // chapter two mark may appear anywhere.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(605, 605.6)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(9, " Chapter two."));
+            });
+
+        Assert.Equal([new DetectedChapter(1, 0.5)], result.Chapters);
+        Assert.False(result.GapRemains);
+    }
+
+    [Fact]
+    public async Task AutoMinSilence_TightensFromTheSilenceTheMarkFallsInto_NotTheTrigger()
+    {
+        // Chapter two's probe is triggered by the 6 s silence at [594, 600], but its phrase
+        // sits deep in the window, anchored to the 3 s silence at [605, 608] - the silence the
+        // mark actually falls into. The threshold must tighten to 0.75 x 3 = 2.25 s, not
+        // 0.75 x 6 = 4.5 s: chapter three's 2.5 s silence ([897.5, 900]) is only probed - and
+        // chapter three, being last, only ever found - if the mark's own silence was used.
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(594, 600), new(605, 608), new(897.5, 900)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(8.4, " Chapter two."));
+                s.Add(900, Seg(0.3, " Chapter three."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal(
+            [new(1, 0.5), new(2, 608), new(3, 900)],
+            result.Chapters);
+        Assert.Contains(900.0, audio.DecodeStarts);
     }
 
     [Fact]
@@ -869,11 +967,13 @@ public sealed class ChapterDetectorTests : IDisposable
         // The up-front window plan (PlanWindowEnds) must move the shared border to its
         // mid-point (608.3) before anything is decoded: window 1's decode itself ends there
         // (8.3 s instead of the natural 12), and window 2's fresh tail starts exactly there -
-        // never at the raw border (612) or the candidate start (606).
+        // never at the raw border (612) or the candidate start (606). Chapter one is scripted
+        // at low confidence so the overlap-sequence skip stays out of the way and window 2 is
+        // actually probed.
         var (_, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
-            s => s.Add(600, Seg(0.5, " Chapter one.")));
+            s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
         Assert.Contains(608.3, audio.DecodeStarts);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
@@ -893,11 +993,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // seam at its neighbor's end, extending window 600's decode to 651.5 and leaving
         // window 640 fully contained in its cache (no decode of its own). The VAD candidate's
         // fresh tail then starts exactly at the seam: 651.5 is decoded, the raw border (650)
-        // and the swallowed candidate start (640) never are.
+        // and the swallowed candidate start (640) never are. Chapter one is scripted at low
+        // confidence so the overlap-sequence skip stays out of the way.
         var (_, _, audio) = await DetectFullAsync(
             Options("--jingle"),
             [new(598, 600), new(638, 640)],
-            s => s.Add(600, Seg(2, " Chapter one.")),
+            s => s.Add(600, Seg(2, " Chapter one.", confidence: 0.3)),
             new FakeVad { Speech = [new(0, 648), new(655, 3600)] });
 
         Assert.Contains(651.5, audio.DecodeStarts);
@@ -914,10 +1015,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // decodes anything (PlanWindowEnds), window 1's decode is simply *extended* to 613.5 up
         // front and window 2's fresh tail starts exactly there: the plan moved the border
         // itself, so no [612, 613.5) hole can exist and nothing is cut mid-word at 612.
+        // Chapter one is scripted at low confidence so the overlap-sequence skip stays out
+        // of the way and window 2 is actually probed.
         var (_, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(613, 614)],
-            s => s.Add(600, Seg(0.5, " Chapter one.")));
+            s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
         Assert.Contains(613.5, audio.DecodeStarts);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
@@ -933,11 +1036,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // straddles the border: its mid-point (612.1) lies a hair past 612, and the plan
         // simply extends window 1's decode to end there - the seam sits mid-silence, nothing
         // is cut mid-word and nothing is left undecoded. (At 1 s the silence is also below
-        // the 1.5 s candidate threshold, so it is retained purely as a seam target.)
+        // the 1.5 s candidate threshold, so it is retained purely as a seam target. Chapter
+        // one is scripted at low confidence so the overlap-sequence skip stays out of the way.)
         var (_, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(611.6, 612.6)],
-            s => s.Add(600, Seg(0.5, " Chapter one.")));
+            s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
         Assert.Contains(612.1, audio.DecodeStarts);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
@@ -951,13 +1055,14 @@ public sealed class ChapterDetectorTests : IDisposable
         // (split at 608.3), but this asserts on the --verbose log itself: the tail probe's log line
         // must show only what was actually decoded from 608.3 onward, at Whisper's own (0-based)
         // timestamps - not the reused segment restated at window-relative time, and not a span
-        // reaching all the way to the window's nominal end (618).
+        // reaching all the way to the window's nominal end (618). Chapter one is scripted at
+        // low confidence so the overlap-sequence skip stays out of the way.
         var (_, log, _) = await DetectWithLogAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
             s =>
             {
-                s.Add(600, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3));
                 s.Add(608.3, Seg(1.0, " some fresh words"));
             });
 
@@ -974,10 +1079,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // so two close-together candidates can end up with the very same (capped) window end -
         // window 2 is then fully contained in window 1's cache and no Whisper call happens at
         // all. The log must say so plainly rather than dumping a (nonexistent) transcript.
+        // Chapter one is scripted at low confidence so the overlap-sequence skip stays out of
+        // the way and the fully-contained window is actually visited.
         var (_, log, audio) = await DetectWithLogAsync(
             Options("--min-silence-length", "1.5"),
             [new(3585, 3590), new(3593, 3595)],
-            s => s.Add(3590, Seg(0.5, " Chapter one.")));
+            s => s.Add(3590, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
         Assert.Contains("probe @0:59:55.00: fully reused, no new transcription", log);
         Assert.DoesNotContain(3595.0, audio.DecodeStarts);
@@ -1077,6 +1184,103 @@ public sealed class ChapterDetectorTests : IDisposable
         var jingle = ChapterDetector.PlanWindowEnds([600, 606], 12, 3600, [], regions, jingle: true);
         Assert.Equal([612, 618], plain);
         Assert.Equal([608.5, 618], jingle);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_ExtendsAStandAloneEnd_ToASeamShortlyAfterIt()
+    {
+        // Window 1's end (12) does not lie inside window 2 ([600, 612]) - no shared border -
+        // but a silence sits just past it: the end is extended to its mid-point (13.5) so the
+        // decode stops word-safely. Window 2's own (last) end has no target within its 5 s
+        // forward search and keeps its natural length.
+        var ends = ChapterDetector.PlanWindowEnds(
+            [0, 600], 12, 3600, [new(13, 14)], [], jingle: false);
+        Assert.Equal([13.5, 612], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_KeepsAStandAloneEnd_WhenNoSeamLiesWithinTheForwardSearch()
+    {
+        // Neither a target whose mid-point lies before the natural end (extension only - the
+        // window must never shrink below its natural span) nor one past the 5 s search limit
+        // ([18, 19], mid-point 18.5 > 17) may move the end: it stays at the natural 12.
+        var ends = ChapterDetector.PlanWindowEnds(
+            [0], 12, 3600, [new(8, 9), new(18, 19)], [], jingle: false);
+        Assert.Equal([12], ends);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_StandAloneEndSnap_UsesVadRegionsOnlyInJingleMode()
+    {
+        List<ChapterDetector.NonSpeechRegion> regions = [new(13, 14)];
+        var plain = ChapterDetector.PlanWindowEnds([0], 12, 3600, [], regions, jingle: false);
+        var jingle = ChapterDetector.PlanWindowEnds([0], 12, 3600, [], regions, jingle: true);
+        Assert.Equal([12], plain);
+        Assert.Equal([13.5], jingle);
+    }
+
+    [Fact]
+    public void PlanWindowEnds_StandAloneEndSnap_StopsAtTheFileEnd()
+    {
+        // The natural end is already clamped to the file end - there is no room to extend
+        // into, so the forward search must come up empty regardless of nearby targets.
+        var ends = ChapterDetector.PlanWindowEnds(
+            [3592], 12, 3600, [new(3596, 3598)], [], jingle: false);
+        Assert.Equal([3600], ends);
+    }
+
+    [Fact]
+    public async Task ProbeWindow_DecodesToTheForwardSnappedEnd()
+    {
+        // Integration check for the stand-alone end snap: the probe window at 600 has no
+        // overlapping neighbor, and the stored 0.8 s silence at [613.2, 614] (sub-threshold,
+        // seam target only) sits within the 5 s forward search past the natural end (612) -
+        // the decode itself must run 13.6 s, up to the mid-point (613.6).
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(595, 600), new(613.2, 614)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Equal([new(1, 0.5), new(2, 600)], result.Chapters);
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 13.6) < 0.01);
+    }
+
+    [Fact]
+    public async Task Pass3_SnapsChunkBordersToSeams_AndBridgesAPhraseAcrossTheSeam()
+    {
+        // Pass 2 finds chapters 1 and 3, so pass 3 transcribes [0.5, 1200]. The first chunk's
+        // natural border (600.5) snaps to the stored 1 s silence at [598, 599] (mid-point
+        // 598.5), so the chunks abut there with no overlap - and the announcement straddles
+        // that very seam: "Chapter" ends just before it (in chunk 1), "two." starts just after
+        // it (in chunk 2). Only the bridge - chunk 1's trailing segments carried into chunk
+        // 2's matching - can assemble the phrase; chunk 1 alone has no number, chunk 2 alone
+        // no phrase. The detection must be flagged as seam-spanning in the log, and the chunk
+        // decodes must reflect the snapped borders: [0.5, 598.5] and [598.5, 1197.5] (the
+        // second border snaps to [1195, 1200]'s mid-point).
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(598, 599), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter three."));
+                s.Add(0.5, Seg(596.5, " Chapter"));  // chunk 1: ends at abs 599, just before the seam
+                s.Add(598.5, Seg(0.3, " two."));     // chunk 2: the number, just after the seam
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Contains(new DetectedChapter(2, 597), result.Chapters); // pinpointed at the phrase start
+        Assert.Contains(log, l => l.Contains("chapter 2 detection spans a Pass 3 chunk seam"));
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 0.5 && w.Duration is { } d && Math.Abs(d - 598) < 0.01);
+        Assert.Contains(audio.DecodeWindows,
+            w => w.Start == 598.5 && w.Duration is { } d && Math.Abs(d - 599) < 0.01);
     }
 
     [Fact]

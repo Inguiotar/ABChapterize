@@ -60,15 +60,28 @@ public sealed class ChapterDetector
     /// <summary>
     /// The shortest silence Pass 1 retains in memory (see the <c>allSilences</c>/<c>silences</c>
     /// split in <see cref="DetectAsync"/>) for use as a window-seam snap target (see
-    /// <see cref="PlanWindowEnds"/> and <see cref="FindOverlapSplitPoint"/>), regardless of how
-    /// high --min-silence-length is set.
+    /// <see cref="FindNearestSeam"/> and its callers: Pass 2's window plan, the reuse-time
+    /// split, and Pass 3's chunk borders) and for pinpointing a mark at the silence directly
+    /// preceding its phrase, regardless of how high --min-silence-length is set.
     /// Only silences at or above --min-silence-length are ever reported as Pass 2 candidates or
-    /// logged; this lower floor exists purely so a silence-mid-point seam is available
-    /// even when the nearest real silence around an overlap border is shorter than the book's
-    /// candidate threshold. Kept low enough to catch ordinary clause pauses without noticeably
+    /// logged; this lower floor exists purely so a silence-mid-point seam (or a mark anchor) is
+    /// available even when the nearest real silence is shorter than the book's candidate
+    /// threshold. Kept low enough to catch ordinary clause pauses without noticeably
     /// growing Pass 1's silence list.
     /// </summary>
     private const double MinStoredSilenceSeconds = 0.5;
+
+    /// <summary>
+    /// How far past a Pass 2 window's natural end <see cref="PlanWindowEnds"/> searches for a
+    /// seam when that end does not lie inside the next window (no shared border to snap): the
+    /// nearest silence - or, with --jingle, VAD non-speech region - mid-point within this many
+    /// seconds after the natural end becomes the window's end, so even a stand-alone window
+    /// stops at a word-safe cut instead of possibly mid-word (a mid-word tail is exactly what
+    /// makes Whisper garble a window's final phrase). Extension only: a target before the
+    /// natural end would shrink the window and could cut off the very phrase the probe exists
+    /// to find. When no target lies within reach, the window keeps its natural length.
+    /// </summary>
+    private const double WindowEndSnapSearchSeconds = 5.0;
 
     /// <summary>Without a jingle the phrase must start within this many seconds after the silence.</summary>
     private const double PhraseLatestStart = 5.0;
@@ -145,8 +158,33 @@ public sealed class ChapterDetector
     /// <summary>Chunk length in seconds for full transcription of gap regions.</summary>
     private const double GapChunkSeconds = 600;
 
-    /// <summary>Overlap between gap transcription chunks so no phrase is cut in half.</summary>
+    /// <summary>Overlap between gap transcription chunks so no phrase is cut in half. Only
+    /// applies to a chunk border that could not be snapped to a word-safe seam (see
+    /// <see cref="Pass3SeamSearchSeconds"/>); snapped borders abut exactly and need no
+    /// overlap redundancy.</summary>
     private const double GapChunkOverlapSeconds = 10;
+
+    /// <summary>
+    /// How far around a Pass 3 chunk's natural border the seam search reaches, in both
+    /// directions: the border snaps to the nearest silence - or, with --jingle, VAD non-speech
+    /// region - mid-point within this range, and the next chunk then starts exactly at that
+    /// seam, with no overlap and nothing decoded twice. Bounded so a chunk can grow to at most
+    /// <see cref="GapChunkSeconds"/> plus this: whisper.cpp has no hard input-length cap (it
+    /// decodes any length in internal 30 s strides), but the decoded sample buffer scales with
+    /// chunk length, so the growth is kept to a small fraction of the chunk.
+    /// </summary>
+    private const double Pass3SeamSearchSeconds = 30;
+
+    /// <summary>
+    /// At a snapped (overlap-free) Pass 3 seam, segments of the previous chunk ending within
+    /// this many seconds before the seam are carried into the next chunk's phrase matching, so
+    /// a chapter phrase straddling the seam itself - the narrator pausing mid-announcement
+    /// right where the seam silence sits, e.g. between "Chapter" and its number - is still
+    /// found even though neither chunk alone contains the whole phrase. Comfortably longer
+    /// than any spoken chapter announcement. Irrelevant at unsnapped borders, where the
+    /// <see cref="GapChunkOverlapSeconds"/> overlap provides the redundancy instead.
+    /// </summary>
+    private const double Pass3BridgeSeconds = 15;
 
     /// <summary>Whisper segment probability below which a chapter detection is flagged as
     /// low-confidence instead of being silently trusted. 0.5 was chosen as the point below
@@ -326,9 +364,10 @@ public sealed class ChapterDetector
 
         var found = new List<DetectedChapter>();
         // Declared here (rather than with the rest of the adaptive-threshold state below) so
-        // ProbeAsync, defined next, can read it - set to the previous distinct chapter mark's
-        // number by the main candidate loop, still holding that value (not yet this mark's)
-        // while a probe is in flight.
+        // ProbeAsync, defined next, can read it - set to the latest accepted chapter mark's
+        // number by the main candidate loop, still holding the previous value (not yet this
+        // window's) while a probe is in flight, which is exactly what a gap re-probe needs to
+        // accept the in-between chapter numbers.
         int? lastNumber = null;
 
         // Transcript cache for Pass 2's overlapping-window reuse. Holds the previous probe's full
@@ -347,16 +386,19 @@ public sealed class ChapterDetector
         var cacheFrom = 0.0;
         var cacheTo = double.NegativeInfinity;
 
-        // Probes a single window and appends any chapter mark found in it to `found`.
-        // Returns the chapter number found (or null when the phrase was not found), together
-        // with the real silence found to immediately precede the phrase - see
-        // FindRealAnchorSilence - for the caller to use when tightening --min-silence-length
-        // instead of blindly trusting this probe's own triggering candidate. windowEnd is the
-        // window's *planned* end (see PlanWindowEnds) - possibly snapped away from the natural
-        // start + probeSeconds - while the candidate start stays the semantic anchor for the
-        // phrase-timing rule, mark placement and progress, all of which are relative to the
+        // Probes a single window and appends every chapter mark found in it to `found`. Since
+        // segment timestamps plus the full stored silence list let every detection be
+        // pinpointed independently of the triggering candidate, one window can yield several
+        // marks (e.g. a wide --jingle window covering two transitions) - there is no
+        // one-chapter-per-window early return anymore. Returns the accepted marks in window
+        // order, each with the silence its mark falls into - null when the mark sits on a VAD
+        // region (or nothing at all) - for the --min-silence-length auto tightening, plus
+        // Whisper's confidence for the candidate loop's sequence-skip decision. windowEnd is
+        // the window's *planned* end (see PlanWindowEnds) - possibly snapped away from the
+        // natural start + probeSeconds - while the candidate start stays the semantic anchor
+        // for the phrase-timing rule and progress, both of which are relative to the
         // triggering silence, not to whatever seam the plan chose.
-        async Task<(int? Number, Silence? RealAnchorSilence)> ProbeAsync(
+        async Task<List<(int Number, Silence? MarkSilence, double Confidence)>> ProbeAsync(
             (double Start, Silence? Silence, NonSpeechRegion? VadRegion) candidate, double windowEnd)
         {
             var start = candidate.Start;
@@ -366,11 +408,10 @@ public sealed class ChapterDetector
             work.SetPhaseProgress((long)(start * bytesPerSecond));
 
             // This window's full transcript in absolute file time, assembled from the previous
-            // window's cache (overlap reuse), a fresh Whisper decode, or a mix. The whole window is
-            // always represented - both cases of what a reuse-only "search just the new tail" scheme
-            // would silently drop are avoided: a phrase the previous probe rejected under the
-            // per-silence 5 s rule but this window accepts, and a second phrase the previous probe's
-            // one-mark-per-window early return never reached.
+            // window's cache (overlap reuse), a fresh Whisper decode, or a mix. The whole window
+            // is always represented, so nothing a reuse-only "search just the new tail" scheme
+            // would silently drop - e.g. a phrase the previous probe rejected for want of a
+            // qualifying anchor that this window can anchor - is ever lost.
             //
             // --verbose logging only ever shows what Whisper actually transcribed just now, at its
             // own (0-based) timestamps - never the reused portion restated at window-relative time,
@@ -448,50 +489,87 @@ public sealed class ChapterDetector
             // FindPhraseMatches and the mark-placement math below work in window-relative time.
             var segments = ShiftSegments(windowSegmentsAbs, -start);
 
+            var marks = new List<(int Number, Silence? MarkSilence, double Confidence)>();
+            // Window-local continuation of lastNumber: several accepted marks within one
+            // window must each top the previous one, exactly as consecutive windows' marks do.
+            var windowLast = lastNumber ?? 0;
+
             // profile is resolved on the first probe, which is always a full decode (the cache is
             // empty then), so it is non-null by the time any transcript-reuse branch above runs.
             foreach (var match in FindPhraseMatches(segments, profile!, mergeBoundarySegIndex))
             {
-                if (!_options.Jingle && match.PhraseStartSeconds > PhraseLatestStart)
-                    continue; // without a jingle the phrase must directly follow the silence
-
-                if (match.SpansMerge)
-                    _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
-                                 "merge from Pass 2's overlap reuse - worth a spot check");
+                // A duplicate or regression (an in-text mention like "as seen in chapter
+                // three", or a re-detection of an already-marked chapter) does not end the
+                // window - skip it and keep scanning, so a real announcement later in the
+                // same window is still found.
+                if (match.Number <= windowLast)
+                    continue;
 
                 var phraseAbs = start + match.PhraseStartSeconds;
-                // An in-text pause long enough to itself pass the --min-silence-length
-                // threshold can trigger a probe whose window - especially the wide one used
-                // with --jingle - still reaches the real chapter transition further along, so
-                // this probe's own triggering silence (at `start`) is not necessarily the one
-                // immediately preceding the phrase.
-                Silence? realAnchorSilence;
-                NonSpeechRegion? realAnchorVadRegion = null;
+                // The silence the mark is placed into (feeds the --min-silence-length auto
+                // tightening; null when the mark sits on a VAD region or on nothing at all)
+                // and, with --jingle, the region it sits on (feeds --max-jingle-length auto).
+                Silence? markSilence;
+                NonSpeechRegion? markRegion = null;
+                double time;
                 if (_options.Jingle)
                 {
                     // With --jingle, anchor to the VAD jingle region ending at the phrase, not to
                     // whichever silence triggered this probe: a false in-text pause earlier in the
                     // previous chapter does not lead that region, so it must not become the anchor
                     // (which would mark at the pause and feed the auto mechanisms a bogus jingle
-                    // length). See ResolveJingleAnchor. When neither a region nor a closer silence
-                    // was found, fall back to this probe's own triggering silence.
-                    (realAnchorSilence, realAnchorVadRegion) = ResolveJingleAnchor(
-                        phraseAbs, start, silences, nonSpeechRegions, candidate.VadRegion);
-                    if (realAnchorSilence == null && realAnchorVadRegion == null)
-                        realAnchorSilence = candidate.Silence;
+                    // length). See ResolveJingleAnchor. The candidate's own VAD region is used
+                    // directly only when this phrase is plausibly attached to it - a second
+                    // announcement further along the window belongs to a different transition
+                    // and must re-derive its own anchor. When neither a region nor a closer
+                    // silence was found, fall back to this probe's own triggering silence.
+                    var candidateRegion = candidate.VadRegion is { } cvr &&
+                        phraseAbs >= cvr.StartSeconds - JinglePhraseMatchToleranceSeconds &&
+                        phraseAbs <= cvr.EndSeconds + JinglePhraseMatchToleranceSeconds
+                        ? candidate.VadRegion : null;
+                    (markSilence, markRegion) = ResolveJingleAnchor(
+                        phraseAbs, start, allSilences, nonSpeechRegions, candidateRegion);
+                    if (markSilence == null && markRegion == null)
+                        markSilence = candidate.Silence;
+                    time = ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds);
+                }
+                else if (match.PhraseStartSeconds <= PhraseLatestStart)
+                {
+                    // The classic shape: the phrase directly follows the triggering silence,
+                    // whose end (the candidate start) is where the mark belongs. A match at
+                    // the very start of the file has no triggering silence; the phrase
+                    // position itself is the mark there.
+                    time = Math.Max(0, start + (start == 0 ? match.PhraseStartSeconds : 0));
+                    markSilence = candidate.Silence;
                 }
                 else
                 {
-                    // Without a jingle, re-derive the real preceding silence from the full list,
-                    // falling back to this probe's own triggering silence when none was found
-                    // between the window start and the phrase.
-                    realAnchorSilence = FindRealAnchorSilence(start, phraseAbs, silences) ?? candidate.Silence;
+                    // The phrase sits deeper in the window than the timing rule allows for the
+                    // triggering silence - but with segment timestamps and the full stored
+                    // silence list, it can still be accepted right away (no need to wait for a
+                    // later candidate's own window to re-find it) when a candidate-grade
+                    // silence directly precedes it: the phrase must follow that silence within
+                    // the same 5 s the classic rule grants, and the silence must be at least
+                    // --min-silence-length long - a shorter breath pause in front of an in-text
+                    // mention ("Chapter eight had been hard.") must not qualify as an anchor.
+                    // The mark is pinpointed at that silence's end, exactly where a probe
+                    // triggered by the silence itself would have placed it.
+                    var anchor = FindRealAnchorSilence(start, phraseAbs, allSilences);
+                    if (anchor is not { } a
+                        || phraseAbs - a.EndSeconds > PhraseLatestStart
+                        || a.EndSeconds - a.StartSeconds < _options.MinSilenceSeconds)
+                        continue;
+                    time = a.EndSeconds;
+                    markSilence = a;
                 }
 
-                var time = _options.Jingle
-                    ? ComputeJingleMark(phraseAbs, realAnchorSilence, realAnchorVadRegion?.StartSeconds)
-                    : Math.Max(0, start + (start == 0 ? match.PhraseStartSeconds : 0));
+                if (match.SpansMerge)
+                    _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
+                                 "merge from Pass 2's overlap reuse - worth a spot check");
+
                 found.Add(new DetectedChapter(match.Number, time, match.Confidence));
+                marks.Add((match.Number, markSilence, match.Confidence));
+                windowLast = match.Number;
                 var (highest, missingNumbers) = ChapterProgress(found);
                 work.HighestChapter = highest;
                 work.MissingChapters = missingNumbers.Count;
@@ -499,25 +577,24 @@ public sealed class ChapterDetector
                              $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
                              MissingNote(missingNumbers));
 
-                if (_options.Jingle && _options.AutoMaxJingle && lastNumber.HasValue)
+                if (_options.Jingle && _options.AutoMaxJingle && found.Count > 1)
                 {
-                    // lastNumber.HasValue means this is at least the second mark found, so its
-                    // triggering candidate is a real inter-chapter jingle - not the
-                    // intro-to-chapter-1 gap, which can easily run longer (or shorter) than a
-                    // book's regular jingles and would otherwise size the window off a
-                    // one-off observation before any real jingle has even been seen. Same
-                    // reasoning as the analogous --min-silence-length auto tightening below.
-                    // The real jingle length is the gap between the real preceding anchor (not
-                    // necessarily this probe's own triggering candidate, see above) and the
-                    // phrase - using the raw offset from this probe's own window start would
-                    // inflate the observation whenever a false, earlier in-text pause was what
-                    // actually triggered this probe. When the anchor is a VAD region (no
-                    // leading silence), its own boundaries give a more accurate jingle length
-                    // than the phrase-relative estimate, since the phrase can start a moment
-                    // after the jingle actually ends.
-                    var observedLength = realAnchorSilence is { } ras
+                    // found.Count > 1 means this is at least the second mark found, so its
+                    // anchor is a real inter-chapter jingle - not the intro-to-chapter-1 gap,
+                    // which can easily run longer (or shorter) than a book's regular jingles
+                    // and would otherwise size the window off a one-off observation before
+                    // any real jingle has even been seen. Same reasoning as the analogous
+                    // --min-silence-length auto tightening in the candidate loop below.
+                    // The jingle length is measured from the silence/region the mark actually
+                    // falls into (see above) - using the raw offset from this probe's own
+                    // window start would inflate the observation whenever a false, earlier
+                    // in-text pause was what actually triggered this probe. When the anchor is
+                    // a VAD region (no leading silence), its own boundaries give a more
+                    // accurate jingle length than the phrase-relative estimate, since the
+                    // phrase can start a moment after the jingle actually ends.
+                    var observedLength = markSilence is { } ras
                         ? phraseAbs - ras.EndSeconds
-                        : realAnchorVadRegion is { } rvr
+                        : markRegion is { } rvr
                             ? rvr.EndSeconds - rvr.StartSeconds
                             : phraseAbs - start;
                     if (observedLength >= MinJingleObservationSeconds)
@@ -540,9 +617,8 @@ public sealed class ChapterDetector
                         }
                     }
                 }
-                return (match.Number, realAnchorSilence); // one chapter per probe window
             }
-            return (null, null);
+            return marks;
         }
 
         // Adaptive threshold state (--min-silence-length auto only; otherwise every candidate
@@ -557,6 +633,10 @@ public sealed class ChapterDetector
         // mark unconditionally and folds the gap marks' own anchor silences into the running
         // minimum, so gap-filling stays inside Pass 2 where possible and the threshold can
         // never again sit above a silence that has proven to precede a chapter.
+        //
+        // skippedSinceLastMark also collects the windows the overlap-sequence skip below
+        // passes over (in every mode, not just auto), so the same gap re-probe covers the
+        // unlikely case of a skipped sequence window having hidden a second transition.
         double? adaptedThresholdSeconds = null;
         var threshold = _options.MinSilenceSeconds;
         var skippedSinceLastMark = new List<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)>();
@@ -583,16 +663,16 @@ public sealed class ChapterDetector
                 continue;
             }
 
-            var (number, realAnchorSilence) = await ProbeAsync(candidate, plannedEnds[ci]);
+            var probeMarks = await ProbeAsync(candidate, plannedEnds[ci]);
 
-            if (number is not { } n || n <= (lastNumber ?? 0))
-                continue; // no match, or a duplicate/regression (e.g. an in-text mention)
-
-            if (_options.AutoMinSilence)
+            foreach (var (n, markSilence, _) in probeMarks)
             {
-                if (lastNumber.HasValue && n > lastNumber.Value + 1 && skippedSinceLastMark.Count > 0)
+                // The gap re-probe runs regardless of --min-silence-length mode: with the
+                // overlap-sequence skip below, candidates can be skipped even with an explicit
+                // threshold, and a sequence gap is the signal that one of them hid a chapter.
+                if (lastNumber is { } previousNumber && n > previousNumber + 1 && skippedSinceLastMark.Count > 0)
                 {
-                    _log?.Invoke($"Pass 2: sequence gap between chapter {lastNumber} and {n}, " +
+                    _log?.Invoke($"Pass 2: sequence gap between chapter {previousNumber} and {n}, " +
                                  $"re-probing {skippedSinceLastMark.Count} skipped candidate(s) unconditionally");
                     if (_options.Jingle && _options.AutoMaxJingle && probeSeconds != jingleCeilingSeconds)
                     {
@@ -611,19 +691,24 @@ public sealed class ChapterDetector
                         info.DurationSeconds, allSilences, nonSpeechRegions, _options.Jingle);
                     for (var si = 0; si < skippedSinceLastMark.Count; si++)
                     {
-                        var skipped = skippedSinceLastMark[si];
-                        var (gapNumber, gapAnchorSilence) = await ProbeAsync(skipped, reprobeEnds[si]);
+                        var gapMarks = await ProbeAsync(skippedSinceLastMark[si], reprobeEnds[si]);
+                        if (!_options.AutoMinSilence)
+                            continue;
                         // A gap mark's anchor silence was, by definition, short enough to have
                         // been skipped - fold it into the running minimum so the threshold can
                         // never again sit above it. Only genuine gap-fillers count; a duplicate
-                        // or in-text mention surfacing in a re-probe must not lower anything.
-                        if (gapNumber is { } gn && gn > lastNumber.Value && gn < n &&
-                            gapAnchorSilence is { } gapSilence)
+                        // or re-detection of this window's own mark surfacing in a re-probe
+                        // must not lower anything.
+                        foreach (var gapMark in gapMarks)
                         {
-                            adaptedThresholdSeconds = Math.Min(
-                                adaptedThresholdSeconds ?? double.MaxValue,
-                                Math.Max(_options.MinSilenceSeconds,
-                                    AdaptiveTightenFactor * (gapSilence.EndSeconds - gapSilence.StartSeconds)));
+                            if (gapMark.Number > previousNumber && gapMark.Number < n &&
+                                gapMark.MarkSilence is { } gapSilence)
+                            {
+                                adaptedThresholdSeconds = Math.Min(
+                                    adaptedThresholdSeconds ?? double.MaxValue,
+                                    Math.Max(_options.MinSilenceSeconds,
+                                        AdaptiveTightenFactor * (gapSilence.EndSeconds - gapSilence.StartSeconds)));
+                            }
                         }
                     }
                     reprobing = false;
@@ -638,33 +723,59 @@ public sealed class ChapterDetector
                     }
                 }
 
-                // realAnchorSilence, when present, is the silence that truly precedes the
-                // phrase (already defaulted to this probe's own triggering silence inside
-                // ProbeAsync when no closer one was found - see FindRealAnchorSilence there).
-                // lastNumber.HasValue means this is at least the second mark found, so that
-                // silence is a real inter-chapter break - not the intro-to-chapter-1 silence,
-                // which is routinely longer than that and would otherwise over-tighten the
-                // threshold from the very first mark. Never below the MinSilenceSeconds floor:
-                // Pass 1's silence scan never detects anything shorter than that floor in the
-                // first place, so every candidate is already >= it - a threshold below the
-                // floor would skip nothing at all.
-                if (lastNumber.HasValue && realAnchorSilence is { } anchorSilence)
+                if (_options.AutoMinSilence)
                 {
-                    var proposed = Math.Max(_options.MinSilenceSeconds,
-                        AdaptiveTightenFactor * (anchorSilence.EndSeconds - anchorSilence.StartSeconds));
-                    adaptedThresholdSeconds = Math.Min(adaptedThresholdSeconds ?? proposed, proposed);
-                }
+                    // markSilence, when present, is the silence the mark actually falls into
+                    // (resolved inside ProbeAsync - the triggering silence for a classic
+                    // detection, the pinpointed anchor otherwise). lastNumber.HasValue means
+                    // this is at least the second mark found, so that silence is a real
+                    // inter-chapter break - not the intro-to-chapter-1 silence, which is
+                    // routinely longer than that and would otherwise over-tighten the
+                    // threshold from the very first mark. Never below the MinSilenceSeconds
+                    // floor: Pass 1 never reports candidates shorter than the floor in the
+                    // first place, so a threshold below it would skip nothing at all.
+                    if (lastNumber.HasValue && markSilence is { } anchorSilence)
+                    {
+                        var proposed = Math.Max(_options.MinSilenceSeconds,
+                            AdaptiveTightenFactor * (anchorSilence.EndSeconds - anchorSilence.StartSeconds));
+                        adaptedThresholdSeconds = Math.Min(adaptedThresholdSeconds ?? proposed, proposed);
+                    }
 
-                // Only announce an actual change; the first set is a raise from the floor
-                // ("tightened"), everything after can only ever be a lowering.
-                var newThreshold = adaptedThresholdSeconds ?? _options.MinSilenceSeconds;
-                if (newThreshold != threshold)
-                    _log?.Invoke($"Pass 2: threshold {(newThreshold > threshold ? "tightened" : "lowered")} " +
-                                 $"to {newThreshold:0.##} s after chapter {n}");
-                threshold = newThreshold;
+                    // Only announce an actual change; the first set is a raise from the floor
+                    // ("tightened"), everything after can only ever be a lowering.
+                    var newThreshold = adaptedThresholdSeconds ?? _options.MinSilenceSeconds;
+                    if (newThreshold != threshold)
+                        _log?.Invoke($"Pass 2: threshold {(newThreshold > threshold ? "tightened" : "lowered")} " +
+                                     $"to {newThreshold:0.##} s after chapter {n}");
+                    threshold = newThreshold;
+                }
                 skippedSinceLastMark.Clear();
+                lastNumber = n;
             }
-            lastNumber = n;
+
+            // A confident mark settles its whole overlapping window sequence (consecutive
+            // candidates whose planned windows each overlap the next): the remaining windows
+            // of the sequence cover the same continuous stretch of audio around the found
+            // transition, and a single sequence spanning two chapter transitions is highly
+            // unlikely - so they are skipped outright instead of probed. They still go into
+            // skippedSinceLastMark, so the gap re-probe above recovers the unlikely case
+            // after all (and Pass 3 remains the final net). A low-confidence mark does not
+            // skip anything: the remaining windows keep their chance to re-detect the
+            // transition it may have gotten wrong.
+            if (probeMarks.Count > 0 && probeMarks[^1].Confidence >= LowConfidenceThreshold)
+            {
+                var skipTo = ci;
+                while (skipTo + 1 < candidates.Count && plannedEnds[skipTo] > candidates[skipTo + 1].Start)
+                    skipTo++;
+                if (skipTo > ci)
+                {
+                    _log?.Invoke($"Pass 2: chapter {lastNumber} settles this overlapping window " +
+                                 $"sequence - skipping its remaining {skipTo - ci} window(s)");
+                    for (var si = ci + 1; si <= skipTo; si++)
+                        skippedSinceLastMark.Add(candidates[si]);
+                    ci = skipTo;
+                }
+            }
         }
 
         var chapters = Normalize(found);
@@ -682,7 +793,7 @@ public sealed class ChapterDetector
             _log?.Invoke($"Pass 3: transcribing suspicious region " +
                          $"{FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)}");
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
-                silences, nonSpeechRegions, bytesPerSecond, work, profile!, chapters, ct);
+                allSilences, nonSpeechRegions, bytesPerSecond, work, profile!, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters);
             work.HighestChapter = highest;
@@ -937,7 +1048,9 @@ public sealed class ChapterDetector
     /// <param name="phraseAbs">Absolute phrase start time.</param>
     /// <param name="earliestAnchor">Earliest time an anchor may lie at: the probe window start
     /// (Pass 2) or <c>phraseAbs - lookback</c> (Pass 3).</param>
-    /// <param name="silences">All silences found by the silence scan.</param>
+    /// <param name="silences">Every silence Pass 1 stored, down to
+    /// <see cref="MinStoredSilenceSeconds"/> - even a sub-threshold silence leading the jingle
+    /// is the more accurate anchor (and jingle-length reference) than the region alone.</param>
     /// <param name="nonSpeechRegions">All VAD non-speech regions (empty when VAD is off).</param>
     /// <param name="candidateVadRegion">The region a VAD candidate carries, if this probe was
     /// triggered by one; used directly instead of re-deriving it. Null for silence candidates
@@ -1045,9 +1158,11 @@ public sealed class ChapterDetector
     /// happens. Returns null when no silence between the window start and the phrase was found,
     /// meaning the triggering silence (ending exactly at windowStart) was the real one after all.
     /// </summary>
-    /// <param name="windowStart">Absolute start of the probe window in seconds.</param>
+    /// <param name="windowStart">Absolute start of the probe window (or of the lookback range)
+    /// in seconds.</param>
     /// <param name="phraseAbsSeconds">Absolute phrase start in seconds.</param>
-    /// <param name="silences">All silences found by the silence scan.</param>
+    /// <param name="silences">The silences to search - callers pass the full stored list
+    /// (every silence down to <see cref="MinStoredSilenceSeconds"/>).</param>
     private static Silence? FindRealAnchorSilence(double windowStart, double phraseAbsSeconds, List<Silence> silences)
     {
         var silence = silences.LastOrDefault(s => s.EndSeconds > windowStart && s.EndSeconds <= phraseAbsSeconds);
@@ -1097,17 +1212,55 @@ public sealed class ChapterDetector
         // At planning time a seam exactly at windowEnd is allowed: window 1 then swallows
         // window 2 whole, and window 2 is served entirely from its cache. At reuse time the
         // bound stays strict so the fresh tail decode [seam, windowEnd) can never be empty.
+        return FindNearestSeam(border, windowStart, windowEnd,
+            upperInclusive: allowBeyondBorder,
+            targetStartAtOrBefore: allowBeyondBorder ? null : border,
+            allSilences, nonSpeechRegions, jingle) ?? border;
+    }
+
+    /// <summary>
+    /// The nearest word-safe seam to <paramref name="border"/>: the mid-point of a silence -
+    /// or, with --jingle, of a VAD non-speech region when no silence qualifies - within
+    /// (<paramref name="earliestExclusive"/>, <paramref name="latestInclusive"/>], or null when
+    /// neither kind of target has its mid-point in that range. No word straddles the mid-point
+    /// of a silence, which is what makes it the safest place to cut audio that is transcribed
+    /// in separate pieces. The single seam search behind every border decision in the
+    /// pipeline: Pass 2's shared-border and stand-alone window-end snaps
+    /// (<see cref="PlanWindowEnds"/>), the reuse-time split (both via
+    /// <see cref="FindOverlapSplitPoint"/>), and Pass 3's chunk borders
+    /// (<see cref="TranscribeRegionAsync"/>).
+    /// </summary>
+    /// <param name="border">The unsnapped border the seam should stay closest to.</param>
+    /// <param name="earliestExclusive">Lower bound (exclusive) for the seam.</param>
+    /// <param name="latestInclusive">Upper bound for the seam; inclusive when
+    /// <paramref name="upperInclusive"/>, exclusive otherwise.</param>
+    /// <param name="upperInclusive">Whether a seam exactly at <paramref name="latestInclusive"/>
+    /// is acceptable (see <see cref="FindOverlapSplitPoint"/> for the one caller that must
+    /// keep the bound strict).</param>
+    /// <param name="targetStartAtOrBefore">When set, only targets that <em>start</em> at or
+    /// before this position qualify - the reuse-time restriction, where everything left of the
+    /// seam must already be covered by a cached transcript.</param>
+    /// <param name="allSilences">Every silence Pass 1 stored, down to
+    /// <see cref="MinStoredSilenceSeconds"/>.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions; empty when --jingle is off.</param>
+    /// <param name="jingle">True when --jingle is in effect, enabling the VAD region fallback.</param>
+    private static double? FindNearestSeam(
+        double border, double earliestExclusive, double latestInclusive, bool upperInclusive,
+        double? targetStartAtOrBefore,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, bool jingle)
+    {
         double? Nearest(IEnumerable<(double Start, double End)> targets) => targets
-            .Where(t => allowBeyondBorder || t.Start <= border)
+            .Where(t => targetStartAtOrBefore is not { } cap || t.Start <= cap)
             .Select(t => (double?)((t.Start + t.End) / 2))
-            .Where(mid => mid > windowStart && (allowBeyondBorder ? mid <= windowEnd : mid < windowEnd))
+            .Where(mid => mid > earliestExclusive &&
+                          (upperInclusive ? mid <= latestInclusive : mid < latestInclusive))
             .OrderBy(mid => Math.Abs(mid!.Value - border))
             .FirstOrDefault();
 
-        var split = Nearest(allSilences.Select(s => (s.StartSeconds, s.EndSeconds)));
-        if (split is null && jingle)
-            split = Nearest(nonSpeechRegions.Select(r => (r.StartSeconds, r.EndSeconds)));
-        return split ?? border;
+        var seam = Nearest(allSilences.Select(s => (s.StartSeconds, s.EndSeconds)));
+        if (seam is null && jingle)
+            seam = Nearest(nonSpeechRegions.Select(r => (r.StartSeconds, r.EndSeconds)));
+        return seam;
     }
 
     /// <summary>
@@ -1123,6 +1276,13 @@ public sealed class ChapterDetector
     /// re-decoded overlap between them. After planning, a raw-border joint remains only where
     /// window 2 contains no snap target at all - and no silence in window 2 means no chapter
     /// transition near the border either, so a mid-word cut there costs nothing.
+    /// <para>
+    /// A window end that does <em>not</em> lie inside the next window (stand-alone windows,
+    /// the last window, and the contained-neighbor case below) is snapped too, in a more
+    /// limited way: to the nearest seam within <see cref="WindowEndSnapSearchSeconds"/>
+    /// <em>after</em> the natural end (extension only), so even an isolated window's decode
+    /// stops at a word-safe cut. Without a target in reach it keeps its natural length.
+    /// </para>
     /// <para>
     /// Computed right to left, so the search range for each shared border is the next window's
     /// <em>final</em> (already snapped) span. A next window that ends at or before this
@@ -1149,12 +1309,25 @@ public sealed class ChapterDetector
         {
             var naturalEnd = Math.Min(starts[i] + probeSeconds, durationSeconds);
             ends[i] = naturalEnd;
-            if (i == starts.Count - 1 || starts[i + 1] >= naturalEnd || ends[i + 1] <= naturalEnd)
-                continue;
-            var seam = FindOverlapSplitPoint(starts[i + 1], naturalEnd, ends[i + 1],
-                allSilences, nonSpeechRegions, jingle, allowBeyondBorder: true);
-            if (seam > starts[i])
-                ends[i] = seam;
+            if (i < starts.Count - 1 && starts[i + 1] < naturalEnd && ends[i + 1] > naturalEnd)
+            {
+                // Shared border inside the next window: snap it to a seam anywhere in there.
+                var seam = FindOverlapSplitPoint(starts[i + 1], naturalEnd, ends[i + 1],
+                    allSilences, nonSpeechRegions, jingle, allowBeyondBorder: true);
+                if (seam > starts[i])
+                    ends[i] = seam;
+            }
+            else if (FindNearestSeam(naturalEnd, naturalEnd,
+                         Math.Min(naturalEnd + WindowEndSnapSearchSeconds, durationSeconds),
+                         upperInclusive: true, targetStartAtOrBefore: null,
+                         allSilences, nonSpeechRegions, jingle) is { } endSeam)
+            {
+                // Stand-alone end: extend to the nearest seam within the short forward search
+                // so the decode never stops mid-word (see WindowEndSnapSearchSeconds). Should
+                // this reach past the next window's start, the reuse-time split simply
+                // re-finds the very same seam as the cache's end - a clean stitch either way.
+                ends[i] = endSeam;
+            }
         }
         return ends;
     }
@@ -1275,30 +1448,76 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Fully transcribes a region of the file in overlapping chunks and returns all chapter
-    /// starts found in it. Used to close sequence gaps left by the silence-probe fast path.
+    /// Fully transcribes a region of the file and returns all chapter starts found in it. Used
+    /// to close sequence gaps left by the silence-probe fast path (Pass 3). Every chunk border
+    /// is snapped to the nearest silence (or, with --jingle, VAD non-speech region) mid-point
+    /// within <see cref="Pass3SeamSearchSeconds"/> of its natural position; consecutive chunks
+    /// then abut exactly at that word-safe seam - no overlap, nothing decoded twice - and a
+    /// phrase straddling the seam itself is still found by carrying the previous chunk's
+    /// trailing segments (<see cref="Pass3BridgeSeconds"/>) into the next chunk's matching.
+    /// Only when no seam target exists near a border does the old scheme remain for that
+    /// joint: a raw cut with <see cref="GapChunkOverlapSeconds"/> of overlap as redundancy
+    /// against the possible mid-word cut.
     /// </summary>
+    /// <param name="allSilences">Every silence Pass 1 stored, down to
+    /// <see cref="MinStoredSilenceSeconds"/> - used both as seam targets and to pinpoint each
+    /// mark at the end of the silence directly preceding its phrase.</param>
     /// <param name="knownChapters">Chapters already detected outside this region, so the
     /// per-mark progress numbers and still-missing log notes reflect the whole file rather
     /// than just this region's finds.</param>
     private async Task<List<DetectedChapter>> TranscribeRegionAsync(
         string file, MediaInfo info, double fromSeconds, double toSeconds,
-        List<Silence> silences, List<NonSpeechRegion> nonSpeechRegions, double bytesPerSecond,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, double bytesPerSecond,
         WorkTracker work, LanguageProfile profile, IReadOnlyList<DetectedChapter> knownChapters,
         CancellationToken ct)
     {
         var found = new List<DetectedChapter>();
-        for (var chunkStart = fromSeconds; chunkStart < toSeconds; chunkStart += GapChunkSeconds - GapChunkOverlapSeconds)
+        // The previous chunk's own transcript in absolute file time, and whether the seam it
+        // ends at was snapped (overlap-free) - the inputs to the cross-chunk bridging below.
+        List<TranscriptSegment> previousChunkAbs = [];
+        var previousSeamSnapped = false;
+        var chunkStart = fromSeconds;
+        while (chunkStart < toSeconds)
         {
             ct.ThrowIfCancellationRequested();
-            var chunkLen = Math.Min(GapChunkSeconds, toSeconds - chunkStart);
-            var samples = await _audio.DecodePcmAsync(file, chunkStart, chunkLen, info.InputDecoder, ct);
+            var naturalEnd = Math.Min(chunkStart + GapChunkSeconds, toSeconds);
+            var seam = naturalEnd < toSeconds
+                ? FindNearestSeam(naturalEnd,
+                    Math.Max(chunkStart, naturalEnd - Pass3SeamSearchSeconds),
+                    Math.Min(naturalEnd + Pass3SeamSearchSeconds, toSeconds),
+                    upperInclusive: true, targetStartAtOrBefore: null,
+                    allSilences, nonSpeechRegions, _options.Jingle)
+                : null;
+            var chunkEnd = seam ?? naturalEnd;
+
+            var samples = await _audio.DecodePcmAsync(file, chunkStart, chunkEnd - chunkStart, info.InputDecoder, ct);
             var segments = await _transcriber.TranscribeAsync(samples, ct);
             LogTranscript($"gap chunk @{FormatTimestamp(chunkStart)}", segments);
+            var freshAbs = ShiftSegments(segments, chunkStart);
 
-            foreach (var match in FindPhraseMatches(segments, profile))
+            // At a snapped seam the chunks share no audio, so a phrase straddling the seam
+            // exists in neither chunk alone - bridge it by prepending the previous chunk's
+            // trailing segments to this chunk's matching input. Unsnapped borders overlap
+            // instead and need no bridge; bridging there would only duplicate the overlap's
+            // text and risk parsing a number across the duplicated join.
+            List<TranscriptSegment> carried = previousSeamSnapped
+                ? previousChunkAbs.Where(s => s.EndSeconds > chunkStart - Pass3BridgeSeconds).ToList()
+                : [];
+            List<TranscriptSegment> matchSegments = carried.Count > 0 ? [.. carried, .. freshAbs] : freshAbs;
+
+            // Unlike Pass 2 there is no window-relative timing rule here, so matching simply
+            // runs in absolute file time: a match's PhraseStartSeconds is already absolute.
+            foreach (var match in FindPhraseMatches(matchSegments, profile,
+                         carried.Count > 0 ? carried.Count : null))
             {
-                var phraseAbs = chunkStart + match.PhraseStartSeconds;
+                var phraseAbs = match.PhraseStartSeconds;
+                // A match entirely inside the carried tail was already found (and reported) by
+                // the previous chunk's own pass; only a seam-straddling detection is news here.
+                if (phraseAbs < chunkStart && !match.SpansMerge)
+                    continue;
+                if (match.SpansMerge)
+                    _log?.Invoke($"chapter {match.Number} detection spans a Pass 3 chunk seam " +
+                                 "(bridged from the previous chunk) - worth a spot check");
                 double time;
                 if (_options.Jingle)
                 {
@@ -1310,12 +1529,16 @@ public sealed class ChapterDetector
                     // pause that merely happens to fall within the lookback.
                     var lookback = _options.MaxJingleSeconds + PhraseMarginSeconds;
                     var (anchorSilence, vadRegion) = ResolveJingleAnchor(
-                        phraseAbs, phraseAbs - lookback, silences, nonSpeechRegions, candidateVadRegion: null);
+                        phraseAbs, phraseAbs - lookback, allSilences, nonSpeechRegions, candidateVadRegion: null);
                     time = ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds);
                 }
                 else
                 {
-                    time = phraseAbs;
+                    // Pinpoint the mark at the end of the silence directly preceding the
+                    // phrase - the same "the chapter starts where the break ends" placement
+                    // Pass 2 uses - falling back to the phrase start when none is close enough.
+                    var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStart, phraseAbs, allSilences);
+                    time = anchor?.EndSeconds ?? phraseAbs;
                 }
                 found.Add(new DetectedChapter(match.Number, time, match.Confidence));
                 var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found));
@@ -1325,7 +1548,15 @@ public sealed class ChapterDetector
                              $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
                              MissingNote(missingNumbers));
             }
-            work.Advance((long)(chunkLen * bytesPerSecond));
+            work.Advance((long)((chunkEnd - chunkStart) * bytesPerSecond));
+
+            if (chunkEnd >= toSeconds)
+                break;
+            previousChunkAbs = freshAbs;
+            previousSeamSnapped = seam.HasValue;
+            // A snapped border needs no overlap - the next decode starts exactly at the seam;
+            // an unsnapped one keeps the redundancy overlap against its possible mid-word cut.
+            chunkStart = seam ?? chunkEnd - GapChunkOverlapSeconds;
         }
         return found;
     }

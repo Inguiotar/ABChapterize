@@ -145,22 +145,41 @@ a mid-silence cut that can never split a word, no audio is ever sent through
 Whisper twice, and no stretch is ever left out. Only when the second window
 contains no silence at all does the border stay where it fell — and no
 silence there means no chapter transition there either, so nothing detection
-cares about can be garbled. (Pass 1 keeps even sub-threshold silences down to
-0.5 s in memory purely as seam targets for this.) Matching still runs over
-the *whole* window, reused part included, so nothing a naive tail-only
-shortcut would drop — a phrase the earlier window rejected on timing, a
-second announcement its one-mark-per-window rule never reached, or an
+cares about can be garbled. A window end that *doesn't* fall inside another
+window gets the same treatment in a lighter form: it is extended to the
+nearest silence mid-point within the 5 seconds after its natural end (never
+shortened, and left alone when there is no such target), so even a
+stand-alone window stops at a word-safe cut instead of possibly mid-word.
+(Pass 1 keeps even sub-threshold silences down to 0.5 s in memory purely as
+seam targets for this.) Matching still runs over the *whole* window, reused
+part included, so nothing a naive tail-only shortcut would drop — e.g. an
 announcement straddling the seam itself — slips through.
 
 Rules applied to the matches:
 
+- A single window can yield several chapter marks: Whisper's segment
+  timestamps plus the full silence list pinpoint each announcement's own
+  preceding silence, independent of which silence triggered the probe. A
+  second chapter announced deeper in a wide window is marked immediately
+  rather than waiting for a later probe of its own.
 - Without `--jingle`, the phrase must start within 5 seconds after the
-  silence — announcements come right after the pause; anything later is
-  narration ("…as we learned in chapter three…") and is ignored.
-- Only one chapter is accepted per probe window.
-- The chapter mark is placed at the end of the silence (i.e. where the
-  announcement starts). For a match at the very beginning of the file, the
-  phrase position itself is used.
+  triggering silence — announcements come right after the pause — *or*
+  within 5 seconds after a candidate-grade silence (at least
+  `--min-silence-length` long) elsewhere in the window, which then anchors
+  the mark. Anything else is narration ("…as we learned in chapter three…")
+  and is ignored; a mere breath pause before an in-text mention never
+  qualifies as an anchor.
+- The chapter mark is placed at the end of the silence preceding the
+  announcement. For a match at the very beginning of the file, the phrase
+  position itself is used.
+- A confidently detected mark settles its whole *overlapping window
+  sequence*: consecutive candidates whose windows each overlap the next
+  cover one continuous stretch of audio, and one such stretch practically
+  never contains two chapter transitions — so once a mark is found anywhere
+  in the sequence, its remaining windows are skipped outright instead of
+  probed. They are remembered, though: should a later sequence gap prove
+  the bet wrong, they are re-probed just like adaptively skipped silences
+  (see below). A low-confidence mark skips nothing.
 - With `--jingle`, the mark is placed at the start of the jingle, not the
   announcement. When a silence precedes the jingle, the mark is anchored 0.5
   seconds *before* the end of that silence (so it lands inside the silence,
@@ -184,7 +203,10 @@ before the first mark is typically the intro/title silence, often longer
 than the breaks between chapters, so it is never used to tighten. The second
 mark raises the threshold to 75% of its own anchor silence's length (a 25%
 safety margin, mirroring `--max-jingle-length auto`'s margin on the jingle
-side). From then on the threshold only ever moves *down*: each further
+side). The anchor here is always the silence the mark actually *falls into*
+— not whichever silence happened to trigger the probe, which can be an
+unrelated in-text pause much longer or shorter than the real chapter break.
+From then on the threshold only ever moves *down*: each further
 mark whose anchor silence is shorter lowers it to 75% of that length, while
 a longer silence never raises it back up — a threshold above a silence that
 has already proven to precede a chapter would, by definition, skip exactly
@@ -204,9 +226,22 @@ probes every silence at or above it, same as before this feature existed.
 If the detected chapter numbers have sequence gaps (…7, 9…), or the first
 detected chapter is not chapter 1 even though it starts more than 30 seconds
 into the file, the regions where the missing chapters must be hiding are
-transcribed *completely* (in 10-minute chunks with 10-second overlap, so no
-phrase is cut in half). This catches announcements that were not preceded by
-a long-enough silence.
+transcribed *completely*, in roughly 10-minute chunks. This catches
+announcements that were not preceded by a long-enough silence.
+
+Chunk borders get the same word-safe treatment as pass 2's window seams:
+each border snaps to the nearest silence mid-point (with `--jingle`, a VAD
+non-speech region as fallback) within 30 seconds of its natural position,
+and the next chunk starts exactly at that seam — no overlap, nothing decoded
+twice, no word ever cut in half. Since even a mid-*phrase* pause could
+coincide with such a seam (a narrator breathing right between "Chapter" and
+its number), the previous chunk's trailing transcript is carried into the
+next chunk's phrase matching, bridging the seam. Only where no seam target
+exists near a border does the old scheme remain for that one joint: a raw
+cut with 10 seconds of overlap as redundancy. Detected marks are pinpointed
+the same way as in pass 2 — at the end of the silence directly preceding
+the announcement (falling back to the phrase position itself when there is
+none close by).
 
 If a gap *between* detected chapters still remains after pass 3, the file is
 left **unchanged** and a warning is printed — a partially wrong chapter list
