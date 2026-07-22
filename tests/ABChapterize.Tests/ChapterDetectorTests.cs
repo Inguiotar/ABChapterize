@@ -1917,14 +1917,14 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task Verify_ConfirmsMarkings_WhenThePhraseAndNumberAreFoundNearby()
     {
-        // Markings at 10 s and 610 s; --verify probes 5 s before each, so windows start at 5 and 605.
+        // Markings at 10 s and 610 s; --verify probes 10 s before each, so windows start at 0 and 600.
         var result = await VerifyAsync(
             Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
             s =>
             {
-                s.Add(5, Seg(5, " Chapter 1."));
-                s.Add(605, Seg(5, " Chapter 2."));
+                s.Add(0, Seg(10, " Chapter 1."));
+                s.Add(600, Seg(10, " Chapter 2."));
             });
 
         Assert.True(result.Passed);
@@ -1938,7 +1938,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var result = await VerifyAsync(
             Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
-            s => s.Add(5, Seg(5, " Chapter 1."))); // nothing scripted near the second marking
+            s => s.Add(0, Seg(10, " Chapter 1."))); // nothing scripted near the second marking
 
         Assert.False(result.Passed);
         Assert.Equal(2, result.Checked);
@@ -1951,7 +1951,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var result = await VerifyAsync(
             Options(),
             [new Chapter(10, "Chapter 1")],
-            s => s.Add(5, Seg(5, " Chapter 2."))); // wrong number for this marking
+            s => s.Add(0, Seg(10, " Chapter 2."))); // wrong number for this marking
 
         Assert.False(result.Passed);
         Assert.Equal(1, result.Checked);
@@ -1976,7 +1976,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var result = await VerifyAsync(
             Options("--lang", "de"),
             [new Chapter(10, "Erstes Kapitel")],
-            s => s.Add(5, Seg(5, " Erstes Kapitel.")));
+            s => s.Add(0, Seg(10, " Erstes Kapitel.")));
 
         Assert.True(result.Passed);
         Assert.Equal(1, result.Checked);

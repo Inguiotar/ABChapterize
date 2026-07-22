@@ -281,12 +281,11 @@ public sealed class ChapterDetector
 
     /// <summary>How far before a pre-existing chapter marking's own timestamp --verify starts
     /// probing - the marking may sit slightly after the phrase actually started.</summary>
-    private const double VerifyMarginBeforeSeconds = 5;
+    private const double VerifyMarginBeforeSeconds = 10;
 
     /// <summary>Total length of the --verify probe window, starting <see
-    /// cref="VerifyMarginBeforeSeconds"/> before the marking. Comparable in scale to the plain
-    /// post-silence probe window (<see cref="ProbeSecondsPlain"/>).</summary>
-    private const double VerifyWindowSeconds = 15;
+    /// cref="VerifyMarginBeforeSeconds"/> before the marking.</summary>
+    private const double VerifyWindowSeconds = 60;
 
     private readonly CliOptions _options;
     private readonly IAudioSource _audio;
