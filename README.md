@@ -169,7 +169,8 @@ when chapters are written. The most useful knobs:
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (and confidence stats) at the end. |
-| `-v`, `--verbose` | Log all transcriptions and processing details. |
+| `-v`, `--verbose` | Log processing details, each probe/chunk as a `<length>@<time>` header. |
+| `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
 | `-d`, `--dry-run` | Detect chapters but write nothing; print what would be written. |
 | `-e`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. |
@@ -245,11 +246,11 @@ keeps its exact position.
 - **Unusual announcements:** `--chapter-phrase` accepts a regexp between
   slashes, e.g. `-c "/part (\d+)/"` — a capturing group is used as the chapter
   number directly.
-- **Diagnosis:** run with `--verbose` to see all Whisper transcriptions and
-  processing details as log lines — what the recognizer actually heard, and
-  the confidence it had in each transcription. Chapter marks below 50%
-  confidence are flagged in the per-file result line (even without
-  `--verbose`) as worth a manual spot-check.
+- **Diagnosis:** run with `--verbose` to see processing details as log lines,
+  or `--verbose-transcripts` (`-T`) to also see every Whisper transcription —
+  what the recognizer actually heard, and the confidence it had in each.
+  Chapter marks below 50% confidence are flagged in the per-file result line
+  (even without `--verbose`) as worth a manual spot-check.
 
 ## Building from source
 

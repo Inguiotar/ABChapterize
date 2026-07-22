@@ -72,164 +72,64 @@ naming one directly as the target is an error.
 ## 3. How detection works
 
 Detection runs in up to three Whisper-transcription passes per file, plus an
-optional VAD pre-pass with `--jingle`.
+optional voice-activity (VAD) pre-pass with `--jingle`. This section is an
+overview of what each pass does; the machinery that keeps it accurate and
+fast — how probe windows are sized and stitched together word-safely, how
+each mark is pinpointed to the exact silence, the transcript caching and the
+self-tuning that cut the number of Whisper calls — is documented in the
+source. Only what affects using the tool is covered here.
 
 ### Pass 1 — silence scan (and VAD pre-pass with `--jingle`)
 
 ffmpeg's `silencedetect` filter finds every silence of at least
 `--min-silence-length` seconds (default, and floor with `auto`: 1.5) below
 −35 dBFS, in one quick decode pass over the whole file. Chapter announcements
-in audiobooks practically always follow such a pause. This pass always uses
-the 1.5 s floor when `--min-silence-length` is left at its default `auto`;
-the self-tightening described under Pass 2 happens afterwards, in C#, over
-the resulting silence list.
+in audiobooks practically always follow such a pause. If the scan ends
+prematurely (e.g. because of a damaged file), the file is aborted with an
+error instead of silently reporting "no chapters".
 
-The scan is guarded: if it ends prematurely (e.g. because of a damaged file),
-the file is aborted with an error instead of silently reporting "no chapters".
-
-With `--jingle`, a voice-activity detection (VAD) pre-pass runs alongside the
-silence scan — see below — over the very same decode: one ffmpeg process
-splits the audio into two filter branches (`silencedetect` on one, resampled
-PCM for the VAD model on the other), so the progress bar shows a single
-"Pass 1" either way instead of separate sub-passes.
-
-`silencedetect` is amplitude-only: a jingle that abuts the narration with no
-detectable gap on either side produces no silence at all, so it never gives
-pass 2 a candidate near that transition. The VAD pre-pass runs the shared
-decode's PCM branch through a bundled voice-activity detection model —
-[Silero VAD](https://github.com/snakers4/silero-vad), MIT-licensed, embedded
-in the executable (~2.2 MB, no separate download; see
-[THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)) — classifying the whole
-file as speech or non-speech. Music reads as non-speech to a speech detector,
-the same as silence, so a jingle shows up as a non-speech region flanked by
-speech regardless of whether there is any amplitude gap around it.
-
-Before candidates are built, the raw VAD output is cleaned up: Silero VAD is
-not fully reliable on jingle music, so a "speech" blip shorter than 1 second
-(a vocal-like transient or a strong rhythmic passage inside otherwise
-instrumental music) does not end a non-speech region — the regions on either
-side of it are merged into one, so a single jingle is not fragmented into
-several short candidates. Every such region is then a candidate jingle
-transition, subject to two filters: it must be at least 2 seconds long
-(shorter regions are dropped outright — more likely an in-narration breath
-pause than a jingle) and no longer than the current `--max-jingle-length`
-window (see below) — a region longer than that could never fit its
-announcement in the probe window anyway. When a `silencedetect` silence
-already leads into the region, pass 1's own candidate already covers that
-transition and no separate VAD candidate is added (VAD only contributes
-*new* candidates at transitions with no leading silence, so books with only
-silence-backed jingles get no extra Whisper probes at all from this pass).
+`silencedetect` is amplitude-only: a jingle (a short music sting) that abuts
+the narration with no detectable gap around it produces no silence at all, so
+it never gives pass 2 a candidate near that transition. With `--jingle`, a
+voice-activity detection pre-pass runs over the same decode using a bundled
+model — [Silero VAD](https://github.com/snakers4/silero-vad), MIT-licensed,
+embedded in the executable (~2.2 MB, no separate download; see
+[THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)). Music reads as
+non-speech to a speech detector, the same as silence, so a jingle shows up as
+a non-speech region flanked by speech even when there is no amplitude gap
+around it, and pass 2 gets a candidate at every such jingle that has no
+leading silence of its own.
 
 ### Pass 2 — probing
 
-A short window of audio is transcribed with Whisper:
+A short window of audio is transcribed with Whisper at the start of the file,
+after the end of every detected silence, and (with `--jingle`) at every
+silence-less jingle the VAD pre-pass found. The window is 12 seconds normally,
+or `--max-jingle-length` + 5 seconds with `--jingle`. Each transcript is
+matched against the chapter phrase (see `--chapter-phrase`), and the chapter
+number is parsed from digits or number words
+(see [section 7](#7-languages-and-number-recognition)).
 
-- at the very beginning of the file,
-- after the end of every detected silence, and
-- (with `--jingle`) at every silence-less jingle transition VAD found.
+Where a chapter announcement is found, the mark is placed at the end of the
+silence that precedes it. With `--jingle` the mark goes to the start of the
+jingle instead: 0.5 seconds before the preceding silence's end when there is
+one (so it lands inside the silence, not the previous chapter's narration), or
+exactly at the jingle's start when the jingle abuts speech directly. In-text
+mentions ("…as we learned in chapter three…") are rejected by requiring the
+announcement to follow a real pause; out-of-order detections and duplicates of
+an already-marked chapter are dropped, keeping the earliest position. Each
+mark also carries Whisper's own confidence, and marks below 0.5 are flagged
+for a spot-check rather than trusted silently (see
+[section 12](#12-output-progress-and-logging)).
 
-The window is 12 seconds normally, or `--max-jingle-length` + 5 seconds with
-`--jingle`. Each transcript is matched against the chapter phrase
-(see `--chapter-phrase`), and the chapter number is parsed from digits or from
-number words (see [section 7](#7-languages-and-number-recognition)).
-
-Each probe window's end is decided on the fly, right before that window is
-transcribed — so it always reflects the current (possibly auto-adapted)
-window size, with no stale up-front plan. When two consecutive windows would overlap
-(common with the wide `--jingle` window and closely spaced candidates), the
-plan snaps their shared border to the mid-point of the nearest silence
-anywhere within the second window (with `--jingle`, a VAD non-speech region
-serves as fallback target): the first window's decode simply ends at that
-seam — be it before or beyond its natural end — and the second window's fresh
-decode starts exactly there. Consecutive transcripts thus stitch together at
-a mid-silence cut that can never split a word, no audio is ever sent through
-Whisper twice, and no stretch is ever left out. Only when the second window
-contains no silence at all does the border stay where it fell — and no
-silence there means no chapter transition there either, so nothing detection
-cares about can be garbled. A window end that *doesn't* fall inside another
-window gets the same treatment in a lighter form: it is extended to the
-nearest silence mid-point within the 5 seconds after its natural end (never
-shortened, and left alone when there is no such target), so even a
-stand-alone window stops at a word-safe cut instead of possibly mid-word.
-(Pass 1 keeps even sub-threshold silences down to 0.5 s in memory purely as
-seam targets for this.) Matching still runs over the *whole* window, reused
-part included, so nothing a naive tail-only shortcut would drop — e.g. an
-announcement straddling the seam itself — slips through.
-
-Rules applied to the matches:
-
-- A single window can yield several chapter marks: Whisper's segment
-  timestamps plus the full silence list pinpoint each announcement's own
-  preceding silence, independent of which silence triggered the probe. A
-  second chapter announced deeper in a wide window is marked immediately
-  rather than waiting for a later probe of its own.
-- Before those timestamps are trusted, each segment's start is corrected for a
-  quirk of Whisper: it timestamps a segment from where its audio block begins,
-  so an announcement that follows a pause (and, with `--jingle`, the jingle
-  music) is timed from the *start* of that silence rather than of the spoken
-  words. The stored silences and VAD non-speech regions tell exactly how long
-  that leading non-speech runs, so the segment's start is advanced past it to
-  the real speech onset. Without this the announcement would appear to begin
-  seconds early — back in the previous chapter's audio — mis-placing the mark
-  and feeding the auto mechanisms below a mis-measured silence.
-- Without `--jingle`, the phrase must start within 5 seconds after the
-  triggering silence — announcements come right after the pause — *or*
-  within 5 seconds after a candidate-grade silence (at least
-  `--min-silence-length` long) elsewhere in the window, which then anchors
-  the mark. Anything else is narration ("…as we learned in chapter three…")
-  and is ignored; a mere breath pause before an in-text mention never
-  qualifies as an anchor.
-- The chapter mark is placed at the end of the silence preceding the
-  announcement. For a match at the very beginning of the file, the phrase
-  position itself is used.
-- A confidently detected mark settles its whole *overlapping window
-  sequence*: consecutive candidates whose windows each overlap the next
-  cover one continuous stretch of audio, and one such stretch practically
-  never contains two chapter transitions — so once a mark is found anywhere
-  in the sequence, its remaining windows are skipped outright instead of
-  probed. They are remembered, though: should a later sequence gap prove
-  the bet wrong, they are re-probed just like adaptively skipped silences
-  (see below). A low-confidence mark skips nothing.
-- With `--jingle`, the mark is placed at the start of the jingle, not the
-  announcement. When a silence precedes the jingle, the mark is anchored 0.5
-  seconds *before* the end of that silence (so it lands inside the silence,
-  not into the previous chapter's narration). When there is no silence — the
-  jingle abuts speech directly, found only via the VAD pre-pass above — the
-  mark is placed exactly at the jingle's own start instead, with no 0.5 s
-  lead: a lead would have nowhere absorbable to land and would cut into the
-  previous chapter.
-- Duplicate detections of the same chapter number keep the earliest position;
-  out-of-order regressions (typically in-text mentions like "as seen in
-  chapter three") are dropped.
-- Whisper's own confidence (average token probability) for the segment the
-  chapter number came from travels with the detection. Marks below 0.5 are
-  flagged as low-confidence instead of being silently trusted — see
-  [section 12](#12-output-progress-and-logging).
-
-By default (`--min-silence-length auto`), probing does not visit every
-silence from pass 1 unconditionally. It starts at the 1.5 s floor as usual
-and stays there until the *second* chapter mark is found - the silence
-before the first mark is typically the intro/title silence, often longer
-than the breaks between chapters, so it is never used to tighten. The second
-mark raises the threshold to 75% of its own anchor silence's length (a 25%
-safety margin, mirroring `--max-jingle-length auto`'s margin on the jingle
-side). The anchor here is always the silence the mark actually *falls into*
-— not whichever silence happened to trigger the probe, which can be an
-unrelated in-text pause much longer or shorter than the real chapter break.
-From then on the threshold only ever moves *down*: each further
-mark whose anchor silence is shorter lowers it to 75% of that length, while
-a longer silence never raises it back up — a threshold above a silence that
-has already proven to precede a chapter would, by definition, skip exactly
-that kind of break. So once real inter-chapter breaks establish their
-length, clearly shorter in-chapter pauses stop being probed, while breaks
-close to (or longer than) that length still are. If a chapter number is then
-found out of sequence (a gap), every silence skipped since the last mark is
-re-probed unconditionally right away, and any chapter recovered that way
-folds its own (shorter) anchor silence into the threshold — all before
-falling through to pass 3, so pass 3's full transcription is only needed if
-that still fails to find the missing chapter(s). Giving
-`--min-silence-length` an explicit numeric value disables all of this and
-probes every silence at or above it, same as before this feature existed.
+By default (`--min-silence-length auto`), pass 2 does not probe every silence
+from pass 1. As chapters are found it learns how long this book's real
+inter-chapter breaks are and stops probing clearly shorter in-chapter pauses,
+so far fewer Whisper probes are needed without a fixed guess; should a chapter
+later turn up out of sequence, everything skipped since the previous chapter
+is re-probed before pass 3 has to step in. Giving `--min-silence-length` an
+explicit numeric value disables this and probes every silence at or above it.
+See the [`-n` reference](#detection-behaviour) for the knob itself.
 
 ### Pass 3 — gap filling (only when needed)
 
@@ -237,21 +137,8 @@ If the detected chapter numbers have sequence gaps (…7, 9…), or the first
 detected chapter is not chapter 1 even though it starts more than 30 seconds
 into the file, the regions where the missing chapters must be hiding are
 transcribed *completely*, in roughly 10-minute chunks. This catches
-announcements that were not preceded by a long-enough silence.
-
-Chunk borders get the same word-safe treatment as pass 2's window seams:
-each border snaps to the nearest silence mid-point (with `--jingle`, a VAD
-non-speech region as fallback) within 30 seconds of its natural position,
-and the next chunk starts exactly at that seam — no overlap, nothing decoded
-twice, no word ever cut in half. Since even a mid-*phrase* pause could
-coincide with such a seam (a narrator breathing right between "Chapter" and
-its number), the previous chunk's trailing transcript is carried into the
-next chunk's phrase matching, bridging the seam. Only where no seam target
-exists near a border does the old scheme remain for that one joint: a raw
-cut with 10 seconds of overlap as redundancy. Detected marks are pinpointed
-the same way as in pass 2 — at the end of the silence directly preceding
-the announcement (falling back to the phrase position itself when there is
-none close by).
+announcements that were not preceded by a long-enough silence. Marks found
+here are placed the same way as in pass 2.
 
 If a gap *between* detected chapters still remains after pass 3, the file is
 left **unchanged** and a warning is printed — a partially wrong chapter list
@@ -589,9 +476,16 @@ skipped (reported as "skipped").
   shown.
 
 `-v`, `--verbose`
-: Print processing details and **all Whisper transcriptions** as timestamped
-  log lines — the best way to see what the recognizer actually heard. See
+: Print processing details as timestamped log lines: each probe, gap and
+  verify line stops at its `<length>@<time>` header. The best overview of what
+  the pipeline is doing without the full recognizer output. See
   [section 12](#12-output-progress-and-logging).
+
+`-T`, `--verbose-transcripts`
+: Like `--verbose`, but also dumps every Whisper transcript's segments (with
+  their timings and confidence) after the header line — the best way to see
+  exactly what the recognizer heard, and what `--verbose` did before this flag
+  existed. Implies `--verbose`.
 
 `-B`, `--no-bar`
 : Never display progress bars; per-file results are printed as timestamped
@@ -700,7 +594,7 @@ touching Whisper at all.
 : Number of files processed concurrently (default: `auto`). With `auto`, the
   ceiling depends on the Whisper backend in use and is then adjusted live
   between 1 and that ceiling based on measured CPU load (sampled every
-  250 ms, using `GetSystemTimes` on Windows and `/proc/stat` on Linux — no
+  2 seconds, using `GetSystemTimes` on Windows and `/proc/stat` on Linux — no
   extra runtime dependency on either platform): above 85% CPU usage the
   limit is lowered by one; below 55% it is raised by one, at most one step
   per sample to avoid flapping.
@@ -963,17 +857,17 @@ name, everything the pipeline does:
 
 - probe result (duration, codec/profile, existing chapter marks),
 - the silence count of pass 1,
-- **every Whisper transcription** with segment timings and confidence
-  (`p=0.87`) — both the probe windows and the full-transcription chunks of
-  pass 3,
+- each probe window and pass-3 chunk as a `<length>@<time>` header line,
 - every accepted chapter detection with the exact mark position and
   confidence, flagged `LOW CONFIDENCE` below 0.5, plus a `still missing:`
   list of any earlier chapter numbers not detected yet,
 - the regions transcribed in pass 3.
 
-This is the primary diagnosis tool: it shows verbatim what the recognizer
-heard, so you can see *why* an announcement was missed and adjust
-`--chapter-phrase`, `--min-silence-length` or the model.
+**`--verbose-transcripts`** (`-T`) adds, after each header line, the full
+Whisper transcript for that window — every segment with its timings and
+confidence (`p=0.87`). This is the primary diagnosis tool: it shows verbatim
+what the recognizer heard, so you can see *why* an announcement was missed and
+adjust `--chapter-phrase`, `--min-silence-length` or the model.
 
 **Confidence flagging** — every chapter mark carries Whisper's own confidence
 (the average token probability of the segment the number was parsed from).

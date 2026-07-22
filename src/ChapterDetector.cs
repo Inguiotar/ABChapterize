@@ -1533,6 +1533,13 @@ public sealed class ChapterDetector
                 // the previous chunk's own pass; only a seam-straddling detection is news here.
                 if (phraseAbs < chunkStart && !match.SpansMerge)
                     continue;
+                // The chapter bounding this gap's start or end is already known (that is what
+                // made this a gap in the first place) and can resurface right at a chunk
+                // border - its own announcement sitting just inside the scanned range - without
+                // being new information. Leave the existing mark alone and stay silent about it,
+                // rather than risking Normalize picking this re-detection's timestamp instead.
+                if (knownChapters.Any(k => k.Number == match.Number))
+                    continue;
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans a Pass 3 chunk seam " +
                                  "(bridged from the previous chunk) - worth a spot check");
@@ -1580,13 +1587,20 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Logs a Whisper transcript in --verbose mode: every segment with its start/end time
-    /// relative to the decoded window. Does nothing when not verbose.
+    /// Logs a Whisper transcript's header line and, only with --verbose-transcripts, the segments
+    /// themselves (each with its start/end time relative to the decoded window). Under plain
+    /// --verbose just the header - the "&lt;length&gt;@&lt;timestamp&gt;" context - is printed, so
+    /// the log stays readable without the full recognizer output. Does nothing when not verbose.
     /// </summary>
-    /// <param name="context">Description of the decoded window, e.g. "probe 50 s @0:12:34.00".</param>
+    /// <param name="context">Description of the decoded window, e.g. "probe 50s@0:12:34.00".</param>
     /// <param name="segments">The transcribed segments.</param>
     private void LogTranscript(string context, List<TranscriptSegment> segments)
     {
+        if (!_options.VerboseTranscripts)
+        {
+            _log?.Invoke(context);
+            return;
+        }
         _log?.Invoke(segments.Count == 0
             ? $"{context}: (no speech recognized)"
             : $"{context}: " + string.Join(" | ",

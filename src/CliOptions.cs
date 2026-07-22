@@ -117,8 +117,20 @@ public sealed class CliOptions
     /// <summary>Suppress per-file output; warnings and errors are still shown (--quiet / -q).</summary>
     public bool Quiet { get; private set; }
 
-    /// <summary>Print processing details and Whisper transcriptions as log lines (--verbose / -v).</summary>
+    /// <summary>
+    /// Print processing details as log lines (--verbose / -v). Probe/gap/verify lines are logged
+    /// up to and including their "&lt;length&gt;@&lt;timestamp&gt;" header; the transcribed segments
+    /// themselves are only dumped when <see cref="VerboseTranscripts"/> is also set. Implied by
+    /// <see cref="VerboseTranscripts"/>.
+    /// </summary>
     public bool Verbose { get; private set; }
+
+    /// <summary>
+    /// Like <see cref="Verbose"/>, but also dumps every Whisper transcript's segments after its
+    /// header line (--verbose-transcripts / -T) - what plain --verbose did before this flag
+    /// existed. Setting it implies <see cref="Verbose"/>.
+    /// </summary>
+    public bool VerboseTranscripts { get; private set; }
 
     /// <summary>Suppress the progress bar; per-file summaries use the log-line format (--no-bar / -B).</summary>
     public bool NoBar { get; private set; }
@@ -220,7 +232,7 @@ public sealed class CliOptions
     private static readonly Dictionary<char, string> ShortOptions = new()
     {
         ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--jingle",
-        ['q'] = "--quiet", ['v'] = "--verbose", ['s'] = "--summary",
+        ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model",
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
@@ -434,6 +446,7 @@ public sealed class CliOptions
             case "--jingle": Jingle = true; return true;
             case "--quiet": Quiet = true; return true;
             case "--verbose": Verbose = true; return true;
+            case "--verbose-transcripts": VerboseTranscripts = Verbose = true; return true;
             case "--no-bar": NoBar = true; return true;
             case "--summary": Summary = true; return true;
             case "--dry-run": DryRun = true; return true;
@@ -695,16 +708,22 @@ public sealed class CliOptions
                                     (the default), starting from the second chapter mark
                                     found (the silence before the first mark is usually the
                                     intro/title silence and often longer, so it is not used
-                                    to tighten), each mark tightens the probing threshold to
-                                    90% of the length of the silence that triggered it,
-                                    resetting to the floor whenever a sequence gap is hit -
-                                    fewer Whisper probes without a fixed guess. An explicit
-                                    numeric value disables this and probes every such
-                                    silence instead - useful if the breaks are known to vary
-                                    a lot, or for troubleshooting.
+                                    to tighten), the probing threshold sits at 75% of the
+                                    length of the shortest silence a mark has fallen into so
+                                    far (raised once, then only ever lowered), and a sequence
+                                    gap re-probes everything skipped since the last mark
+                                    rather than resetting the threshold - fewer Whisper
+                                    probes without a fixed guess. An explicit numeric value
+                                    disables this and probes every such silence instead -
+                                    useful if the breaks are known to vary a lot, or for
+                                    troubleshooting.
           -q, --quiet               Suppress per-file output; warnings and errors are still shown.
-          -v, --verbose             Print processing details and all Whisper transcriptions as
-                                    timestamped log lines (to see what the recognizer heard).
+          -v, --verbose             Print processing details as timestamped log lines. Probe,
+                                    gap and verify lines stop at their "<length>@<time>" header;
+                                    use -T to also see the transcribed segments.
+          -T, --verbose-transcripts Like --verbose, but also dumps every Whisper transcript's
+                                    segments (to see exactly what the recognizer heard). Implies
+                                    --verbose.
           -B, --no-bar              Do not display progress bars; per-file summary lines are
                                     printed in the same timestamped format as --verbose logs.
           -s, --summary             Print a summary at the end: file counts, total and average

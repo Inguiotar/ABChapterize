@@ -1051,13 +1051,13 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task OverlappingProbe_LogsOnlyTheFreshTail_AtItsOwnTimestamps()
     {
         // Same split-snapping setup as OverlappingProbe_SnapsTheSplitToASilenceMidpointWithinWindowTwo
-        // (split at 608.3), but this asserts on the --verbose log itself: the tail probe's log line
-        // must show only what was actually decoded from 608.3 onward, at Whisper's own (0-based)
-        // timestamps - not the reused segment restated at window-relative time, and not a span
-        // reaching all the way to the window's nominal end (618). Chapter one is scripted at
-        // low confidence so the overlap-sequence skip stays out of the way.
+        // (split at 608.3), but this asserts on the --verbose-transcripts log itself: the tail
+        // probe's log line must show only what was actually decoded from 608.3 onward, at Whisper's
+        // own (0-based) timestamps - not the reused segment restated at window-relative time, and
+        // not a span reaching all the way to the window's nominal end (618). Chapter one is scripted
+        // at low confidence so the overlap-sequence skip stays out of the way.
         var (_, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--verbose-transcripts", "--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
             s =>
             {
@@ -1087,6 +1087,31 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Contains("probe @0:59:55.00: fully reused, no new transcription", log);
         Assert.DoesNotContain(3595.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task Verbose_LogsProbeHeadersButOmitsSegments_UnlessVerboseTranscriptsIsSet()
+    {
+        // The first probe (window at 0) transcribes "Chapter one." Plain --verbose must log the
+        // probe's "<length>@<timestamp>" header but not the segment text; --verbose-transcripts
+        // appends the segments after a colon. The chapter-detected line (not a transcript) shows
+        // under both.
+        List<Silence> silences = [new(595, 600)];
+        Action<ScriptedTranscriber> script = s => s.Add(0, Seg(0.5, " Chapter one."));
+
+        var (_, plain, _) = await DetectWithLogAsync(Options(), silences, script);
+        var (_, full, _) = await DetectWithLogAsync(Options("-T"), silences, script);
+
+        var plainHeader = Assert.Single(plain, l => l.StartsWith("probe ") && l.Contains("@0:00:00.00"));
+        Assert.EndsWith("@0:00:00.00", plainHeader);      // header ends at the timestamp, no segment dump
+        // No probe line dumps segments (the "(p=" marker) - the language-detection line has its
+        // own "(p=" and is not a transcript, so scope the check to probe lines.
+        Assert.DoesNotContain(plain, l => l.StartsWith("probe ") && l.Contains("(p="));
+
+        var fullHeader = Assert.Single(full, l => l.StartsWith("probe ") && l.Contains("@0:00:00.00"));
+        Assert.Contains("Chapter one.", fullHeader);
+
+        Assert.Contains(plain, l => l.Contains("chapter 1 detected"));
     }
 
     [Fact]
@@ -1358,6 +1383,36 @@ public sealed class ChapterDetectorTests : IDisposable
             w => w.Start == 0.5 && w.Duration is { } d && Math.Abs(d - 598) < 0.01);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 598.5 && w.Duration is { } d && Math.Abs(d - 599) < 0.01);
+    }
+
+    [Fact]
+    public async Task Pass3_IgnoresAReDetectionOfTheGapsBoundingChapter_AtBothEnds()
+    {
+        // Pass 2 finds chapters 1 (at 0.5, no preceding silence) and 3 (at 500, pinned to the
+        // silence [495, 500] preceding it), leaving a gap for chapter 2. Pass 3 then transcribes
+        // [0.5, 500] as one chunk and - besides the genuine "Chapter two." - Whisper also
+        // re-hears chapter 1's own announcement right at the chunk's start and chapter 3's right
+        // near its end, at 495 instead of 3's real, silence-anchored position of 500. Neither
+        // re-detection is new information: both must be ignored outright, with no log line and
+        // without nudging chapter 3's mark from 500 down to 495.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(495, 500)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(500, Seg(0.3, " Chapter three."));
+                // Pass 3's gap chunk, decoded from 0.5: re-hears chapter 1 at its own start,
+                // a genuine chapter 2 in the middle, and chapter 3 again near the end (earlier
+                // than its real mark).
+                s.Add(0.5, Seg(0, " Chapter one."), Seg(200, " Chapter two."), Seg(494.5, " Chapter three."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.5), new(2, 200.5), new(3, 500)], result.Chapters);
+        Assert.DoesNotContain(log, l => l.Contains("chapter 1 found in gap"));
+        Assert.DoesNotContain(log, l => l.Contains("chapter 3 found in gap"));
+        Assert.Contains(log, l => l.Contains("chapter 2 found in gap"));
     }
 
     [Fact]
