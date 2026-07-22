@@ -1032,6 +1032,10 @@ public sealed class ChapterDetector
 
         var checkedCount = 0;
         var failed = 0;
+        // Mirrors Pass 2/3's found-chapters list, but of confirmed markings rather than fresh
+        // detections, so the same ChapterProgress/bar display applies: the highest confirmed
+        // number, with any lower unconfirmed one shown as a "(-N)" gap beneath it.
+        var confirmedChapters = new List<DetectedChapter>();
 
         work.BeginPhase("Verify", info.ExistingChapters.Count);
         foreach (var marking in info.ExistingChapters)
@@ -1066,6 +1070,11 @@ public sealed class ChapterDetector
                 : $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
             if (!confirmed)
                 failed++;
+            else
+                confirmedChapters.Add(new DetectedChapter(expected, marking.StartSeconds));
+            var (highest, missingNumbers) = ChapterProgress(confirmedChapters);
+            work.HighestChapter = highest;
+            work.MissingChapters = missingNumbers.Count;
             work.Advance(1);
         }
 

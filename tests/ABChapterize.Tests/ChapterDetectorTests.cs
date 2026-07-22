@@ -1906,8 +1906,9 @@ public sealed class ChapterDetectorTests : IDisposable
         CliOptions options, IReadOnlyList<Chapter> existingChapters, Action<ScriptedTranscriber> script)
         => (await VerifyWithTranscriberAsync(options, existingChapters, script)).Result;
 
-    /// <summary>Runs --verify, also returning the transcriber for language-detection assertions.</summary>
-    private async Task<(VerifyResult Result, ScriptedTranscriber Transcriber)> VerifyWithTranscriberAsync(
+    /// <summary>Runs --verify, also returning the transcriber for language-detection assertions
+    /// and the tracker for progress-bar assertions.</summary>
+    private async Task<(VerifyResult Result, ScriptedTranscriber Transcriber, WorkTracker Tracker)> VerifyWithTranscriberAsync(
         CliOptions options, IReadOnlyList<Chapter> existingChapters, Action<ScriptedTranscriber> script)
     {
         var audio = new FakeAudioSource();
@@ -1916,8 +1917,9 @@ public sealed class ChapterDetectorTests : IDisposable
         var detector = new ChapterDetector(options, audio, transcriber);
         var info = new MediaInfo(Duration, (long)Duration, existingChapters.Count,
             ExistingChapterList: existingChapters);
-        var result = await detector.VerifyExistingChaptersAsync(_file, info, new WorkTracker(), null, CancellationToken.None);
-        return (result, transcriber);
+        var tracker = new WorkTracker();
+        var result = await detector.VerifyExistingChaptersAsync(_file, info, tracker, null, CancellationToken.None);
+        return (result, transcriber, tracker);
     }
 
     [Fact]
@@ -1999,7 +2001,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // never be discovered, silently skipping every marking (Checked == 0, a false pass)
         // instead of verifying the book. Resolving upfront, from the first marking with a
         // decodable window regardless of its title, must check both.
-        var (result, transcriber) = await VerifyWithTranscriberAsync(
+        var (result, transcriber, _) = await VerifyWithTranscriberAsync(
             Options(),
             [new Chapter(10, "Erstes Kapitel"), new Chapter(610, "Zweites Kapitel")],
             s =>
@@ -2014,5 +2016,25 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal(0, result.Failed);
         // Detected once, upfront - not re-detected per marking.
         Assert.Equal(1, transcriber.DetectLanguageCalls);
+    }
+
+    [Fact]
+    public async Task Verify_TracksHighestConfirmedChapter_AndCountsUnconfirmedOnesAsMissing()
+    {
+        // Chapter 2 fails to confirm; 1 and 3 do. Same display convention as Pass 2/3: the
+        // tracker should read the highest *confirmed* number, with the unconfirmed one below it
+        // counted as a "(-N)" gap - not the highest pre-existing marking regardless of outcome.
+        var (_, _, tracker) = await VerifyWithTranscriberAsync(
+            Options(),
+            [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2"), new Chapter(1210, "Chapter 3")],
+            s =>
+            {
+                s.Add(0, Seg(10, " Chapter 1."));
+                // nothing scripted near the second marking - Chapter 2 will not confirm.
+                s.Add(1200, Seg(10, " Chapter 3."));
+            });
+
+        Assert.Equal(3, tracker.HighestChapter);
+        Assert.Equal(1, tracker.MissingChapters);
     }
 }

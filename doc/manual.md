@@ -459,7 +459,11 @@ skipped (reported as "skipped").
   the mark count alone isn't proof of anything. Since its intent
   contradicts `--force` (always discard vs. decide based on a check) and it
   has nothing to check against with `--import` (which never runs
-  detection), `--verify` cannot be combined with either.
+  detection), `--verify` cannot be combined with either. The progress bar's
+  chapter state (see [section 12](#12-output-progress-and-logging)) tracks
+  confirmations the same way it tracks fresh detections: the highest
+  confirmed mark, with any lower one that failed confirmation shown as a
+  `(-N)` gap.
 
 ### Safety and undo
 
@@ -853,14 +857,15 @@ done:
 My Audiobook.m4b: 23 chapter(s) written (1-23) + intro
 ```
 
-The chapter state reads `----` until the first chapter is found (all of
-pass 1, where nothing can change anyway), then shows the highest chapter
-number detected so far — `ch 6` — with any not-yet-detected earlier
-chapters (the gaps pass 3 would have to chase) as a bracketed negative
+The chapter state reads `----` until the first chapter is confirmed (all
+of pass 1, where nothing can change anyway), then shows the highest
+chapter number found so far — `ch 6` — with any lower chapter that is
+still unconfirmed (the gaps pass 3 would have to chase during detection,
+or a mark that failed its check during `--verify`) as a bracketed negative
 count: `ch 6(-2)` means chapter 6 is marked but two below it are still
-missing. Pass 2's percentage follows the probe position within the file's
-play time, so it can move nonlinearly — and, briefly, backwards, when a
-sequence gap makes the detector re-probe earlier skipped silences.
+outstanding. Pass 2's percentage follows the probe position within the
+file's play time, so it can move nonlinearly — and, briefly, backwards,
+when a sequence gap makes the detector re-probe earlier skipped silences.
 
 Once detection finishes, the bar switches to a final `Muxing...` phase while
 the chapter markings are written into the file — worth watching on a large
