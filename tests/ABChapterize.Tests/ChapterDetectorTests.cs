@@ -2234,4 +2234,160 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal(1, result.Checked);
         Assert.Equal(1, result.Failed);
     }
+
+    [Fact]
+    public void BuildGapRegions_BuildsOneRegion_ForAnInteriorUnconfirmedRun()
+    {
+        var markings = new List<VerifyMarkingOutcome>
+        {
+            new(10, 1, true), new(30, 2, false), new(50, 3, true),
+        };
+        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+
+        Assert.Equal([new(10, 50, 1, 3)], plan.Regions);
+        Assert.Null(plan.TrailingFrom);
+        Assert.Empty(plan.TrailingTargets);
+    }
+
+    [Fact]
+    public void BuildGapRegions_BuildsATrailingRegion_WhenTheLastCheckableMarkingIsUnconfirmed()
+    {
+        var markings = new List<VerifyMarkingOutcome> { new(10, 1, true), new(610, 2, false) };
+        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+
+        Assert.Equal([new(10, Duration, 1, null)], plan.Regions);
+        Assert.Equal(10, plan.TrailingFrom);
+        Assert.Equal([2], plan.TrailingTargets);
+    }
+
+    [Fact]
+    public void BuildGapRegions_GroupsConsecutiveUnconfirmedMarkings_IntoOneRun()
+    {
+        var markings = new List<VerifyMarkingOutcome>
+        {
+            new(10, 1, true), new(20, 2, false), new(30, 3, false), new(40, 4, true),
+        };
+        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+
+        Assert.Equal([new(10, 40, 1, 4)], plan.Regions);
+    }
+
+    [Fact]
+    public void BuildGapRegions_KeepsSeparateRunsAsSeparateRegions()
+    {
+        var markings = new List<VerifyMarkingOutcome>
+        {
+            new(10, 1, true), new(20, 2, false), new(30, 3, true), new(40, 4, false), new(50, 5, true),
+        };
+        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+
+        Assert.Equal([new(10, 30, 1, 3), new(30, 50, 3, 5)], plan.Regions);
+    }
+
+    [Fact]
+    public void BuildGapRegions_AbsorbsAnUnparseableMarking_WithoutBreakingTheRun()
+    {
+        // The middle marking has no parseable number (Confirmed is always false for those, but
+        // that must not itself make the surrounding run look "broken" into two).
+        var markings = new List<VerifyMarkingOutcome>
+        {
+            new(10, 1, true), new(20, 2, false), new(25, null, false), new(30, 3, false), new(40, 4, true),
+        };
+        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+
+        Assert.Equal([new(10, 40, 1, 4)], plan.Regions);
+    }
+
+    [Fact]
+    public void BuildGapRegions_ReturnsNoRegions_WhenEveryCheckableMarkingIsConfirmed()
+    {
+        var markings = new List<VerifyMarkingOutcome> { new(10, 1, true), new(610, 2, true) };
+        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+
+        Assert.Empty(plan.Regions);
+        Assert.Null(plan.TrailingFrom);
+    }
+
+    /// <summary>Runs gap-scoped recovery (DetectGapsAsync) against a hand-built VerifyResult.</summary>
+    private async Task<(DetectionResult Result, FakeAudioSource Audio)> DetectGapsAsync(
+        CliOptions options, VerifyResult verify, List<Silence> silences, Action<ScriptedTranscriber> script)
+    {
+        var audio = new FakeAudioSource { Silences = silences };
+        var transcriber = new ScriptedTranscriber(audio);
+        script(transcriber);
+        var detector = new ChapterDetector(options, audio, transcriber);
+        var result = await detector.DetectGapsAsync(_file, Info, new WorkTracker(), null, verify, CancellationToken.None);
+        return (result, audio);
+    }
+
+    [Fact]
+    public async Task DetectGapsAsync_RecoversAnInteriorGap_ViaGapScopedPass2_AndTrustsConfirmedMarkingsVerbatim()
+    {
+        // Chapter 1 (@10) and chapter 3 (@50) were already confirmed by --verify; chapter 2
+        // (marking @30) was not. Only the region between the two confirmed markings' own
+        // timestamps [10, 50) is probed - a single synthetic candidate at its own start (10),
+        // exactly like the whole-file case's own start-of-file candidate.
+        var verify = new VerifyResult(false, 2, 1,
+            [new(1, 10), new(3, 50)],
+            [new(10, 1, true), new(30, 2, false), new(50, 3, true)],
+            Options().DefaultProfile, null, 0);
+
+        var (result, audio) = await DetectGapsAsync(
+            Options("--max-jingle-length", "0"), verify, [],
+            s => s.Add(10, Seg(0.3, " Chapter 2.")));
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+        // Confirmed markings are trusted verbatim - the only decode is the gap region's own
+        // single synthetic candidate; nothing probes near the confirmed markings' own timestamps.
+        Assert.Equal([10.0], audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task DetectGapsAsync_RecoversATrailingGap_ViaPass3Fallback_WhenGapScopedPass2MissesIt()
+    {
+        // Chapter 3 (marking @1210, the last one in file order) was not confirmed. The phrase
+        // sits 300 s into the decode starting at 610 - far past Pass 2's PhraseLatestStart rule
+        // (and there is no anchor silence to rescue it, since none are scripted), so the
+        // region-scoped Pass 2 window [610, 622) rejects it; Pass 3 has no such window-relative
+        // timing rule, so its own chunk [610, 1210) still finds it - the trailing fallback is the
+        // only mechanism that can notice a still-missing *trailing* chapter at all.
+        var verify = new VerifyResult(false, 2, 1,
+            [new(1, 10), new(2, 610)],
+            [new(10, 1, true), new(610, 2, true), new(1210, 3, false)],
+            Options().DefaultProfile, null, 0);
+
+        var (result, _) = await DetectGapsAsync(
+            Options("--max-jingle-length", "0"), verify, [],
+            s => s.Add(610, Seg(300, " Chapter 3.")));
+
+        Assert.False(result.GapRemains);
+        Assert.Equal(3, result.Chapters.Count);
+        Assert.Equal(3, result.Chapters[^1].Number);
+    }
+
+    [Fact]
+    public async Task DetectGapsAsync_UpperBoundGuard_PreventsGapScopedPass2FromDisplacingTheNextConfirmedChapter()
+    {
+        // A (contrived) Pass 2 window inside the [10, 50) gap picks up chapter 3's own phrase -
+        // exactly the failure mode the region's UpperNumber guard exists for: without it, this
+        // would add a second, wrongly-timed chapter 3 entry that Normalize's earliest-timestamp-
+        // wins rule would then prefer over the correctly confirmed one at 50.
+        var verify = new VerifyResult(false, 2, 1,
+            [new(1, 10), new(3, 50)],
+            [new(10, 1, true), new(30, 2, false), new(50, 3, true)],
+            Options().DefaultProfile, null, 0);
+
+        var (result, _) = await DetectGapsAsync(
+            Options("--max-jingle-length", "0"), verify, [],
+            s => s.Add(10, Seg(0.3, " Chapter 3.")));
+
+        // Chapter 3 must keep its correct, confirmed timestamp - not the gap probe's mistaken one.
+        Assert.Contains(new DetectedChapter(3, 50), result.Chapters);
+        // Chapter 2 was never actually found (only chapter 3's phrase was scripted, deliberately,
+        // to isolate the guard) - the file correctly reports it as still missing rather than
+        // silently accepting the wrong chapter 3 in its place.
+        Assert.True(result.GapRemains);
+        Assert.Contains(2, result.MissingNumbers);
+    }
 }

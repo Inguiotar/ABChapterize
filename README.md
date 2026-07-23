@@ -134,6 +134,11 @@ abchapterize --recurse --verify "D:\Audiobooks"
 # See what would be detected without writing anything:
 abchapterize --dry-run "My Audiobook.m4b"
 
+# Retry only the files a previous run couldn't fully chapterize (tagged
+# "<name>.missing-marks-<n>-<n>-....<ext>" - see the manual's troubleshooting
+# section), leaving the rest of a big collection untouched:
+abchapterize --recurse --force --filter "/\.missing-marks-/" "D:\Audiobooks"
+
 # Batch run: quiet, but with a summary at the end:
 abchapterize -rqs "D:\Audiobooks"
 
@@ -144,10 +149,9 @@ abchapterize --export "My Audiobook.m4b"
 # without re-running Whisper:
 abchapterize --import --force "My Audiobook.m4b"
 
-# Process a big batch faster: several files at once, auto-throttled to CPU load:
-abchapterize --recurse "D:\Audiobooks"
-
-# Force a fixed number of concurrent files instead of the automatic ceiling:
+# Processing several files at once, auto-throttled to CPU load, is already the
+# default for any multi-file run - no flag needed. Force a fixed number of
+# concurrent files instead of the automatic ceiling:
 abchapterize --recurse --jobs 4 "D:\Audiobooks"
 ```
 
@@ -170,7 +174,7 @@ when chapters are written. The most useful knobs:
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
-| `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are left alone, marks that don't are discarded and the file goes through full detection. Cannot combine with `--force` or `--import`. |
+| `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
 | `-j`, `--mark-before-jingle` | **Experimental.** Anchor the mark to a preceding jingle/silence instead of the default fixed offset before the phrase — this tool's original mark-placement rule (see [How it works](#how-it-works)). |
 | `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |

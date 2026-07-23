@@ -65,13 +65,38 @@ public readonly record struct DetectionResult(
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability, DetectionStats Stats);
 
+/// <summary>Outcome of checking one pre-existing chapter marking against the audio, in file order -
+/// the raw material <see cref="ChapterDetector.BuildGapRegions"/> groups into gap-scoped
+/// recovery regions for <see cref="ChapterDetector.DetectGapsAsync"/>.</summary>
+/// <param name="StartSeconds">The marking's own pre-existing timestamp.</param>
+/// <param name="ExpectedNumber">The chapter number parsed from the marking's title, or null when
+/// its title had none (e.g. a prelude/intro entry) - such a marking counts neither as confirmed
+/// nor as a gap boundary and is skipped when regions are built.</param>
+/// <param name="Confirmed">True when Whisper found the expected phrase near this marking.</param>
+public readonly record struct VerifyMarkingOutcome(double StartSeconds, int? ExpectedNumber, bool Confirmed);
+
 /// <summary>Outcome of checking pre-existing chapter markings against the audio (--verify).</summary>
 /// <param name="Passed">True when every checkable marking was confirmed; also true when none
 /// of the file's markings had a parseable expected number (nothing to disprove).</param>
 /// <param name="Checked">Number of markings that had a parseable expected number and were
 /// actually probed. Markings without one (e.g. a prelude/intro entry) are not counted.</param>
 /// <param name="Failed">Of <paramref name="Checked"/>, how many could not be confirmed.</param>
-public readonly record struct VerifyResult(bool Passed, int Checked, int Failed);
+/// <param name="ConfirmedChapters">The confirmed markings, trusted and importable directly as
+/// detected chapters - the seed <see cref="ChapterDetector.DetectGapsAsync"/> builds on instead
+/// of redetecting them.</param>
+/// <param name="Markings">Every marking's own outcome, in file order - the input to
+/// <see cref="ChapterDetector.BuildGapRegions"/>.</param>
+/// <param name="Profile">The language profile resolved while verifying (or the run's fixed
+/// <see cref="CliOptions.DefaultProfile"/> when nothing needed resolving); reused as-is by
+/// <see cref="ChapterDetector.DetectGapsAsync"/> so gap recovery never re-resolves the language.</param>
+/// <param name="DetectedLanguage">Whisper's raw language guess with <c>--lang auto</c>; null when
+/// auto-detection was not active or every marking's window was empty.</param>
+/// <param name="DetectedProbability">Whisper's probability for <paramref name="DetectedLanguage"/>;
+/// 0 when <paramref name="DetectedLanguage"/> is null.</param>
+public readonly record struct VerifyResult(
+    bool Passed, int Checked, int Failed,
+    IReadOnlyList<DetectedChapter> ConfirmedChapters, IReadOnlyList<VerifyMarkingOutcome> Markings,
+    LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability);
 
 /// <summary>
 /// Finds chapter starts in an audiobook. Fast path: detect longer-than-usual silences and
@@ -393,15 +418,76 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Runs the complete detection pipeline for one file.
+    /// Runs the complete detection pipeline for one file: a single Pass 2 region spanning the
+    /// whole file, seeded with no prior knowledge. See <see cref="DetectGapsAsync"/> for the
+    /// gap-scoped alternative run after a --verify failure.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
     /// <param name="work">Progress tracker fed with processed bytes.</param>
     /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
     /// <param name="ct">Cancellation token.</param>
-    public async Task<DetectionResult> DetectAsync(
+    public Task<DetectionResult> DetectAsync(
         string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
+        => DetectCoreAsync(file, info, work, log, [],
+            [new DetectionRegion(0, info.DurationSeconds, 0, null)], null, null, ct);
+
+    /// <summary>
+    /// Runs gap-scoped recovery after a --verify failure: <paramref name="verify"/>'s confirmed
+    /// markings are trusted and imported directly, and only the region(s) <see
+    /// cref="BuildGapRegions"/> builds around the unconfirmed one(s) get their own Pass 2 - the
+    /// rest of the file is not re-scanned or re-transcribed at all.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="work">Progress tracker fed with processed bytes.</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="verify">The --verify run's own result: <see cref="VerifyResult.ConfirmedChapters"/>
+    /// seeds the result directly, <see cref="VerifyResult.Markings"/> is grouped into regions, and
+    /// <see cref="VerifyResult.Profile"/>/<see cref="VerifyResult.DetectedLanguage"/>/<see
+    /// cref="VerifyResult.DetectedProbability"/> are reused as-is so gap recovery never re-resolves
+    /// the language.</param>
+    /// <param name="ct">Cancellation token.</param>
+    internal Task<DetectionResult> DetectGapsAsync(
+        string file, MediaInfo info, WorkTracker work, Action<string>? log, VerifyResult verify, CancellationToken ct)
+    {
+        var plan = BuildGapRegions(verify.Markings, info.DurationSeconds);
+        return DetectCoreAsync(file, info, work, log, verify.ConfirmedChapters, plan.Regions,
+            (verify.Profile, verify.DetectedLanguage, verify.DetectedProbability),
+            plan.TrailingFrom is { } from ? (from, plan.TrailingTargets) : null, ct);
+    }
+
+    /// <summary>
+    /// The shared detection pipeline behind <see cref="DetectAsync"/> and <see
+    /// cref="DetectGapsAsync"/>. Pass 1 always runs whole-file, even for a gap-scoped call -
+    /// <see cref="IAudioSource"/> has no ranged silence/VAD scan, and redoing this one full-file
+    /// decode is cheap next to the Whisper probing that follows. Pass 2 then runs once per entry
+    /// in <paramref name="regions"/>, each with its own candidates (built only from silences/VAD
+    /// regions starting inside that region) and its own adaptive-threshold/adaptive-jingle-window
+    /// state starting completely fresh - a region is probed as if it were its own small file, not
+    /// a continuation of whatever an earlier region's Pass 2 happened to learn. The existing
+    /// sequence-gap Pass 3 (unchanged, over the accumulated <c>chapters</c> and the file's full
+    /// duration) remains the final net for any interior gap regardless of how <c>chapters</c> was
+    /// seeded; <paramref name="trailingFallback"/> exists only for the one case that tail
+    /// structurally cannot catch - a still-missing chapter after the last one found, which
+    /// nothing bounds from above to even notice.
+    /// </summary>
+    /// <param name="confirmedSeed">Chapters trusted verbatim, with no Whisper re-check of their
+    /// own - empty for a fresh <see cref="DetectAsync"/> run.</param>
+    /// <param name="regions">The independent Pass 2 region(s) to probe; a single whole-file region
+    /// for <see cref="DetectAsync"/>, or the gap-scoped regions <see cref="BuildGapRegions"/> built
+    /// for <see cref="DetectGapsAsync"/>.</param>
+    /// <param name="known">The already-resolved language profile (from --verify) plus its own
+    /// detected-language data to carry into the result verbatim, or null to resolve it lazily from
+    /// the first probe's samples exactly as before this feature existed.</param>
+    /// <param name="trailingFallback">The trailing region's start and expected chapter numbers,
+    /// when <see cref="BuildGapRegions"/> found the last checkable --verify marking unconfirmed;
+    /// null otherwise (including for a fresh <see cref="DetectAsync"/> run).</param>
+    private async Task<DetectionResult> DetectCoreAsync(
+        string file, MediaInfo info, WorkTracker work, Action<string>? log,
+        IReadOnlyList<DetectedChapter> confirmedSeed, IReadOnlyList<DetectionRegion> regions,
+        (LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)? known,
+        (double From, List<int> Targets)? trailingFallback, CancellationToken ct)
     {
         _log = log;
         _whisperAudioSeconds = 0;
@@ -410,22 +496,6 @@ public sealed class ChapterDetector
         _chapterJingleSeconds.Clear();
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
-        var probeSeconds = _options.MaxJingleSeconds > 0 ? jingleCeilingSeconds : ProbeSecondsPlain;
-
-        // With --max-jingle-length auto, the adapted probe window: JingleObservationSafetyFactor
-        // times the longest real inter-chapter jingle observed so far, plus PhraseMarginSeconds,
-        // capped at the ceiling. Null until the first qualifying observation (from the second
-        // mark found - see the AutoMinSilence precedent below for why the first is excluded;
-        // chapters with no/an ultra-short jingle are excluded too, see
-        // MinJingleObservationSeconds); monotonically increasing from then on (see
-        // JingleObservationSafetyFactor). probeSeconds (captured by ProbeAsync below) follows it.
-        double? adaptedWindowSeconds = null;
-
-        // True while the sequence-gap recovery in the candidate loop below re-probes skipped
-        // candidates at the full ceiling window: observations made during the re-probe still
-        // feed adaptedWindowSeconds, but must not pull probeSeconds back down mid-re-probe -
-        // the whole point of the reset is that every re-probe runs at the ceiling.
-        var reprobing = false;
 
         // Pass 1: silence scan (one full pass over the file). When the VAD pre-pass is enabled
         // (see CliOptions.RunVadPrePass), it runs concurrently over the very same decode (see
@@ -474,49 +544,6 @@ public sealed class ChapterDetector
             // region count alone is the actionable number, so only it is logged.
             _log?.Invoke($"Pass 1: {nonSpeechRegions.Count} non-speech region(s) found");
 
-        // Pass 2: probe the beginning of the file and the end of every silence. With
-        // --min-silence-length auto, ProbeThresholdTightening below can skip some of these
-        // candidates instead of probing every one.
-        var candidates = new List<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)> { (0, null, null) };
-        candidates.AddRange(silences
-            .Where(s => s.EndSeconds < info.DurationSeconds - 1)
-            .Select(s => ((double)s.EndSeconds, (Silence?)s, (NonSpeechRegion?)null)));
-
-        // Add a VAD candidate for every silence-less non-speech region: a silencedetect
-        // silence already leading the region means the existing silence candidate above
-        // probes the same transition, so skip it there (dedup - the silence path stays
-        // primary). The lower length bound is already guaranteed by ComputeNonSpeechRegions'
-        // own MinJingleObservationSeconds filter, kept here as well as a defensive invariant;
-        // the upper bound (regions too long to ever be this book's jingle) is rechecked against
-        // the (possibly since-narrowed) probe window inside the Pass 2 loop below.
-        if (_vad != null)
-        {
-            foreach (var region in nonSpeechRegions)
-            {
-                var jingleStart = JingleStart(region, silences, speechSegments);
-                if (jingleStart != region.StartSeconds)
-                    continue;
-                var length = region.EndSeconds - jingleStart;
-                if (length < MinJingleObservationSeconds || length > jingleCeilingSeconds)
-                    continue;
-                candidates.Add((jingleStart, null, region));
-            }
-            candidates = candidates.OrderBy(c => c.Start).ToList();
-        }
-
-        // Each probe window's end is computed on the fly, right before its probe runs (see
-        // PlanWindowEnd): an overlapping neighbor gets the shared border snapped to a silence
-        // mid-point, moving this window's decode end itself - possibly beyond its natural end -
-        // rather than merely choosing where to stop reusing cache after the fact. Deciding per
-        // window instead of pre-planning the whole list keeps every end consistent with the
-        // probeSeconds in effect at that moment - the adaptive resizes below apply to the very
-        // next window, with no stale bulk plan to recompute and drift away from what earlier
-        // probes actually decoded.
-        double WindowEndFor(IReadOnlyList<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)> list, int index)
-            => PlanWindowEnd(list[index].Start,
-                index + 1 < list.Count ? list[index + 1].Start : null,
-                probeSeconds, info.DurationSeconds, allSilences, nonSpeechRegions, _vad != null);
-
         // Pass 2 progress is position-based: the bar shows how far into the file's play time the
         // current candidate lies, not how many probes have run. Probe costs vary wildly (full
         // window decode vs. reused overlap vs. skipped candidate), so a fixed per-probe byte
@@ -524,443 +551,523 @@ public sealed class ChapterDetector
         // is, at the price of nonlinear - and, during gap re-probes, briefly backwards - movement.
         work.BeginPhase("Pass 2", info.SizeBytes);
 
-        // With --lang auto, the language is resolved once per file, from the very first probe
-        // window's samples (always at start 0, decoded below like any other window - no extra
-        // decode needed) - then fixed for the rest of the file via ChangeLanguage, rather than
-        // re-detected per probe, which would be both slower and inconsistent within one file.
-        LanguageProfile? profile = null;
-        string? detectedLanguage = null;
-        var detectedProbability = 0.0;
+        // With --lang auto and a fresh DetectAsync run, the language is resolved once per file,
+        // from the very first probe window's samples (always at start 0, decoded below like any
+        // other window - no extra decode needed) - then fixed for the rest of the file via
+        // ChangeLanguage, rather than re-detected per probe. A gap-scoped DetectGapsAsync run
+        // instead already knows it (--verify resolved it), so `known` seeds it here and no probe
+        // ever re-resolves it.
+        LanguageProfile? profile = known?.Profile;
+        if (profile != null)
+            _transcriber.ChangeLanguage(profile.Language);
+        string? detectedLanguage = known?.DetectedLanguage;
+        var detectedProbability = known?.DetectedProbability ?? 0.0;
 
-        var found = new List<DetectedChapter>();
-        // Declared here (rather than with the rest of the adaptive-threshold state below) so
-        // ProbeAsync, defined next, can read it - set to the latest accepted chapter mark's
-        // number by the main candidate loop, still holding the previous value (not yet this
-        // window's) while a probe is in flight, which is exactly what a gap re-probe needs to
-        // accept the in-between chapter numbers.
-        int? lastNumber = null;
+        // Confirmed markings are trusted verbatim; new finds from every region below are added to
+        // the same list, so Pass 3's existing gap tail (after the region loop) sees one seamless
+        // sequence regardless of which numbers came from --verify and which from fresh probing.
+        var found = new List<DetectedChapter>(confirmedSeed);
 
-        // Transcript cache for Pass 2's overlapping-window reuse. Holds the previous probe's full
-        // window transcript in absolute file time, together with the absolute [from, to) span that
-        // transcript actually covers. When the next candidate's window overlaps this span, the
-        // overlapping segments are reused verbatim instead of being re-run through Whisper - only
-        // the fresh tail beyond the planned seam is decoded. The cache-span test below (start
-        // inside [cacheFrom, cacheTo)) doubles as the seam-stitching check: it holds exactly when
-        // the previous window really was decoded up to the seam this window's plan relies on, and
-        // when it does not (e.g. that window was skipped by the adaptive threshold), the probe
-        // falls back to decoding its full window from the candidate start - nothing is ever left
-        // covered by neither decode. cacheTo starts at negative infinity so the very first probe
-        // (start 0) never counts as an overlap and always does a full transcribe - which is also
-        // where --lang auto resolves the language from full samples.
-        List<TranscriptSegment> cacheSegmentsAbs = [];
-        var cacheFrom = 0.0;
-        var cacheTo = double.NegativeInfinity;
-
-        // Probes a single window and appends every chapter mark found in it to `found`. Since
-        // segment timestamps plus the full stored silence list let every detection be
-        // pinpointed independently of the triggering candidate, one window can yield several
-        // marks (e.g. a wide --jingle window covering two transitions) - there is no
-        // one-chapter-per-window early return anymore. Returns the accepted marks in window
-        // order, each with the silence its mark falls into - null when the mark sits on a VAD
-        // region (or nothing at all) - for the --min-silence-length auto tightening, plus
-        // Whisper's confidence for the candidate loop's sequence-skip decision. windowEnd is
-        // the window's *planned* end (see PlanWindowEnd) - possibly snapped away from the
-        // natural start + probeSeconds - while the candidate start stays the semantic anchor
-        // for the phrase-timing rule and progress, both of which are relative to the
-        // triggering silence, not to whatever seam the plan chose.
-        async Task<List<(int Number, Silence? MarkSilence, double Confidence)>> ProbeAsync(
-            (double Start, Silence? Silence, NonSpeechRegion? VadRegion) candidate, double windowEnd)
+        foreach (var region in regions)
         {
-            var start = candidate.Start;
-            ct.ThrowIfCancellationRequested();
-            // Position-based Pass 2 progress (see BeginPhase above); reported here rather than
-            // only in the candidate loop so gap re-probes show their (backwards) position too.
-            work.SetPhaseProgress((long)(start * bytesPerSecond));
+            // Every piece of state below - the probe window size and its adaptive resizing, the
+            // --min-silence-length auto threshold, the transcript-reuse cache, and the "last
+            // accepted number" - starts fresh for this region: it is probed as if it were its own
+            // small file, not a continuation of whatever an earlier region happened to learn (see
+            // DetectionRegion's remarks for why carrying it over would be wrong in both
+            // directions). Declared here (rather than at DetectCoreAsync's top) so ProbeAsync,
+            // defined next, closes over this region's own instances.
+            var probeSeconds = _options.MaxJingleSeconds > 0 ? jingleCeilingSeconds : ProbeSecondsPlain;
+            // With --max-jingle-length auto, the adapted probe window: JingleObservationSafetyFactor
+            // times the longest real inter-chapter jingle observed so far in this region, plus
+            // PhraseMarginSeconds, capped at the ceiling. Null until the first qualifying
+            // observation; monotonically increasing from then on (see JingleObservationSafetyFactor).
+            double? adaptedWindowSeconds = null;
+            // True while the sequence-gap recovery in the candidate loop below re-probes skipped
+            // candidates at the full ceiling window: observations made during the re-probe still
+            // feed adaptedWindowSeconds, but must not pull probeSeconds back down mid-re-probe -
+            // the whole point of the reset is that every re-probe runs at the ceiling.
+            var reprobing = false;
+            // Set to region.LowerNumber when a chapter is already confirmed to precede this
+            // region (an interior or trailing gap), or null for a from-file-start region (the
+            // whole-file case, or a leading gap) - exactly DetectAsync's own original seeding,
+            // generalized. Holds the previous value (not yet this window's) while a probe is in
+            // flight, which is exactly what a gap re-probe needs to accept the in-between numbers.
+            int? lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
 
-            // This window's full transcript in absolute file time, assembled from the previous
-            // window's cache (overlap reuse), a fresh Whisper decode, or a mix. The whole window
-            // is always represented, so nothing a reuse-only "search just the new tail" scheme
-            // would silently drop - e.g. a phrase the previous probe rejected for want of a
-            // qualifying anchor that this window can anchor - is ever lost.
-            //
-            // --verbose logging only ever shows what Whisper actually transcribed just now, at its
-            // own (0-based) timestamps - never the reused portion restated at window-relative time,
-            // which would make every probe look like a fresh full-window decode even when most of it
-            // was cache. Segments used for phrase matching below (`segments`) are unaffected; only
-            // what gets logged changes.
-            List<TranscriptSegment> windowSegmentsAbs;
-            // Set only by the partial-overlap branch below, to the count of reused segments that
-            // precede the fresh tail in windowSegmentsAbs - i.e. the index of the first fresh
-            // segment. Passed to FindPhraseMatches so it can flag a detection that draws on text
-            // from both sides of the cache/fresh boundary (see PhraseMatch.SpansMerge).
-            int? mergeBoundarySegIndex = null;
-
-            // A window whose start falls inside the cached span overlaps the previous one.
-            if (start >= cacheFrom && start < cacheTo)
+            // Candidates for this region only: the region's own start (mirroring the whole-file
+            // case's start-of-file candidate), plus every silence/VAD non-speech region whose own
+            // candidate position falls inside [FromSeconds, ToSeconds). A window can never decode
+            // past ToSeconds regardless (see WindowEndFor's duration clamp below), so a region
+            // boundary alone is enough containment - no extra check is needed here for that.
+            var candidates = new List<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)>
+                { (region.FromSeconds, null, null) };
+            candidates.AddRange(silences
+                .Where(s => s.EndSeconds >= region.FromSeconds && s.EndSeconds < region.ToSeconds - 1)
+                .Select(s => ((double)s.EndSeconds, (Silence?)s, (NonSpeechRegion?)null)));
+            if (_vad != null)
             {
-                if (windowEnd <= cacheTo)
+                foreach (var vadRegion in nonSpeechRegions)
                 {
-                    // Fully contained in the previous window: reuse its transcript wholesale, no
-                    // Whisper at all. The (larger) cache is deliberately left untouched so a later
-                    // candidate starting within it can keep reusing it too.
-                    windowSegmentsAbs = cacheSegmentsAbs
-                        .Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList();
-                    _log?.Invoke($"probe @{FormatTimestamp(start)}: fully reused, no new transcription");
+                    var jingleStart = JingleStart(vadRegion, silences, speechSegments);
+                    if (jingleStart != vadRegion.StartSeconds)
+                        continue;
+                    if (jingleStart < region.FromSeconds || jingleStart >= region.ToSeconds)
+                        continue;
+                    var length = vadRegion.EndSeconds - jingleStart;
+                    if (length < MinJingleObservationSeconds || length > jingleCeilingSeconds)
+                        continue;
+                    candidates.Add((jingleStart, null, vadRegion));
+                }
+                candidates = candidates.OrderBy(c => c.Start).ToList();
+            }
+
+            // Each probe window's end is computed on the fly, right before its probe runs (see
+            // PlanWindowEnd): an overlapping neighbor gets the shared border snapped to a silence
+            // mid-point, moving this window's decode end itself - possibly beyond its natural end -
+            // rather than merely choosing where to stop reusing cache after the fact. Deciding per
+            // window instead of pre-planning the whole list keeps every end consistent with the
+            // probeSeconds in effect at that moment - the adaptive resizes below apply to the very
+            // next window, with no stale bulk plan to recompute and drift away from what earlier
+            // probes actually decoded. durationSeconds is region.ToSeconds, not the file's own
+            // duration, so a window can never spill past this region's own boundary.
+            double WindowEndFor(IReadOnlyList<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)> list, int index)
+                => PlanWindowEnd(list[index].Start,
+                    index + 1 < list.Count ? list[index + 1].Start : null,
+                    probeSeconds, region.ToSeconds, allSilences, nonSpeechRegions, _vad != null);
+
+            // Transcript cache for Pass 2's overlapping-window reuse. Holds the previous probe's full
+            // window transcript in absolute file time, together with the absolute [from, to) span that
+            // transcript actually covers. When the next candidate's window overlaps this span, the
+            // overlapping segments are reused verbatim instead of being re-run through Whisper - only
+            // the fresh tail beyond the planned seam is decoded. The cache-span test below (start
+            // inside [cacheFrom, cacheTo)) doubles as the seam-stitching check: it holds exactly when
+            // the previous window really was decoded up to the seam this window's plan relies on, and
+            // when it does not (e.g. that window was skipped by the adaptive threshold), the probe
+            // falls back to decoding its full window from the candidate start - nothing is ever left
+            // covered by neither decode. cacheTo starts at negative infinity so the very first probe
+            // of this region never counts as an overlap and always does a full transcribe.
+            List<TranscriptSegment> cacheSegmentsAbs = [];
+            var cacheFrom = region.FromSeconds;
+            var cacheTo = double.NegativeInfinity;
+
+            // Probes a single window and appends every chapter mark found in it to `found`. Since
+            // segment timestamps plus the full stored silence list let every detection be
+            // pinpointed independently of the triggering candidate, one window can yield several
+            // marks (e.g. a wide --jingle window covering two transitions) - there is no
+            // one-chapter-per-window early return anymore. Returns the accepted marks in window
+            // order, each with the silence its mark falls into - null when the mark sits on a VAD
+            // region (or nothing at all) - for the --min-silence-length auto tightening, plus
+            // Whisper's confidence for the candidate loop's sequence-skip decision. windowEnd is
+            // the window's *planned* end (see PlanWindowEnd) - possibly snapped away from the
+            // natural start + probeSeconds - while the candidate start stays the semantic anchor
+            // for the phrase-timing rule and progress, both of which are relative to the
+            // triggering silence, not to whatever seam the plan chose.
+            async Task<List<(int Number, Silence? MarkSilence, double Confidence)>> ProbeAsync(
+                (double Start, Silence? Silence, NonSpeechRegion? VadRegion) candidate, double windowEnd)
+            {
+                var start = candidate.Start;
+                ct.ThrowIfCancellationRequested();
+                // Position-based Pass 2 progress (see BeginPhase above); reported here rather than
+                // only in the candidate loop so gap re-probes show their (backwards) position too.
+                work.SetPhaseProgress((long)(start * bytesPerSecond));
+
+                // This window's full transcript in absolute file time, assembled from the previous
+                // window's cache (overlap reuse), a fresh Whisper decode, or a mix. The whole window
+                // is always represented, so nothing a reuse-only "search just the new tail" scheme
+                // would silently drop - e.g. a phrase the previous probe rejected for want of a
+                // qualifying anchor that this window can anchor - is ever lost.
+                //
+                // --verbose logging only ever shows what Whisper actually transcribed just now, at its
+                // own (0-based) timestamps - never the reused portion restated at window-relative time,
+                // which would make every probe look like a fresh full-window decode even when most of it
+                // was cache. Segments used for phrase matching below (`segments`) are unaffected; only
+                // what gets logged changes.
+                List<TranscriptSegment> windowSegmentsAbs;
+                // Set only by the partial-overlap branch below, to the count of reused segments that
+                // precede the fresh tail in windowSegmentsAbs - i.e. the index of the first fresh
+                // segment. Passed to FindPhraseMatches so it can flag a detection that draws on text
+                // from both sides of the cache/fresh boundary (see PhraseMatch.SpansMerge).
+                int? mergeBoundarySegIndex = null;
+
+                // A window whose start falls inside the cached span overlaps the previous one.
+                if (start >= cacheFrom && start < cacheTo)
+                {
+                    if (windowEnd <= cacheTo)
+                    {
+                        // Fully contained in the previous window: reuse its transcript wholesale, no
+                        // Whisper at all. The (larger) cache is deliberately left untouched so a later
+                        // candidate starting within it can keep reusing it too.
+                        windowSegmentsAbs = cacheSegmentsAbs
+                            .Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList();
+                        _log?.Invoke($"probe @{FormatTimestamp(start)}: fully reused, no new transcription");
+                    }
+                    else
+                    {
+                        // Partial overlap: cut between the reused cache and the fresh tail decode.
+                        // The previous window's end was planned as a seam snapped to a silence
+                        // mid-point inside this window (see PlanWindowEnd), so the cache normally
+                        // ends exactly at that seam and this restricted search simply re-finds it
+                        // at distance zero - the fresh decode starts right where the previous
+                        // window's decode stopped, stitching the two transcripts together
+                        // word-safely with nothing re-decoded and nothing dropped. It genuinely
+                        // decides only for overlaps that plan did not anticipate (a probe-window
+                        // resize since the previous window was probed), where it snaps to the best
+                        // seam still covered by the cache; the border fallback means no seam
+                        // exists, which also means no chapter transition sits in the overlap.
+                        var splitPoint = FindOverlapSplitPoint(
+                            start, cacheTo, windowEnd, allSilences, nonSpeechRegions, _vad != null,
+                            allowBeyondBorder: false);
+                        var samples = await _audio.DecodePcmAsync(file, splitPoint,
+                            windowEnd - splitPoint, info.InputDecoder, ct);
+                        var fresh = await TranscribeCountingAsync(samples, ct);
+                        var reused = cacheSegmentsAbs
+                            .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint).ToList();
+                        windowSegmentsAbs = reused.Concat(ShiftSegments(fresh, splitPoint)).ToList();
+                        mergeBoundarySegIndex = reused.Count;
+                        cacheSegmentsAbs = windowSegmentsAbs;
+                        cacheFrom = start;
+                        cacheTo = windowEnd;
+                        LogTranscript($"probe {windowEnd - splitPoint:0.#}s@{FormatTimestamp(splitPoint)} (tail)", fresh);
+                    }
                 }
                 else
                 {
-                    // Partial overlap: cut between the reused cache and the fresh tail decode.
-                    // The previous window's end was planned as a seam snapped to a silence
-                    // mid-point inside this window (see PlanWindowEnd), so the cache normally
-                    // ends exactly at that seam and this restricted search simply re-finds it
-                    // at distance zero - the fresh decode starts right where the previous
-                    // window's decode stopped, stitching the two transcripts together
-                    // word-safely with nothing re-decoded and nothing dropped. It genuinely
-                    // decides only for overlaps that plan did not anticipate (a probe-window
-                    // resize since the previous window was probed), where it snaps to the best
-                    // seam still covered by the cache; the border fallback means no seam
-                    // exists, which also means no chapter transition sits in the overlap.
-                    var splitPoint = FindOverlapSplitPoint(
-                        start, cacheTo, windowEnd, allSilences, nonSpeechRegions, _vad != null,
-                        allowBeyondBorder: false);
-                    var samples = await _audio.DecodePcmAsync(file, splitPoint,
-                        windowEnd - splitPoint, info.InputDecoder, ct);
+                    // No usable overlap - transcribe the whole window. For a fresh DetectAsync run
+                    // this is also where --lang auto resolves the language, once, from the very
+                    // first probe's full samples; a gap-scoped run already has profile set from
+                    // `known`, so this never re-resolves it.
+                    var samples = await _audio.DecodePcmAsync(file, start,
+                        windowEnd - start, info.InputDecoder, ct);
+
+                    if (profile == null)
+                    {
+                        (profile, detectedLanguage, detectedProbability) = await ResolveLanguageAsync(samples, ct);
+                        _transcriber.ChangeLanguage(profile.Language);
+                    }
+
                     var fresh = await TranscribeCountingAsync(samples, ct);
-                    var reused = cacheSegmentsAbs
-                        .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint).ToList();
-                    windowSegmentsAbs = reused.Concat(ShiftSegments(fresh, splitPoint)).ToList();
-                    mergeBoundarySegIndex = reused.Count;
+                    windowSegmentsAbs = ShiftSegments(fresh, start);
                     cacheSegmentsAbs = windowSegmentsAbs;
                     cacheFrom = start;
                     cacheTo = windowEnd;
-                    LogTranscript($"probe {windowEnd - splitPoint:0.#}s@{FormatTimestamp(splitPoint)} (tail)", fresh);
-                }
-            }
-            else
-            {
-                // No usable overlap - transcribe the whole window. This is also where --lang auto
-                // resolves the language, once, from the very first probe's full samples.
-                var samples = await _audio.DecodePcmAsync(file, start,
-                    windowEnd - start, info.InputDecoder, ct);
-
-                if (profile == null)
-                {
-                    (profile, detectedLanguage, detectedProbability) = await ResolveLanguageAsync(samples, ct);
-                    _transcriber.ChangeLanguage(profile.Language);
+                    LogTranscript($"probe {windowEnd - start:0.#}s@{FormatTimestamp(start)}", fresh);
                 }
 
-                var fresh = await TranscribeCountingAsync(samples, ct);
-                windowSegmentsAbs = ShiftSegments(fresh, start);
-                cacheSegmentsAbs = windowSegmentsAbs;
-                cacheFrom = start;
-                cacheTo = windowEnd;
-                LogTranscript($"probe {windowEnd - start:0.#}s@{FormatTimestamp(start)}", fresh);
-            }
+                // Correct segment starts that Whisper timestamped from a leading silence/jingle
+                // before shifting to window-relative time (the cache keeps the raw absolute timings
+                // its reuse math relies on). FindPhraseMatches and the mark-placement math below
+                // then work in window-relative time; the absolute trimmed transcript is kept for
+                // ResolveJingleAnchor's narration-aware jingle edge adjustment.
+                var trimmedAbs = TrimLeadingNonSpeech(
+                    windowSegmentsAbs, allSilences, nonSpeechRegions, _vad != null);
+                var segments = ShiftSegments(trimmedAbs, -start);
 
-            // Correct segment starts that Whisper timestamped from a leading silence/jingle
-            // before shifting to window-relative time (the cache keeps the raw absolute timings
-            // its reuse math relies on). FindPhraseMatches and the mark-placement math below
-            // then work in window-relative time; the absolute trimmed transcript is kept for
-            // ResolveJingleAnchor's narration-aware jingle edge adjustment.
-            var trimmedAbs = TrimLeadingNonSpeech(
-                windowSegmentsAbs, allSilences, nonSpeechRegions, _vad != null);
-            var segments = ShiftSegments(trimmedAbs, -start);
+                var marks = new List<(int Number, Silence? MarkSilence, double Confidence)>();
+                // Window-local continuation of lastNumber: several accepted marks within one
+                // window must each top the previous one, exactly as consecutive windows' marks do.
+                var windowLast = lastNumber ?? 0;
 
-            var marks = new List<(int Number, Silence? MarkSilence, double Confidence)>();
-            // Window-local continuation of lastNumber: several accepted marks within one
-            // window must each top the previous one, exactly as consecutive windows' marks do.
-            var windowLast = lastNumber ?? 0;
-
-            // profile is resolved on the first probe, which is always a full decode (the cache is
-            // empty then), so it is non-null by the time any transcript-reuse branch above runs.
-            foreach (var match in FindPhraseMatches(segments, profile!, mergeBoundarySegIndex))
-            {
-                // A duplicate or regression (an in-text mention like "as seen in chapter
-                // three", or a re-detection of an already-marked chapter) does not end the
-                // window - skip it and keep scanning, so a real announcement later in the
-                // same window is still found.
-                if (match.Number <= windowLast)
-                    continue;
-
-                var phraseAbs = start + match.PhraseStartSeconds;
-                // The silence the mark is placed into (feeds the --min-silence-length auto
-                // tightening; null when the mark sits on a VAD region or on nothing at all)
-                // and, when the VAD pre-pass ran, the region it sits on (feeds
-                // --max-jingle-length auto). Recorded for the auto mechanisms regardless of
-                // --mark-before-jingle - only the final `time` below depends on that option.
-                Silence? markSilence;
-                NonSpeechRegion? markRegion = null;
-                double time;
-                if (_vad != null)
+                // profile is resolved on the first probe, which is always a full decode (the cache is
+                // empty then), so it is non-null by the time any transcript-reuse branch above runs.
+                foreach (var match in FindPhraseMatches(segments, profile!, mergeBoundarySegIndex))
                 {
-                    // Anchor to the VAD jingle region ending at the phrase, not to whichever
-                    // silence triggered this probe: a false in-text pause earlier in the
-                    // previous chapter does not lead that region, so it must not become the anchor
-                    // (which would mark at the pause and feed the auto mechanisms a bogus jingle
-                    // length). See ResolveJingleAnchor. The candidate's own VAD region is used
-                    // directly only when this phrase is plausibly attached to it - a second
-                    // announcement further along the window belongs to a different transition
-                    // and must re-derive its own anchor. When neither a region nor a closer
-                    // silence was found, fall back to this probe's own triggering silence.
-                    var candidateRegion = candidate.VadRegion is { } cvr &&
-                        phraseAbs >= cvr.StartSeconds - JinglePhraseMatchToleranceSeconds &&
-                        phraseAbs <= cvr.EndSeconds + JinglePhraseMatchToleranceSeconds
-                        ? candidate.VadRegion : null;
-                    (markSilence, markRegion) = ResolveJingleAnchor(
-                        phraseAbs, start + match.PhraseEndSeconds, start, allSilences,
-                        nonSpeechRegions, candidateRegion, speechSegments, trimmedAbs);
-                    if (markSilence == null && markRegion == null)
-                        markSilence = candidate.Silence;
-                    time = _options.MarkBeforeJingle
-                        ? ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds)
-                        : Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
-                }
-                else if (match.PhraseStartSeconds <= PhraseLatestStart)
-                {
-                    // The classic shape: the phrase directly follows the triggering silence.
-                    // Without --mark-before-jingle the mark always goes DefaultMarkLeadSeconds
-                    // before the phrase itself, regardless of what precedes it; markSilence is
-                    // still recorded for the --min-silence-length auto tightening.
-                    time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
-                    markSilence = candidate.Silence;
-                }
-                else
-                {
-                    // The phrase sits deeper in the window than the timing rule allows for the
-                    // triggering silence - but with segment timestamps and the full stored
-                    // silence list, it can still be accepted right away (no need to wait for a
-                    // later candidate's own window to re-find it) when a candidate-grade
-                    // silence directly precedes it: the phrase must follow that silence within
-                    // the same 5 s the classic rule grants, and the silence must be at least
-                    // --min-silence-length long - a shorter breath pause in front of an in-text
-                    // mention ("Chapter eight had been hard.") must not qualify as an anchor.
-                    var anchor = FindRealAnchorSilence(start, phraseAbs, allSilences);
-                    if (anchor is not { } a
-                        || phraseAbs - a.EndSeconds > PhraseLatestStart
-                        || a.EndSeconds - a.StartSeconds < _options.MinSilenceSeconds)
+                    // A duplicate or regression (an in-text mention like "as seen in chapter
+                    // three", or a re-detection of an already-marked chapter) does not end the
+                    // window - skip it and keep scanning, so a real announcement later in the
+                    // same window is still found.
+                    if (match.Number <= windowLast)
                         continue;
-                    time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
-                    markSilence = a;
-                }
+                    // A snapped window can, near a gap region's own upper boundary, reach right up
+                    // against the next already-confirmed chapter's own announcement - reject a
+                    // match at or above it outright so gap recovery can never displace a chapter
+                    // --verify already trusts. Never set for the whole-file region (its
+                    // UpperNumber is always null), so this never fires for a fresh DetectAsync run.
+                    if (region.UpperNumber is { } upperBound && match.Number >= upperBound)
+                        continue;
 
-                if (match.SpansMerge)
-                    _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
-                                 "merge from Pass 2's overlap reuse - worth a spot check");
-
-                found.Add(new DetectedChapter(match.Number, time, match.Confidence));
-                marks.Add((match.Number, markSilence, match.Confidence));
-                RecordChapterStats(match.Number, markSilence, markRegion, phraseAbs);
-                windowLast = match.Number;
-                var (highest, missingNumbers) = ChapterProgress(found);
-                work.HighestChapter = highest;
-                work.MissingChapters = missingNumbers.Count;
-                _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)} " +
-                             $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
-                             MissingNote(missingNumbers));
-
-                if (_vad != null && _options.AutoMaxJingle && found.Count > 1)
-                {
-                    // found.Count > 1 means this is at least the second mark found, so its
-                    // anchor is a real inter-chapter jingle - not the intro-to-chapter-1 gap,
-                    // which can easily run longer (or shorter) than a book's regular jingles
-                    // and would otherwise size the window off a one-off observation before
-                    // any real jingle has even been seen. Same reasoning as the analogous
-                    // --min-silence-length auto tightening in the candidate loop below.
-                    // The jingle length is measured from the silence/region the mark actually
-                    // falls into (see above) - using the raw offset from this probe's own
-                    // window start would inflate the observation whenever a false, earlier
-                    // in-text pause was what actually triggered this probe. When the anchor is
-                    // a VAD region (no leading silence), the length runs from the region start
-                    // to the phrase, clipped at the region end: the announcement is often spoken
-                    // inside the jingle (so the phrase precedes the region end), and the region
-                    // end can itself be inflated when ComputeNonSpeechRegions' short-speech-gap
-                    // merge swallowed that announcement - either way the phrase bounds the jingle.
-                    var observedLength = markSilence is { } ras
-                        ? phraseAbs - ras.EndSeconds
-                        : markRegion is { } rvr
-                            ? Math.Min(rvr.EndSeconds, phraseAbs) - rvr.StartSeconds
-                            : phraseAbs - start;
-                    if (observedLength >= MinJingleObservationSeconds)
+                    var phraseAbs = start + match.PhraseStartSeconds;
+                    // The silence the mark is placed into (feeds the --min-silence-length auto
+                    // tightening; null when the mark sits on a VAD region or on nothing at all)
+                    // and, when the VAD pre-pass ran, the region it sits on (feeds
+                    // --max-jingle-length auto). Recorded for the auto mechanisms regardless of
+                    // --mark-before-jingle - only the final `time` below depends on that option.
+                    Silence? markSilence;
+                    NonSpeechRegion? markRegion = null;
+                    double time;
+                    if (_vad != null)
                     {
-                        // The window this observation asks for; the adapted window is the
-                        // running maximum of these (monotonically increasing after the first
-                        // set - see JingleObservationSafetyFactor), capped at the original
-                        // ceiling so an outlier can never make the window wider than what
-                        // --max-jingle-length was given (or its 45 s default) would allow.
-                        // During a gap re-probe only the running maximum is updated;
-                        // probeSeconds stays at the ceiling until the re-probe is done.
-                        var proposed = Math.Min(jingleCeilingSeconds,
-                            JingleObservationSafetyFactor * observedLength + PhraseMarginSeconds);
-                        adaptedWindowSeconds = Math.Max(adaptedWindowSeconds ?? proposed, proposed);
-                        if (!reprobing && adaptedWindowSeconds.Value != probeSeconds)
-                        {
-                            probeSeconds = adaptedWindowSeconds.Value;
-                            _log?.Invoke($"jingle probe window resized to {probeSeconds:0.#} s");
-                        }
+                        // Anchor to the VAD jingle region ending at the phrase, not to whichever
+                        // silence triggered this probe: a false in-text pause earlier in the
+                        // previous chapter does not lead that region, so it must not become the anchor
+                        // (which would mark at the pause and feed the auto mechanisms a bogus jingle
+                        // length). See ResolveJingleAnchor. The candidate's own VAD region is used
+                        // directly only when this phrase is plausibly attached to it - a second
+                        // announcement further along the window belongs to a different transition
+                        // and must re-derive its own anchor. When neither a region nor a closer
+                        // silence was found, fall back to this probe's own triggering silence.
+                        var candidateRegion = candidate.VadRegion is { } cvr &&
+                            phraseAbs >= cvr.StartSeconds - JinglePhraseMatchToleranceSeconds &&
+                            phraseAbs <= cvr.EndSeconds + JinglePhraseMatchToleranceSeconds
+                            ? candidate.VadRegion : null;
+                        (markSilence, markRegion) = ResolveJingleAnchor(
+                            phraseAbs, start + match.PhraseEndSeconds, start, allSilences,
+                            nonSpeechRegions, candidateRegion, speechSegments, trimmedAbs);
+                        if (markSilence == null && markRegion == null)
+                            markSilence = candidate.Silence;
+                        time = _options.MarkBeforeJingle
+                            ? ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds)
+                            : Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
                     }
-                }
-            }
-            return marks;
-        }
-
-        // Adaptive threshold state (--min-silence-length auto only; otherwise every candidate
-        // is probed unconditionally, same as before this feature existed). Probing proceeds
-        // unthrottled until the second mark is found (its anchor silence is the first real
-        // inter-chapter break - the silence before the first mark is typically the intro/title
-        // silence, often longer, so it must not be used to tighten). From there, each mark's
-        // anchor silence proposes AdaptiveTightenFactor times its own length, and the adapted
-        // threshold is the running *minimum* of those proposals - the first one raises it from
-        // the floor, every later one can only lower it (see AdaptiveTightenFactor for why a
-        // raise is never safe). A sequence gap re-probes everything skipped since the last
-        // mark unconditionally and folds the gap marks' own anchor silences into the running
-        // minimum, so gap-filling stays inside Pass 2 where possible and the threshold can
-        // never again sit above a silence that has proven to precede a chapter.
-        //
-        // skippedSinceLastMark also collects the windows the overlap-sequence skip below
-        // passes over (in every mode, not just auto), so the same gap re-probe covers the
-        // unlikely case of a skipped sequence window having hidden a second transition.
-        double? adaptedThresholdSeconds = null;
-        var threshold = _options.MinSilenceSeconds;
-        var skippedSinceLastMark = new List<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)>();
-
-        for (var ci = 0; ci < candidates.Count; ci++)
-        {
-            var candidate = candidates[ci];
-            work.SetPhaseProgress((long)(candidate.Start * bytesPerSecond));
-
-            if (_options.AutoMinSilence && candidate.Silence is { } candidateSilence &&
-                candidateSilence.EndSeconds - candidateSilence.StartSeconds < threshold)
-            {
-                skippedSinceLastMark.Add(candidate);
-                continue;
-            }
-
-            // A VAD candidate qualified against the probe window at merge time, but that
-            // window can since have narrowed (--max-jingle-length auto) once a baseline is
-            // known - recheck here so probing keeps skipping regions too long to be this
-            // book's jingle, same as the merge-time filter intends after the baseline exists.
-            if (candidate.VadRegion is { } region && region.EndSeconds - candidate.Start > probeSeconds)
-            {
-                skippedSinceLastMark.Add(candidate);
-                continue;
-            }
-
-            var windowEnd = WindowEndFor(candidates, ci);
-            var probeMarks = await ProbeAsync(candidate, windowEnd);
-
-            foreach (var (n, markSilence, _) in probeMarks)
-            {
-                // The gap re-probe runs regardless of --min-silence-length mode: with the
-                // overlap-sequence skip below, candidates can be skipped even with an explicit
-                // threshold, and a sequence gap is the signal that one of them hid a chapter.
-                if (lastNumber is { } previousNumber && n > previousNumber + 1 && skippedSinceLastMark.Count > 0)
-                {
-                    _log?.Invoke($"sequence gap between chapter {previousNumber} and {n}, " +
-                                 $"re-probing {skippedSinceLastMark.Count} skipped candidate(s) unconditionally");
-                    if (_vad != null && _options.AutoMaxJingle && probeSeconds != jingleCeilingSeconds)
+                    else if (match.PhraseStartSeconds <= PhraseLatestStart)
                     {
-                        probeSeconds = jingleCeilingSeconds;
-                        _log?.Invoke($"jingle probe window reset to {probeSeconds:0.#} s for the re-probe");
+                        // The classic shape: the phrase directly follows the triggering silence.
+                        // Without --mark-before-jingle the mark always goes DefaultMarkLeadSeconds
+                        // before the phrase itself, regardless of what precedes it; markSilence is
+                        // still recorded for the --min-silence-length auto tightening.
+                        time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
+                        markSilence = candidate.Silence;
                     }
-                    reprobing = true;
-                    // The skipped candidates form their own little window sequence at the
-                    // (possibly ceiling-reset) width, each end computed on the fly against its
-                    // next skipped neighbor so adjacent re-probe windows get snapped shared
-                    // borders too. probeSeconds cannot change mid-re-probe (the resize inside
-                    // ProbeAsync is gated on !reprobing), so consecutive ends stay consistent
-                    // for the whole sequence.
-                    for (var si = 0; si < skippedSinceLastMark.Count; si++)
+                    else
                     {
-                        var gapMarks = await ProbeAsync(skippedSinceLastMark[si], WindowEndFor(skippedSinceLastMark, si));
-                        if (!_options.AutoMinSilence)
+                        // The phrase sits deeper in the window than the timing rule allows for the
+                        // triggering silence - but with segment timestamps and the full stored
+                        // silence list, it can still be accepted right away (no need to wait for a
+                        // later candidate's own window to re-find it) when a candidate-grade
+                        // silence directly precedes it: the phrase must follow that silence within
+                        // the same 5 s the classic rule grants, and the silence must be at least
+                        // --min-silence-length long - a shorter breath pause in front of an in-text
+                        // mention ("Chapter eight had been hard.") must not qualify as an anchor.
+                        var anchor = FindRealAnchorSilence(start, phraseAbs, allSilences);
+                        if (anchor is not { } a
+                            || phraseAbs - a.EndSeconds > PhraseLatestStart
+                            || a.EndSeconds - a.StartSeconds < _options.MinSilenceSeconds)
                             continue;
-                        // A gap mark's anchor silence was, by definition, short enough to have
-                        // been skipped - fold it into the running minimum so the threshold can
-                        // never again sit above it. Only genuine gap-fillers count; a duplicate
-                        // or re-detection of this window's own mark surfacing in a re-probe
-                        // must not lower anything.
-                        foreach (var gapMark in gapMarks)
+                        time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
+                        markSilence = a;
+                    }
+
+                    if (match.SpansMerge)
+                        _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
+                                     "merge from Pass 2's overlap reuse - worth a spot check");
+
+                    found.Add(new DetectedChapter(match.Number, time, match.Confidence));
+                    marks.Add((match.Number, markSilence, match.Confidence));
+                    RecordChapterStats(match.Number, markSilence, markRegion, phraseAbs);
+                    windowLast = match.Number;
+                    var (highest, missingNumbers) = ChapterProgress(found);
+                    work.HighestChapter = highest;
+                    work.MissingChapters = missingNumbers.Count;
+                    _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)} " +
+                                 $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
+                                 MissingNote(missingNumbers));
+
+                    if (_vad != null && _options.AutoMaxJingle && found.Count > 1)
+                    {
+                        // found.Count > 1 means this is at least the second mark found overall
+                        // (including any confirmedSeed entries), so its anchor is a real
+                        // inter-chapter jingle - not the intro-to-chapter-1 gap, which can easily
+                        // run longer (or shorter) than a book's regular jingles and would
+                        // otherwise size the window off a one-off observation before any real
+                        // jingle has even been seen. Same reasoning as the analogous
+                        // --min-silence-length auto tightening in the candidate loop below.
+                        // The jingle length is measured from the silence/region the mark actually
+                        // falls into (see above) - using the raw offset from this probe's own
+                        // window start would inflate the observation whenever a false, earlier
+                        // in-text pause was what actually triggered this probe. When the anchor is
+                        // a VAD region (no leading silence), the length runs from the region start
+                        // to the phrase, clipped at the region end: the announcement is often spoken
+                        // inside the jingle (so the phrase precedes the region end), and the region
+                        // end can itself be inflated when ComputeNonSpeechRegions' short-speech-gap
+                        // merge swallowed that announcement - either way the phrase bounds the jingle.
+                        var observedLength = markSilence is { } ras
+                            ? phraseAbs - ras.EndSeconds
+                            : markRegion is { } rvr
+                                ? Math.Min(rvr.EndSeconds, phraseAbs) - rvr.StartSeconds
+                                : phraseAbs - start;
+                        if (observedLength >= MinJingleObservationSeconds)
                         {
-                            if (gapMark.Number > previousNumber && gapMark.Number < n &&
-                                gapMark.MarkSilence is { } gapSilence)
+                            // The window this observation asks for; the adapted window is the
+                            // running maximum of these (monotonically increasing after the first
+                            // set - see JingleObservationSafetyFactor), capped at the original
+                            // ceiling so an outlier can never make the window wider than what
+                            // --max-jingle-length was given (or its 45 s default) would allow.
+                            // During a gap re-probe only the running maximum is updated;
+                            // probeSeconds stays at the ceiling until the re-probe is done.
+                            var proposed = Math.Min(jingleCeilingSeconds,
+                                JingleObservationSafetyFactor * observedLength + PhraseMarginSeconds);
+                            adaptedWindowSeconds = Math.Max(adaptedWindowSeconds ?? proposed, proposed);
+                            if (!reprobing && adaptedWindowSeconds.Value != probeSeconds)
                             {
-                                adaptedThresholdSeconds = Math.Min(
-                                    adaptedThresholdSeconds ?? double.MaxValue,
-                                    Math.Max(_options.MinSilenceSeconds,
-                                        AdaptiveTightenFactor * (gapSilence.EndSeconds - gapSilence.StartSeconds)));
+                                probeSeconds = adaptedWindowSeconds.Value;
+                                _log?.Invoke($"jingle probe window resized to {probeSeconds:0.#} s");
                             }
                         }
                     }
-                    reprobing = false;
-                    // Re-probing done: bring the jingle window back down from the ceiling to the
-                    // adapted value, including anything the re-probed marks just taught us.
-                    if (_vad != null && _options.AutoMaxJingle &&
-                        adaptedWindowSeconds is { } restoredWindow && probeSeconds != restoredWindow)
-                    {
-                        probeSeconds = restoredWindow;
-                        _log?.Invoke($"jingle probe window restored to {probeSeconds:0.#} s");
-                    }
                 }
-
-                if (_options.AutoMinSilence)
-                {
-                    // markSilence, when present, is the silence the mark actually falls into
-                    // (resolved inside ProbeAsync - the triggering silence for a classic
-                    // detection, the pinpointed anchor otherwise). lastNumber.HasValue means
-                    // this is at least the second mark found, so that silence is a real
-                    // inter-chapter break - not the intro-to-chapter-1 silence, which is
-                    // routinely longer than that and would otherwise over-tighten the
-                    // threshold from the very first mark. Never below the MinSilenceSeconds
-                    // floor: Pass 1 never reports candidates shorter than the floor in the
-                    // first place, so a threshold below it would skip nothing at all.
-                    if (lastNumber.HasValue && markSilence is { } anchorSilence)
-                    {
-                        var proposed = Math.Max(_options.MinSilenceSeconds,
-                            AdaptiveTightenFactor * (anchorSilence.EndSeconds - anchorSilence.StartSeconds));
-                        adaptedThresholdSeconds = Math.Min(adaptedThresholdSeconds ?? proposed, proposed);
-                    }
-
-                    // Only announce an actual change; the first set is a raise from the floor
-                    // ("tightened"), everything after can only ever be a lowering.
-                    var newThreshold = adaptedThresholdSeconds ?? _options.MinSilenceSeconds;
-                    if (newThreshold != threshold)
-                        _log?.Invoke($"threshold {(newThreshold > threshold ? "tightened" : "lowered")} " +
-                                     $"to {newThreshold:0.##} s after chapter {n}");
-                    threshold = newThreshold;
-                }
-                skippedSinceLastMark.Clear();
-                lastNumber = n;
+                return marks;
             }
 
-            // A confident mark settles its whole overlapping window sequence (consecutive
-            // candidates whose windows each overlap the next): the remaining windows of the
-            // sequence cover the same continuous stretch of audio around the found
-            // transition, and a single sequence spanning two chapter transitions is highly
-            // unlikely - so they are skipped outright instead of probed. They still go into
-            // skippedSinceLastMark, so the gap re-probe above recovers the unlikely case
-            // after all (and Pass 3 remains the final net). A low-confidence mark does not
-            // skip anything: the remaining windows keep their chance to re-detect the
-            // transition it may have gotten wrong. The chain starts from this window's
-            // *actual* probed end - a mid-probe resize (--max-jingle-length auto) must not
-            // retroactively pretend the window was narrower than what was really decoded -
-            // while the links beyond it use ends computed at the current width, the same
-            // ends those windows would be probed with.
-            if (probeMarks.Count > 0 && probeMarks[^1].Confidence >= LowConfidenceThreshold)
+            // Adaptive threshold state (--min-silence-length auto only; otherwise every candidate
+            // is probed unconditionally, same as before this feature existed). Probing proceeds
+            // unthrottled until the second mark is found (its anchor silence is the first real
+            // inter-chapter break - the silence before the first mark is typically the intro/title
+            // silence, often longer, so it must not be used to tighten). From there, each mark's
+            // anchor silence proposes AdaptiveTightenFactor times its own length, and the adapted
+            // threshold is the running *minimum* of those proposals - the first one raises it from
+            // the floor, every later one can only lower it (see AdaptiveTightenFactor for why a
+            // raise is never safe). A sequence gap re-probes everything skipped since the last
+            // mark unconditionally and folds the gap marks' own anchor silences into the running
+            // minimum, so gap-filling stays inside Pass 2 where possible and the threshold can
+            // never again sit above a silence that has proven to precede a chapter.
+            //
+            // skippedSinceLastMark also collects the windows the overlap-sequence skip below
+            // passes over (in every mode, not just auto), so the same gap re-probe covers the
+            // unlikely case of a skipped sequence window having hidden a second transition.
+            double? adaptedThresholdSeconds = null;
+            var threshold = _options.MinSilenceSeconds;
+            var skippedSinceLastMark = new List<(double Start, Silence? Silence, NonSpeechRegion? VadRegion)>();
+
+            for (var ci = 0; ci < candidates.Count; ci++)
             {
-                var skipTo = ci;
-                var reach = windowEnd;
-                while (skipTo + 1 < candidates.Count && reach > candidates[skipTo + 1].Start)
+                var candidate = candidates[ci];
+                work.SetPhaseProgress((long)(candidate.Start * bytesPerSecond));
+
+                if (_options.AutoMinSilence && candidate.Silence is { } candidateSilence &&
+                    candidateSilence.EndSeconds - candidateSilence.StartSeconds < threshold)
                 {
-                    skipTo++;
-                    reach = WindowEndFor(candidates, skipTo);
+                    skippedSinceLastMark.Add(candidate);
+                    continue;
                 }
-                if (skipTo > ci)
+
+                // A VAD candidate qualified against the probe window at merge time, but that
+                // window can since have narrowed (--max-jingle-length auto) once a baseline is
+                // known - recheck here so probing keeps skipping regions too long to be this
+                // book's jingle, same as the merge-time filter intends after the baseline exists.
+                if (candidate.VadRegion is { } candidateVadRegion &&
+                    candidateVadRegion.EndSeconds - candidate.Start > probeSeconds)
                 {
-                    _log?.Invoke($"chapter {lastNumber} settles current overlapping window " +
-                                 $"sequence - skipping its remaining {skipTo - ci} window(s)");
-                    for (var si = ci + 1; si <= skipTo; si++)
-                        skippedSinceLastMark.Add(candidates[si]);
-                    ci = skipTo;
+                    skippedSinceLastMark.Add(candidate);
+                    continue;
+                }
+
+                var windowEnd = WindowEndFor(candidates, ci);
+                var probeMarks = await ProbeAsync(candidate, windowEnd);
+
+                foreach (var (n, markSilence, _) in probeMarks)
+                {
+                    // The gap re-probe runs regardless of --min-silence-length mode: with the
+                    // overlap-sequence skip below, candidates can be skipped even with an explicit
+                    // threshold, and a sequence gap is the signal that one of them hid a chapter.
+                    if (lastNumber is { } previousNumber && n > previousNumber + 1 && skippedSinceLastMark.Count > 0)
+                    {
+                        _log?.Invoke($"sequence gap between chapter {previousNumber} and {n}, " +
+                                     $"re-probing {skippedSinceLastMark.Count} skipped candidate(s) unconditionally");
+                        if (_vad != null && _options.AutoMaxJingle && probeSeconds != jingleCeilingSeconds)
+                        {
+                            probeSeconds = jingleCeilingSeconds;
+                            _log?.Invoke($"jingle probe window reset to {probeSeconds:0.#} s for the re-probe");
+                        }
+                        reprobing = true;
+                        // The skipped candidates form their own little window sequence at the
+                        // (possibly ceiling-reset) width, each end computed on the fly against its
+                        // next skipped neighbor so adjacent re-probe windows get snapped shared
+                        // borders too. probeSeconds cannot change mid-re-probe (the resize inside
+                        // ProbeAsync is gated on !reprobing), so consecutive ends stay consistent
+                        // for the whole sequence.
+                        for (var si = 0; si < skippedSinceLastMark.Count; si++)
+                        {
+                            var gapMarks = await ProbeAsync(skippedSinceLastMark[si], WindowEndFor(skippedSinceLastMark, si));
+                            if (!_options.AutoMinSilence)
+                                continue;
+                            // A gap mark's anchor silence was, by definition, short enough to have
+                            // been skipped - fold it into the running minimum so the threshold can
+                            // never again sit above it. Only genuine gap-fillers count; a duplicate
+                            // or re-detection of this window's own mark surfacing in a re-probe
+                            // must not lower anything.
+                            foreach (var gapMark in gapMarks)
+                            {
+                                if (gapMark.Number > previousNumber && gapMark.Number < n &&
+                                    gapMark.MarkSilence is { } gapSilence)
+                                {
+                                    adaptedThresholdSeconds = Math.Min(
+                                        adaptedThresholdSeconds ?? double.MaxValue,
+                                        Math.Max(_options.MinSilenceSeconds,
+                                            AdaptiveTightenFactor * (gapSilence.EndSeconds - gapSilence.StartSeconds)));
+                                }
+                            }
+                        }
+                        reprobing = false;
+                        // Re-probing done: bring the jingle window back down from the ceiling to the
+                        // adapted value, including anything the re-probed marks just taught us.
+                        if (_vad != null && _options.AutoMaxJingle &&
+                            adaptedWindowSeconds is { } restoredWindow && probeSeconds != restoredWindow)
+                        {
+                            probeSeconds = restoredWindow;
+                            _log?.Invoke($"jingle probe window restored to {probeSeconds:0.#} s");
+                        }
+                    }
+
+                    if (_options.AutoMinSilence)
+                    {
+                        // markSilence, when present, is the silence the mark actually falls into
+                        // (resolved inside ProbeAsync - the triggering silence for a classic
+                        // detection, the pinpointed anchor otherwise). lastNumber.HasValue means
+                        // this is at least the second mark found, so that silence is a real
+                        // inter-chapter break - not the intro-to-chapter-1 silence, which is
+                        // routinely longer than that and would otherwise over-tighten the
+                        // threshold from the very first mark. Never below the MinSilenceSeconds
+                        // floor: Pass 1 never reports candidates shorter than the floor in the
+                        // first place, so a threshold below it would skip nothing at all.
+                        if (lastNumber.HasValue && markSilence is { } anchorSilence)
+                        {
+                            var proposed = Math.Max(_options.MinSilenceSeconds,
+                                AdaptiveTightenFactor * (anchorSilence.EndSeconds - anchorSilence.StartSeconds));
+                            adaptedThresholdSeconds = Math.Min(adaptedThresholdSeconds ?? proposed, proposed);
+                        }
+
+                        // Only announce an actual change; the first set is a raise from the floor
+                        // ("tightened"), everything after can only ever be a lowering.
+                        var newThreshold = adaptedThresholdSeconds ?? _options.MinSilenceSeconds;
+                        if (newThreshold != threshold)
+                            _log?.Invoke($"threshold {(newThreshold > threshold ? "tightened" : "lowered")} " +
+                                         $"to {newThreshold:0.##} s after chapter {n}");
+                        threshold = newThreshold;
+                    }
+                    skippedSinceLastMark.Clear();
+                    lastNumber = n;
+                }
+
+                // A confident mark settles its whole overlapping window sequence (consecutive
+                // candidates whose windows each overlap the next): the remaining windows of the
+                // sequence cover the same continuous stretch of audio around the found
+                // transition, and a single sequence spanning two chapter transitions is highly
+                // unlikely - so they are skipped outright instead of probed. They still go into
+                // skippedSinceLastMark, so the gap re-probe above recovers the unlikely case
+                // after all (and Pass 3 remains the final net). A low-confidence mark does not
+                // skip anything: the remaining windows keep their chance to re-detect the
+                // transition it may have gotten wrong. The chain starts from this window's
+                // *actual* probed end - a mid-probe resize (--max-jingle-length auto) must not
+                // retroactively pretend the window was narrower than what was really decoded -
+                // while the links beyond it use ends computed at the current width, the same
+                // ends those windows would be probed with.
+                if (probeMarks.Count > 0 && probeMarks[^1].Confidence >= LowConfidenceThreshold)
+                {
+                    var skipTo = ci;
+                    var reach = windowEnd;
+                    while (skipTo + 1 < candidates.Count && reach > candidates[skipTo + 1].Start)
+                    {
+                        skipTo++;
+                        reach = WindowEndFor(candidates, skipTo);
+                    }
+                    if (skipTo > ci)
+                    {
+                        _log?.Invoke($"chapter {lastNumber} settles current overlapping window " +
+                                     $"sequence - skipping its remaining {skipTo - ci} window(s)");
+                        for (var si = ci + 1; si <= skipTo; si++)
+                            skippedSinceLastMark.Add(candidates[si]);
+                        ci = skipTo;
+                    }
                 }
             }
         }
@@ -969,7 +1076,10 @@ public sealed class ChapterDetector
         _log?.Invoke("Pass 2 finished");
 
         // Pass 3 (only when needed): resolve sequence gaps by fully transcribing the regions
-        // between mismatched markings (and before the first marking, if it is not chapter 1).
+        // between mismatched markings (and before the first marking, if it is not chapter 1). This
+        // is the same, unmodified mechanism regardless of how `chapters` was seeded - a
+        // gap-scoped DetectGapsAsync run's confirmed-plus-region-2 chapters are covered by it
+        // exactly like a fresh DetectAsync run's own chapters would be.
         var gaps = FindGaps(chapters, info.DurationSeconds);
         if (gaps.Count > 0)
         {
@@ -996,6 +1106,31 @@ public sealed class ChapterDetector
         }
         if (gaps.Count > 0)
             _log?.Invoke("Pass 3 finished");
+
+        // Trailing fallback: only for a gap-scoped DetectGapsAsync run whose last checkable
+        // --verify marking was unconfirmed. FindGaps above has no way to notice a still-missing
+        // trailing chapter (nothing bounds it from above to compare against), so this is the one
+        // safety net that is not already covered by the untouched Pass 3 tail just above.
+        if (trailingFallback is { } tf)
+        {
+            var stillMissing = tf.Targets.Where(n => !chapters.Any(c => c.Number == n)).ToList();
+            if (stillMissing.Count > 0)
+            {
+                _log?.Invoke($"transcribing suspicious trailing region " +
+                             $"{FormatTimestamp(tf.From)} - {FormatTimestamp(info.DurationSeconds)}");
+                work.BeginPhase("Pass 3", (long)((info.DurationSeconds - tf.From) * bytesPerSecond));
+                if (!ReferenceEquals(_pass3Transcriber, _transcriber))
+                    _pass3Transcriber.ChangeLanguage(profile!.Language);
+                var fills = await TranscribeRegionAsync(file, info, tf.From, info.DurationSeconds,
+                    stillMissing, allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
+                    profile!, chapters, ct);
+                chapters = Normalize(chapters.Concat(fills).ToList());
+                var (highest, missingNumbers) = ChapterProgress(chapters);
+                work.HighestChapter = highest;
+                work.MissingChapters = missingNumbers.Count;
+                _log?.Invoke("Pass 3 finished (trailing)");
+            }
+        }
 
         // Final consistency check: internal gaps that remain are fatal for this file.
         var missing = new List<int>();
@@ -1063,6 +1198,8 @@ public sealed class ChapterDetector
         // skipping an earlier marking whose title is only parseable in the book's actual
         // language. Mirrors DetectAsync's own very-first-probe language resolution.
         LanguageProfile? profile = _options.AutoLanguage ? null : _options.DefaultProfile;
+        string? detectedLanguage = null;
+        var detectedProbability = 0.0;
         if (profile != null)
             _transcriber.ChangeLanguage(profile.Language);
         else
@@ -1074,7 +1211,7 @@ public sealed class ChapterDetector
                 if (windowLen <= 0)
                     continue;
                 var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
-                (profile, _, _) = await ResolveLanguageAsync(samples, ct);
+                (profile, detectedLanguage, detectedProbability) = await ResolveLanguageAsync(samples, ct);
                 _transcriber.ChangeLanguage(profile.Language);
                 break;
             }
@@ -1086,6 +1223,11 @@ public sealed class ChapterDetector
         // detections, so the same ChapterProgress/bar display applies: the highest confirmed
         // number, with any lower unconfirmed one shown as a "(-N)" gap beneath it.
         var confirmedChapters = new List<DetectedChapter>();
+        // Every marking's own outcome, in file order - the input BuildGapRegions groups into
+        // DetectGapsAsync's recovery regions; a marking skipped below (empty window or no
+        // parseable number) is still recorded, as null/false, so a run of unconfirmed markings on
+        // either side of it is not wrongly treated as broken by an unrelated, unparseable one.
+        var markings = new List<VerifyMarkingOutcome>();
 
         work.BeginPhase("Verify", info.ExistingChapters.Count);
         foreach (var marking in info.ExistingChapters)
@@ -1096,6 +1238,7 @@ public sealed class ChapterDetector
             var windowLen = Math.Min(VerifyWindowSeconds, info.DurationSeconds - windowStart);
             if (windowLen <= 0)
             {
+                markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
                 work.Advance(1);
                 continue;
             }
@@ -1105,6 +1248,7 @@ public sealed class ChapterDetector
             // order - is either this marking or one before it.
             if (!TryParseExpectedNumber(marking.Title, profile!.Language, out var expected))
             {
+                markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
                 work.Advance(1);
                 continue;
             }
@@ -1121,6 +1265,7 @@ public sealed class ChapterDetector
             _log?.Invoke(confirmed
                 ? $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} confirmed"
                 : $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
+            markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, expected, confirmed));
             if (!confirmed)
                 failed++;
             else
@@ -1131,7 +1276,8 @@ public sealed class ChapterDetector
             work.Advance(1);
         }
 
-        return new VerifyResult(failed == 0, checkedCount, failed);
+        return new VerifyResult(failed == 0, checkedCount, failed, confirmedChapters, markings,
+            profile ?? _options.DefaultProfile, detectedLanguage, detectedProbability);
     }
 
     /// <summary>
@@ -1248,6 +1394,44 @@ public sealed class ChapterDetector
     /// <param name="FromSeconds">Region start.</param>
     /// <param name="ToSeconds">Region end.</param>
     internal readonly record struct GapRegion(double FromSeconds, double ToSeconds);
+
+    /// <summary>One region <see cref="DetectCoreAsync"/> runs its own, independent Pass 2 pass
+    /// over - the whole file for a fresh <see cref="DetectAsync"/> run, or a single gap-scoped
+    /// stretch for <see cref="DetectGapsAsync"/>. Bounds every aspect of that pass: candidates
+    /// are built only from silences/VAD regions starting inside [<paramref name="FromSeconds"/>,
+    /// <paramref name="ToSeconds"/>), window ends are clamped to <paramref name="ToSeconds"/>
+    /// (see <see cref="PlanWindowEnd"/>), and the running chapter-number state seeds fresh from
+    /// <paramref name="LowerNumber"/>/<paramref name="UpperNumber"/> rather than carrying over
+    /// from any other region.</summary>
+    /// <param name="FromSeconds">Region start; candidates/decodes never precede it.</param>
+    /// <param name="ToSeconds">Region end; candidates/decodes never reach past it.</param>
+    /// <param name="LowerNumber">The chapter number already confirmed to precede this region, or 0
+    /// when nothing precedes it (a from-file-start region). Seeds Pass 2's running "last accepted
+    /// number" so a match must still exceed it to be accepted - but, unlike the whole-file case,
+    /// never as the seed for the intro-transition exemption (see <see cref="LowerNumber"/>'s use
+    /// in <see cref="DetectCoreAsync"/>: a match count already primed by <paramref
+    /// name="LowerNumber"/> &gt; 0 is not the "chapter 1" case even when this is the very first
+    /// match Pass 2 makes in this region).</param>
+    /// <param name="UpperNumber">The chapter number already confirmed to follow this region, or
+    /// null when nothing does (this region reaches to the file end). A match at or above it is
+    /// rejected outright - guarding against a snapped probe window spilling into the next known
+    /// chapter's own announcement and displacing it.</param>
+    internal readonly record struct DetectionRegion(
+        double FromSeconds, double ToSeconds, int LowerNumber, int? UpperNumber);
+
+    /// <summary>The regions and, when the last checkable marking in file order is unconfirmed, the
+    /// trailing recovery target <see cref="DetectCoreAsync"/> needs - see <see
+    /// cref="BuildGapRegions"/>.</summary>
+    /// <param name="Regions">One region per run of consecutive unconfirmed markings.</param>
+    /// <param name="TrailingFrom">Start of the trailing region (the last confirmed/file-start
+    /// point before it), or null when the file's last checkable marking was confirmed.</param>
+    /// <param name="TrailingTargets">The expected numbers of the unconfirmed markings in the
+    /// trailing run, in file order; empty when <paramref name="TrailingFrom"/> is null. Unlike an
+    /// interior region's <see cref="DetectionRegion.UpperNumber"/>-bounded range, these are taken
+    /// verbatim from the markings themselves since there is no following confirmed chapter to
+    /// derive a contiguous range from.</param>
+    internal readonly record struct GapRecoveryPlan(
+        List<DetectionRegion> Regions, double? TrailingFrom, List<int> TrailingTargets);
 
     /// <summary>
     /// A gap between two consecutive <see cref="SpeechSegment"/>s found by the VAD pre-pass -
@@ -1705,6 +1889,65 @@ public sealed class ChapterDetector
         for (var n = lower + 1; n < upper; n++)
             missing.Add(n);
         return missing;
+    }
+
+    /// <summary>
+    /// Groups a --verify run's marking outcomes into the regions <see cref="DetectGapsAsync"/>
+    /// re-probes: one <see cref="DetectionRegion"/> per run of consecutive unconfirmed markings
+    /// (a single unconfirmed marking is its own run of one), bounded below by the nearest
+    /// preceding marking and above by the nearest following one - confirmed or not, since an
+    /// unparseable-title marking (<see cref="VerifyMarkingOutcome.ExpectedNumber"/> null) carries
+    /// no boundary information and is skipped entirely rather than breaking a run. A run reaching
+    /// the last checkable marking has no following bound; it becomes the trailing target instead
+    /// of a region with a null <see cref="DetectionRegion.UpperNumber"/> precisely because there
+    /// is no generic mechanism (unlike <see cref="FindGaps"/>'s interior gaps, safety-netted by
+    /// the existing Pass 3 tail regardless of how <c>chapters</c> was seeded) that would otherwise
+    /// notice a still-missing trailing chapter - nothing bounds it from above to compare against.
+    /// Internal for unit testing.
+    /// </summary>
+    /// <param name="markings">A --verify run's per-marking outcomes, in file order (see
+    /// <see cref="VerifyResult.Markings"/>).</param>
+    /// <param name="duration">Total play time; both a trailing region's and the trailing target's
+    /// own upper bound.</param>
+    internal static GapRecoveryPlan BuildGapRegions(IReadOnlyList<VerifyMarkingOutcome> markings, double duration)
+    {
+        var checkable = markings.Where(m => m.ExpectedNumber is not null)
+            .OrderBy(m => m.StartSeconds).ToList();
+        var regions = new List<DetectionRegion>();
+        double? trailingFrom = null;
+        var trailingTargets = new List<int>();
+        for (var i = 0; i < checkable.Count; i++)
+        {
+            if (checkable[i].Confirmed)
+                continue;
+            // Not the start of a run when the previous checkable marking is itself unconfirmed -
+            // this index was already folded into that earlier run below.
+            if (i > 0 && !checkable[i - 1].Confirmed)
+                continue;
+
+            var runEnd = i;
+            while (runEnd + 1 < checkable.Count && !checkable[runEnd + 1].Confirmed)
+                runEnd++;
+
+            var isTrailing = runEnd + 1 >= checkable.Count;
+            var from = i > 0 ? checkable[i - 1].StartSeconds : 0.0;
+            var lower = i > 0 ? checkable[i - 1].ExpectedNumber!.Value : 0;
+            var to = isTrailing ? duration : checkable[runEnd + 1].StartSeconds;
+            var upper = isTrailing ? (int?)null : checkable[runEnd + 1].ExpectedNumber!.Value;
+            // The trailing run also gets an ordinary Pass 2 region (cheap silence/jingle probing
+            // may well find it, exactly like an interior gap); trailingFrom/trailingTargets exist
+            // purely so DetectCoreAsync can still add a Pass 3 fallback for whatever that probing
+            // does not find, since - see the remarks above - nothing else would notice.
+            regions.Add(new DetectionRegion(from, to, lower, upper));
+            if (isTrailing)
+            {
+                trailingFrom = from;
+                for (var k = i; k <= runEnd; k++)
+                    trailingTargets.Add(checkable[k].ExpectedNumber!.Value);
+            }
+            i = runEnd;
+        }
+        return new GapRecoveryPlan(regions, trailingFrom, trailingTargets);
     }
 
     /// <summary>

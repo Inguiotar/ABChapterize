@@ -524,6 +524,7 @@ public sealed class FileProcessor
 
             // Policy for pre-existing chapter markings.
             var (skip, discardNote) = EvaluateExistingChapters(info);
+            DetectionResult result;
             if (skip && _options.Verify)
             {
                 var verify = await detector.VerifyExistingChaptersAsync(file, info, work, log, ct);
@@ -536,19 +537,36 @@ public sealed class FileProcessor
                     _progress.FinishWithSummary(work, $"{name}: skipped - {verifyNote} (use --force to redo)");
                     return;
                 }
-                skip = false;
-                discardNote = $", {info.ChapterCount} existing marking(s) discarded " +
-                              $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed)";
+                if (verify.ConfirmedChapters.Count > 0)
+                {
+                    // At least one marking is trusted - only the gap(s) around the unconfirmed
+                    // one(s) get their own Pass 2 (and, for a still-missing trailing chapter,
+                    // Pass 3); everything else in the file is left exactly as --verify found it.
+                    discardNote = $", {verify.ConfirmedChapters.Count} of {info.ChapterCount} existing " +
+                                  $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
+                    result = await detector.DetectGapsAsync(file, info, work, log, verify, ct);
+                }
+                else
+                {
+                    // Nothing survived verification - no trustworthy anchor to scope a gap
+                    // recovery around, so fall back to a full whole-file redetect.
+                    discardNote = $", {info.ChapterCount} existing marking(s) discarded " +
+                                  $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed)";
+                    result = await detector.DetectAsync(file, info, work, log, ct);
+                }
             }
-            if (skip)
+            else if (skip)
             {
                 lock (_statsLock) _skipped++;
                 _progress.FinishWithSummary(work,
                     $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
                 return;
             }
+            else
+            {
+                result = await detector.DetectAsync(file, info, work, log, ct);
+            }
 
-            var result = await detector.DetectAsync(file, info, work, log, ct);
             lock (_statsLock)
             {
                 _processed++;

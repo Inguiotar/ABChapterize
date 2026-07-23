@@ -475,11 +475,15 @@ skipped (reported as "skipped").
   pass, any long unrecognized stretch inside the window gets a further,
   closer look in small overlapping chunks before the mark is given up as
   unconfirmed — documented in the source. Marks that all check out are left
-  untouched, same as a skip without `--verify`. If any mark fails, all of
-  the file's existing marks are discarded and it goes through full
-  detection, same as `--force` would — a single bad mark is enough to
-  distrust the whole set, since a partially hand-edited or corrupted
-  chapter list isn't safely salvageable mark-by-mark. A file already over
+  untouched, same as a skip without `--verify`. If any mark fails but at
+  least one other is confirmed, the confirmed marks are trusted and kept
+  as-is, and detection - including its own proper pass 2 - runs only over
+  the stretch(es) of the file around the unconfirmed mark(s), rather than
+  the whole file; a still-missing mark past the last one in the file is
+  covered by a further, file-end-only fallback pass, since nothing else
+  would notice it is missing at all. If every checked mark fails, there is
+  nothing left to anchor a scoped recovery to, so the file falls back to
+  full detection instead, same as `--force` would. A file already over
   the `--max-chapters` threshold is still assumed bogus outright and skips
   verification entirely; `--verify` only decides the borderline cases where
   the mark count alone isn't proof of anything. Since its intent
