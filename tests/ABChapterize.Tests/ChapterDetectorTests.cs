@@ -2013,6 +2013,77 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void AdvancePastNonSpeech_ReturnsTheOnsetOfTheNextQualifyingSpeechSegment()
+    {
+        // Scanning forward from a point still in non-speech (100) must land on the start of the
+        // next speech segment that clears the noise floor (105), not its end or midpoint.
+        var speech = new List<SpeechSegment> { new(0, 50), new(105, 108) };
+        Assert.Equal(105, ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+    }
+
+    [Fact]
+    public void AdvancePastNonSpeech_SkipsATransientShorterThanTheFloor()
+    {
+        // A 0.05 s blip between the scan start and the true onset is detector noise-floor jitter,
+        // not real speech - it must be skipped over (resuming the scan from its own end), landing
+        // on the next, genuine (3 s) segment's start instead.
+        var speech = new List<SpeechSegment> { new(0, 50), new(102, 102.05), new(105, 108) };
+        Assert.Equal(105, ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+    }
+
+    [Fact]
+    public void AdvancePastNonSpeech_ChainsPastSeveralConsecutiveTransients()
+    {
+        // Three short blips (0.05, 0.08, 0.05 s) in a row must all be skipped as noise, not just
+        // the first one, before reaching the genuine onset at 106.
+        var speech = new List<SpeechSegment>
+        {
+            new(0, 50), new(102, 102.05), new(103, 103.08), new(104, 104.05), new(106, 109),
+        };
+        Assert.Equal(106, ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+    }
+
+    [Fact]
+    public void AdvancePastNonSpeech_TreatsExactlyTheFloorDurationAsGenuine()
+    {
+        // A blip of exactly the floor duration is not "shorter than" it, so it counts as a real
+        // onset rather than being skipped as a transient. Integer bounds avoid the binary64
+        // rounding that a literal like 102.1 - 102 would introduce right at the comparison edge.
+        var speech = new List<SpeechSegment> { new(0, 50), new(102, 103) };
+        Assert.Equal(102, ChapterDetector.AdvancePastNonSpeech(100, speech, 1.0));
+    }
+
+    [Fact]
+    public void AdvancePastNonSpeech_DoesNotMoveBackward_WhenAlreadyInsideAQualifyingSegment()
+    {
+        // The scan start (105) already sits inside a genuine speech segment (100-110) - it must be
+        // returned unchanged, never snapped back to the segment's own start.
+        var speech = new List<SpeechSegment> { new(0, 50), new(100, 110) };
+        Assert.Equal(105, ChapterDetector.AdvancePastNonSpeech(105, speech, 0.1));
+    }
+
+    [Fact]
+    public void AdvancePastNonSpeech_DoesNotMoveBackward_WhenAlreadyInsideATransient()
+    {
+        // The scan start (100.02) happens to fall inside a short (0.05 s) blip that would
+        // otherwise be treated as a transient - "never move backward past a point already at or
+        // beyond a segment" wins over transient-skipping, so it is still returned unchanged rather
+        // than being pushed forward past this blip to the next segment.
+        var speech = new List<SpeechSegment> { new(0, 50), new(100, 100.05), new(105, 108) };
+        Assert.Equal(100.02, ChapterDetector.AdvancePastNonSpeech(100.02, speech, 0.1));
+    }
+
+    [Fact]
+    public void AdvancePastNonSpeech_ReturnsNull_WhenTheSpeechDataDoesNotReachFarEnough()
+    {
+        // No segment in the given data ends after the scan start (100), so there is nothing left
+        // to find a qualifying onset in - the caller must be told to look further (e.g. by
+        // re-running VAD over a wider window) rather than being given a false answer.
+        var speech = new List<SpeechSegment> { new(0, 50) };
+        Assert.Null(ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+    }
+
+    [Fact]
     public void Normalize_SortsAndDropsDuplicatesAndRegressions()
     {
         var raw = new List<DetectedChapter>

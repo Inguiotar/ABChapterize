@@ -244,6 +244,14 @@ public sealed class ChapterDetector
     private const double MergeShortSpeechGapSeconds = 1.0;
 
     /// <summary>
+    /// The speech-duration floor <see cref="AdvancePastNonSpeech"/> uses to tell a genuine
+    /// spoken onset from VAD noise-floor jitter - much tighter than
+    /// <see cref="MergeShortSpeechGapSeconds"/>'s jingle-vocal-transient threshold, since this
+    /// is about rejecting detector artifacts, not musical vocals.
+    /// </summary>
+    private const double TransientSpeechFloorSeconds = 0.1;
+
+    /// <summary>
     /// With --max-jingle-length auto, the resized probe window is this factor times the
     /// longest jingle observed so far (plus <see cref="PhraseMarginSeconds"/>), leaving a 25 %
     /// safety margin above the longest observed jingle for normal length variation between
@@ -1924,6 +1932,52 @@ public sealed class ChapterDetector
         if (swallowedBlip is { } blip)
             return blip.StartSeconds;
         return phraseAbs < r.StartSeconds ? r.EndSeconds : phraseAbs;
+    }
+
+    /// <summary>
+    /// Scans forward from <paramref name="from"/> through VAD's raw speech/non-speech
+    /// classification for the next genuine speech onset, ignoring any speech blip shorter than
+    /// <paramref name="minSpeechSeconds"/> as detector noise-floor jitter rather than real
+    /// spoken content. Unlike Whisper's own segment timestamps - demonstrably unreliable near a
+    /// jingle (see <see cref="ResolveDefaultPhraseOnset"/>) and sensitive to the surrounding
+    /// decode window's exact content - VAD's classification of a given stretch of audio does
+    /// not depend on what window it happens to be decoded within, making it a solid independent
+    /// cross-check for a mark <see cref="ResolveDefaultPhraseOnset"/> already computed:
+    /// starting the scan from that mark and re-deriving it from the found onset
+    /// (<c>onset - <see cref="DefaultMarkLeadSeconds"/></c>) is a no-op whenever the mark was
+    /// already correct (it sits exactly <see cref="DefaultMarkLeadSeconds"/> before the true
+    /// onset, so the scan finds that same onset immediately), and only ever moves a mark that
+    /// was too early forward toward the truth - never backward past a mark already at or beyond
+    /// it, matching the "any remaining error is too early, never too late" invariant the whole
+    /// default-mode jingle-anchoring chain is built on.
+    /// </summary>
+    /// <param name="from">The point to scan forward from - typically an already-computed mark.</param>
+    /// <param name="speech">Raw VAD speech segments, chronological, covering at least the span
+    /// from <paramref name="from"/> to the true onset.</param>
+    /// <param name="minSpeechSeconds">Speech segments shorter than this are treated as noise and
+    /// skipped over rather than accepted as the true onset.</param>
+    /// <returns>The start of the first speech segment at or after <paramref name="from"/> whose
+    /// own length meets <paramref name="minSpeechSeconds"/>; <paramref name="from"/> itself when
+    /// it already falls strictly inside such a segment (never moves backward); or null when
+    /// <paramref name="speech"/> does not reach far enough to find one - the caller should
+    /// re-run VAD over a wider window in that case, since VAD itself is cheap.</returns>
+    internal static double? AdvancePastNonSpeech(double from, List<SpeechSegment> speech, double minSpeechSeconds)
+    {
+        var t = from;
+        while (true)
+        {
+            var next = speech.Where(b => b.EndSeconds > t).Cast<SpeechSegment?>().FirstOrDefault();
+            if (next is not { } blip)
+                return null;
+            if (blip.StartSeconds <= t)
+                return t;
+            if (blip.EndSeconds - blip.StartSeconds < minSpeechSeconds)
+            {
+                t = blip.EndSeconds;
+                continue;
+            }
+            return blip.StartSeconds;
+        }
     }
 
     /// <summary>
