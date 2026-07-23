@@ -2158,7 +2158,10 @@ public sealed class ChapterDetector
         List<SpeechSegment> speechSegments, CancellationToken ct)
     {
         if (await PreciseMarkPhraseFoundAsync(mark, file, inputDecoder, profile, ct))
+        {
+            _log?.Invoke($"--precise-mark: confirmed at {FormatTimestamp(mark)} - unchanged");
             return mark;
+        }
 
         var searchHorizon = mark + _options.MaxJingleSeconds + PhraseMarginSeconds;
         var candidates = speechSegments
