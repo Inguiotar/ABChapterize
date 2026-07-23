@@ -2390,4 +2390,86 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.True(result.GapRemains);
         Assert.Contains(2, result.MissingNumbers);
     }
+
+    /// <summary>Runs ResumeMissingMarksAsync against the given committed markings (as if probed
+    /// from a ".missing-marks-..." file) and script.</summary>
+    private async Task<(DetectionResult Result, FakeAudioSource Audio, ScriptedTranscriber Transcriber)> ResumeMissingMarksAsync(
+        CliOptions options, IReadOnlyList<Chapter> existingChapters, List<Silence> silences, Action<ScriptedTranscriber> script)
+    {
+        var audio = new FakeAudioSource { Silences = silences };
+        var transcriber = new ScriptedTranscriber(audio);
+        script(transcriber);
+        var detector = new ChapterDetector(options, audio, transcriber);
+        var info = new MediaInfo(Duration, (long)Duration, existingChapters.Count,
+            ExistingChapterList: existingChapters);
+        var result = await detector.ResumeMissingMarksAsync(_file, info, new WorkTracker(), null, CancellationToken.None);
+        return (result, audio, transcriber);
+    }
+
+    [Fact]
+    public async Task ResumeMissingMarksAsync_RecoversAnInteriorGap_ViaGapScopedPass2_AndTrustsCommittedMarkingsVerbatim()
+    {
+        // Chapters 1 (@10) and 3 (@50) are already committed on the tagged file; chapter 2 is
+        // still missing between them. Only the gap [10, 50) is probed - a single synthetic
+        // candidate at its own start (10), exactly like DetectGapsAsync's own gap-scoped region.
+        // An explicit --lang sidesteps the upfront language-resolution decode near chapter 1's own
+        // marking (@10, so its own window would start at 0) that --lang auto would otherwise add,
+        // keeping the decode-start assertion below solely about the gap-scoped Pass 2 region.
+        var (result, audio, _) = await ResumeMissingMarksAsync(
+            Options("--lang", "en", "--max-jingle-length", "0"),
+            [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
+            s => s.Add(10, Seg(0.3, " Chapter 2.")));
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+        // The committed markings are trusted verbatim - nothing probes near their own timestamps,
+        // only the gap region's own synthetic candidate.
+        Assert.Equal([10.0], audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task ResumeMissingMarksAsync_LeavesGapRemains_WithTheStillMissingNumbers_WhenTheGapIsNotFound()
+    {
+        var (result, _, _) = await ResumeMissingMarksAsync(
+            Options("--max-jingle-length", "0"),
+            [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
+            _ => { }); // nothing scripted for the gap - chapter 2 stays missing
+
+        Assert.True(result.GapRemains);
+        Assert.Equal([2], result.MissingNumbers);
+        Assert.Equal([new(1, 10), new(3, 50)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task ResumeMissingMarksAsync_SkipsAnUnparseableIntroMarking_WithoutTreatingItAsAGapBoundary()
+    {
+        // The intro entry BuildChapters inserts on a partial commit has no parseable number - it
+        // must be dropped from the trusted set entirely (not treated as chapter 0), so the gap is
+        // still correctly bounded by chapter 1 (@10) and chapter 3 (@50), exactly as if the intro
+        // marking were not present at all.
+        var (result, _, _) = await ResumeMissingMarksAsync(
+            Options("--max-jingle-length", "0"),
+            [new Chapter(0, "Intro"), new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
+            s => s.Add(10, Seg(0.3, " Chapter 2.")));
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task ResumeMissingMarksAsync_WithAutoLanguage_ResolvesLanguageFromTheCommittedMarkingsWindow()
+    {
+        // Mirrors Verify_WithAutoLanguage_ResolvesLanguageUpfront_BeforeParsingAnyTitle: with
+        // --lang auto, the language must be resolved from a committed marking's own window (here,
+        // the same "de" ResolveProfileFromMarkingsAsync helper both methods now share), regardless
+        // of whether the gap itself ends up recovered.
+        var (result, _, transcriber) = await ResumeMissingMarksAsync(
+            Options("--max-jingle-length", "0"),
+            [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
+            s => s.DetectedLanguage = ("de", 0.9f));
+
+        Assert.Equal("de", result.Profile.Language);
+        Assert.Contains("de", transcriber.LanguageChanges);
+        Assert.Equal(1, transcriber.DetectLanguageCalls);
+    }
 }

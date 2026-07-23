@@ -485,6 +485,28 @@ public sealed class FileProcessor
     private static string StripMissingMarksTag(string stem)
         => System.Text.RegularExpressions.Regex.Replace(stem, @"\.missing-marks-[0-9-]+$", "");
 
+    /// <summary>True when a file name still carries a ".missing-marks-&lt;n&gt;-..." tag (see
+    /// <see cref="MissingMarksPath"/>) - i.e. a previous run left it with an unresolved
+    /// chapter-sequence gap, and it is a candidate for <see cref="ProcessOneAsync"/>'s auto-resume
+    /// branch. Internal for unit testing.</summary>
+    /// <param name="file">Path of the file being considered.</param>
+    internal static bool HasMissingMarksTag(string file)
+    {
+        var stem = Path.GetFileNameWithoutExtension(file);
+        return StripMissingMarksTag(stem) != stem;
+    }
+
+    /// <summary>The file's own original name, with any ".missing-marks-..." tag stripped - what a
+    /// resumed file is renamed back to once every previously-missing chapter is found.</summary>
+    /// <param name="file">Path of the tagged file.</param>
+    private static string StripMissingMarksPath(string file)
+    {
+        var dir = Path.GetDirectoryName(file) ?? "";
+        var stem = StripMissingMarksTag(Path.GetFileNameWithoutExtension(file));
+        var ext = Path.GetExtension(file);
+        return Path.Combine(dir, stem + ext);
+    }
+
     /// <summary>Processes a single audiobook file and prints its summary line.</summary>
     private async Task ProcessOneAsync(
         string file, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
@@ -520,6 +542,72 @@ public sealed class FileProcessor
                     _progress.FinishWithSummary(work, $"{name}: WARNING - {XheAacHint}", important: true);
                     return;
                 }
+            }
+
+            // Auto-resume a ".missing-marks-<n>-<n>-..." file left behind by a previous run's
+            // unresolved chapter-sequence gap: only the still-missing gap(s) are re-probed, the
+            // committed markings are trusted as-is. --force means "redo the whole file from
+            // scratch" and takes priority - it falls through to the normal policy below, which
+            // discards every existing marking (including these) and runs a fresh full detection.
+            if (!_options.Force && HasMissingMarksTag(file))
+            {
+                var resumed = await detector.ResumeMissingMarksAsync(file, info, work, log, ct);
+                lock (_statsLock)
+                {
+                    _processed++;
+                    _processingTime += watch.Elapsed;
+                    AccumulateStats(resumed.Stats, info.DurationSeconds);
+                }
+                log?.Invoke(FormatFileStats(resumed.Stats, info.DurationSeconds));
+                AccumulateConfidence(resumed.Chapters);
+                var (resumedChapters, resumedIntroNote) = BuildChapters(resumed);
+
+                if (resumed.GapRemains)
+                {
+                    lock (_statsLock) _warnings++;
+                    var retarget = MissingMarksPath(file, resumed.MissingNumbers);
+                    var stillMissing = string.Join(", ", resumed.MissingNumbers);
+                    if (_options.DryRun)
+                    {
+                        var partialListing = string.Join(Environment.NewLine,
+                            resumedChapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
+                        _progress.FinishWithSummary(work,
+                            $"{name}: DRY RUN - resume incomplete, still missing: {stillMissing}; would write " +
+                            $"{resumed.Chapters.Count} partial mark(s){resumedIntroNote} and re-tag as " +
+                            $"{Path.GetFileName(retarget)}:{Environment.NewLine}{partialListing}", important: true);
+                        return;
+                    }
+                    await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
+                        BeginMuxingPhase(work, info), ct);
+                    File.Move(file, retarget, overwrite: true);
+                    var resumedPartialBackup = _options.Backup ? ", backup kept" : "";
+                    _progress.FinishWithSummary(work,
+                        $"{name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
+                        $"{resumed.Chapters.Count} partial mark(s){resumedIntroNote}, re-tagged as " +
+                        $"{Path.GetFileName(retarget)}{resumedPartialBackup}", important: true);
+                    return;
+                }
+
+                var restored = StripMissingMarksPath(file);
+                if (_options.DryRun)
+                {
+                    var listing = string.Join(Environment.NewLine,
+                        resumedChapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
+                    _progress.FinishWithSummary(work,
+                        $"{name}: DRY RUN - resume complete, all chapters found; would write " +
+                        $"{resumed.Chapters.Count} chapter(s) ({resumed.Chapters[0].Number}-{resumed.Chapters[^1].Number})" +
+                        $"{resumedIntroNote} and rename to {Path.GetFileName(restored)}:{Environment.NewLine}{listing}");
+                    return;
+                }
+                await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
+                    BeginMuxingPhase(work, info), ct);
+                File.Move(file, restored, overwrite: true);
+                var restoredBackup = _options.Backup ? ", backup kept" : "";
+                _progress.FinishWithSummary(work,
+                    $"{name}: resume complete - {resumed.Chapters.Count} chapter(s) written " +
+                    $"({resumed.Chapters[0].Number}-{resumed.Chapters[^1].Number}){resumedIntroNote}, renamed to " +
+                    $"{Path.GetFileName(restored)}{restoredBackup}");
+                return;
             }
 
             // Policy for pre-existing chapter markings.

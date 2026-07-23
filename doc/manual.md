@@ -163,13 +163,21 @@ that *were* found are still written, but a warning is printed and the file is
 still-missing chapter numbers, `-`-delimited (e.g.
 `My Book.missing-marks-3-7.m4b`). This flags the file for attention and
 preserves the partial work instead of discarding it, rather than committing a
-silently-complete-looking but partially-wrong chapter list. (Automatically
-resuming such a file on a later run — only re-searching for the tagged
-chapters, and renaming it back once they are all found — is not implemented
-yet.) A first chapter number above 1 that cannot be pushed down further is
-tolerated, not treated as a gap: some books simply start mid-series (which is
-also why a first chapter within the first 10 seconds is taken as-is), and the
-intro chapter covers the leading audio either way.
+silently-complete-looking but partially-wrong chapter list. A first chapter
+number above 1 that cannot be pushed down further is tolerated, not treated
+as a gap: some books simply start mid-series (which is also why a first
+chapter within the first 10 seconds is taken as-is), and the intro chapter
+covers the leading audio either way.
+
+A later run over such a tagged file picks it up automatically (unless
+`--force` is given): the chapters already committed are trusted outright,
+and only the still-tagged gap(s) get their own pass 2 and, if needed, pass 3,
+exactly as after a failed `--verify` (see
+[`--verify`](#handling-of-pre-existing-chapters)). If that completes the
+sequence, the file is renamed back to its original name; if a gap is still
+unresolved, it is re-tagged with the (possibly shorter) remaining list.
+`--force` bypasses this and redoes the file from scratch instead, discarding
+every existing marking including the partial ones.
 
 ### The intro chapter
 
@@ -982,9 +990,11 @@ explicit `--lang` if so), the pauses are shorter than `--min-silence-length`
 **Chapters found but some are missing** — if the missing ones are announced
 without a preceding pause, pass 3 usually catches them automatically. If a
 gap remains, the partial marks are written and the file is renamed with a
-`.missing-marks-…` tag (see the warning); try a lower `--min-silence-length`,
-a better `--model`, or a heavier `--pass3-model` (e.g. `large`) for one last
-attempt at just the gaps.
+`.missing-marks-…` tag (see the warning); simply running the tool again over
+such a file resumes it automatically, re-probing only the still-tagged
+gap(s). If that still doesn't find them, try a lower `--min-silence-length`,
+a better `--model`, or a heavier `--pass3-model` (e.g. `large`) before
+resuming again.
 
 **A "chapter" was detected that isn't one** — in-text mentions are filtered
 by the ordering heuristics, but a phrase like "chapter twelve" right after a

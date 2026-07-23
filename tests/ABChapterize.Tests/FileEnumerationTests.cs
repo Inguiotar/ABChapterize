@@ -100,4 +100,16 @@ public sealed class FileEnumerationTests : IDisposable
         var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.missing-marks-3-7.m4b"), [7]);
         Assert.Equal(Path.Combine("lib", "Book.missing-marks-7.m4b"), path);
     }
+
+    [Fact]
+    public void HasMissingMarksTag_RecognizesATaggedFileName()
+    {
+        Assert.True(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.missing-marks-3-7-8.m4b")));
+    }
+
+    [Fact]
+    public void HasMissingMarksTag_IsFalse_ForAnOrdinaryFileName()
+    {
+        Assert.False(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.m4b")));
+    }
 }

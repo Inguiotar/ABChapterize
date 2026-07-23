@@ -458,6 +458,58 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Auto-resumes a file <see cref="FileProcessor.MissingMarksPath"/> tagged after a previous run
+    /// left a chapter-sequence gap unresolved: the file's currently committed markings are trusted
+    /// verbatim, with no --verify-style re-check against the audio (unlike <see
+    /// cref="DetectGapsAsync"/>'s confirmed markings, these were never in doubt in the first place -
+    /// they are exactly what pass 3 already settled on last time). Only the gap(s) <see
+    /// cref="FindGaps"/> still finds between them get their own gap-scoped Pass 2 plus the existing
+    /// Pass 3 tail, exactly as <see cref="DetectGapsAsync"/> does after a --verify failure - which is
+    /// what lets this reuse <see cref="DetectCoreAsync"/> directly instead of a bespoke pipeline.
+    /// There is never a trailing region to recover here: a missing-marks tag can only name chapters
+    /// <see cref="FindGaps"/> itself flagged when the file was first tagged, and that always means a
+    /// gap bounded by two confirmed chapters (or the file start) - the one case <see cref="FindGaps"/>
+    /// structurally cannot flag, a still-missing trailing chapter, therefore never produces a tag to
+    /// resume in the first place.
+    /// </summary>
+    /// <param name="file">Path of the audio file (still carrying its ".missing-marks-..." tag).</param>
+    /// <param name="info">Probe result of the file, including its committed chapter markings.</param>
+    /// <param name="work">Progress tracker fed with processed bytes.</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<DetectionResult> ResumeMissingMarksAsync(
+        string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
+    {
+        _log = log;
+        var (profile, detectedLanguage, detectedProbability) =
+            await ResolveProfileFromMarkingsAsync(file, info, ct);
+        _transcriber.ChangeLanguage(profile.Language);
+
+        // Committed markings are trusted directly - only their own chapter number matters here
+        // (parsed the same way --verify parses a marking's expected number), never re-probed. A
+        // marking with no parseable number (the intro/prelude entry BuildChapters inserts) carries
+        // no chapter identity and is silently dropped, exactly like an unparseable --verify marking.
+        var confirmed = new List<DetectedChapter>();
+        foreach (var marking in info.ExistingChapters)
+            if (TryParseExpectedNumber(marking.Title, profile.Language, out var number))
+                confirmed.Add(new DetectedChapter(number, marking.StartSeconds));
+        confirmed = Normalize(confirmed);
+
+        // Re-deriving the gaps from the committed markings themselves - rather than trusting the
+        // tag's own number list - means this always agrees with what FindGaps/MissingNumbersInGap
+        // would say right now, with no risk of drifting out of sync with the file's actual content.
+        var regions = FindGaps(confirmed, info.DurationSeconds)
+            .Select(gap => new DetectionRegion(
+                gap.FromSeconds, gap.ToSeconds,
+                confirmed.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds).Number,
+                confirmed.First(c => c.TimeSeconds == gap.ToSeconds).Number))
+            .ToList();
+
+        return await DetectCoreAsync(file, info, work, log, confirmed, regions,
+            (profile, detectedLanguage, detectedProbability), null, ct);
+    }
+
+    /// <summary>
     /// The shared detection pipeline behind <see cref="DetectAsync"/> and <see
     /// cref="DetectGapsAsync"/>. Pass 1 always runs whole-file, even for a gap-scoped call -
     /// <see cref="IAudioSource"/> has no ranged silence/VAD scan, and redoing this one full-file
@@ -1190,32 +1242,9 @@ public sealed class ChapterDetector
         string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
     {
         _log = log;
-        // With an explicit --lang, the profile is known upfront - no probing needed to resolve
-        // it. With --lang auto, resolve it upfront too - from the first marking with a
-        // decodable window - rather than lazily inside the loop below: TryParseExpectedNumber
-        // needs the real language to recognize spelled-out numbers, so resolving it only after
-        // some marking's title happened to parse under an "en" placeholder risked wrongly
-        // skipping an earlier marking whose title is only parseable in the book's actual
-        // language. Mirrors DetectAsync's own very-first-probe language resolution.
-        LanguageProfile? profile = _options.AutoLanguage ? null : _options.DefaultProfile;
-        string? detectedLanguage = null;
-        var detectedProbability = 0.0;
-        if (profile != null)
-            _transcriber.ChangeLanguage(profile.Language);
-        else
-        {
-            foreach (var marking in info.ExistingChapters)
-            {
-                var windowStart = Math.Max(0, marking.StartSeconds - VerifyMarginBeforeSeconds);
-                var windowLen = Math.Min(VerifyWindowSeconds, info.DurationSeconds - windowStart);
-                if (windowLen <= 0)
-                    continue;
-                var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
-                (profile, detectedLanguage, detectedProbability) = await ResolveLanguageAsync(samples, ct);
-                _transcriber.ChangeLanguage(profile.Language);
-                break;
-            }
-        }
+        var (profile, detectedLanguage, detectedProbability) =
+            await ResolveProfileFromMarkingsAsync(file, info, ct);
+        _transcriber.ChangeLanguage(profile.Language);
 
         var checkedCount = 0;
         var failed = 0;
@@ -1243,10 +1272,7 @@ public sealed class ChapterDetector
                 continue;
             }
 
-            // profile is guaranteed non-null here: the upfront resolution above breaks on the
-            // very first marking with windowLen > 0, which - the lists being walked in the same
-            // order - is either this marking or one before it.
-            if (!TryParseExpectedNumber(marking.Title, profile!.Language, out var expected))
+            if (!TryParseExpectedNumber(marking.Title, profile.Language, out var expected))
             {
                 markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
                 work.Advance(1);
@@ -1277,7 +1303,37 @@ public sealed class ChapterDetector
         }
 
         return new VerifyResult(failed == 0, checkedCount, failed, confirmedChapters, markings,
-            profile ?? _options.DefaultProfile, detectedLanguage, detectedProbability);
+            profile, detectedLanguage, detectedProbability);
+    }
+
+    /// <summary>
+    /// Resolves the language profile to use for a file from its pre-existing chapter markings,
+    /// shared by <see cref="VerifyExistingChaptersAsync"/> and <see cref="ResumeMissingMarksAsync"/>:
+    /// with an explicit --lang, <see cref="CliOptions.DefaultProfile"/> is returned immediately with
+    /// no decode at all; with --lang auto, the first marking with a decodable window (<see
+    /// cref="VerifyMarginBeforeSeconds"/> before its own timestamp, <see cref="VerifyWindowSeconds"/>
+    /// long) is used to resolve it via <see cref="ResolveLanguageAsync"/>. Does not itself call
+    /// <see cref="ITranscriber.ChangeLanguage"/> - every caller needs that applied at a slightly
+    /// different point, so it is left to them.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<(LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)>
+        ResolveProfileFromMarkingsAsync(string file, MediaInfo info, CancellationToken ct)
+    {
+        if (!_options.AutoLanguage)
+            return (_options.DefaultProfile, null, 0);
+        foreach (var marking in info.ExistingChapters)
+        {
+            var windowStart = Math.Max(0, marking.StartSeconds - VerifyMarginBeforeSeconds);
+            var windowLen = Math.Min(VerifyWindowSeconds, info.DurationSeconds - windowStart);
+            if (windowLen <= 0)
+                continue;
+            var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
+            return await ResolveLanguageAsync(samples, ct);
+        }
+        return (_options.DefaultProfile, null, 0);
     }
 
     /// <summary>

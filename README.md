@@ -136,7 +136,12 @@ abchapterize --dry-run "My Audiobook.m4b"
 
 # Retry only the files a previous run couldn't fully chapterize (tagged
 # "<name>.missing-marks-<n>-<n>-....<ext>" - see the manual's troubleshooting
-# section), leaving the rest of a big collection untouched:
+# section): running over them again resumes automatically, re-probing only
+# the still-tagged gap(s) - no extra flag needed, and the rest of a big
+# collection is left untouched either way:
+abchapterize --recurse --filter "/\.missing-marks-/" "D:\Audiobooks"
+
+# ...or discard that partial work and start such a file over from scratch:
 abchapterize --recurse --force --filter "/\.missing-marks-/" "D:\Audiobooks"
 
 # Batch run: quiet, but with a summary at the end:
@@ -236,7 +241,12 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    can use a different model than pass 2 (`--pass3-model`). If a gap still
    remains, the chapters that *were* found are written and the file is renamed
    with a `.missing-marks-…` tag listing the still-missing numbers, rather than
-   discarded.
+   discarded. Running the tool again over such a file resumes it
+   automatically: the committed chapters are trusted as-is, and only the
+   still-tagged gap(s) get their own pass 2/pass 3, exactly as after a failed
+   `--verify`. The file is renamed back to its original name once every
+   chapter is found, or re-tagged with the (possibly shorter) remaining list
+   otherwise; `--force` bypasses this and redoes the whole file from scratch.
 
 A synthetic "Intro" mark (localized by `--lang`, customizable with
 `--intro-title`) covers everything before the first detected chapter
