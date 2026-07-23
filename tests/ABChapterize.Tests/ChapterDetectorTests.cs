@@ -1106,6 +1106,62 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultMode_AnnouncementSplitAcrossTwoAdjacentBlips_MarksAtTheFirstBlipStart_NotTheLast()
+    {
+        // Real-world confirmed bug (Perry Rhodan "Die Dritte Macht", chapter 31, 2026-07-23):
+        // unlike chapter 35 above (only "Kapitel" was swallowed - "35" itself was long enough to
+        // end the region), here BOTH short words of "Kapitel 31" got swallowed into the same
+        // merged region, 0.2s apart. The prior fix took only the *last* swallowed blip (656-656.6,
+        // "31"'s stand-in here), landing the mark right after "Kapitel" (655.2-655.8) had already
+        // been spoken - confirmed live by re-transcribing 5.25s starting at that mark and getting
+        // unrelated narration instead of the phrase. Clustering the swallowed blips by the same
+        // short-gap threshold that grouped them into one region, then anchoring to the *first*
+        // blip of the *last* cluster, lands on "Kapitel"'s own onset (655.2) instead of "31"'s
+        // (656).
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+            },
+            new FakeVad
+            {
+                Speech = [new(0, 640), new(655.2, 655.8), new(656, 656.6), new(657, 658.2), new(660, 3600)],
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 654.95)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task DefaultMode_IsolatedEarlierBlip_SeparatedByALongGap_IsNotTreatedAsPartOfTheAnnouncement()
+    {
+        // Guard for the clustering fix's other half: an early speech blip inside the jingle region,
+        // separated from the true announcement blip by a gap well over MergeShortSpeechGapSeconds
+        // (here 50.5s - an incidental musical vocal transient near the jingle's start, not part of
+        // "Chapter two"), must form its own separate cluster and be ignored, not pull the mark back
+        // to it. The mark must still land at the true (later) cluster's own start (656), matching
+        // the single-blip case above.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+            },
+            new FakeVad
+            {
+                Speech = [new(0, 600), new(605, 605.5), new(656, 656.6), new(657, 658.2), new(660, 3600)],
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
     {
         // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs

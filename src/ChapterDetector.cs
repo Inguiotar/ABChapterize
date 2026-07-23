@@ -1895,24 +1895,37 @@ public sealed class ChapterDetector
     /// VAD's own speech-segment boundaries do not share that unreliability, and can still
     /// pinpoint the true onset in the one case that matters: <see cref="ComputeNonSpeechRegions"/>'s
     /// <see cref="MergeShortSpeechGapSeconds"/> merge - kept to bridge the announcement when it is
-    /// spoken <em>inside</em> the jingle - cannot tell the announcement's own quietly-spoken first
-    /// word/syllable apart from an incidental musical vocal transient when it is short enough
-    /// (under a second), and silently merges it into the surrounding non-speech run. When the
-    /// jingle's music genuinely never dips below the noise floor except right at its very end, the
-    /// last such swallowed blip inside the region is - by the same "the only speech inside a
-    /// jingle is the announcement" invariant <see cref="IsTrailingNarrationBlip"/> already relies
-    /// on for the region's head - the announcement's own leading edge, not a coincidence; its start
-    /// is the true phrase onset (confirmed byte-exact on real audio: a "Kapitel 35" split by VAD
-    /// into a 0.6 s blip then a 1.0 s blip, merged together into one region whose end fell exactly
-    /// between them, landing the old floor-only mark mid-word).
+    /// spoken <em>inside</em> the jingle - cannot tell the announcement's own quietly-spoken
+    /// word(s)/syllables apart from an incidental musical vocal transient when they are short
+    /// enough (under a second), and silently merges them into the surrounding non-speech run. When
+    /// the jingle's music genuinely never dips below the noise floor except right around the
+    /// announcement itself, the swallowed blips inside the region are - by the same "the only
+    /// speech inside a jingle is the announcement" invariant <see cref="IsTrailingNarrationBlip"/>
+    /// already relies on for the region's head - the announcement's own words, not a coincidence.
     /// </para>
     /// <para>
-    /// Absent such a blip, there is nothing more precise than <paramref name="phraseAbs"/> itself
-    /// to go on: if it already sits at or after the region's start, it is at least in the right
-    /// neighbourhood (that is what qualified the region via containment in the first place) and is
-    /// used unchanged; only when it still precedes the region - Whisper smeared the segment so
-    /// badly that even <see cref="TrimLeadingNonSpeech"/>'s forward correction could not bridge it -
-    /// is it floored at the region's end instead, so the mark cannot land seconds back in the
+    /// A first version of this fix took only the <em>last</em> swallowed blip's start, reasoning
+    /// that a multi-word announcement ("Kapitel 35") ends with its own trailing word closest to
+    /// the region's end. That holds when the announcement itself produces exactly one swallowed
+    /// blip (an earlier, unrelated musical vocal transient sitting well before it, separated by a
+    /// gap of a second or more, is correctly ignored) - but breaks when the announcement's own
+    /// several words are each individually swallowed: confirmed on real audio, chapter 31's
+    /// "Kapitel 31" was split into a 0.67 s "Kapitel" blip and a 0.9 s "31" blip 0.26 s apart, and
+    /// taking only the last landed the mark after "Kapitel" had already been spoken, verified via a
+    /// direct 5.25 s re-transcription starting at that mark landing mid-narration rather than on
+    /// the phrase. The fix: cluster the swallowed blips using the same short-gap threshold that
+    /// decided they belonged inside one merged region in the first place, and take the first blip
+    /// of the <em>last</em> cluster - the announcement's own leading edge, whether it produced one
+    /// swallowed blip or several, while still skipping past any earlier, separately-clustered
+    /// incidental vocal transient.
+    /// </para>
+    /// <para>
+    /// Absent any swallowed blip, there is nothing more precise than <paramref name="phraseAbs"/>
+    /// itself to go on: if it already sits at or after the region's start, it is at least in the
+    /// right neighbourhood (that is what qualified the region via containment in the first place)
+    /// and is used unchanged; only when it still precedes the region - Whisper smeared the segment
+    /// so badly that even <see cref="TrimLeadingNonSpeech"/>'s forward correction could not bridge
+    /// it - is it floored at the region's end instead, so the mark cannot land seconds back in the
     /// previous chapter's narration.
     /// </para>
     /// </summary>
@@ -1925,13 +1938,18 @@ public sealed class ChapterDetector
     {
         if (jingleRegion is not { } r)
             return phraseAbs;
-        var swallowedBlip = speech
+        var swallowed = speech
             .Where(b => b.StartSeconds > r.StartSeconds && b.EndSeconds < r.EndSeconds)
-            .Cast<SpeechSegment?>()
-            .LastOrDefault();
-        if (swallowedBlip is { } blip)
-            return blip.StartSeconds;
-        return phraseAbs < r.StartSeconds ? r.EndSeconds : phraseAbs;
+            .OrderBy(b => b.StartSeconds)
+            .ToList();
+        if (swallowed.Count == 0)
+            return phraseAbs < r.StartSeconds ? r.EndSeconds : phraseAbs;
+
+        var lastClusterStart = swallowed[0].StartSeconds;
+        for (var i = 1; i < swallowed.Count; i++)
+            if (swallowed[i].StartSeconds - swallowed[i - 1].EndSeconds >= MergeShortSpeechGapSeconds)
+                lastClusterStart = swallowed[i].StartSeconds;
+        return lastClusterStart;
     }
 
     /// <summary>
