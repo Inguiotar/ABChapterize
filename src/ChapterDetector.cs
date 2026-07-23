@@ -877,7 +877,9 @@ public sealed class ChapterDetector
                             markSilence = candidate.Silence;
                         time = _options.MarkBeforeJingle
                             ? ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds)
-                            : Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, speechSegments) - DefaultMarkLeadSeconds);
+                            : RefineDefaultMark(
+                                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, speechSegments) - DefaultMarkLeadSeconds),
+                                speechSegments);
                     }
                     else if (match.PhraseStartSeconds <= PhraseLatestStart)
                     {
@@ -1999,6 +2001,50 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Refines a default-mode (non --mark-before-jingle) mark by advancing past non-speech from it
+    /// with <see cref="AdvancePastNonSpeech"/> and re-deriving <see cref="DefaultMarkLeadSeconds"/>
+    /// back from whatever genuine speech onset that finds, rather than trusting
+    /// <paramref name="preliminaryMark"/>'s own upstream reasoning outright. Confirmed necessary on
+    /// real audio: even after clustering-fixing <see cref="ResolveDefaultPhraseOnset"/>'s swallowed-
+    /// blip handling, several chapters still landed at the very start of their jingle rather than
+    /// before the announcement. This sidesteps needing to reason about which VAD blip "is" the
+    /// announcement in the first place, or which non-speech region even belongs to it: whatever
+    /// upstream logic decided, the true onset is simply the next place VAD says real speech resumes
+    /// at or after it, and backing off <see cref="DefaultMarkLeadSeconds"/> from there is the same
+    /// rule default mode already applies everywhere else - a no-op whenever
+    /// <paramref name="preliminaryMark"/> was already correct (see
+    /// <see cref="AdvancePastNonSpeech"/>'s own idempotency note). Deliberately unbounded: an earlier
+    /// version capped the scan at the resolved jingle region's own end to protect a synthetic case
+    /// where Whisper reports a phrase inside a region VAD shows no speech in at all, but that cap
+    /// also silently defeated the fix for phrases whose jingle region resolution failed entirely -
+    /// exactly the cases still broken live. Real jingle announcements are reliably VAD-detectable (the
+    /// same "only speech in a jingle is the announcement" invariant this whole chain relies on), so a
+    /// region with a genuine phrase match and zero VAD speech anywhere in or after it is not expected
+    /// on real audio; trusting the scan unconditionally is the simpler, more direct reading of the fix
+    /// and was validated this way per the user's own request - see the updated
+    /// <c>DefaultMode_PhraseAlreadyInsideTheJingleRegion_*</c> test for the resulting behaviour change.
+    /// </summary>
+    /// <param name="preliminaryMark">The mark the existing default-mode logic already computed.</param>
+    /// <param name="speech">Raw VAD speech segments; empty when the VAD pre-pass did not run, in
+    /// which case there is nothing to advance past and <paramref name="preliminaryMark"/> is
+    /// returned unchanged.</param>
+    /// <returns>The refined mark, or <paramref name="preliminaryMark"/> unchanged when VAD did not
+    /// run or the scan found nothing further ahead.</returns>
+    private static double RefineDefaultMark(double preliminaryMark, List<SpeechSegment> speech)
+    {
+        if (speech.Count == 0)
+            return preliminaryMark;
+        var onset = AdvancePastNonSpeech(preliminaryMark, speech, TransientSpeechFloorSeconds);
+        // AdvancePastNonSpeech returns preliminaryMark itself, unchanged, when the mark already
+        // sits inside a qualifying speech segment (e.g. continuous narration with no pause before
+        // it) - that is its own no-op case, not a phrase onset to back DefaultMarkLeadSeconds off
+        // from again, so o > preliminaryMark below excludes it from the (redundant) correction.
+        if (onset is not { } o || o <= preliminaryMark)
+            return preliminaryMark;
+        return Math.Max(0, o - DefaultMarkLeadSeconds);
+    }
+
+    /// <summary>
     /// Finds the VAD non-speech region (the jingle) a matched phrase belongs to, by
     /// <em>containment</em> rather than end-alignment: the last region that contains the phrase
     /// (<c>Start &lt;= phrase &lt;= End</c>) or brackets it within
@@ -2629,7 +2675,9 @@ public sealed class ChapterDetector
                 nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
             time = _options.MarkBeforeJingle
                 ? ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds)
-                : Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, speechSegments) - DefaultMarkLeadSeconds);
+                : RefineDefaultMark(
+                    Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, speechSegments) - DefaultMarkLeadSeconds),
+                    speechSegments);
             (statSilence, statRegion) = (anchorSilence, vadRegion);
         }
         else

@@ -1055,13 +1055,21 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task DefaultMode_PhraseAlreadyInsideTheJingleRegion_IsNotFloored()
+    public async Task DefaultMode_PhraseAlreadyInsideTheJingleRegion_RefineAdvancesToRealSpeechResumption()
     {
-        // Regression guard for ResolveDefaultPhraseOnset: when phraseAbs (645) already sits at or
-        // after the resolved region's own start (640) - the containment case, not the smeared-away
-        // case - and no VAD speech blip inside the region says otherwise, it is "at least in the
-        // right neighbourhood" and must be left alone. The mark stays at the ordinary
-        // phraseAbs - 0.25s (644.75), unchanged from pre-fix behaviour.
+        // ResolveDefaultPhraseOnset alone: when phraseAbs (645) already sits at or after the
+        // resolved region's own start (640) - the containment case, not the smeared-away case -
+        // and no VAD speech blip inside the region says otherwise, it leaves phraseAbs - 0.25s
+        // (644.75) alone, "at least in the right neighbourhood". But RefineDefaultMark runs next
+        // and scans forward regardless: since VAD shows zero speech anywhere from 644.75 through
+        // the rest of the region, it advances all the way to where real speech actually resumes
+        // (650) and re-derives the lead from there (649.75). An earlier version capped this scan at
+        // the region's own end specifically to keep this test at 644.75, but that cap also silently
+        // defeated the fix for phrases whose region resolution fails entirely - the cases still
+        // broken live - so the scan was made unbounded per the user's explicit request instead; see
+        // RefineDefaultMark's doc comment. A region with a genuine phrase match and no VAD speech
+        // anywhere in it is not expected on real audio (jingle announcements are reliably
+        // VAD-detectable), so this is a synthetic edge case, not a live-observed regression.
         var result = await DetectAsync(
             Options(),
             [new(610, 613)],
@@ -1073,7 +1081,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(650, 3600)] }); // jingle region 640-650 envelops 645
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 644.75)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 649.75)], result.Chapters);
     }
 
     [Fact]
