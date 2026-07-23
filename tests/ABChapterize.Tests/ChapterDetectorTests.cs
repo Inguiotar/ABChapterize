@@ -1030,6 +1030,54 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultMode_PhraseSmearedAcrossTheJingle_FloorsAtTheRegionEnd_NotBeforeIt()
+    {
+        // The default-mode (no --mark-before-jingle) counterpart to the smeared-phrase test above -
+        // the real-world failure this fix addresses (Perry Rhodan "Die Dritte Macht", chapters
+        // 1/4/6/7/11/25/27/29/31, 2026-07-22): --mark-before-jingle's ComputeJingleMark never trusts
+        // phraseAbs once a jingle anchor is resolved, but the default path used to trust it blindly,
+        // landing the mark 0.25 s before the smeared timestamp (637.75) - inside the *previous*
+        // chapter's narration, well before the jingle (640-660) even starts. FloorSmearedPhraseOnset
+        // now floors phraseAbs at the resolved region's own end (660) whenever it precedes the
+        // region's start, so the mark instead lands at 659.75 - late into the jingle rather than
+        // early into the wrong chapter, per the design chosen when the fix was implemented.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+            },
+            new FakeVad { Speech = [new(0, 640), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 659.75)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task DefaultMode_PhraseAlreadyInsideTheJingleRegion_IsNotFloored()
+    {
+        // Regression guard for FloorSmearedPhraseOnset: when phraseAbs (645) already sits at or
+        // after the resolved region's own start (640) - the containment case, not the smeared-away
+        // case - it is "at least in the right neighbourhood" and must be left alone. The floor must
+        // only intervene when phraseAbs provably precedes the region, never here; the mark stays at
+        // the ordinary phraseAbs - 0.25s (644.75), unchanged from pre-fix behaviour.
+        var result = await DetectAsync(
+            Options(),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(32, " Chapter two.")); // window [613, ...], phrase at 645
+            },
+            new FakeVad { Speech = [new(0, 640), new(650, 3600)] }); // jingle region 640-650 envelops 645
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 644.75)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
     {
         // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs

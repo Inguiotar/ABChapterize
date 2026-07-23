@@ -869,7 +869,7 @@ public sealed class ChapterDetector
                             markSilence = candidate.Silence;
                         time = _options.MarkBeforeJingle
                             ? ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds)
-                            : Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
+                            : Math.Max(0, FloorSmearedPhraseOnset(phraseAbs, markRegion) - DefaultMarkLeadSeconds);
                     }
                     else if (match.PhraseStartSeconds <= PhraseLatestStart)
                     {
@@ -1875,6 +1875,34 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Floors the phrase-onset estimate the <em>default</em> (non --mark-before-jingle) mark
+    /// placement backs <see cref="DefaultMarkLeadSeconds"/> off from, for phrases anchored to a
+    /// jingle region. Whisper's segment timestamp for a "Kapitel N" announcement spoken over or
+    /// inside a jingle is exactly the failure --mark-before-jingle's containment/smeared-phrase
+    /// machinery (<see cref="FindJingleRegionForPhrase"/>, <see cref="FindSmearedJingleRegion"/>)
+    /// exists to route around - but that machinery, and <see cref="TrimLeadingNonSpeech"/> after
+    /// it, only ever correct a timestamp <em>forward</em> into or past the region; when Whisper
+    /// smeared the segment so badly that even that correction cannot bridge it (its own end still
+    /// falls short of the region's), <paramref name="phraseAbs"/> is left sitting before the
+    /// jingle even starts - i.e. before <paramref name="jingleRegion"/>'s own start, which can
+    /// never be right, since the announcement this region was resolved *for* cannot precede its
+    /// own anchor. Flooring at the region's end in that case (the point non-speech detection
+    /// itself says speech resumes) at least keeps the mark from landing seconds back in the
+    /// previous chapter's narration, even though the true announcement can sit anywhere in the
+    /// region's tail this cannot pin down further - per-token Whisper timestamps were tried and
+    /// found just as unreliable in these cases (see tools/vadprobe's token-timestamp trace), so
+    /// this is the best floor available, not a precise fix. A <paramref name="phraseAbs"/> that
+    /// already sits at or after the region's start needs no correction: it is at least in the
+    /// right neighbourhood (that is what qualified the region via containment in the first
+    /// place), unlike the smeared-before case this guards against.
+    /// </summary>
+    /// <param name="phraseAbs">The (TrimLeadingNonSpeech-corrected) phrase onset estimate.</param>
+    /// <param name="jingleRegion">The jingle region <see cref="ResolveJingleAnchor"/> resolved for
+    /// this phrase, or null when none was found.</param>
+    private static double FloorSmearedPhraseOnset(double phraseAbs, NonSpeechRegion? jingleRegion)
+        => jingleRegion is { } r && phraseAbs < r.StartSeconds ? r.EndSeconds : phraseAbs;
+
+    /// <summary>
     /// Finds the VAD non-speech region (the jingle) a matched phrase belongs to, by
     /// <em>containment</em> rather than end-alignment: the last region that contains the phrase
     /// (<c>Start &lt;= phrase &lt;= End</c>) or brackets it within
@@ -2505,7 +2533,7 @@ public sealed class ChapterDetector
                 nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
             time = _options.MarkBeforeJingle
                 ? ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds)
-                : Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
+                : Math.Max(0, FloorSmearedPhraseOnset(phraseAbs, vadRegion) - DefaultMarkLeadSeconds);
             (statSilence, statRegion) = (anchorSilence, vadRegion);
         }
         else
