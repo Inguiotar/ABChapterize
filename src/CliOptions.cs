@@ -107,18 +107,19 @@ public sealed class CliOptions
     public double MaxJingleSeconds { get; private set; } = 45;
 
     /// <summary>
-    /// True when --max-jingle-length was given the value "auto": <see cref="ChapterDetector"/>
-    /// starts probing with the <see cref="MaxJingleSeconds"/> ceiling, then - from the second
-    /// jingle mark found (the same reasoning as <see cref="AutoMinSilence"/>: the gap before
-    /// the first mark is not necessarily representative) - resizes the probe window to 1.25x
-    /// the longest jingle actually observed so far plus margin (both up and down as the
-    /// observed maximum changes), capped at the original ceiling. Chapters with no jingle (or
-    /// an ultra-short one) are excluded from that, since some audiobooks only play the jingle
-    /// for some chapters and such a chapter says nothing about how long the window needs to be
-    /// for one that does have a full jingle.
-    /// False (the default) keeps the window fixed at <see cref="MaxJingleSeconds"/> throughout.
+    /// True (the default) unless --max-jingle-length was given an explicit numeric value
+    /// (including 0, which also disables jingle probing/VAD entirely - see
+    /// <see cref="RunVadPrePass"/>): <see cref="ChapterDetector"/> starts probing with the
+    /// <see cref="MaxJingleSeconds"/> ceiling, then - from the second jingle mark found (the
+    /// same reasoning as <see cref="AutoMinSilence"/>: the gap before the first mark is not
+    /// necessarily representative) - resizes the probe window to 1.25x the longest jingle
+    /// actually observed so far plus margin (both up and down as the observed maximum changes),
+    /// capped at the original ceiling. Chapters with no jingle (or an ultra-short one) are
+    /// excluded from that, since some audiobooks only play the jingle for some chapters and
+    /// such a chapter says nothing about how long the window needs to be for one that does have
+    /// a full jingle. "auto" can also be given explicitly for clarity.
     /// </summary>
-    public bool AutoMaxJingle { get; private set; }
+    public bool AutoMaxJingle { get; private set; } = true;
 
     /// <summary>
     /// True whenever the Silero VAD pre-pass should run over a file: either
@@ -744,16 +745,21 @@ public sealed class CliOptions
                                     Without this option, the mark is always placed 0.25 seconds
                                     before the chapter phrase, no matter what precedes it.
           -X, --max-jingle-length <seconds|auto>
-                                    Maximum expected jingle duration (default: 45), or 0 if no
-                                    jingle is expected at all. Above 0, audio is probed for
-                                    this duration plus 5 seconds (for the phrase itself) after
-                                    each silence; at 0, probing uses its original fixed window
-                                    instead, and the VAD pre-pass is skipped entirely unless
-                                    --mark-before-jingle still needs it. Lower values speed up
-                                    probing. With "auto", probing starts at the default ceiling
-                                    and - from the second jingle mark found - resizes to 1.25x
-                                    the longest jingle actually observed so far plus margin
-                                    (capped at the ceiling).
+                                    Maximum expected jingle duration (default, and ceiling with
+                                    "auto": 45), or 0 if no jingle is expected at all. Above 0,
+                                    audio is probed for this duration plus 5 seconds (for the
+                                    phrase itself) after each silence; at 0, probing uses its
+                                    original fixed window instead, and the VAD pre-pass is
+                                    skipped entirely unless --mark-before-jingle still needs it.
+                                    With "auto" (the default), starting from the second jingle
+                                    mark found (the first is not necessarily representative),
+                                    the probe window resizes to 1.25x the longest jingle
+                                    actually observed so far plus margin, capped at the ceiling
+                                    - narrower once a book's real jingle length is known, wider
+                                    again if a longer one turns up. An explicit numeric value
+                                    disables this and keeps the window fixed at that value
+                                    throughout - useful if the jingle length is known and
+                                    consistent, or for troubleshooting.
           -n, --min-silence-length <seconds|auto>
                                     Minimum silence duration that counts as a potential
                                     chapter break; the silence scan always uses this as its

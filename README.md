@@ -181,7 +181,7 @@ when chapters are written. The most useful knobs:
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
 | `-j`, `--mark-before-jingle` | **Experimental.** Anchor the mark to a preceding jingle/silence instead of the default fixed offset before the phrase — this tool's original mark-placement rule (see [How it works](#how-it-works)). |
-| `-X`, `--max-jingle-length <s>` | Longest expected jingle in seconds (default: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). |
+| `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
@@ -232,7 +232,12 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    breaks are established; everything skipped since the last mark is
    re-probed the moment a sequence gap turns up. An explicit
    `--min-silence-length` value disables
-   this and probes every silence at or above it instead.
+   this and probes every silence at or above it instead. The jingle probe
+   window (`--max-jingle-length` plus 5 seconds for the phrase itself)
+   self-tightens the same way by default (`--max-jingle-length auto`):
+   starting from the second jingle mark found, it resizes to 1.25x the
+   longest jingle actually observed so far, capped at the 45 s ceiling — an
+   explicit `--max-jingle-length` value keeps the window fixed at it instead.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in chunks whose borders snap to
@@ -260,9 +265,11 @@ keeps its exact position.
   your audiobook's pauses vary too much for that to help, an explicit
   threshold like `-n 2.5` still works — far fewer Whisper probes, much faster
   run, but chapters go missing if it's set too high.
-- **Jingles:** if you know the jingle is short, `-X 15` narrows the probe
-  window and speeds things up; if there's no jingle at all, `-X 0` narrows it
-  all the way back down and skips the VAD pre-pass too.
+- **Jingles:** by default (`-X auto`), the probe window self-tightens as real
+  jingle lengths are found, the same way `-n auto` does for silences. If you
+  know the jingle is consistently short, an explicit `-X 15` narrows the
+  window and speeds things up further; if there's no jingle at all, `-X 0`
+  narrows it all the way back down and skips the VAD pre-pass too.
 - **Accuracy vs. speed:** `--model turbo` (default) is a good balance;
   `large` is the most accurate and slowest. Going smaller than `small` is
   not advisable for real audiobooks: chapter detection stands or falls with

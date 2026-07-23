@@ -111,7 +111,8 @@ A short window of audio is transcribed with Whisper at the start of the file,
 after the end of every detected silence, and — whenever the VAD pre-pass ran
 (the default; see [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) — at every
 silence-less jingle it found too. The window is `--max-jingle-length` + 5
-seconds (50 seconds with the default 45 s ceiling), or a fixed 12 seconds when
+seconds (up to 50 seconds, with the 45 s ceiling, before it self-tightens —
+see below), or a fixed 12 seconds when
 `--max-jingle-length 0` says no jingle is expected. Each transcript is matched
 against the chapter phrase (see `--chapter-phrase`), and the chapter number is
 parsed from digits or number words
@@ -143,6 +144,16 @@ later turn up out of sequence, everything skipped since the previous chapter
 is re-probed before pass 3 has to step in. Giving `--min-silence-length` an
 explicit numeric value disables this and probes every silence at or above it.
 See the [`-n` reference](#detection-behaviour) for the knob itself.
+
+By default (`--max-jingle-length auto`), the jingle probe window self-tightens
+the same way. Starting from the second jingle mark found (the first is
+excluded — the gap before it isn't necessarily representative), the window
+resizes to 1.25x the longest jingle actually observed so far plus the
+5-second phrase margin, capped at the 45 s ceiling — narrowing once a book's
+real jingle length is known, and widening again if a longer one turns up.
+Giving `--max-jingle-length` an explicit numeric value (including `0`)
+disables this and keeps the window fixed at that value throughout. See the
+[`-X` reference](#detection-behaviour) for the knob itself.
 
 ### Pass 3 — gap filling (only when needed)
 
@@ -366,15 +377,19 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   precedes it.
 
 `-X`, `--max-jingle-length <seconds|auto>`
-: Longest expected jingle (0, or 1–600, default: 45). Above 0, probe windows
+: Longest expected jingle (0, or 1–600); this is always the probe window's
+  ceiling (default, and ceiling with `auto`: 45). Above 0, probe windows
   are `--max-jingle-length` + 5 seconds wide and a VAD pre-pass runs (see
   [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) to add candidates for
   jingles with no detectable silence around them. `0` says no jingle is
   expected at all: probe windows fall back to a fixed 12 seconds, and the
   VAD pre-pass is skipped entirely unless `--mark-before-jingle` still needs
   it for mark placement — reproducing this tool's original,
-  pre-jingle-detection behavior. Lower values (still above 0) shrink the
-  probe windows and speed up detection further. With `auto`, probing starts
+  pre-jingle-detection behavior. An explicit numeric value (still above 0)
+  disables the self-tightening below and keeps the probe window fixed at
+  that width throughout — useful if the jingle length is known and
+  consistent, or to shrink the window further for speed. With `auto` (the
+  default), probing starts
   at the 45 s ceiling and, from the second jingle mark found (the first is
   excluded for the same reason as `--min-silence-length auto` excludes the
   first silence — the gap before it isn't necessarily representative),
