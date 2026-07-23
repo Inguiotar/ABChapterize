@@ -1032,15 +1032,14 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task DefaultMode_PhraseSmearedAcrossTheJingle_FloorsAtTheRegionEnd_NotBeforeIt()
     {
-        // The default-mode (no --mark-before-jingle) counterpart to the smeared-phrase test above -
-        // the real-world failure this fix addresses (Perry Rhodan "Die Dritte Macht", chapters
-        // 1/4/6/7/11/25/27/29/31, 2026-07-22): --mark-before-jingle's ComputeJingleMark never trusts
-        // phraseAbs once a jingle anchor is resolved, but the default path used to trust it blindly,
-        // landing the mark 0.25 s before the smeared timestamp (637.75) - inside the *previous*
-        // chapter's narration, well before the jingle (640-660) even starts. FloorSmearedPhraseOnset
-        // now floors phraseAbs at the resolved region's own end (660) whenever it precedes the
-        // region's start, so the mark instead lands at 659.75 - late into the jingle rather than
-        // early into the wrong chapter, per the design chosen when the fix was implemented.
+        // The default-mode (no --mark-before-jingle) counterpart to the smeared-phrase test above:
+        // --mark-before-jingle's ComputeJingleMark never trusts phraseAbs once a jingle anchor is
+        // resolved, but the default path used to trust it blindly, landing the mark 0.25 s before
+        // the smeared timestamp (637.75) - inside the *previous* chapter's narration, well before
+        // the jingle (640-660) even starts. With no VAD speech blip inside the region to pinpoint
+        // the true onset (see ResolveDefaultPhraseOnset's other test below for that case), it falls
+        // back to flooring phraseAbs at the resolved region's own end (660), so the mark instead
+        // lands at 659.75 - late into the jingle rather than early into the wrong chapter.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5"),
             [new(610, 613)],
@@ -1058,11 +1057,11 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task DefaultMode_PhraseAlreadyInsideTheJingleRegion_IsNotFloored()
     {
-        // Regression guard for FloorSmearedPhraseOnset: when phraseAbs (645) already sits at or
+        // Regression guard for ResolveDefaultPhraseOnset: when phraseAbs (645) already sits at or
         // after the resolved region's own start (640) - the containment case, not the smeared-away
-        // case - it is "at least in the right neighbourhood" and must be left alone. The floor must
-        // only intervene when phraseAbs provably precedes the region, never here; the mark stays at
-        // the ordinary phraseAbs - 0.25s (644.75), unchanged from pre-fix behaviour.
+        // case - and no VAD speech blip inside the region says otherwise, it is "at least in the
+        // right neighbourhood" and must be left alone. The mark stays at the ordinary
+        // phraseAbs - 0.25s (644.75), unchanged from pre-fix behaviour.
         var result = await DetectAsync(
             Options(),
             [new(610, 613)],
@@ -1075,6 +1074,35 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([new(1, 0.25), new(2, 644.75)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task DefaultMode_AnnouncementBlipSwallowedIntoTheJingle_MarksAtTheBlipStart()
+    {
+        // The real-world mid-phrase failure this addresses (Perry Rhodan "Die Dritte Macht",
+        // chapter 35, 2026-07-22): VAD split the announcement into a short 0.6 s blip ("Kapitel")
+        // and a longer 1.2 s blip ("35"), separated by a brief gap. ComputeNonSpeechRegions'
+        // MergeShortSpeechGapSeconds merge - meant to bridge an announcement's own quiet syllables
+        // inside a jingle - cannot tell that short first blip apart from a musical vocal transient
+        // and merges it into the surrounding non-speech run, so the resolved region's end (657)
+        // lands exactly *between* the two blips, mid-word. Whisper's own timestamp for the smeared
+        // "Chapter two." segment (638-658) is no help - it is the reason the region had to be
+        // rescued via the segment-span overlap in the first place. But the swallowed blip itself
+        // (656-656.6) is real VAD data pinpointing the announcement's true onset: the mark must
+        // land 0.25s before its start (655.75), not at the region's end (656.75) as a plain floor
+        // would give.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+            },
+            new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
     }
 
     [Fact]

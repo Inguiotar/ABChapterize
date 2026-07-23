@@ -119,10 +119,15 @@ parsed from digits or number words
 (see [section 7](#7-languages-and-number-recognition)).
 
 Where a chapter announcement is found, the mark is placed 0.25 seconds before
-it, no matter what precedes it — a silence, a jingle, or nothing at all. If a
-jingle precedes the announcement and Whisper's own timestamp for it comes back
-smeared to before the jingle even starts, the mark is floored at the jingle's
-own end instead of landing early, back in the previous chapter's narration.
+it, no matter what precedes it — a silence, a jingle, or nothing at all. When a
+jingle precedes the announcement, Whisper's own timestamp for it is not always
+trusted outright: if the voice-activity pre-pass shows the announcement's own
+opening syllable was brief enough to be folded into the jingle's non-speech
+stretch, the mark is placed there instead — VAD's boundaries pinpoint it more
+reliably than Whisper's own timing in that case. Failing that, if the
+timestamp still comes back smeared to before the jingle even starts, the mark
+is floored at the jingle's own end instead of landing early, back in the
+previous chapter's narration.
 `--mark-before-jingle` (**experimental**) anchors the mark to a preceding
 jingle/silence instead, the way this tool originally always placed marks: 0.5
 seconds before a leading silence's end (so it lands inside the silence, not
