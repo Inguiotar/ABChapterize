@@ -57,7 +57,7 @@ public sealed class CliOptionsTests : IDisposable
         // --mark-before-jingle - only --max-jingle-length 0 turns it off.
         Assert.True(o.RunVadPrePass);
         Assert.False(o.TargetIsDirectory);
-        Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.MarkBeforeJingle | o.Quiet | o.Verbose
+        Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.MarkBeforeJingle | o.PreciseMark | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
         Assert.Null(o.Jobs);
     }
@@ -172,6 +172,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--model", "small")]
     [InlineData("--pass3-model", "large")]
     [InlineData("--mark-before-jingle")]
+    [InlineData("--precise-mark")]
     [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
     [InlineData("--verify")]
@@ -215,6 +216,21 @@ public sealed class CliOptionsTests : IDisposable
     public void VerifyWithForce_IsAnError()
     {
         Assert.Throws<CliError>(() => ParseFile("--verify", "--force"));
+    }
+
+    [Fact]
+    public void PreciseMark_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--precise-mark")!.PreciseMark);
+        Assert.True(ParseFile("-p")!.PreciseMark);
+    }
+
+    [Fact]
+    public void PreciseMarkWithMarkBeforeJingle_IsAnError()
+    {
+        // --precise-mark only corrects default-mode placement, which --mark-before-jingle
+        // replaces with its own, unrelated anchor - there is nothing left for it to correct.
+        Assert.Throws<CliError>(() => ParseFile("--precise-mark", "--mark-before-jingle"));
     }
 
     [Fact]
@@ -458,6 +474,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--verify"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--mark-before-jingle"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--precise-mark"));
     }
 
     [Fact]

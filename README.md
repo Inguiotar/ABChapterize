@@ -181,6 +181,7 @@ when chapters are written. The most useful knobs:
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
 | `-j`, `--mark-before-jingle` | **Experimental.** Anchor the mark to a preceding jingle/silence instead of the default fixed offset before the phrase — this tool's original mark-placement rule (see [How it works](#how-it-works)). |
+| `-p`, `--precise-mark` | **Experimental.** Double-check every mark placed without `-j` by re-transcribing the audio right at it, correcting it if the phrase isn't actually there (see [How it works](#how-it-works)). Slower — costs one or more extra transcriptions per chapter. Cannot combine with `-j`. |
 | `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
@@ -238,6 +239,13 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    starting from the second jingle mark found, it resizes to 1.25x the
    longest jingle actually observed so far, capped at the 45 s ceiling — an
    explicit `--max-jingle-length` value keeps the window fixed at it instead.
+2b. **Precise-mark check (only with `--precise-mark`/`-p`, experimental):** for
+   the rare mark that still lands on the wrong spot — usually a jingle whose
+   music briefly fools the voice-activity detector into sounding like speech —
+   every mark is double-checked by re-transcribing a short, isolated clip of
+   the audio right at it; if the phrase isn't really there, nearby candidates
+   are checked the same way until it's found and the mark is corrected. Costs
+   one or more extra transcriptions per chapter, so it's off by default.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in chunks whose borders snap to

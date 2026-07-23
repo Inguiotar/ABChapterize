@@ -95,6 +95,27 @@ public sealed class CliOptions
     public bool MarkBeforeJingle { get; private set; }
 
     /// <summary>
+    /// Verifies (and if necessary, corrects) every default-mode mark - i.e. one not produced by
+    /// <see cref="MarkBeforeJingle"/> - by directly re-transcribing the audio at the mark instead
+    /// of trusting the VAD/duration heuristics that produced it (--precise-mark / -p): if the
+    /// chapter phrase is the first thing heard there, the mark is left alone (the common case,
+    /// and the only extra cost paid for a chapter that was already right). If not - typically
+    /// because the mark landed on a jingle's own spurious VAD "speech" blip rather than the real
+    /// announcement - each subsequent VAD speech-segment start is checked the same way in turn
+    /// until one succeeds and the next one after it fails again; only that success-then-fail
+    /// pattern confirms the phrase truly begins at the earlier candidate, rather than at some
+    /// other unrelated false positive further inside the jingle. A chapter whose phrase can never
+    /// be confirmed this way keeps its original mark rather than guessing. Substantially more
+    /// expensive than the default algorithm alone - most of all for chapters preceded by a jingle
+    /// with several spurious VAD blips, since each one needs its own extra transcription - so
+    /// this is off by default; see <see cref="ChapterDetector"/> for the mechanics. Cannot be
+    /// combined with <see cref="MarkBeforeJingle"/>, which replaces default-mode placement with
+    /// its own, unrelated jingle/silence anchor - there is nothing here left for this to correct.
+    /// <para><b>Experimental.</b></para>
+    /// </summary>
+    public bool PreciseMark { get; private set; }
+
+    /// <summary>
     /// Maximum expected jingle duration in seconds (--max-jingle-length / -X, default 45), or 0
     /// to say no jingle is expected at all. Above 0, the probe window after each silence spans
     /// this duration plus a flat 5-second margin for the chapter phrase itself, and VAD
@@ -266,6 +287,7 @@ public sealed class CliOptions
     private static readonly Dictionary<char, string> ShortOptions = new()
     {
         ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--mark-before-jingle",
+        ['p'] = "--precise-mark",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
@@ -395,7 +417,7 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.DryRun || o._langSet || o._phraseSet || o._modelSet
+        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.PreciseMark || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                          || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
@@ -403,15 +425,21 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o.MarkBeforeJingle || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o.MarkBeforeJingle || o.PreciseMark || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
-                "--mark-before-jingle, --max-jingle-length, --min-silence-length and --verify have no effect and cannot be combined with it.");
+                "--mark-before-jingle, --precise-mark, --max-jingle-length, --min-silence-length and --verify have no effect and cannot be combined with it.");
 
         if (o.Force && o.Verify)
             throw new CliError(
                 "--force and --verify cannot be combined: --force always discards pre-existing " +
                 "chapter markings, while --verify decides that based on whether they check out.");
+
+        if (o.MarkBeforeJingle && o.PreciseMark)
+            throw new CliError(
+                "--mark-before-jingle and --precise-mark cannot be combined: --precise-mark only " +
+                "corrects the default (non -j) mark placement, which --mark-before-jingle replaces " +
+                "with its own, unrelated jingle/silence anchor.");
 
         if (o.SimpleMetadata && !o.Export && !o.Import)
             throw new CliError("--simple-metadata requires --export or --import.");
@@ -483,6 +511,7 @@ public sealed class CliOptions
             case "--revert": Revert = true; return true;
             case "--force": Force = true; return true;
             case "--mark-before-jingle": MarkBeforeJingle = true; return true;
+            case "--precise-mark": PreciseMark = true; return true;
             case "--quiet": Quiet = true; return true;
             case "--verbose": Verbose = true; return true;
             case "--verbose-transcripts": VerboseTranscripts = Verbose = true; return true;
@@ -744,6 +773,18 @@ public sealed class CliOptions
                                     the mark is placed at the start of the jingle instead.
                                     Without this option, the mark is always placed 0.25 seconds
                                     before the chapter phrase, no matter what precedes it.
+          -p, --precise-mark        [EXPERIMENTAL] Verify every mark placed without
+                                    --mark-before-jingle by re-transcribing the audio right at
+                                    it: if the chapter phrase is heard there, the mark is left
+                                    alone (the common case - no extra cost beyond that one
+                                    check). Otherwise, further candidate positions are checked
+                                    the same way until the real onset is confirmed and the mark
+                                    is corrected to it; a mark that can never be confirmed this
+                                    way is left as originally placed. Substantially slower than
+                                    without this option, since it costs one or more extra
+                                    Whisper transcriptions per chapter, most of all for ones
+                                    preceded by a jingle with several false-positive candidates.
+                                    Cannot be combined with --mark-before-jingle.
           -X, --max-jingle-length <seconds|auto>
                                     Maximum expected jingle duration (default, and ceiling with
                                     "auto": 45), or 0 if no jingle is expected at all. Above 0,

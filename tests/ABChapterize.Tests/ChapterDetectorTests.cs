@@ -1170,6 +1170,85 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task PreciseMark_LeavesAnAlreadyCorrectMarkUnchanged()
+    {
+        // --precise-mark's cheap path: re-transcribing right at the mark already computed (here,
+        // chapter one's plain 0.25 s lead) finds the phrase as the very first thing heard, so
+        // the mark is confirmed and left exactly as is - no candidate search needed.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(2, " Chapter two.")); // window [613, ...], phrase at 615
+                // --precise-mark checks, keyed by their own decode start (checked position - 0.5s
+                // lead-in): chapter one's mark (0.25) decodes from max(0, 0.25-0.5) = 0, landing on
+                // the very same script entry already used for the real probe window at 0 - the
+                // phrase really is the first thing there, so this is not a coincidence of the test.
+                s.Add(614.25, Seg(0, " Chapter two.")); // check @ 614.75 (chapter two's own mark)
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PreciseMark_CorrectsAMarkStuckOnASpuriousVadBlip()
+    {
+        // Reproduces "ch19 disease" (Perry Rhodan "Die Dritte Macht", chapter 19, 2026-07-23):
+        // a jingle's own musical/vocal transient can be long enough to clear
+        // TransientSpeechFloorSeconds, fooling RefineDefaultMark's VAD-duration heuristic into
+        // stopping on it (656) instead of the real announcement (657) - both blips look identical
+        // to that heuristic, which only ever looks at duration. --precise-mark catches what the
+        // heuristic cannot: its own first check (at 655.75, the heuristic's mark) fails, then
+        // every later VAD speech-segment start is checked in turn - 656 fails too (still the
+        // transient), 657 succeeds (the real phrase), and 660 fails again (narration resumes),
+        // which is exactly the success-then-fail pattern that confirms 657 as the true onset.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+                s.Add(655.25, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 655.75 (RefineDefaultMark's mark) - the transient, not the phrase
+                s.Add(655.5, new TranscriptSegment(0, 0.6, " Music", 1.0));        // candidate @ 656 (the transient itself) - still not the phrase
+                s.Add(656.5, Seg(0, " Chapter two."));                            // candidate @ 657 - the real phrase
+                s.Add(659.5, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // candidate @ 660 - narration resumes, confirming 657
+            },
+            new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 656.75)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PreciseMark_FallsBackToTheOriginalMark_WhenNoCandidateEverConfirms()
+    {
+        // If the phrase can never be confirmed anywhere - every check simulates unrelated audio,
+        // as if the real announcement were outside the search horizon entirely - --precise-mark
+        // must not guess: it leaves the mark exactly as RefineDefaultMark computed it, rather than
+        // looping forever or picking an arbitrary candidate.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0));
+                s.Add(655.25, new TranscriptSegment(0, 1, " Music", 1.0));
+                s.Add(655.5, new TranscriptSegment(0, 0.6, " Music", 1.0));
+                s.Add(656.5, new TranscriptSegment(0, 1.2, " Music", 1.0));
+                s.Add(659.5, new TranscriptSegment(0, 3, " Once upon a time.", 1.0));
+            },
+            new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
     {
         // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs

@@ -16,8 +16,13 @@ namespace ABChapterize;
 /// </summary>
 internal static class VadSegmenter
 {
-    /// <summary>Frame speech probability at/above this counts as speech (Silero's own default).</summary>
-    internal const float Threshold = 0.5f;
+    /// <summary>Frame speech probability at/above this counts as speech. Raised from Silero's own
+    /// 0.5 default: audiobooks are studio-recorded and mixed for clear intelligibility, unlike the
+    /// noisy, low-SNR speech (voice assistants, phone calls) Silero is tuned for by default, so a
+    /// stricter threshold has headroom to reject more jingle-music false positives without losing
+    /// real narration - confirmed via <c>tools\vadprobe</c>'s threshold sweep against a real
+    /// audiobook, up to 0.70, before picking this value.</summary>
+    internal const float Threshold = 0.6f;
 
     /// <summary>A candidate speech run must persist at least this long to be kept (Silero's own
     /// default for <c>min_speech_duration_ms</c>).</summary>
@@ -39,7 +44,12 @@ internal static class VadSegmenter
     /// </summary>
     /// <param name="frames">Each frame's start time in seconds and speech probability [0,1],
     /// in chronological order.</param>
-    internal static List<SpeechSegment> Smooth(IReadOnlyList<(double TimeSeconds, float Probability)> frames)
+    /// <param name="threshold">Frame probability at/above which counts as speech; defaults to
+    /// <see cref="Threshold"/>. Exposed only so diagnostic tooling can re-smooth the same raw
+    /// frames at other candidate thresholds without re-running VAD inference - production code
+    /// always uses the default.</param>
+    internal static List<SpeechSegment> Smooth(
+        IReadOnlyList<(double TimeSeconds, float Probability)> frames, float threshold = Threshold)
     {
         var result = new List<SpeechSegment>();
         double? runStart = null;
@@ -48,7 +58,7 @@ internal static class VadSegmenter
 
         foreach (var (time, probability) in frames)
         {
-            if (probability >= Threshold)
+            if (probability >= threshold)
             {
                 runStart ??= time;
                 silenceStart = null;

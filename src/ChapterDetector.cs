@@ -245,11 +245,43 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// The speech-duration floor <see cref="AdvancePastNonSpeech"/> uses to tell a genuine
-    /// spoken onset from VAD noise-floor jitter - much tighter than
-    /// <see cref="MergeShortSpeechGapSeconds"/>'s jingle-vocal-transient threshold, since this
-    /// is about rejecting detector artifacts, not musical vocals.
+    /// spoken onset from a jingle's own musical/vocal transients (or an occasional Whisper
+    /// hallucination inside one) that VAD still classifies as "speech". Calibrated empirically
+    /// against a real audiobook (see <c>tools\vadprobe</c>'s sweep data): the shortest such
+    /// transient measured 0.352s and stubbornly survived raising <see cref="VadSegmenter.Threshold"/>
+    /// as far as 0.70, while the shortest genuine chapter-announcement word measured 0.608s -
+    /// this sits roughly midway between the two, erring toward not skipping real speech since a
+    /// real onset in some other supported language could plausibly be shorter than the one
+    /// German data point available. Deliberately tighter than <see
+    /// cref="MergeShortSpeechGapSeconds"/>'s cluster-grouping gap, since the two solve different
+    /// problems: this rejects a single too-short blip outright, that decides whether separate
+    /// blips belong to the same jingle-internal cluster.
     /// </summary>
-    private const double TransientSpeechFloorSeconds = 0.1;
+    private const double TransientSpeechFloorSeconds = 0.4;
+
+    /// <summary>
+    /// Length of the decode --precise-mark transcribes to check whether a mark's chapter phrase
+    /// is really the first thing heard there (see <see cref="RefinePreciseMarkAsync"/>). A real
+    /// chapter announcement is never anywhere close to this long, and a jingle - the only other
+    /// thing a mark can land on - is rarely shorter than it, so a single window is normally
+    /// enough to tell the two apart without needing several probes of increasing length.
+    /// </summary>
+    private const double PreciseMarkCheckWindowSeconds = 4.0;
+
+    /// <summary>
+    /// Real audio lead-in --precise-mark decodes before every position it checks (widening the
+    /// window backward rather than shifting it, so <see cref="PreciseMarkCheckWindowSeconds"/> of
+    /// fresh audio is never lost off the tail). Needed because a VAD-detected onset can lag the
+    /// true acoustic word-start by a few tenths of a second (a soft consonant takes VAD's
+    /// amplitude threshold a moment to cross); without this margin, decoding from exactly such an
+    /// onset can clip the phrase's leading sound enough that Whisper drops the word from the
+    /// transcript entirely rather than merely mishearing it - confirmed on real audio (see
+    /// <c>tools\vadprobe</c>'s <c>precise</c> prototype). A synthetic silence lead-in was tried
+    /// first instead and rejected: it caused Whisper to misrecognize the very next word's leading
+    /// consonant right at the padding/audio boundary (e.g. "Kapitel" heard as "Spitel"), an
+    /// artifact plain real audio never showed.
+    /// </summary>
+    private const double PreciseMarkLeadInSeconds = 0.5;
 
     /// <summary>
     /// With --max-jingle-length auto, the resized probe window is this factor times the
@@ -908,6 +940,9 @@ public sealed class ChapterDetector
                         time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
                         markSilence = a;
                     }
+
+                    if (_options.PreciseMark && !_options.MarkBeforeJingle)
+                        time = await RefinePreciseMarkAsync(time, file, info.InputDecoder, profile!, speechSegments, ct);
 
                     if (match.SpansMerge)
                         _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
@@ -2045,6 +2080,124 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Checks whether <paramref name="profile"/>'s chapter phrase is really the first thing heard
+    /// starting at <paramref name="start"/>, by transcribing a short, isolated window there
+    /// directly - the --precise-mark correction's basic building block (see
+    /// <see cref="RefinePreciseMarkAsync"/>), used both for the mark itself and for every
+    /// candidate position considered while correcting it. Sidesteps Whisper's own segment
+    /// timestamps entirely, which is the point: those are demonstrably unreliable close to a
+    /// jingle (a single segment has been observed spanning almost an entire 18 s jingle) and
+    /// therefore useless for pinpointing anything - this only ever asks a binary question of a
+    /// small, self-contained decode instead of trusting where a large decode claims a phrase
+    /// began.
+    /// </summary>
+    /// <param name="start">Absolute position to check.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True when the first non-blank transcribed segment contains the chapter phrase.</returns>
+    private async Task<bool> PreciseMarkPhraseFoundAsync(
+        double start, string file, string? inputDecoder, LanguageProfile profile, CancellationToken ct)
+    {
+        var decodeStart = Math.Max(0, start - PreciseMarkLeadInSeconds);
+        var samples = await _audio.DecodePcmAsync(
+            file, decodeStart, PreciseMarkCheckWindowSeconds + (start - decodeStart), inputDecoder, ct);
+        var transcript = await TranscribeCountingAsync(samples, ct);
+        // The lead-in can surface a trailing fragment of whatever preceded `start` as the first
+        // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
+        // *non-blank* segment is what actually starts at or after the checked position.
+        var first = transcript.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Text));
+        return first.Text != null && profile.PhraseRegex.IsMatch(first.Text);
+    }
+
+    /// <summary>
+    /// Verifies (and if necessary, corrects) a default-mode mark by directly asking Whisper
+    /// "does the chapter phrase start right here?" instead of trusting the VAD/duration
+    /// heuristics <see cref="RefineDefaultMark"/> already applied - the --precise-mark option
+    /// (<see cref="CliOptions.PreciseMark"/>). Those heuristics rest on a floor deliberately
+    /// calibrated to err toward not skipping real speech (see
+    /// <see cref="TransientSpeechFloorSeconds"/>'s remarks on cross-language uncertainty), which
+    /// means a spurious VAD "speech" blip inside a jingle that happens to clear that floor - a
+    /// vocal-like musical transient, or an occasional Whisper hallucination - can still fool them
+    /// into stopping short of the true announcement; this asks the audio directly instead, at the
+    /// cost of one or more extra transcriptions per chapter.
+    /// <para>
+    /// First checks <paramref name="mark"/> itself: if its own phrase is heard there, it is
+    /// already correct and is returned unchanged - the common case, and the only cost paid for a
+    /// chapter that needed no correction. Otherwise, every VAD speech-segment start after
+    /// <paramref name="mark"/> (the same swallowed-blip candidates <see
+    /// cref="ResolveDefaultPhraseOnset"/> already reasons about, not a blind fixed-step scan) is
+    /// checked in chronological order until one succeeds <em>and</em> the next one after it fails
+    /// again - only that success-then-fail pattern confirms the phrase truly begins at the
+    /// earlier candidate, immune to a single stray false positive elsewhere in the jingle, since a
+    /// real chapter announcement's own audio ends and narration (or some unrelated cue) resumes
+    /// right after it. The search is bounded to a plausible jingle-plus-phrase span
+    /// (<see cref="CliOptions.MaxJingleSeconds"/> plus <see cref="PhraseMarginSeconds"/>) after
+    /// <paramref name="mark"/>, so it can never wander into the next chapter's own territory.
+    /// </para>
+    /// <para>
+    /// When no candidate is ever confirmed this way, <paramref name="mark"/> is returned
+    /// unchanged rather than guessing - validated against a real audiobook's full set of known
+    /// good and previously-broken marks (see <c>tools\vadprobe</c>'s <c>precise</c> prototype)
+    /// before this was ported here.
+    /// </para>
+    /// </summary>
+    /// <param name="mark">The mark <see cref="RefineDefaultMark"/> already computed.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
+    /// empty when the VAD pre-pass did not run, in which case there is nothing to check beyond
+    /// <paramref name="mark"/> itself and it is returned unchanged whenever its own check fails.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The confirmed/corrected mark, or <paramref name="mark"/> unchanged when it was
+    /// already correct or no candidate could be confirmed.</returns>
+    private async Task<double> RefinePreciseMarkAsync(
+        double mark, string file, string? inputDecoder, LanguageProfile profile,
+        List<SpeechSegment> speechSegments, CancellationToken ct)
+    {
+        if (await PreciseMarkPhraseFoundAsync(mark, file, inputDecoder, profile, ct))
+            return mark;
+
+        var searchHorizon = mark + _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var candidates = speechSegments
+            .Where(s => s.StartSeconds > mark && s.StartSeconds <= searchHorizon)
+            .Select(s => s.StartSeconds)
+            .OrderBy(s => s);
+
+        double? confirmed = null;
+        foreach (var candidate in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            var found = await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct);
+            if (found)
+            {
+                if (confirmed is { } already)
+                    _log?.Invoke(
+                        $"--precise-mark: consecutive candidates confirmed ({FormatTimestamp(already)} " +
+                        $"then {FormatTimestamp(candidate)}) - ambiguous, moving confirmation forward");
+                confirmed = candidate;
+                continue;
+            }
+            if (confirmed is { } c)
+            {
+                _log?.Invoke(
+                    $"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(c)}");
+                return Math.Max(0, c - DefaultMarkLeadSeconds);
+            }
+        }
+
+        if (confirmed is { } onset)
+        {
+            _log?.Invoke($"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
+            return Math.Max(0, onset - DefaultMarkLeadSeconds);
+        }
+        _log?.Invoke($"--precise-mark: could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
+        return mark;
+    }
+
+    /// <summary>
     /// Finds the VAD non-speech region (the jingle) a matched phrase belongs to, by
     /// <em>containment</em> rather than end-alignment: the last region that contains the phrase
     /// (<c>Start &lt;= phrase &lt;= End</c>) or brackets it within
@@ -2590,8 +2743,8 @@ public sealed class ChapterDetector
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans a Pass 3 chunk seam " +
                                  "(bridged from the previous chunk) - worth a spot check");
-                RecordGapChapterMatch(match, matchSegments, found, remaining, knownChapters,
-                    allSilences, nonSpeechRegions, speechSegments, work);
+                await RecordGapChapterMatch(match, matchSegments, found, remaining, knownChapters,
+                    allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile, ct);
             }
 
             // A chunk whose normal transcript still leaves some expected number(s) unaccounted
@@ -2647,13 +2800,18 @@ public sealed class ChapterDetector
     /// <param name="allSilences">Every silence Pass 1 stored, for anchor resolution.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions (empty when the VAD pre-pass did
     /// not run), for the jingle anchor resolution.</param>
-    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
+    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment and,
+    /// with --precise-mark, as its candidate positions.</param>
     /// <param name="work">The file's progress tracker.</param>
-    private void RecordGapChapterMatch(
+    /// <param name="file">Path of the audio file, for --precise-mark's own extra transcriptions.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="profile">Language profile supplying the phrase --precise-mark looks for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task RecordGapChapterMatch(
         PhraseMatch match, List<TranscriptSegment> matchSegments,
         List<DetectedChapter> found, HashSet<int> remaining, IReadOnlyList<DetectedChapter> knownChapters,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
-        WorkTracker work)
+        WorkTracker work, string file, string? inputDecoder, LanguageProfile profile, CancellationToken ct)
     {
         var phraseAbs = match.PhraseStartSeconds;
         double time;
@@ -2689,6 +2847,8 @@ public sealed class ChapterDetector
             time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
             statSilence = anchor;
         }
+        if (_options.PreciseMark && !_options.MarkBeforeJingle)
+            time = await RefinePreciseMarkAsync(time, file, inputDecoder, profile, speechSegments, ct);
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
         RecordChapterStats(match.Number, statSilence, statRegion, phraseAbs);
         remaining.Remove(match.Number);
@@ -2782,8 +2942,8 @@ public sealed class ChapterDetector
                 {
                     if (!remaining.Contains(match.Number) || knownChapters.Any(k => k.Number == match.Number))
                         continue;
-                    RecordGapChapterMatch(match, subAbs, found, remaining, knownChapters,
-                        allSilences, nonSpeechRegions, speechSegments, work);
+                    await RecordGapChapterMatch(match, subAbs, found, remaining, knownChapters,
+                        allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile, ct);
                     if (remaining.Count == 0)
                         break;
                 }

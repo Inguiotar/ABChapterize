@@ -86,6 +86,16 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
 
     /// <inheritdoc/>
     public async Task<List<SpeechSegment>> DetectSpeechAsync(IAsyncEnumerable<float[]> pcm, CancellationToken ct)
+        => VadSegmenter.Smooth(await DetectSpeechProbabilitiesAsync(pcm, ct));
+
+    /// <summary>Runs VAD inference over the given PCM stream and returns each frame's raw speech
+    /// probability, before <see cref="VadSegmenter.Smooth"/>'s thresholding/hysteresis turns them
+    /// into segments. Exposed (rather than kept private inside <see cref="DetectSpeechAsync"/>)
+    /// purely for diagnostic tooling that needs to re-smooth the same frames at several candidate
+    /// thresholds without paying for repeated ONNX inference - production code only ever calls
+    /// <see cref="DetectSpeechAsync"/>.</summary>
+    public async Task<List<(double TimeSeconds, float Probability)>> DetectSpeechProbabilitiesAsync(
+        IAsyncEnumerable<float[]> pcm, CancellationToken ct)
     {
         var frames = new List<(double TimeSeconds, float Probability)>();
         // Zero-initialized recurrent state and context are Silero's documented starting point
@@ -114,7 +124,7 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
         // Any trailing partial frame (< 32 ms) at true EOF is dropped; far below the precision
         // chapter marks need.
 
-        return VadSegmenter.Smooth(frames);
+        return frames;
     }
 
     /// <summary>Runs one inference frame and updates <paramref name="state"/> and <paramref

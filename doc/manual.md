@@ -128,6 +128,23 @@ reliably than Whisper's own timing in that case. Failing that, if the
 timestamp still comes back smeared to before the jingle even starts, the mark
 is floored at the jingle's own end instead of landing early, back in the
 previous chapter's narration.
+
+`--precise-mark`/`-p` (**experimental**) adds one more layer on top of that,
+for the rare case where even this still lands on the wrong spot — typically a
+jingle whose own music briefly resembles speech closely enough to fool the
+voice-activity detector. Every mark placed this way (not with
+`--mark-before-jingle`, which has its own separate anchor) is double-checked by
+transcribing a short, isolated clip of the audio right at it: if the chapter
+phrase is really the first thing heard there, nothing changes; otherwise
+further candidate positions nearby are checked the same way until the true
+announcement is found, and the mark is corrected to it. A mark that cannot be
+confirmed this way at all is left as originally placed rather than guessed at.
+This costs one or more extra Whisper transcriptions per chapter on top of pass
+2's own probe — most of all for chapters preceded by a jingle with several
+false-positive candidates — so it is off by default; turn it on for a book
+where marks keep landing inside jingles even without it (the machinery is
+documented in the source).
+
 `--mark-before-jingle` (**experimental**) anchors the mark to a preceding
 jingle/silence instead, the way this tool originally always placed marks: 0.5
 seconds before a leading silence's end (so it lands inside the silence, not
@@ -383,6 +400,19 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   regardless of this option. Without `--mark-before-jingle`, a mark is
   always placed 0.25 seconds before the chapter phrase, no matter what
   precedes it.
+
+`-p`, `--precise-mark`
+: **Experimental.** Verify every mark placed without `--mark-before-jingle`
+  (which has its own separate anchor, so this cannot be combined with it) by
+  re-transcribing the audio right at it: if the chapter phrase is heard there,
+  the mark is left alone — the common case, and the only cost paid for a
+  chapter that needed no correction. Otherwise, further candidate positions
+  nearby are checked the same way until the true announcement is confirmed and
+  the mark is corrected to it; a mark that can never be confirmed this way is
+  left as originally placed rather than guessed at. Substantially slower than
+  without this option, since it costs one or more extra Whisper transcriptions
+  per chapter, most of all for chapters preceded by a jingle with several
+  false-positive candidates — see [Pass 2](#pass-2--probing).
 
 `-X`, `--max-jingle-length <seconds|auto>`
 : Longest expected jingle (0, or 1–600); this is always the probe window's
