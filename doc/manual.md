@@ -733,7 +733,11 @@ touching Whisper at all.
     would duplicate the model into VRAM, risking exhaustion. An explicit
     `-J`/`--jobs` value always overrides this cap if you want to force it
     anyway (verified to work correctly on a Vulkan GPU in testing, but at
-    your own risk regarding VRAM).
+    your own risk regarding VRAM) — though it's unlikely to actually speed
+    anything up: a single GPU generally can't run more than one inference at
+    a time regardless of how many concurrent instances are asking it to, so
+    the extra "concurrent" files typically end up queued rather than truly
+    processed in parallel.
   - **CPU backend:** ceiling is `Environment.ProcessorCount / 4`, clamped to
     1-4; each concurrent instance is given a matching share of threads so
     the total stays close to the core count instead of oversubscribing it.
