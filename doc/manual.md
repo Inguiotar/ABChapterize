@@ -615,7 +615,8 @@ skipped (reported as "skipped").
 
 `-s`, `--summary`
 : Print a summary at the end of the run: files encountered / processed /
-  skipped, warnings, total and average processing time, and — when at least
+  skipped, warnings, how many processed files had no chapter found at all,
+  total and average processing time, and — when at least
   one chapter mark was written — the min/max/average Whisper confidence
   across those marks (not every probe attempted, only the ones that produced
   a mark). Also, across all processed files, the shortest silence and (when

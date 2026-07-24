@@ -28,6 +28,10 @@ public sealed class FileProcessor
     /// <summary>Number of files that actually went through chapter detection.</summary>
     private int _processed;
 
+    /// <summary>Number of processed files where detection found no chapter phrases at all
+    /// (left unchanged), a subset of <see cref="_processed"/>.</summary>
+    private int _noChaptersFound;
+
     /// <summary>Accumulated detection time of the processed files (for the --summary average).</summary>
     private TimeSpan _processingTime;
 
@@ -221,9 +225,10 @@ public sealed class FileProcessor
         if (_options.Summary)
         {
             var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
+            var noChaptersNote = _noChaptersFound > 0 ? $", {_noChaptersFound} with no chapters found" : "";
             Console.WriteLine(
                 $"Summary: {files.Count} file(s) encountered, {_processed} processed, " +
-                $"{_skipped} skipped{warningNote}");
+                $"{_skipped} skipped{warningNote}{noChaptersNote}");
             var average = _processed > 0
                 ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
                 : "";
@@ -695,6 +700,7 @@ public sealed class FileProcessor
             }
             if (result.Chapters.Count == 0)
             {
+                lock (_statsLock) _noChaptersFound++;
                 var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
                 _progress.FinishWithSummary(work, $"{name}: no chapter phrases found; file unchanged{langHint}");
                 return;
