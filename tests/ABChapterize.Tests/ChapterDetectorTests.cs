@@ -1353,6 +1353,37 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task PreciseMark_QuietSnap_PrefersBackward_WhenBothSidesAreSimilarlyQuiet()
+    {
+        // When the quietest stretch before the mark and the quietest stretch after it are in the
+        // same ballpark (within PreciseMarkQuietSnapBiasDb = 3 dB) rather than one being the clear
+        // winner, the snap must prefer the backward (earlier) side - even when the forward dip is
+        // technically a hair quieter. Backward dip (amplitude 0.10, sum-of-squares 1.6) sits 50ms
+        // before the mark; forward dip (amplitude 0.09, sum-of-squares 1.296) sits 50ms after -
+        // 0.92 dB apart, well under the 3 dB threshold, with forward the quieter of the two. A
+        // plain "quietest wins" rule would move the mark forward to 614.80; it must land on the
+        // backward dip's centre (614.70) instead.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(2, " Chapter two."));
+                s.Add(614.25, Seg(0, " Chapter two."));
+
+                var samples = new float[3200];
+                Array.Fill(samples, 1.0f);
+                for (var i = 720; i < 880; i++) samples[i] = 0.10f;  // backward dip @ 614.70
+                for (var i = 2320; i < 2480; i++) samples[i] = 0.09f; // forward dip @ 614.80
+                s.Audio.AddPcm(614.65, samples);
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 614.70)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
     {
         // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs

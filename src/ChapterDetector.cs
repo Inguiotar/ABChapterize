@@ -301,6 +301,17 @@ public sealed class ChapterDetector
     private const double PreciseMarkQuietWindowSeconds = 0.01;
 
     /// <summary>
+    /// Power-ratio tolerance, in dB, within which <see cref="SnapToQuietestPointAsync"/> treats
+    /// the quietest stretch before the mark and the quietest stretch after it as "the same
+    /// ballpark" of silence rather than one being the clear winner. 3 dB is the classic
+    /// just-noticeable-difference threshold for loudness (a 2x power ratio) - close enough that
+    /// picking the technically-quieter side over the other would be splitting hairs no listener
+    /// could hear. When both sides qualify, the mark moves backward rather than forward (see
+    /// <see cref="SnapToQuietestPointAsync"/> for why backward is preferred as the tiebreak).
+    /// </summary>
+    private const double PreciseMarkQuietSnapBiasDb = 3.0;
+
+    /// <summary>
     /// With --max-jingle-length auto, the resized probe window is this factor times the
     /// longest jingle observed so far (plus <see cref="PhraseMarginSeconds"/>), leaving a 25 %
     /// safety margin above the longest observed jingle for normal length variation between
@@ -2250,12 +2261,18 @@ public sealed class ChapterDetector
     /// starting playback there is audible as a "plop".
     /// <para>
     /// Decodes a small window of raw PCM centered on <paramref name="mark"/> and slides a short
-    /// (<see cref="PreciseMarkQuietWindowSeconds"/>) RMS window across it, tracking the position
-    /// with the lowest sum of squares. Ties - most notably a window that is uniformly silent or
-    /// uniformly loud throughout, which has no single quietest instant to prefer - are broken by
-    /// proximity to <paramref name="mark"/> itself, so a range with nothing to gain from moving at
-    /// all resolves to exactly <paramref name="mark"/> rather than drifting to an arbitrary tied
-    /// position for no acoustic reason.
+    /// (<see cref="PreciseMarkQuietWindowSeconds"/>) RMS window across it, separately tracking the
+    /// quietest position on either side of <paramref name="mark"/> (by sum of squares). When one
+    /// side is clearly quieter than the other, that side wins outright. When they are within
+    /// <see cref="PreciseMarkQuietSnapBiasDb"/> of each other - the same ballpark of silence, not
+    /// necessarily identical - the earlier (backward) side wins instead: nudging a mark earlier
+    /// only ever trims a beat of trailing silence from the previous chapter, while nudging it later
+    /// risks eating into the next phrase's own lead-in, so backward is the safer direction to
+    /// prefer whenever the acoustic evidence does not clearly favor forward. Ties within a side are
+    /// broken by proximity to <paramref name="mark"/> itself, so a side with nothing to gain from
+    /// moving at all resolves to exactly <paramref name="mark"/> rather than drifting to an
+    /// arbitrary tied position for no acoustic reason; if that no-gain position also wins overall,
+    /// <paramref name="mark"/> is returned unchanged.
     /// </para>
     /// </summary>
     /// <param name="mark">The mark to snap.</param>
@@ -2282,20 +2299,67 @@ public sealed class ChapterDetector
         for (var i = 0; i < windowSamples; i++)
             sumSquares += (double)samples[i] * samples[i];
 
-        var bestStart = 0;
-        var bestSumSquares = sumSquares;
-        var bestDistance = Math.Abs(halfWindow - markSample);
+        // Backward = window centered at or before markSample; forward = strictly after. Tracked
+        // separately, each with its own closest-to-mark tiebreak, so the two sides can be compared
+        // against each other afterward instead of collapsing straight to a single global best.
+        int? bestBackwardStart = null;
+        var bestBackwardSumSquares = double.PositiveInfinity;
+        var bestBackwardDistance = int.MaxValue;
+        int? bestForwardStart = null;
+        var bestForwardSumSquares = double.PositiveInfinity;
+        var bestForwardDistance = int.MaxValue;
+
+        void Consider(int start, double windowSumSquares)
+        {
+            var center = start + halfWindow;
+            var distance = Math.Abs(center - markSample);
+            if (center <= markSample)
+            {
+                if (windowSumSquares < bestBackwardSumSquares ||
+                    (windowSumSquares == bestBackwardSumSquares && distance < bestBackwardDistance))
+                {
+                    bestBackwardSumSquares = windowSumSquares;
+                    bestBackwardStart = start;
+                    bestBackwardDistance = distance;
+                }
+            }
+            else
+            {
+                if (windowSumSquares < bestForwardSumSquares ||
+                    (windowSumSquares == bestForwardSumSquares && distance < bestForwardDistance))
+                {
+                    bestForwardSumSquares = windowSumSquares;
+                    bestForwardStart = start;
+                    bestForwardDistance = distance;
+                }
+            }
+        }
+
+        Consider(0, sumSquares);
         for (var start = 1; start <= samples.Length - windowSamples; start++)
         {
             sumSquares += (double)samples[start + windowSamples - 1] * samples[start + windowSamples - 1]
                           - (double)samples[start - 1] * samples[start - 1];
-            var distance = Math.Abs(start + halfWindow - markSample);
-            if (sumSquares < bestSumSquares || (sumSquares == bestSumSquares && distance < bestDistance))
-            {
-                bestSumSquares = sumSquares;
-                bestStart = start;
-                bestDistance = distance;
-            }
+            Consider(start, sumSquares);
+        }
+
+        int bestStart;
+        int bestDistance;
+        if (bestBackwardStart is { } backwardStart && bestForwardStart is { } forwardStart &&
+            IsSameSilenceBallpark(bestBackwardSumSquares, bestForwardSumSquares))
+        {
+            bestStart = backwardStart;
+            bestDistance = bestBackwardDistance;
+        }
+        else if (bestForwardSumSquares < bestBackwardSumSquares)
+        {
+            bestStart = bestForwardStart!.Value;
+            bestDistance = bestForwardDistance;
+        }
+        else
+        {
+            bestStart = bestBackwardStart!.Value;
+            bestDistance = bestBackwardDistance;
         }
 
         // The closest achievable window already centers on mark's own sample - nothing to gain by
@@ -2308,6 +2372,25 @@ public sealed class ChapterDetector
         // losing anything the sample grid could actually distinguish.
         return Math.Round(
             Math.Max(0, decodeStart + (bestStart + halfWindow) / (double)FfmpegClient.SampleRate), 6);
+    }
+
+    /// <summary>
+    /// Whether two candidate windows' energies (sum of squares) are within
+    /// <see cref="PreciseMarkQuietSnapBiasDb"/> of each other on a power-ratio (dB) scale - i.e.
+    /// close enough to call them the same ballpark of quiet rather than one clearly winning. Both
+    /// being exactly zero (true digital silence on both sides) counts as the same ballpark; exactly
+    /// one being zero does not, since that side is categorically quieter than any nonzero level.
+    /// </summary>
+    private static bool IsSameSilenceBallpark(double backwardSumSquares, double forwardSumSquares)
+    {
+        if (backwardSumSquares <= 0 && forwardSumSquares <= 0)
+            return true;
+        if (backwardSumSquares <= 0 || forwardSumSquares <= 0)
+            return false;
+
+        var ratioDb = 10.0 * Math.Log10(
+            Math.Max(backwardSumSquares, forwardSumSquares) / Math.Min(backwardSumSquares, forwardSumSquares));
+        return ratioDb <= PreciseMarkQuietSnapBiasDb;
     }
 
     /// <summary>
