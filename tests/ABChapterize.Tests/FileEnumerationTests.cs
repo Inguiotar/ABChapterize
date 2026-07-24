@@ -112,4 +112,55 @@ public sealed class FileEnumerationTests : IDisposable
     {
         Assert.False(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.m4b")));
     }
+
+    /// <summary>Runs --no-op against the temp directory and returns everything written to
+    /// Console.Out, restoring the original writer afterward regardless of outcome.</summary>
+    private async Task<string> RunNoOpAsync(params string[] extraArgs)
+    {
+        var parsed = CliOptions.Parse([.. extraArgs, _dir])!;
+        var p = new FileProcessor(parsed, new ProgressRenderer(quiet: true));
+        var original = Console.Out;
+        var writer = new StringWriter();
+        Console.SetOut(writer);
+        try
+        {
+            await p.RunAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetOut(original);
+        }
+        return writer.ToString();
+    }
+
+    [Fact]
+    public async Task NoOp_ListsOnlyTheFilesTheFilterMatches_WithoutProcessingAnything()
+    {
+        var output = await RunNoOpAsync("--no-op", "--filter", "m4b");
+        Assert.Contains(Path.Combine(_dir, "alpha.m4b"), output);
+        Assert.DoesNotContain("beta.MP3", output);
+        Assert.DoesNotContain("gamma.opus", output); // excluded: no --recurse
+    }
+
+    [Fact]
+    public async Task NoOp_WithRecurse_IncludesSubdirectoryMatches()
+    {
+        var output = await RunNoOpAsync("--no-op", "--recurse", "--filter", "opus");
+        Assert.Contains(Path.Combine(_dir, "sub", "gamma.opus"), output);
+    }
+
+    [Fact]
+    public async Task NoOp_Quiet_SuppressesTheListing_ButNotTheSummary()
+    {
+        var output = await RunNoOpAsync("--no-op", "--filter", "m4b", "--quiet", "--summary");
+        Assert.DoesNotContain("alpha.m4b", output);
+        Assert.Contains("1 file(s) would be processed", output);
+    }
+
+    [Fact]
+    public async Task NoOp_NoMatches_ReportsNoneFound()
+    {
+        var output = await RunNoOpAsync("--no-op", "--filter", "opus"); // no top-level .opus file
+        Assert.Contains("No audio files matching --filter found.", output);
+    }
 }

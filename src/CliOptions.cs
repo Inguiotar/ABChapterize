@@ -34,6 +34,15 @@ public sealed class CliOptions
     public bool Revert { get; private set; }
 
     /// <summary>
+    /// Lists every file that would be processed, then exits without loading a Whisper model,
+    /// invoking ffmpeg or touching any file (--no-op / -O). Requires --filter - the whole
+    /// point is checking that a --filter regexp or extension list actually matches the
+    /// intended files before committing to a real run. Combinable only with --recurse,
+    /// --filter and the output options, the same restriction <see cref="Revert"/> has.
+    /// </summary>
+    public bool NoOp { get; private set; }
+
+    /// <summary>
     /// Two-letter ISO 639-1 language hint for Whisper, or "auto" (--lang / -l, default "auto").
     /// With "auto", <see cref="ChapterDetector"/> detects each file's language from a short
     /// clip via Whisper's own language detector instead of assuming a fixed language for the
@@ -59,6 +68,16 @@ public sealed class CliOptions
     /// only when a file actually reaches pass 3.
     /// </summary>
     public string Pass3Model { get; private set; } = "turbo";
+
+    /// <summary>
+    /// Forces the CPU backend for Whisper instead of the fastest available hardware
+    /// acceleration (--cpu-only / -C; see <see cref="WhisperTranscriber"/>). The Silero VAD
+    /// pre-pass already always runs on CPU regardless of this option - the ONNX Runtime
+    /// package this tool references has no GPU-capable execution provider to begin with - so
+    /// this only changes Whisper's own backend selection. Useful to leave a GPU free for other
+    /// work, or to sidestep a flaky/unsupported GPU backend.
+    /// </summary>
+    public bool CpuOnly { get; private set; }
 
     /// <summary>Discard pre-existing chapter markings instead of skipping the file (--force / -f).</summary>
     public bool Force { get; private set; }
@@ -296,8 +315,8 @@ public sealed class CliOptions
         ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
-        ['e'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
-        ['J'] = "--jobs", ['V'] = "--verify",
+        ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
+        ['J'] = "--jobs", ['V'] = "--verify", ['C'] = "--cpu-only", ['O'] = "--no-op",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -425,6 +444,14 @@ public sealed class CliOptions
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
+        if (o.NoOp && o.FilterRegex == null && o.FilterExtensions == null)
+            throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
+
+        if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.PreciseMark || o.DryRun || o._langSet || o._phraseSet || o._modelSet
+                       || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
+                       || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
+            throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
+
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
@@ -512,6 +539,8 @@ public sealed class CliOptions
             case "--recurse": Recurse = true; return true;
             case "--backup": Backup = true; return true;
             case "--revert": Revert = true; return true;
+            case "--no-op": NoOp = true; return true;
+            case "--cpu-only": CpuOnly = true; return true;
             case "--force": Force = true; return true;
             case "--mark-before-jingle": MarkBeforeJingle = true; return true;
             case "--precise-mark": PreciseMark = true; return true;
@@ -713,6 +742,7 @@ public sealed class CliOptions
         Usage:
           abchapterize [options] <file-or-directory>
           abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
+          abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>
           abchapterize --help | -?
 
         Options (must precede the file/directory argument):
@@ -722,6 +752,12 @@ public sealed class CliOptions
                                     added ".bak" suffix, delete the corresponding original and
                                     rename the .bak file back. Combinable with --recurse,
                                     --filter and the output options, but nothing else.
+          -O, --no-op               List every file --filter (and --recurse) would select, then
+                                    exit without loading a Whisper model, invoking ffmpeg or
+                                    touching any file. A quick way to check that a --filter
+                                    regexp or extension list actually matches the intended files
+                                    before a real run. Requires --filter; combinable with
+                                    --recurse and the output options, but nothing else.
           -l, --lang <code|auto>    Two-letter language hint for Whisper, or "auto" (the
                                     default): each file's language is detected from a short
                                     clip and used for that file, falling back to "en" when
@@ -747,6 +783,11 @@ public sealed class CliOptions
                                     speed pass 3 up, or "large" for one last best-effort attempt at
                                     the chapters the main model missed. Loaded and downloaded lazily,
                                     only when a file actually reaches pass 3.
+          -C, --cpu-only            Force Whisper onto the CPU backend instead of the fastest
+                                    available hardware acceleration. The Silero VAD pre-pass
+                                    already always runs on CPU regardless of this option, so it
+                                    only affects Whisper. Useful to leave a GPU free for other
+                                    work, or to sidestep a flaky/unsupported GPU backend.
           -F, --filter <filter>     Only process matching files. Either "/regexp/" - matched
                                     case-insensitively against the whole path of each file -
                                     or a comma-separated list of permissible file extensions,
@@ -833,7 +874,7 @@ public sealed class CliOptions
                                     processing time.
           -d, --dry-run             Run detection but write nothing; print the chapters that
                                     would be written (timestamps, numbers, titles) instead.
-          -e, --export              Also write detected chapters to a sidecar file next to
+          -E, --export              Also write detected chapters to a sidecar file next to
                                     the audio file (<file>.chapters.ffmeta by default, or
                                     <file>.chapters.txt with --simple-metadata), for manual
                                     review or correction. Combinable with --dry-run.

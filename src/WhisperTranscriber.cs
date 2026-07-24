@@ -30,12 +30,16 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     /// (see <see cref="ConcurrencyPolicy"/>) each instance is given a smaller share instead,
     /// so the total across all of them still roughly matches the core count.
     /// </param>
-    public WhisperTranscriber(string modelPath, string language, int? threads = null)
+    /// <param name="forceCpu">Skips the GPU backends entirely and loads straight onto CPU
+    /// (--cpu-only, see <see cref="CliOptions.CpuOnly"/>), rather than relying on them being
+    /// unavailable or failing to load.</param>
+    public WhisperTranscriber(string modelPath, string language, int? threads = null, bool forceCpu = false)
     {
         // Prefer the fastest available backend; Whisper.net probes them in this order
         // and silently falls back to the next one.
-        RuntimeOptions.RuntimeLibraryOrder =
-            [RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx];
+        RuntimeOptions.RuntimeLibraryOrder = forceCpu
+            ? [RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx]
+            : [RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx];
 
         _factory = WhisperFactory.FromPath(modelPath);
         _processor = _factory.CreateBuilder()

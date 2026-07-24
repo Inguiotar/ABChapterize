@@ -391,6 +391,14 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
   and loaded lazily — only if and when a file actually reaches pass 3 — so
   naming a model here costs nothing on files that never need it.
 
+`-C`, `--cpu-only`
+: Forces Whisper onto the CPU backend instead of the fastest available
+  hardware acceleration (CUDA, then Vulkan, then CPU — see
+  [section 9](#9-gpu-acceleration)). The Silero VAD pre-pass already always
+  runs on CPU regardless of this option, so it only affects Whisper. Useful
+  to leave a GPU free for other work, or to sidestep a flaky/unsupported GPU
+  backend.
+
 `-n`, `--min-silence-length <seconds|auto>`
 : Minimum silence duration (0.1–60, default: `auto`) that counts as a
   potential chapter break; the silence scan always uses this as its floor
@@ -590,6 +598,15 @@ skipped (reported as "skipped").
   options are rejected. When a single audio file is given as the target, its
   `.bak` neighbour is restored.
 
+`-O`, `--no-op`
+: Lists every file `--filter` (and `--recurse`) would select, then exits
+  without loading a Whisper model, invoking ffmpeg or touching any file - a
+  quick way to check that a `--filter` regexp or extension list actually
+  matches the intended files before committing to a real run. Requires
+  `--filter`; combinable only with `--recurse` and the output options
+  (`--quiet` suppresses the listing itself, leaving just `--summary`'s
+  count), the same restriction `--revert` has.
+
 ### Titles
 
 `-t`, `--title <word>`
@@ -668,7 +685,7 @@ the detected chapters to a sidecar file, hand-correct it in a text editor,
 then import it back — the corrected chapters are written directly, without
 touching Whisper at all.
 
-`-e`, `--export`
+`-E`, `--export`
 : In addition to writing chapters into the audio file as usual, also save
   them to a sidecar file next to it: `<file>.chapters.ffmeta` by default, or
   `<file>.chapters.txt` with `--simple-metadata`. Composes with normal
@@ -915,6 +932,11 @@ WSL2), then CPU. The chosen backend is shown in the startup line:
 ```
 Whisper model "turbo" loaded (Vulkan backend), 3 file(s) to process.
 ```
+
+`--cpu-only`/`-C` skips straight to the CPU backend instead, e.g. to leave a
+GPU free for other work or to sidestep a flaky/unsupported GPU backend. The
+Silero VAD pre-pass always runs on CPU regardless, so this option only
+changes Whisper's own backend.
 
 The `runtimes` folder next to the executable contains these native libraries
 and must be kept — without it, nothing works.

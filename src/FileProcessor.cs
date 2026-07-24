@@ -64,7 +64,7 @@ public sealed class FileProcessor
         _progress = progress;
     }
 
-    /// <summary>Runs the tool in the mode selected by the options (revert or abchapterize).</summary>
+    /// <summary>Runs the tool in the mode selected by the options (revert, --no-op or abchapterize).</summary>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     public async Task RunAsync(CancellationToken ct)
     {
@@ -73,7 +73,34 @@ public sealed class FileProcessor
             RunRevert(ct);
             return;
         }
+        if (_options.NoOp)
+        {
+            RunNoOp();
+            return;
+        }
         await RunABChapterizeAsync(ct);
+    }
+
+    /// <summary>
+    /// --no-op mode: lists every file --filter (and --recurse) would select, then returns
+    /// without loading a Whisper model, invoking ffmpeg or touching any file - a quick way to
+    /// check that a --filter regexp or extension list actually matches the intended files
+    /// before committing to a real run. --filter is required to reach this mode at all (see
+    /// <see cref="CliOptions"/>'s validation), so the listing is always filtered.
+    /// </summary>
+    private void RunNoOp()
+    {
+        var files = EnumerateTargets(_options.EffectiveExtensions);
+        if (files.Count == 0)
+        {
+            Console.WriteLine("No audio files matching --filter found.");
+            return;
+        }
+        if (!_options.Quiet)
+            foreach (var file in files)
+                Console.WriteLine(file);
+        if (_options.Summary)
+            Console.WriteLine($"Summary: {files.Count} file(s) would be processed");
     }
 
     /// <summary>
@@ -144,7 +171,7 @@ public sealed class FileProcessor
             // ChangeLanguage before the first real transcription of every file, resolving
             // the actual language to use (the fixed --lang, or a fresh auto-detection).
             var initialLanguage = _options.AutoLanguage ? "en" : _options.Language;
-            var first = new WhisperTranscriber(modelPath, initialLanguage);
+            var first = new WhisperTranscriber(modelPath, initialLanguage, forceCpu: _options.CpuOnly);
 
             // GPU backends are capped at one file at a time: a GPU context is not proven safe
             // for concurrent inference, and loading the model into VRAM again per concurrent
@@ -161,7 +188,7 @@ public sealed class FileProcessor
             // --model means no separate instance at all - pass 3 reuses each file's own transcriber.
             var pass3Differs = _options.Pass3Model != _options.Model;
             var pass3Shared = pass3Differs
-                ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage)
+                ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly)
                 : null;
 
             if (!_options.Quiet)
@@ -181,7 +208,7 @@ public sealed class FileProcessor
                 await first.DisposeAsync();
                 var threadsPerInstance = Math.Max(2, Environment.ProcessorCount / hardCap);
                 pool = [.. Enumerable.Range(0, hardCap)
-                    .Select(_ => new WhisperTranscriber(modelPath, initialLanguage, threadsPerInstance))];
+                    .Select(_ => new WhisperTranscriber(modelPath, initialLanguage, threadsPerInstance, _options.CpuOnly))];
             }
 
             // Shared like ffmpeg above (one instance for the whole run, safe for concurrent

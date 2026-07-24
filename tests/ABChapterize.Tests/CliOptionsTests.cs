@@ -57,7 +57,7 @@ public sealed class CliOptionsTests : IDisposable
         // --mark-before-jingle - only --max-jingle-length 0 turns it off.
         Assert.True(o.RunVadPrePass);
         Assert.False(o.TargetIsDirectory);
-        Assert.False(o.Recurse | o.Backup | o.Revert | o.Force | o.MarkBeforeJingle | o.PreciseMark | o.Quiet | o.Verbose
+        Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.PreciseMark | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
         Assert.Null(o.Jobs);
     }
@@ -137,7 +137,7 @@ public sealed class CliOptionsTests : IDisposable
     public void Export_IsParsed_LongAndShort()
     {
         Assert.True(ParseFile("--export")!.Export);
-        Assert.True(ParseFile("-e")!.Export);
+        Assert.True(ParseFile("-E")!.Export);
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public sealed class CliOptionsTests : IDisposable
     public void SimpleMetadata_IsParsed_LongAndShort()
     {
         Assert.True(ParseFile("--export", "--simple-metadata")!.SimpleMetadata);
-        Assert.True(ParseFile("-eS")!.SimpleMetadata);
+        Assert.True(ParseFile("-ES")!.SimpleMetadata);
     }
 
     [Fact]
@@ -489,6 +489,51 @@ public sealed class CliOptionsTests : IDisposable
     {
         var o = ParseDir("--revert", "--quiet", "--summary", "--verbose", "--no-bar")!;
         Assert.True(o.Revert && o.Quiet && o.Summary);
+    }
+
+    [Fact]
+    public void NoOp_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseDir("--no-op", "--filter", "m4b")!.NoOp);
+        Assert.True(ParseDir("-O", "--filter", "m4b")!.NoOp);
+    }
+
+    [Fact]
+    public void NoOp_WithoutFilter_IsAnError()
+    {
+        var ex = Assert.Throws<CliError>(() => ParseDir("--no-op"));
+        Assert.Contains("requires --filter", ex.Message);
+    }
+
+    [Fact]
+    public void NoOp_WithExtensionOrRegexFilter_IsAllowed()
+    {
+        Assert.True(ParseDir("--no-op", "--filter", "m4b")!.NoOp);
+        Assert.True(ParseDir("--no-op", "--filter", "/book/")!.NoOp);
+    }
+
+    [Fact]
+    public void NoOp_WithIncompatibleOptions_IsAnError()
+    {
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--revert"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--force"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--lang", "de"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--dry-run"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--jobs", "2"));
+    }
+
+    [Fact]
+    public void NoOp_WithRecurseAndOutputOptions_IsAllowed()
+    {
+        var o = ParseDir("--no-op", "--filter", "m4b", "--recurse", "--quiet", "--summary")!;
+        Assert.True(o.NoOp && o.Recurse && o.Quiet && o.Summary);
+    }
+
+    [Fact]
+    public void CpuOnly_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--cpu-only")!.CpuOnly);
+        Assert.True(ParseFile("-C")!.CpuOnly);
     }
 
     [Fact]
