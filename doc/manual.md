@@ -132,13 +132,15 @@ previous chapter's narration.
 `--precise-mark`/`-p` (**experimental**) adds one more layer on top of that,
 for the rare case where even this still lands on the wrong spot — typically a
 jingle whose own music briefly resembles speech closely enough to fool the
-voice-activity detector. Every mark placed this way (not with
+voice-activity detector, in either direction: short of the true announcement
+or generously past it. Every mark placed this way (not with
 `--mark-before-jingle`, which has its own separate anchor) is double-checked by
 transcribing a short, isolated clip of the audio right at it: if the chapter
 phrase is really the first thing heard there, nothing changes; otherwise
-further candidate positions nearby are checked the same way until the true
-announcement is found, and the mark is corrected to it. A mark that cannot be
-confirmed this way at all is left as originally placed rather than guessed at.
+further candidate positions nearby — first later, then earlier, if needed —
+are checked the same way until the true announcement is found, and the mark is
+corrected to it. A mark that cannot be confirmed this way at all is left as
+originally placed rather than guessed at.
 This costs one or more extra Whisper transcriptions per chapter on top of pass
 2's own probe — most of all for chapters preceded by a jingle with several
 false-positive candidates — so it is off by default; turn it on for a book

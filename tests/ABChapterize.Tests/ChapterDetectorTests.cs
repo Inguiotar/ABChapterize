@@ -1249,6 +1249,39 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task PreciseMark_CorrectsAMarkThatOvershotForward_BySearchingBackward()
+    {
+        // Reproduces the opposite failure shape from "ch19 disease" above (Perry Rhodan
+        // "Die Dritte Macht", chapters 8 and 20, 2026-07-24): here the announcement's own
+        // swallowed blip (656-656.6) and an unrelated later blip (658-658.6, standing in for the
+        // next sentence's leading fragment bleeding into the same over-merged jingle region) are
+        // far enough apart (1.4s, over MergeShortSpeechGapSeconds) to form two separate clusters,
+        // yet each blip is individually short enough that ComputeNonSpeechRegions' merge still
+        // swallows both into one region. ResolveDefaultPhraseOnset's "first blip of the *last*
+        // cluster" rule then lands the mark on the second, unrelated blip (657.75) - almost 2s
+        // past the true announcement. Its own check fails, and so does the only forward candidate
+        // (658, the same wrong blip) and the one after it (660, narration) - the forward search
+        // that fixes "ch19 disease" finds nothing here, so --precise-mark falls through to
+        // searching backward, where the announcement's own blip (656) confirms immediately.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+                s.Add(657.25, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 657.75 (the wrong, default mark) - fails
+                s.Add(657.5, new TranscriptSegment(0, 1.1, " Music", 1.0));        // forward candidate @ 658 (the wrong blip itself) - still fails
+                s.Add(659.5, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // forward candidate @ 660 - narration, also fails
+                s.Add(655.5, Seg(0, " Chapter two."));                            // backward candidate @ 656 - the real phrase, confirms
+            },
+            new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(658, 658.6), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+    }
+
+    [Fact]
     public async Task AutoMaxJingle_MeasuresJingleUpToThePhrase_NotTheInflatedRegionEnd()
     {
         // Chapter two's jingle is really only 5 s (800-805), but its VAD non-speech region runs
@@ -1667,12 +1700,13 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task OverlappingProbe_LogsFullyReusedWindows_WithoutASegmentDump()
+    public async Task OverlappingProbe_FullyReusedWindow_LogsNothingAndDoesNotTranscribe()
     {
         // Near the end of the file the probe window is capped at the file's duration (3600 s),
         // so two close-together candidates can end up with the very same (capped) window end -
         // window 2 is then fully contained in window 1's cache and no Whisper call happens at
-        // all. The log must say so plainly rather than dumping a (nonexistent) transcript.
+        // all. A fully-reused window is the common case for a fine-grained candidate scan, so
+        // it logs nothing at all rather than a line (or a segment dump) per occurrence.
         // Chapter one is scripted at low confidence so the overlap-sequence skip stays out of
         // the way and the fully-contained window is actually visited.
         var (_, log, audio) = await DetectWithLogAsync(
@@ -1680,7 +1714,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(3585, 3590), new(3593, 3595)],
             s => s.Add(3590, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
-        Assert.Contains("probe @0:59:55.00: fully reused, no new transcription", log);
+        Assert.DoesNotContain(log, l => l.Contains("0:59:55"));
         Assert.DoesNotContain(3595.0, audio.DecodeStarts);
     }
 

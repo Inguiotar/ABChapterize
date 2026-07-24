@@ -792,7 +792,6 @@ public sealed class ChapterDetector
                         // candidate starting within it can keep reusing it too.
                         windowSegmentsAbs = cacheSegmentsAbs
                             .Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList();
-                        _log?.Invoke($"probe @{FormatTimestamp(start)}: fully reused, no new transcription");
                     }
                     else
                     {
@@ -820,7 +819,7 @@ public sealed class ChapterDetector
                         cacheSegmentsAbs = windowSegmentsAbs;
                         cacheFrom = start;
                         cacheTo = windowEnd;
-                        LogTranscript($"probe {windowEnd - splitPoint:0.#}s@{FormatTimestamp(splitPoint)} (tail)", fresh);
+                        LogTranscript($"probe {windowEnd - splitPoint:0.0}s@{FormatTimestamp(splitPoint)} (tail)", fresh);
                     }
                 }
                 else
@@ -843,7 +842,7 @@ public sealed class ChapterDetector
                     cacheSegmentsAbs = windowSegmentsAbs;
                     cacheFrom = start;
                     cacheTo = windowEnd;
-                    LogTranscript($"probe {windowEnd - start:0.#}s@{FormatTimestamp(start)}", fresh);
+                    LogTranscript($"probe {windowEnd - start:0.0}s@{FormatTimestamp(start)}", fresh);
                 }
 
                 // Correct segment starts that Whisper timestamped from a leading silence/jingle
@@ -1159,8 +1158,7 @@ public sealed class ChapterDetector
                     }
                     if (skipTo > ci)
                     {
-                        _log?.Invoke($"chapter {lastNumber} settles current overlapping window " +
-                                     $"sequence - skipping its remaining {skipTo - ci} window(s)");
+                        _log?.Invoke($"{skipTo - ci} overlapping windows skipped");
                         for (var si = ci + 1; si <= skipTo; si++)
                             skippedSinceLastMark.Add(candidates[si]);
                         ci = skipTo;
@@ -1439,7 +1437,7 @@ public sealed class ChapterDetector
 
                 var gapSamples = await _audio.DecodePcmAsync(file, absStart, len, info.InputDecoder, ct);
                 var gapSegments = await _transcriber.TranscribeAsync(gapSamples, ct);
-                LogTranscript($"verify gap retry {len:0.#}s@{FormatTimestamp(absStart)}", gapSegments);
+                LogTranscript($"verify gap retry {len:0.0}s@{FormatTimestamp(absStart)}", gapSegments);
                 if (FindPhraseMatches(gapSegments, profile).Any(m => m.Number == expected))
                     return true;
             }
@@ -2128,16 +2126,34 @@ public sealed class ChapterDetector
     /// chapter that needed no correction. Otherwise, every VAD speech-segment start after
     /// <paramref name="mark"/> (the same swallowed-blip candidates <see
     /// cref="ResolveDefaultPhraseOnset"/> already reasons about, not a blind fixed-step scan) is
-    /// checked in chronological order until one succeeds <em>and</em> the next one after it fails
-    /// again - only that success-then-fail pattern confirms the phrase truly begins at the
-    /// earlier candidate, immune to a single stray false positive elsewhere in the jingle, since a
-    /// real chapter announcement's own audio ends and narration (or some unrelated cue) resumes
-    /// right after it. The search is bounded to a plausible jingle-plus-phrase span
-    /// (<see cref="CliOptions.MaxJingleSeconds"/> plus <see cref="PhraseMarginSeconds"/>) after
-    /// <paramref name="mark"/>, so it can never wander into the next chapter's own territory.
+    /// checked in chronological order via <see cref="WalkPreciseMarkCandidatesAsync"/> until one
+    /// succeeds <em>and</em> the next one after it fails again - only that success-then-fail
+    /// pattern confirms the phrase truly begins at the earlier candidate, immune to a single
+    /// stray false positive elsewhere in the jingle, since a real chapter announcement's own audio
+    /// ends and narration (or some unrelated cue) resumes right after it. That forward search is
+    /// bounded to a plausible jingle-plus-phrase span (<see cref="CliOptions.MaxJingleSeconds"/>
+    /// plus <see cref="PhraseMarginSeconds"/>) after <paramref name="mark"/>, so it can never
+    /// wander into the next chapter's own territory.
     /// </para>
     /// <para>
-    /// When no candidate is ever confirmed this way, <paramref name="mark"/> is returned
+    /// If the forward search never confirms anything, the same walk runs backward through VAD
+    /// speech-segment starts <em>before</em> <paramref name="mark"/> (nearest first), over the
+    /// same span. This exists for a distinct failure shape from the one above: rather than
+    /// stopping short on a spurious blip ahead of the true announcement,
+    /// <see cref="ResolveDefaultPhraseOnset"/>'s swallowed-blip clustering can occasionally
+    /// promote a later, unrelated blip inside an over-merged jingle region over the
+    /// announcement's own earlier one, landing <paramref name="mark"/> generously past the true
+    /// onset instead of short of it. Confirmed live on chapters whose true onset sat mere seconds
+    /// before what the heuristic reported (Perry Rhodan "Die Dritte Macht", chapters 8 and 20,
+    /// 2026-07-24). Kept as a fallback rather than tried first, so the original, separately
+    /// validated forward correction for the short-of-the-mark case is unaffected: this only
+    /// engages when forward search comes up empty. Deliberately does not touch
+    /// <see cref="ResolveDefaultPhraseOnset"/> itself - default-mode marking (without
+    /// --precise-mark) must stay exactly as heuristically accurate as it already is, since it
+    /// alone is what makes plain marks usable for jumping to a chapter.
+    /// </para>
+    /// <para>
+    /// When neither direction ever confirms a candidate, <paramref name="mark"/> is returned
     /// unchanged rather than guessing - validated against a real audiobook's full set of known
     /// good and previously-broken marks (see <c>tools\vadprobe</c>'s <c>precise</c> prototype)
     /// before this was ported here.
@@ -2152,7 +2168,7 @@ public sealed class ChapterDetector
     /// <paramref name="mark"/> itself and it is returned unchanged whenever its own check fails.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark, or <paramref name="mark"/> unchanged when it was
-    /// already correct or no candidate could be confirmed.</returns>
+    /// already correct or no candidate could be confirmed in either direction.</returns>
     private async Task<double> RefinePreciseMarkAsync(
         double mark, string file, string? inputDecoder, LanguageProfile profile,
         List<SpeechSegment> speechSegments, CancellationToken ct)
@@ -2163,12 +2179,53 @@ public sealed class ChapterDetector
             return mark;
         }
 
-        var searchHorizon = mark + _options.MaxJingleSeconds + PhraseMarginSeconds;
-        var candidates = speechSegments
-            .Where(s => s.StartSeconds > mark && s.StartSeconds <= searchHorizon)
+        var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var forwardCandidates = speechSegments
+            .Where(s => s.StartSeconds > mark && s.StartSeconds <= mark + span)
             .Select(s => s.StartSeconds)
             .OrderBy(s => s);
+        var confirmed = await WalkPreciseMarkCandidatesAsync(forwardCandidates, file, inputDecoder, profile, ct);
 
+        if (confirmed is null)
+        {
+            var backwardCandidates = speechSegments
+                .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
+                .Select(s => s.StartSeconds)
+                .OrderByDescending(s => s);
+            confirmed = await WalkPreciseMarkCandidatesAsync(backwardCandidates, file, inputDecoder, profile, ct);
+        }
+
+        if (confirmed is { } onset)
+        {
+            _log?.Invoke($"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
+            return Math.Max(0, onset - DefaultMarkLeadSeconds);
+        }
+        _log?.Invoke($"--precise-mark: could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
+        return mark;
+    }
+
+    /// <summary>
+    /// Walks <paramref name="candidates"/> in the given order, checking each with
+    /// <see cref="PreciseMarkPhraseFoundAsync"/>, and returns the confirmed onset - the
+    /// success-then-fail pattern described on <see cref="RefinePreciseMarkAsync"/>. Shared between
+    /// that method's forward and backward searches, which differ only in which candidates they
+    /// feed in and in what order; the confirmation logic itself is direction-agnostic; a run of
+    /// consecutive successes keeps moving <c>confirmed</c> to the most recently checked one
+    /// (logged as ambiguous), and the first failure after any success locks that in as the answer.
+    /// Reaching the end of <paramref name="candidates"/> without a subsequent failure also accepts
+    /// the last confirmed one, since the caller's search span already bounds how far this can
+    /// wander.
+    /// </summary>
+    /// <param name="candidates">Positions to check, in the order they should be tried.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The confirmed candidate position, or null if none was ever confirmed.</returns>
+    private async Task<double?> WalkPreciseMarkCandidatesAsync(
+        IEnumerable<double> candidates, string file, string? inputDecoder, LanguageProfile profile,
+        CancellationToken ct)
+    {
         double? confirmed = null;
         foreach (var candidate in candidates)
         {
@@ -2179,25 +2236,14 @@ public sealed class ChapterDetector
                 if (confirmed is { } already)
                     _log?.Invoke(
                         $"--precise-mark: consecutive candidates confirmed ({FormatTimestamp(already)} " +
-                        $"then {FormatTimestamp(candidate)}) - ambiguous, moving confirmation forward");
+                        $"then {FormatTimestamp(candidate)}) - ambiguous, keeping the latter");
                 confirmed = candidate;
                 continue;
             }
             if (confirmed is { } c)
-            {
-                _log?.Invoke(
-                    $"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(c)}");
-                return Math.Max(0, c - DefaultMarkLeadSeconds);
-            }
+                return c;
         }
-
-        if (confirmed is { } onset)
-        {
-            _log?.Invoke($"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
-            return Math.Max(0, onset - DefaultMarkLeadSeconds);
-        }
-        _log?.Invoke($"--precise-mark: could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
-        return mark;
+        return confirmed;
     }
 
     /// <summary>
@@ -2937,7 +2983,7 @@ public sealed class ChapterDetector
 
                 var subSamples = await _audio.DecodePcmAsync(file, subStart, len, info.InputDecoder, ct);
                 var subSegments = await TranscribeCountingAsync(subSamples, ct, _pass3Transcriber);
-                LogTranscript($"gap retry {len:0.#}s@{FormatTimestamp(subStart)}", subSegments);
+                LogTranscript($"gap retry {len:0.0}s@{FormatTimestamp(subStart)}", subSegments);
                 var subAbs = TrimLeadingNonSpeech(
                     ShiftSegments(subSegments, subStart), allSilences, nonSpeechRegions, _vad != null);
 

@@ -381,7 +381,7 @@ public sealed class FileProcessor
     /// <param name="audioSeconds">Audio handed to Whisper.</param>
     /// <param name="transcribeSeconds">Wall-clock time spent transcribing it.</param>
     private static string FormatSpeed(double audioSeconds, double transcribeSeconds)
-        => transcribeSeconds > 0 ? $"transcription speed {100 * audioSeconds / transcribeSeconds:0} % of real-time" : "";
+        => transcribeSeconds > 0 ? $"transcription speed {100 * audioSeconds / transcribeSeconds:0}% of real-time" : "";
 
     /// <summary>
     /// Builds the per-file statistics log line shown under --verbose (or --verbose-transcripts):

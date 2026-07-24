@@ -101,16 +101,19 @@ public sealed class CliOptions
     /// chapter phrase is the first thing heard there, the mark is left alone (the common case,
     /// and the only extra cost paid for a chapter that was already right). If not - typically
     /// because the mark landed on a jingle's own spurious VAD "speech" blip rather than the real
-    /// announcement - each subsequent VAD speech-segment start is checked the same way in turn
-    /// until one succeeds and the next one after it fails again; only that success-then-fail
-    /// pattern confirms the phrase truly begins at the earlier candidate, rather than at some
-    /// other unrelated false positive further inside the jingle. A chapter whose phrase can never
-    /// be confirmed this way keeps its original mark rather than guessing. Substantially more
-    /// expensive than the default algorithm alone - most of all for chapters preceded by a jingle
-    /// with several spurious VAD blips, since each one needs its own extra transcription - so
-    /// this is off by default; see <see cref="ChapterDetector"/> for the mechanics. Cannot be
-    /// combined with <see cref="MarkBeforeJingle"/>, which replaces default-mode placement with
-    /// its own, unrelated jingle/silence anchor - there is nothing here left for this to correct.
+    /// announcement - each subsequent VAD speech-segment start after the mark is checked the same
+    /// way in turn until one succeeds and the next one after it fails again; only that
+    /// success-then-fail pattern confirms the phrase truly begins at the earlier candidate, rather
+    /// than at some other unrelated false positive further inside the jingle. If that forward
+    /// search finds nothing, the same check runs backward through VAD speech-segment starts before
+    /// the mark instead, for the rarer opposite failure - the mark landing generously past the
+    /// true announcement rather than short of it. A chapter whose phrase can never be confirmed
+    /// either way keeps its original mark rather than guessing. Substantially more expensive than
+    /// the default algorithm alone - most of all for chapters preceded by a jingle with several
+    /// spurious VAD blips, since each one needs its own extra transcription - so this is off by
+    /// default; see <see cref="ChapterDetector"/> for the mechanics. Cannot be combined with
+    /// <see cref="MarkBeforeJingle"/>, which replaces default-mode placement with its own,
+    /// unrelated jingle/silence anchor - there is nothing here left for this to correct.
     /// <para><b>Experimental.</b></para>
     /// </summary>
     public bool PreciseMark { get; private set; }
