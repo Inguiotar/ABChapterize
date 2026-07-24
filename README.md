@@ -247,8 +247,10 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    music briefly fools the voice-activity detector into sounding like speech —
    every mark is double-checked by re-transcribing a short, isolated clip of
    the audio right at it; if the phrase isn't really there, nearby candidates
-   are checked the same way until it's found and the mark is corrected. Costs
-   one or more extra transcriptions per chapter, so it's off by default.
+   are checked the same way until it's found and the mark is corrected,
+   falling back to a wider sweep of the same area on the rare chapter where
+   even that doesn't confirm anything. Costs one or more extra transcriptions
+   per chapter, so it's off by default.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in chunks whose borders snap to
