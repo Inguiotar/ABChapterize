@@ -50,6 +50,15 @@ public sealed class ChapterDetectorTests : IDisposable
         /// shortened or extended the decode itself, not just where the next decode started.</summary>
         public List<(double Start, double? Duration)> DecodeWindows { get; } = [];
 
+        private readonly List<(double Start, float[] Samples)> _pcmScript = [];
+
+        /// <summary>Scripts real PCM sample amplitudes for the decode window starting near
+        /// <paramref name="start"/> - for tests that need actual waveform content (e.g.
+        /// --precise-mark's quiet-snap step), unlike <see cref="ScriptedTranscriber"/>'s
+        /// text-only script, which ignores samples entirely. Decodes with no script still return
+        /// the default all-zero buffer below.</summary>
+        public void AddPcm(double start, float[] samples) => _pcmScript.Add((start, samples));
+
         /// <inheritdoc/>
         public Task<List<Silence>> DetectSilencesAsync(
             string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
@@ -62,7 +71,8 @@ public sealed class ChapterDetectorTests : IDisposable
         {
             DecodeStarts.Add(startSeconds);
             DecodeWindows.Add((startSeconds, durationSeconds));
-            return Task.FromResult(new float[16000]);
+            var hit = _pcmScript.FirstOrDefault(e => Math.Abs(e.Start - startSeconds) < 0.25);
+            return Task.FromResult(hit.Samples ?? new float[16000]);
         }
 
         /// <inheritdoc/>
@@ -116,6 +126,11 @@ public sealed class ChapterDetectorTests : IDisposable
 
         /// <summary>Creates a transcriber that follows the decode requests of <paramref name="audio"/>.</summary>
         public ScriptedTranscriber(FakeAudioSource audio) => _audio = audio;
+
+        /// <summary>The audio source backing this transcriber, exposed so a test's script
+        /// callback can also script raw PCM (<see cref="FakeAudioSource.AddPcm"/>) without a
+        /// separate hook into <c>DetectFullAsync</c>.</summary>
+        public FakeAudioSource Audio => _audio;
 
         /// <summary>Scripts the transcript for the decode window starting near <paramref name="start"/>.</summary>
         public void Add(double start, params TranscriptSegment[] segments)
@@ -1279,6 +1294,62 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PreciseMark_SnapsToTheQuietestNearbyPoint()
+    {
+        // --precise-mark's final cleanup step (SnapToQuietestPointAsync): even a mark the phrase
+        // check already confirmed can still coincide with a comparatively loud sample - a player
+        // seeking there would start playback abruptly mid-waveform, an audible "plop". Chapter
+        // two's mark (614.75) is confirmed unchanged exactly as in the simple case above, but here
+        // the surrounding +/-0.1s is scripted as loud (1.0) throughout except for a genuine
+        // 10ms-wide quiet dip 50ms *before* the mark (samples 720-879 of the 3200-sample window
+        // starting at 614.65) - the mark should end up snapped to that dip's centre (614.70)
+        // rather than left at 614.75.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(2, " Chapter two.")); // window [613, ...], phrase at 615
+                s.Add(614.25, Seg(0, " Chapter two.")); // check @ 614.75 (chapter two's own mark)
+
+                var samples = new float[3200];
+                Array.Fill(samples, 1.0f);
+                Array.Clear(samples, 720, 160); // quiet dip: 614.65 + 720/16000 .. + 880/16000
+                s.Audio.AddPcm(614.65, samples); // quiet-snap decode window [614.65, 614.85]
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 614.70)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PreciseMark_QuietSnap_LeavesTheMarkInPlace_WhenNothingNearbyIsQuieter()
+    {
+        // Guard for the quiet-snap step's tie-break: audio that is uniformly loud throughout the
+        // +/-0.1s search range (not just the trivial all-silent default every other test relies
+        // on) has no single quietest instant to prefer - every sliding window ties. The mark must
+        // resolve back to exactly where it already was (614.75) rather than drifting to whichever
+        // tied window a plain first-found scan happened to hit first.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(2, " Chapter two."));
+                s.Add(614.25, Seg(0, " Chapter two."));
+
+                var samples = new float[3200];
+                Array.Fill(samples, 0.7f);
+                s.Audio.AddPcm(614.65, samples);
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
     }
 
     [Fact]

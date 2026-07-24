@@ -140,7 +140,10 @@ phrase is really the first thing heard there, nothing changes; otherwise
 further candidate positions nearby — first later, then earlier, if needed —
 are checked the same way until the true announcement is found, and the mark is
 corrected to it. A mark that cannot be confirmed this way at all is left as
-originally placed rather than guessed at.
+originally placed rather than guessed at. Finally, whatever mark results —
+confirmed, corrected, or left as is — is nudged by up to 0.1 seconds in either
+direction to the quietest point right around it, so skipping to the chapter
+does not start playback abruptly mid-sound (an audible "plop").
 This costs one or more extra Whisper transcriptions per chapter on top of pass
 2's own probe — most of all for chapters preceded by a jingle with several
 false-positive candidates — so it is off by default; turn it on for a book

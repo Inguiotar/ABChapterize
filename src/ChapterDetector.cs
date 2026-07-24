@@ -284,6 +284,23 @@ public sealed class ChapterDetector
     private const double PreciseMarkLeadInSeconds = 0.5;
 
     /// <summary>
+    /// How far in either direction of a confirmed/left-as-is --precise-mark mark
+    /// <see cref="SnapToQuietestPointAsync"/> is allowed to search for a quieter point to move it
+    /// to - the final cleanup step's own radius, independent of (and much smaller than) the
+    /// candidate search radii above it.
+    /// </summary>
+    private const double PreciseMarkQuietSnapRadiusSeconds = 0.1;
+
+    /// <summary>
+    /// Width of the sliding RMS window <see cref="SnapToQuietestPointAsync"/> scans across
+    /// <see cref="PreciseMarkQuietSnapRadiusSeconds"/>'s range to find the quietest point. Short
+    /// enough to land inside a genuine micro-pause between words/syllables rather than averaging
+    /// across most of one, long enough that a single sample near a zero-crossing inside otherwise
+    /// loud audio cannot masquerade as a real quiet spot.
+    /// </summary>
+    private const double PreciseMarkQuietWindowSeconds = 0.01;
+
+    /// <summary>
     /// With --max-jingle-length auto, the resized probe window is this factor times the
     /// longest jingle observed so far (plus <see cref="PhraseMarginSeconds"/>), leaving a 25 %
     /// safety margin above the longest observed jingle for normal length variation between
@@ -2153,10 +2170,17 @@ public sealed class ChapterDetector
     /// alone is what makes plain marks usable for jumping to a chapter.
     /// </para>
     /// <para>
-    /// When neither direction ever confirms a candidate, <paramref name="mark"/> is returned
-    /// unchanged rather than guessing - validated against a real audiobook's full set of known
-    /// good and previously-broken marks (see <c>tools\vadprobe</c>'s <c>precise</c> prototype)
-    /// before this was ported here.
+    /// When neither direction ever confirms a candidate, <paramref name="mark"/> itself carries
+    /// forward into the final step below rather than guessing - validated against a real
+    /// audiobook's full set of known good and previously-broken marks (see <c>tools\vadprobe</c>'s
+    /// <c>precise</c> prototype) before this was ported here.
+    /// </para>
+    /// <para>
+    /// Final cleanup step, applied regardless of which of the above produced the mark (even one
+    /// left exactly as given): <see cref="SnapToQuietestPointAsync"/> nudges it to the quietest
+    /// point within <see cref="PreciseMarkQuietSnapRadiusSeconds"/>, so a player seeking to it
+    /// starts playback in as close to true silence as the audio right there actually offers,
+    /// rather than risking an audible "plop" from starting abruptly mid-waveform.
     /// </para>
     /// </summary>
     /// <param name="mark">The mark <see cref="RefineDefaultMark"/> already computed.</param>
@@ -2167,41 +2191,123 @@ public sealed class ChapterDetector
     /// empty when the VAD pre-pass did not run, in which case there is nothing to check beyond
     /// <paramref name="mark"/> itself and it is returned unchanged whenever its own check fails.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The confirmed/corrected mark, or <paramref name="mark"/> unchanged when it was
-    /// already correct or no candidate could be confirmed in either direction.</returns>
+    /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
+    /// left as given when no candidate could be confirmed), quiet-snapped as a final step.</returns>
     private async Task<double> RefinePreciseMarkAsync(
         double mark, string file, string? inputDecoder, LanguageProfile profile,
         List<SpeechSegment> speechSegments, CancellationToken ct)
     {
+        double result;
         if (await PreciseMarkPhraseFoundAsync(mark, file, inputDecoder, profile, ct))
         {
             _log?.Invoke($"--precise-mark: confirmed at {FormatTimestamp(mark)} - unchanged");
-            return mark;
+            result = mark;
         }
-
-        var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
-        var forwardCandidates = speechSegments
-            .Where(s => s.StartSeconds > mark && s.StartSeconds <= mark + span)
-            .Select(s => s.StartSeconds)
-            .OrderBy(s => s);
-        var confirmed = await WalkPreciseMarkCandidatesAsync(forwardCandidates, file, inputDecoder, profile, ct);
-
-        if (confirmed is null)
+        else
         {
-            var backwardCandidates = speechSegments
-                .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
+            var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
+            var forwardCandidates = speechSegments
+                .Where(s => s.StartSeconds > mark && s.StartSeconds <= mark + span)
                 .Select(s => s.StartSeconds)
-                .OrderByDescending(s => s);
-            confirmed = await WalkPreciseMarkCandidatesAsync(backwardCandidates, file, inputDecoder, profile, ct);
+                .OrderBy(s => s);
+            var confirmed = await WalkPreciseMarkCandidatesAsync(forwardCandidates, file, inputDecoder, profile, ct);
+
+            if (confirmed is null)
+            {
+                var backwardCandidates = speechSegments
+                    .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
+                    .Select(s => s.StartSeconds)
+                    .OrderByDescending(s => s);
+                confirmed = await WalkPreciseMarkCandidatesAsync(backwardCandidates, file, inputDecoder, profile, ct);
+            }
+
+            if (confirmed is { } onset)
+            {
+                _log?.Invoke(
+                    $"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
+                result = Math.Max(0, onset - DefaultMarkLeadSeconds);
+            }
+            else
+            {
+                _log?.Invoke(
+                    $"--precise-mark: could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
+                result = mark;
+            }
         }
 
-        if (confirmed is { } onset)
+        var quietest = await SnapToQuietestPointAsync(result, file, inputDecoder, ct);
+        if (quietest != result)
+            _log?.Invoke($"--precise-mark: nudged {FormatTimestamp(result)} to quieter {FormatTimestamp(quietest)}");
+        return quietest;
+    }
+
+    /// <summary>
+    /// --precise-mark's final cleanup step: nudges <paramref name="mark"/> to the quietest point
+    /// within <see cref="PreciseMarkQuietSnapRadiusSeconds"/> in either direction, so a player
+    /// seeking there starts playback as close to true silence as the audio actually offers nearby.
+    /// Even a mark sitting exactly on the chapter phrase's own onset can coincide with a
+    /// comparatively loud sample - it is, after all, the start of someone speaking - and abruptly
+    /// starting playback there is audible as a "plop".
+    /// <para>
+    /// Decodes a small window of raw PCM centered on <paramref name="mark"/> and slides a short
+    /// (<see cref="PreciseMarkQuietWindowSeconds"/>) RMS window across it, tracking the position
+    /// with the lowest sum of squares. Ties - most notably a window that is uniformly silent or
+    /// uniformly loud throughout, which has no single quietest instant to prefer - are broken by
+    /// proximity to <paramref name="mark"/> itself, so a range with nothing to gain from moving at
+    /// all resolves to exactly <paramref name="mark"/> rather than drifting to an arbitrary tied
+    /// position for no acoustic reason.
+    /// </para>
+    /// </summary>
+    /// <param name="mark">The mark to snap.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The quietest nearby position, or <paramref name="mark"/> unchanged when it was
+    /// already the best (or only) candidate, or when too little audio decoded to analyze.</returns>
+    private async Task<double> SnapToQuietestPointAsync(
+        double mark, string file, string? inputDecoder, CancellationToken ct)
+    {
+        var decodeStart = Math.Max(0, mark - PreciseMarkQuietSnapRadiusSeconds);
+        var samples = await _audio.DecodePcmAsync(
+            file, decodeStart, 2 * PreciseMarkQuietSnapRadiusSeconds, inputDecoder, ct);
+
+        var windowSamples = (int)(PreciseMarkQuietWindowSeconds * FfmpegClient.SampleRate);
+        if (windowSamples < 1 || samples.Length < windowSamples)
+            return mark;
+
+        var halfWindow = windowSamples / 2;
+        var markSample = (int)Math.Round((mark - decodeStart) * FfmpegClient.SampleRate);
+
+        double sumSquares = 0;
+        for (var i = 0; i < windowSamples; i++)
+            sumSquares += (double)samples[i] * samples[i];
+
+        var bestStart = 0;
+        var bestSumSquares = sumSquares;
+        var bestDistance = Math.Abs(halfWindow - markSample);
+        for (var start = 1; start <= samples.Length - windowSamples; start++)
         {
-            _log?.Invoke($"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
-            return Math.Max(0, onset - DefaultMarkLeadSeconds);
+            sumSquares += (double)samples[start + windowSamples - 1] * samples[start + windowSamples - 1]
+                          - (double)samples[start - 1] * samples[start - 1];
+            var distance = Math.Abs(start + halfWindow - markSample);
+            if (sumSquares < bestSumSquares || (sumSquares == bestSumSquares && distance < bestDistance))
+            {
+                bestSumSquares = sumSquares;
+                bestStart = start;
+                bestDistance = distance;
+            }
         }
-        _log?.Invoke($"--precise-mark: could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
-        return mark;
+
+        // The closest achievable window already centers on mark's own sample - nothing to gain by
+        // reconstructing an equivalent position through fresh (and not bit-for-bit guaranteed
+        // identical) arithmetic.
+        if (bestDistance == 0)
+            return mark;
+        // Rounded to microsecond precision - finer than one sample (62.5us at 16 kHz) already is,
+        // so this only cleans up floating-point noise from the addition chain above rather than
+        // losing anything the sample grid could actually distinguish.
+        return Math.Round(
+            Math.Max(0, decodeStart + (bestStart + halfWindow) / (double)FfmpegClient.SampleRate), 6);
     }
 
     /// <summary>
