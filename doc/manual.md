@@ -59,6 +59,14 @@ The set is determined by what ffmpeg can both read *and write* chapter marks
 for; each of these formats has been verified to round-trip chapters through
 the exact remux command ABChapterize uses.
 
+`.m4b` is the recommended format. `.m4a` and `.m4b` are identical containers —
+the extension is purely a naming convention (`.m4b` for audiobooks/podcasts,
+`.m4a` for other audio) — but players may choose their exact behavior (e.g.
+remembering playback position) based on which one it actually sees, so it is
+worth naming audiobooks `.m4b`. `.mp3` and `.opus` chapter support, while
+written correctly by ABChapterize, is honored by comparatively few players —
+expect inconsistent or missing chapter navigation with those two formats.
+
 Notably absent:
 
 - **`.ogg` (Vorbis) and `.flac`** — ffmpeg's muxers for these containers

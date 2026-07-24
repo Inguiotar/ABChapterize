@@ -60,6 +60,9 @@ Prebuilt binaries for Windows and Linux are available on the
 - **All chapter-capable audio formats** — MP4 audiobooks (`.m4a`/`.m4b`), MP3,
   Opus and Matroska audio (`.mka`). (`.ogg` and `.flac` are out, through no
   fault of their own: ffmpeg cannot write chapter marks into those containers.)
+  `.m4b` is recommended: `.m4a` and `.m4b` are identical containers, but
+  players may pick their exact behavior based on which extension they see, and
+  chapters in `.mp3`/`.opus` files are honored by comparatively few players.
 - **Windows and Linux**, single self-contained executable.
 
 ## Getting started
