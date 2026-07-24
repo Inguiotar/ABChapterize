@@ -272,16 +272,18 @@ public sealed class ChapterDetector
     /// Real audio lead-in --precise-mark decodes before every position it checks (widening the
     /// window backward rather than shifting it, so <see cref="PreciseMarkCheckWindowSeconds"/> of
     /// fresh audio is never lost off the tail). Needed because a VAD-detected onset can lag the
-    /// true acoustic word-start by a few tenths of a second (a soft consonant takes VAD's
-    /// amplitude threshold a moment to cross); without this margin, decoding from exactly such an
-    /// onset can clip the phrase's leading sound enough that Whisper drops the word from the
-    /// transcript entirely rather than merely mishearing it - confirmed on real audio (see
-    /// <c>tools\vadprobe</c>'s <c>precise</c> prototype). A synthetic silence lead-in was tried
-    /// first instead and rejected: it caused Whisper to misrecognize the very next word's leading
-    /// consonant right at the padding/audio boundary (e.g. "Kapitel" heard as "Spitel"), an
-    /// artifact plain real audio never showed.
+    /// true acoustic word-start by a moment (a soft consonant takes VAD's amplitude threshold a
+    /// moment to cross); without this margin, decoding from exactly such an onset can clip the
+    /// phrase's leading sound enough that Whisper drops the word from the transcript entirely
+    /// rather than merely mishearing it - confirmed on real audio (see <c>tools\vadprobe</c>'s
+    /// <c>precise</c> prototype). A synthetic silence lead-in was tried first instead and
+    /// rejected: it caused Whisper to misrecognize the very next word's leading consonant right
+    /// at the padding/audio boundary (e.g. "Kapitel" heard as "Spitel"), an artifact plain real
+    /// audio never showed. Kept small (well under a syllable's worth of audio) rather than the
+    /// few tenths of a second the onset lag can reach: too generous a margin risks pulling a
+    /// trailing syllable or two of whatever precedes the phrase into the decode window instead.
     /// </summary>
-    private const double PreciseMarkLeadInSeconds = 0.5;
+    private const double PreciseMarkLeadInSeconds = 0.1;
 
     /// <summary>
     /// How far in either direction of a confirmed/left-as-is --precise-mark mark

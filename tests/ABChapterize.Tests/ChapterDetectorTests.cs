@@ -1197,11 +1197,12 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, Seg(2, " Chapter two.")); // window [613, ...], phrase at 615
-                // --precise-mark checks, keyed by their own decode start (checked position - 0.5s
-                // lead-in): chapter one's mark (0.25) decodes from max(0, 0.25-0.5) = 0, landing on
-                // the very same script entry already used for the real probe window at 0 - the
-                // phrase really is the first thing there, so this is not a coincidence of the test.
-                s.Add(614.25, Seg(0, " Chapter two.")); // check @ 614.75 (chapter two's own mark)
+                // --precise-mark checks, keyed by their own decode start (checked position - 0.1s
+                // lead-in): chapter one's mark (0.25) decodes from max(0, 0.25-0.1) = 0.15, landing
+                // (within the script's 0.25s match tolerance) on the very same script entry already
+                // used for the real probe window at 0 - the phrase really is the first thing there,
+                // so this is not a coincidence of the test.
+                s.Add(614.65, Seg(0, " Chapter two.")); // check @ 614.75 (chapter two's own mark)
             });
 
         Assert.False(result.GapRemains);
@@ -1227,10 +1228,10 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
-                s.Add(655.25, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 655.75 (RefineDefaultMark's mark) - the transient, not the phrase
-                s.Add(655.5, new TranscriptSegment(0, 0.6, " Music", 1.0));        // candidate @ 656 (the transient itself) - still not the phrase
-                s.Add(656.5, Seg(0, " Chapter two."));                            // candidate @ 657 - the real phrase
-                s.Add(659.5, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // candidate @ 660 - narration resumes, confirming 657
+                s.Add(655.65, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 655.75 (RefineDefaultMark's mark) - the transient, not the phrase
+                s.Add(655.9, new TranscriptSegment(0, 0.6, " Music", 1.0));        // candidate @ 656 (the transient itself) - still not the phrase
+                s.Add(656.9, Seg(0, " Chapter two."));                            // candidate @ 657 - the real phrase
+                s.Add(659.9, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // candidate @ 660 - narration resumes, confirming 657
             },
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
 
@@ -1252,10 +1253,10 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0));
-                s.Add(655.25, new TranscriptSegment(0, 1, " Music", 1.0));
-                s.Add(655.5, new TranscriptSegment(0, 0.6, " Music", 1.0));
-                s.Add(656.5, new TranscriptSegment(0, 1.2, " Music", 1.0));
-                s.Add(659.5, new TranscriptSegment(0, 3, " Once upon a time.", 1.0));
+                s.Add(655.65, new TranscriptSegment(0, 1, " Music", 1.0));
+                s.Add(655.9, new TranscriptSegment(0, 0.6, " Music", 1.0));
+                s.Add(656.9, new TranscriptSegment(0, 1.2, " Music", 1.0));
+                s.Add(659.9, new TranscriptSegment(0, 3, " Once upon a time.", 1.0));
             },
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
 
@@ -1285,10 +1286,10 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
-                s.Add(657.25, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 657.75 (the wrong, default mark) - fails
-                s.Add(657.5, new TranscriptSegment(0, 1.1, " Music", 1.0));        // forward candidate @ 658 (the wrong blip itself) - still fails
-                s.Add(659.5, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // forward candidate @ 660 - narration, also fails
-                s.Add(655.5, Seg(0, " Chapter two."));                            // backward candidate @ 656 - the real phrase, confirms
+                s.Add(657.65, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 657.75 (the wrong, default mark) - fails
+                s.Add(657.9, new TranscriptSegment(0, 1.1, " Music", 1.0));        // forward candidate @ 658 (the wrong blip itself) - still fails
+                s.Add(659.9, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // forward candidate @ 660 - narration, also fails
+                s.Add(655.9, Seg(0, " Chapter two."));                            // backward candidate @ 656 - the real phrase, confirms
             },
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(658, 658.6), new(660, 3600)] });
 
@@ -1314,7 +1315,7 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, Seg(2, " Chapter two.")); // window [613, ...], phrase at 615
-                s.Add(614.25, Seg(0, " Chapter two.")); // check @ 614.75 (chapter two's own mark)
+                s.Add(614.65, Seg(0, " Chapter two.")); // check @ 614.75 (chapter two's own mark)
 
                 var samples = new float[3200];
                 Array.Fill(samples, 1.0f);
@@ -1341,7 +1342,7 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, Seg(2, " Chapter two."));
-                s.Add(614.25, Seg(0, " Chapter two."));
+                s.Add(614.65, Seg(0, " Chapter two."));
 
                 var samples = new float[3200];
                 Array.Fill(samples, 0.7f);
@@ -1370,7 +1371,7 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, Seg(2, " Chapter two."));
-                s.Add(614.25, Seg(0, " Chapter two."));
+                s.Add(614.65, Seg(0, " Chapter two."));
 
                 var samples = new float[3200];
                 Array.Fill(samples, 1.0f);
