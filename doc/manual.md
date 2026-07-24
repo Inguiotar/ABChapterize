@@ -145,18 +145,23 @@ or generously past it. Every mark placed this way (not with
 `--mark-before-jingle`, which has its own separate anchor) is double-checked by
 transcribing a short, isolated clip of the audio right at it: if the chapter
 phrase is really the first thing heard there, nothing changes; otherwise
-further candidate positions nearby — first later, then earlier, if needed —
-are checked the same way until the true announcement is found, and the mark is
-corrected to it. A mark that cannot be confirmed this way at all is left as
+further candidate positions nearby — both before and after it — are checked
+the same way until the true announcement is found, and the mark is corrected
+to it. On the rare chapter where none of those nearby candidates
+confirm anything either, a second, wider sweep of the same area is tried
+before giving up. A mark that cannot be confirmed this way at all is left as
 originally placed rather than guessed at. Finally, whatever mark results —
-confirmed, corrected, or left as is — is nudged by up to 0.1 seconds in either
-direction to the quietest point right around it, so skipping to the chapter
-does not start playback abruptly mid-sound (an audible "plop").
+confirmed, corrected, or left as is — is nudged up to 0.15 seconds earlier to
+the quietest point in that stretch, but only when doing so is a clear (at
+least 6 dB) improvement over the mark's own position; a mark is never moved
+later. This keeps a player from starting playback abruptly mid-sound (an
+audible "plop") without ever risking eating into the announcement itself.
 This costs one or more extra Whisper transcriptions per chapter on top of pass
 2's own probe — most of all for chapters preceded by a jingle with several
-false-positive candidates — so it is off by default; turn it on for a book
-where marks keep landing inside jingles even without it (the machinery is
-documented in the source).
+false-positive candidates, or the rarer chapter needing that second, wider
+sweep — so it is off by default; turn it on for a book where marks keep
+landing inside jingles even without it (the machinery is documented in the
+source).
 
 `--mark-before-jingle` (**experimental**) anchors the mark to a preceding
 jingle/silence instead, the way this tool originally always placed marks: 0.5

@@ -286,12 +286,23 @@ public sealed class ChapterDetector
     private const double PreciseMarkLeadInSeconds = 0.1;
 
     /// <summary>
-    /// How far in either direction of a confirmed/left-as-is --precise-mark mark
-    /// <see cref="SnapToQuietestPointAsync"/> is allowed to search for a quieter point to move it
-    /// to - the final cleanup step's own radius, independent of (and much smaller than) the
-    /// candidate search radii above it.
+    /// Step size --precise-mark's round 2 (<see cref="RefinePreciseMarkAsync"/>) advances by when
+    /// blindly sweeping for the chapter phrase after round 1's VAD-speech-segment candidates never
+    /// confirmed it in either direction. Matches <see cref="PreciseMarkLeadInSeconds"/>'s own
+    /// magnitude - both are about the finest granularity worth probing at, given
+    /// <see cref="PreciseMarkCheckWindowSeconds"/>'s window length - rather than some unrelated
+    /// value.
     /// </summary>
-    private const double PreciseMarkQuietSnapRadiusSeconds = 0.1;
+    private const double PreciseMarkFixedStepSeconds = 0.1;
+
+    /// <summary>
+    /// How far <em>before</em> a confirmed/left-as-is --precise-mark mark
+    /// <see cref="SnapToQuietestPointAsync"/> is allowed to search for a quieter point to move it
+    /// to - the final cleanup step's own radius, independent of (and larger than) the candidate
+    /// search step size above it. Backward-only (see <see cref="SnapToQuietestPointAsync"/>), so
+    /// this is a one-sided lookback, not a window centered on the mark.
+    /// </summary>
+    private const double PreciseMarkQuietSnapRadiusSeconds = 0.15;
 
     /// <summary>
     /// Width of the sliding RMS window <see cref="SnapToQuietestPointAsync"/> scans across
@@ -303,15 +314,14 @@ public sealed class ChapterDetector
     private const double PreciseMarkQuietWindowSeconds = 0.01;
 
     /// <summary>
-    /// Power-ratio tolerance, in dB, within which <see cref="SnapToQuietestPointAsync"/> treats
-    /// the quietest stretch before the mark and the quietest stretch after it as "the same
-    /// ballpark" of silence rather than one being the clear winner. 3 dB is the classic
-    /// just-noticeable-difference threshold for loudness (a 2x power ratio) - close enough that
-    /// picking the technically-quieter side over the other would be splitting hairs no listener
-    /// could hear. When both sides qualify, the mark moves backward rather than forward (see
-    /// <see cref="SnapToQuietestPointAsync"/> for why backward is preferred as the tiebreak).
+    /// Minimum power-ratio improvement, in dB, a backward candidate point within
+    /// <see cref="PreciseMarkQuietSnapRadiusSeconds"/> must offer over the mark's own current
+    /// position before <see cref="SnapToQuietestPointAsync"/> will nudge to it. 6 dB is a 4x power
+    /// ratio - comfortably audible, not a marginal difference that could just as easily be
+    /// noise-floor jitter - so a nudge only ever happens for a genuine, worthwhile improvement,
+    /// never as a coin-flip between two nearly-identical spots.
     /// </summary>
-    private const double PreciseMarkQuietSnapBiasDb = 3.0;
+    private const double PreciseMarkQuietSnapMinImprovementDb = 6.0;
 
     /// <summary>
     /// With --max-jingle-length auto, the resized probe window is this factor times the
@@ -2153,47 +2163,63 @@ public sealed class ChapterDetector
     /// <para>
     /// First checks <paramref name="mark"/> itself: if its own phrase is heard there, it is
     /// already correct and is returned unchanged - the common case, and the only cost paid for a
-    /// chapter that needed no correction. Otherwise, every VAD speech-segment start after
-    /// <paramref name="mark"/> (the same swallowed-blip candidates <see
-    /// cref="ResolveDefaultPhraseOnset"/> already reasons about, not a blind fixed-step scan) is
-    /// checked in chronological order via <see cref="WalkPreciseMarkCandidatesAsync"/> until one
-    /// succeeds <em>and</em> the next one after it fails again - only that success-then-fail
-    /// pattern confirms the phrase truly begins at the earlier candidate, immune to a single
-    /// stray false positive elsewhere in the jingle, since a real chapter announcement's own audio
-    /// ends and narration (or some unrelated cue) resumes right after it. That forward search is
-    /// bounded to a plausible jingle-plus-phrase span (<see cref="CliOptions.MaxJingleSeconds"/>
-    /// plus <see cref="PhraseMarginSeconds"/>) after <paramref name="mark"/>, so it can never
-    /// wander into the next chapter's own territory.
+    /// chapter that needed no correction. Otherwise, round 1 searches VAD speech-segment starts
+    /// within a plausible jingle-plus-phrase span (<see cref="CliOptions.MaxJingleSeconds"/> plus
+    /// <see cref="PhraseMarginSeconds"/>) of <paramref name="mark"/> - the same swallowed-blip
+    /// candidates <see cref="ResolveDefaultPhraseOnset"/> already reasons about, not a blind
+    /// fixed-step scan - via <see cref="WalkPreciseMarkCandidatesInterleavedAsync"/>, which tries
+    /// the forward (later-than-mark) and backward (earlier-than-mark) candidates one at a time in
+    /// alternation - backward, then forward, then backward again - rather than exhausting one
+    /// direction before ever trying the other.
     /// </para>
     /// <para>
-    /// If the forward search never confirms anything, the same walk runs backward through VAD
-    /// speech-segment starts <em>before</em> <paramref name="mark"/> (nearest first), over the
-    /// same span. This exists for a distinct failure shape from the one above: rather than
-    /// stopping short on a spurious blip ahead of the true announcement,
-    /// <see cref="ResolveDefaultPhraseOnset"/>'s swallowed-blip clustering can occasionally
-    /// promote a later, unrelated blip inside an over-merged jingle region over the
+    /// The two directions are trusted asymmetrically, for two distinct failure shapes. A forward
+    /// success only locks in once the <em>next</em> forward candidate afterward fails - that
+    /// success-then-fail pattern confirms the phrase truly begins at the earlier candidate, immune
+    /// to a single stray false positive elsewhere in the jingle, since a real chapter
+    /// announcement's own audio ends and narration (or some unrelated cue) resumes right after it.
+    /// A backward success, by contrast, is accepted the moment it is heard, with no further
+    /// checking: <see cref="ResolveDefaultPhraseOnset"/>'s swallowed-blip clustering can
+    /// occasionally promote a later, unrelated blip inside an over-merged jingle region over the
     /// announcement's own earlier one, landing <paramref name="mark"/> generously past the true
-    /// onset instead of short of it. Confirmed live on chapters whose true onset sat mere seconds
-    /// before what the heuristic reported (Perry Rhodan "Die Dritte Macht", chapters 8 and 20,
-    /// 2026-07-24). Kept as a fallback rather than tried first, so the original, separately
-    /// validated forward correction for the short-of-the-mark case is unaffected: this only
-    /// engages when forward search comes up empty. Deliberately does not touch
-    /// <see cref="ResolveDefaultPhraseOnset"/> itself - default-mode marking (without
-    /// --precise-mark) must stay exactly as heuristically accurate as it already is, since it
-    /// alone is what makes plain marks usable for jumping to a chapter.
+    /// onset instead of short of it (confirmed live on chapters whose true onset sat mere seconds
+    /// before what the heuristic reported - Perry Rhodan "Die Dritte Macht", chapters 8 and 20,
+    /// 2026-07-24) - once the search has walked back past that later blip to the real
+    /// announcement, there is nothing earlier still worth preferring over it. Because forward
+    /// needs corroboration but backward does not, the instant any forward candidate succeeds,
+    /// backward is abandoned for the rest of this search - only that forward success still needs
+    /// confirming, by further forward candidates alone. Both spans are bounded to the same
+    /// jingle-plus-phrase distance from <paramref name="mark"/>, so neither direction can wander
+    /// into a neighbouring chapter's own territory. This deliberately does not touch <see
+    /// cref="ResolveDefaultPhraseOnset"/> itself - default-mode marking (without --precise-mark)
+    /// must stay exactly as heuristically accurate as it already is, since it alone is what makes
+    /// plain marks usable for jumping to a chapter.
     /// </para>
     /// <para>
-    /// When neither direction ever confirms a candidate, <paramref name="mark"/> itself carries
-    /// forward into the final step below rather than guessing - validated against a real
+    /// If round 1 never confirms anything in either direction - it relies entirely on
+    /// VAD-reported speech-segment starts, so it can only find what VAD itself noticed - a second
+    /// round repeats the same interleaved search over the same span, but stepping by a fixed <see
+    /// cref="PreciseMarkFixedStepSeconds"/> instead of VAD candidates: a blind scan immune to VAD
+    /// missing or mis-clustering the announcement's blip entirely (e.g. a jingle quiet enough, or
+    /// short enough, that VAD reports no speech segment inside it at all). Costs more
+    /// transcriptions than round 1 (a check roughly every <see
+    /// cref="PreciseMarkFixedStepSeconds"/> across the whole span instead of only at actual VAD
+    /// segment starts), so it only ever runs after round 1 has already come up empty.
+    /// </para>
+    /// <para>
+    /// When neither round nor direction ever confirms a candidate, <paramref name="mark"/> itself
+    /// carries forward into the final step below rather than guessing - validated against a real
     /// audiobook's full set of known good and previously-broken marks (see <c>tools\vadprobe</c>'s
     /// <c>precise</c> prototype) before this was ported here.
     /// </para>
     /// <para>
     /// Final cleanup step, applied regardless of which of the above produced the mark (even one
-    /// left exactly as given): <see cref="SnapToQuietestPointAsync"/> nudges it to the quietest
-    /// point within <see cref="PreciseMarkQuietSnapRadiusSeconds"/>, so a player seeking to it
-    /// starts playback in as close to true silence as the audio right there actually offers,
-    /// rather than risking an audible "plop" from starting abruptly mid-waveform.
+    /// left exactly as given): <see cref="SnapToQuietestPointAsync"/> nudges it backward - never
+    /// later - to a quieter point within <see cref="PreciseMarkQuietSnapRadiusSeconds"/> before it,
+    /// provided one is at least <see cref="PreciseMarkQuietSnapMinImprovementDb"/> quieter than the
+    /// mark's own position, so a player seeking to it starts playback in close to true silence
+    /// rather than risking an audible "plop" from starting abruptly mid-waveform - without ever
+    /// risking eating into the announcement itself by moving later.
     /// </para>
     /// </summary>
     /// <param name="mark">The mark <see cref="RefineDefaultMark"/> already computed.</param>
@@ -2223,15 +2249,19 @@ public sealed class ChapterDetector
                 .Where(s => s.StartSeconds > mark && s.StartSeconds <= mark + span)
                 .Select(s => s.StartSeconds)
                 .OrderBy(s => s);
-            var confirmed = await WalkPreciseMarkCandidatesAsync(forwardCandidates, file, inputDecoder, profile, ct);
+            var backwardCandidates = speechSegments
+                .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
+                .Select(s => s.StartSeconds)
+                .OrderByDescending(s => s);
+            var confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
+                forwardCandidates, backwardCandidates, file, inputDecoder, profile, ct);
 
             if (confirmed is null)
             {
-                var backwardCandidates = speechSegments
-                    .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
-                    .Select(s => s.StartSeconds)
-                    .OrderByDescending(s => s);
-                confirmed = await WalkPreciseMarkCandidatesAsync(backwardCandidates, file, inputDecoder, profile, ct);
+                var forwardSteps = FixedStepCandidates(mark, span, forward: true);
+                var backwardSteps = FixedStepCandidates(mark, span, forward: false);
+                confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
+                    forwardSteps, backwardSteps, file, inputDecoder, profile, ct);
             }
 
             if (confirmed is { } onset)
@@ -2255,40 +2285,44 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// --precise-mark's final cleanup step: nudges <paramref name="mark"/> to the quietest point
-    /// within <see cref="PreciseMarkQuietSnapRadiusSeconds"/> in either direction, so a player
-    /// seeking there starts playback as close to true silence as the audio actually offers nearby.
-    /// Even a mark sitting exactly on the chapter phrase's own onset can coincide with a
-    /// comparatively loud sample - it is, after all, the start of someone speaking - and abruptly
-    /// starting playback there is audible as a "plop".
+    /// --precise-mark's final cleanup step: nudges <paramref name="mark"/> backward to a quieter
+    /// point within <see cref="PreciseMarkQuietSnapRadiusSeconds"/> before it, so a player seeking
+    /// there starts playback as close to true silence as the audio actually offers nearby. Even a
+    /// mark sitting exactly on the chapter phrase's own onset can coincide with a comparatively
+    /// loud sample - it is, after all, the start of someone speaking - and abruptly starting
+    /// playback there is audible as a "plop".
     /// <para>
-    /// Decodes a small window of raw PCM centered on <paramref name="mark"/> and slides a short
-    /// (<see cref="PreciseMarkQuietWindowSeconds"/>) RMS window across it, separately tracking the
-    /// quietest position on either side of <paramref name="mark"/> (by sum of squares). When one
-    /// side is clearly quieter than the other, that side wins outright. When they are within
-    /// <see cref="PreciseMarkQuietSnapBiasDb"/> of each other - the same ballpark of silence, not
-    /// necessarily identical - the earlier (backward) side wins instead: nudging a mark earlier
-    /// only ever trims a beat of trailing silence from the previous chapter, while nudging it later
-    /// risks eating into the next phrase's own lead-in, so backward is the safer direction to
-    /// prefer whenever the acoustic evidence does not clearly favor forward. Ties within a side are
-    /// broken by proximity to <paramref name="mark"/> itself, so a side with nothing to gain from
-    /// moving at all resolves to exactly <paramref name="mark"/> rather than drifting to an
-    /// arbitrary tied position for no acoustic reason; if that no-gain position also wins overall,
-    /// <paramref name="mark"/> is returned unchanged.
+    /// Never moves the mark later: only positions before <paramref name="mark"/> are ever
+    /// considered, since nudging earlier only ever trims a beat of trailing silence from the
+    /// previous chapter, while nudging later risks eating into the next phrase's own lead-in - not
+    /// a trade worth making for a marginally quieter spot. Decodes a small window of raw PCM
+    /// covering that lookback and slides a short (<see cref="PreciseMarkQuietWindowSeconds"/>) RMS
+    /// window across it, tracking the quietest position found (by sum of squares) together with
+    /// <paramref name="mark"/>'s own, fixed current-position window. Ties among backward candidates
+    /// are broken by proximity to <paramref name="mark"/>, so drifting further back than necessary
+    /// for the same energy never happens.
+    /// </para>
+    /// <para>
+    /// The quietest backward candidate only ever wins if it is at least
+    /// <see cref="PreciseMarkQuietSnapMinImprovementDb"/> quieter than <paramref name="mark"/>'s own
+    /// position - a small, possibly noise-floor-only difference is not reason enough to move a mark
+    /// that was already confirmed (or left as-is) by the search above. When nothing nearby clears
+    /// that bar, <paramref name="mark"/> is returned unchanged.
     /// </para>
     /// </summary>
     /// <param name="mark">The mark to snap.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The quietest nearby position, or <paramref name="mark"/> unchanged when it was
-    /// already the best (or only) candidate, or when too little audio decoded to analyze.</returns>
+    /// <returns>A quieter position before <paramref name="mark"/>, or <paramref name="mark"/>
+    /// unchanged when nothing nearby is quiet enough to be worth moving to, or when too little
+    /// audio decoded to analyze.</returns>
     private async Task<double> SnapToQuietestPointAsync(
         double mark, string file, string? inputDecoder, CancellationToken ct)
     {
         var decodeStart = Math.Max(0, mark - PreciseMarkQuietSnapRadiusSeconds);
         var samples = await _audio.DecodePcmAsync(
-            file, decodeStart, 2 * PreciseMarkQuietSnapRadiusSeconds, inputDecoder, ct);
+            file, decodeStart, mark - decodeStart + PreciseMarkQuietWindowSeconds, inputDecoder, ct);
 
         var windowSamples = (int)(PreciseMarkQuietWindowSeconds * FfmpegClient.SampleRate);
         if (windowSamples < 1 || samples.Length < windowSamples)
@@ -2301,39 +2335,32 @@ public sealed class ChapterDetector
         for (var i = 0; i < windowSamples; i++)
             sumSquares += (double)samples[i] * samples[i];
 
-        // Backward = window centered at or before markSample; forward = strictly after. Tracked
-        // separately, each with its own closest-to-mark tiebreak, so the two sides can be compared
-        // against each other afterward instead of collapsing straight to a single global best.
-        int? bestBackwardStart = null;
-        var bestBackwardSumSquares = double.PositiveInfinity;
-        var bestBackwardDistance = int.MaxValue;
-        int? bestForwardStart = null;
-        var bestForwardSumSquares = double.PositiveInfinity;
-        var bestForwardDistance = int.MaxValue;
+        // The mark's own current-position window (centered on markSample) is the fixed baseline
+        // every backward candidate is measured against, not another candidate to search over.
+        var currentStart = Math.Clamp(markSample - halfWindow, 0, samples.Length - windowSamples);
+        var currentSumSquares = double.NaN;
+
+        int? bestStart = null;
+        var bestSumSquares = double.PositiveInfinity;
+        var bestDistance = int.MaxValue;
 
         void Consider(int start, double windowSumSquares)
         {
+            if (start == currentStart)
+                currentSumSquares = windowSumSquares;
+
             var center = start + halfWindow;
-            var distance = Math.Abs(center - markSample);
-            if (center <= markSample)
+            // Only positions at or before the mark are ever candidates - see the "never moves the
+            // mark later" remark above.
+            if (center > markSample)
+                return;
+            var distance = markSample - center;
+            if (windowSumSquares < bestSumSquares ||
+                (windowSumSquares == bestSumSquares && distance < bestDistance))
             {
-                if (windowSumSquares < bestBackwardSumSquares ||
-                    (windowSumSquares == bestBackwardSumSquares && distance < bestBackwardDistance))
-                {
-                    bestBackwardSumSquares = windowSumSquares;
-                    bestBackwardStart = start;
-                    bestBackwardDistance = distance;
-                }
-            }
-            else
-            {
-                if (windowSumSquares < bestForwardSumSquares ||
-                    (windowSumSquares == bestForwardSumSquares && distance < bestForwardDistance))
-                {
-                    bestForwardSumSquares = windowSumSquares;
-                    bestForwardStart = start;
-                    bestForwardDistance = distance;
-                }
+                bestSumSquares = windowSumSquares;
+                bestStart = start;
+                bestDistance = distance;
             }
         }
 
@@ -2345,96 +2372,137 @@ public sealed class ChapterDetector
             Consider(start, sumSquares);
         }
 
-        int bestStart;
-        int bestDistance;
-        if (bestBackwardStart is { } backwardStart && bestForwardStart is { } forwardStart &&
-            IsSameSilenceBallpark(bestBackwardSumSquares, bestForwardSumSquares))
-        {
-            bestStart = backwardStart;
-            bestDistance = bestBackwardDistance;
-        }
-        else if (bestForwardSumSquares < bestBackwardSumSquares)
-        {
-            bestStart = bestForwardStart!.Value;
-            bestDistance = bestForwardDistance;
-        }
-        else
-        {
-            bestStart = bestBackwardStart!.Value;
-            bestDistance = bestBackwardDistance;
-        }
-
-        // The closest achievable window already centers on mark's own sample - nothing to gain by
-        // reconstructing an equivalent position through fresh (and not bit-for-bit guaranteed
-        // identical) arithmetic.
-        if (bestDistance == 0)
+        if (bestStart is not { } winningStart || bestDistance == 0 ||
+            !IsQuieterByAtLeast(bestSumSquares, currentSumSquares, PreciseMarkQuietSnapMinImprovementDb))
             return mark;
+
         // Rounded to microsecond precision - finer than one sample (62.5us at 16 kHz) already is,
         // so this only cleans up floating-point noise from the addition chain above rather than
         // losing anything the sample grid could actually distinguish.
         return Math.Round(
-            Math.Max(0, decodeStart + (bestStart + halfWindow) / (double)FfmpegClient.SampleRate), 6);
+            Math.Max(0, decodeStart + (winningStart + halfWindow) / (double)FfmpegClient.SampleRate), 6);
     }
 
     /// <summary>
-    /// Whether two candidate windows' energies (sum of squares) are within
-    /// <see cref="PreciseMarkQuietSnapBiasDb"/> of each other on a power-ratio (dB) scale - i.e.
-    /// close enough to call them the same ballpark of quiet rather than one clearly winning. Both
-    /// being exactly zero (true digital silence on both sides) counts as the same ballpark; exactly
-    /// one being zero does not, since that side is categorically quieter than any nonzero level.
+    /// Whether <paramref name="candidateSumSquares"/> is at least <paramref name="thresholdDb"/>
+    /// quieter than <paramref name="currentSumSquares"/> on a power-ratio (dB) scale - the gate
+    /// <see cref="SnapToQuietestPointAsync"/> applies before nudging to a backward candidate. A
+    /// candidate at true digital silence (zero) always qualifies against any nonzero current level
+    /// (an infinite improvement); the current position already being true silence never qualifies,
+    /// since there is no quieter place left to go.
     /// </summary>
-    private static bool IsSameSilenceBallpark(double backwardSumSquares, double forwardSumSquares)
+    private static bool IsQuieterByAtLeast(double candidateSumSquares, double currentSumSquares, double thresholdDb)
     {
-        if (backwardSumSquares <= 0 && forwardSumSquares <= 0)
-            return true;
-        if (backwardSumSquares <= 0 || forwardSumSquares <= 0)
+        if (currentSumSquares <= 0)
             return false;
+        if (candidateSumSquares <= 0)
+            return true;
 
-        var ratioDb = 10.0 * Math.Log10(
-            Math.Max(backwardSumSquares, forwardSumSquares) / Math.Min(backwardSumSquares, forwardSumSquares));
-        return ratioDb <= PreciseMarkQuietSnapBiasDb;
+        var ratioDb = 10.0 * Math.Log10(currentSumSquares / candidateSumSquares);
+        return ratioDb >= thresholdDb;
     }
 
     /// <summary>
-    /// Walks <paramref name="candidates"/> in the given order, checking each with
-    /// <see cref="PreciseMarkPhraseFoundAsync"/>, and returns the confirmed onset - the
-    /// success-then-fail pattern described on <see cref="RefinePreciseMarkAsync"/>. Shared between
-    /// that method's forward and backward searches, which differ only in which candidates they
-    /// feed in and in what order; the confirmation logic itself is direction-agnostic; a run of
-    /// consecutive successes keeps moving <c>confirmed</c> to the most recently checked one
-    /// (logged as ambiguous), and the first failure after any success locks that in as the answer.
-    /// Reaching the end of <paramref name="candidates"/> without a subsequent failure also accepts
-    /// the last confirmed one, since the caller's search span already bounds how far this can
-    /// wander.
+    /// Generates --precise-mark round 2's blind, fixed-step candidate positions (see
+    /// <see cref="RefinePreciseMarkAsync"/>): <paramref name="mark"/> plus/minus
+    /// <see cref="PreciseMarkFixedStepSeconds"/>, 2x that, 3x that, and so on out to
+    /// <paramref name="span"/>, unlike round 1's candidates, which come from actual VAD
+    /// speech-segment starts. Stops early, short of <paramref name="span"/>, if a backward step
+    /// would otherwise go negative - there is nothing before the start of the file to check.
     /// </summary>
-    /// <param name="candidates">Positions to check, in the order they should be tried.</param>
+    /// <param name="mark">Position the steps count out from; never itself included.</param>
+    /// <param name="span">How far out from <paramref name="mark"/> to keep stepping.</param>
+    /// <param name="forward">True to step later than <paramref name="mark"/>, false to step earlier.</param>
+    private static IEnumerable<double> FixedStepCandidates(double mark, double span, bool forward)
+    {
+        var steps = (int)Math.Round(span / PreciseMarkFixedStepSeconds);
+        for (var i = 1; i <= steps; i++)
+        {
+            var candidate = forward
+                ? mark + i * PreciseMarkFixedStepSeconds
+                : mark - i * PreciseMarkFixedStepSeconds;
+            if (candidate < 0)
+                yield break;
+            yield return Math.Round(candidate, 6);
+        }
+    }
+
+    /// <summary>
+    /// Interleaves <paramref name="forwardCandidates"/> and <paramref name="backwardCandidates"/>
+    /// one at a time - backward, then forward, then backward again, and so on - rather than
+    /// exhausting either direction before ever trying the other, so whichever direction the true
+    /// announcement actually lies in is typically found in about half the checks a fully
+    /// sequential search would need. The two directions are accepted asymmetrically, as described
+    /// on <see cref="RefinePreciseMarkAsync"/>:
+    /// <list type="bullet">
+    /// <item>A backward success is trusted immediately and returned on the spot, with no further
+    /// checking.</item>
+    /// <item>A forward success instead switches the search to a forward-only continuation -
+    /// backward is abandoned outright from that point on - and forward candidates keep being
+    /// checked, in order, until one fails (which locks in the <em>previous</em> one as the
+    /// answer) or they simply run out (which accepts whichever was confirmed last; the caller's
+    /// search span already bounds how far this can wander).</item>
+    /// </list>
+    /// A run of consecutive forward successes during that continuation is logged as ambiguous,
+    /// each time moving the tentative answer to the most recently confirmed one.
+    /// </summary>
+    /// <param name="forwardCandidates">Positions later than the mark, in the order to try them.</param>
+    /// <param name="backwardCandidates">Positions earlier than the mark, in the order to try them.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="profile">Language profile supplying the phrase to look for.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The confirmed candidate position, or null if none was ever confirmed.</returns>
-    private async Task<double?> WalkPreciseMarkCandidatesAsync(
-        IEnumerable<double> candidates, string file, string? inputDecoder, LanguageProfile profile,
-        CancellationToken ct)
+    /// <returns>The confirmed candidate position, or null if neither direction ever confirmed one.</returns>
+    private async Task<double?> WalkPreciseMarkCandidatesInterleavedAsync(
+        IEnumerable<double> forwardCandidates, IEnumerable<double> backwardCandidates,
+        string file, string? inputDecoder, LanguageProfile profile, CancellationToken ct)
     {
-        double? confirmed = null;
-        foreach (var candidate in candidates)
+        using var forwardEnumerator = forwardCandidates.GetEnumerator();
+        using var backwardEnumerator = backwardCandidates.GetEnumerator();
+        var forwardHasMore = forwardEnumerator.MoveNext();
+        var backwardHasMore = backwardEnumerator.MoveNext();
+        double? forwardConfirmed = null;
+
+        while (forwardConfirmed is null && (backwardHasMore || forwardHasMore))
         {
-            ct.ThrowIfCancellationRequested();
-            var found = await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct);
-            if (found)
+            if (backwardHasMore)
             {
-                if (confirmed is { } already)
-                    _log?.Invoke(
-                        $"--precise-mark: consecutive candidates confirmed ({FormatTimestamp(already)} " +
-                        $"then {FormatTimestamp(candidate)}) - ambiguous, keeping the latter");
-                confirmed = candidate;
+                var candidate = backwardEnumerator.Current;
+                ct.ThrowIfCancellationRequested();
+                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+                    return candidate;
+                backwardHasMore = backwardEnumerator.MoveNext();
+            }
+
+            if (forwardHasMore)
+            {
+                var candidate = forwardEnumerator.Current;
+                ct.ThrowIfCancellationRequested();
+                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+                    forwardConfirmed = candidate;
+                forwardHasMore = forwardEnumerator.MoveNext();
+            }
+        }
+
+        if (forwardConfirmed is null)
+            return null;
+
+        while (forwardHasMore)
+        {
+            var candidate = forwardEnumerator.Current;
+            ct.ThrowIfCancellationRequested();
+            if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+            {
+                _log?.Invoke(
+                    $"--precise-mark: consecutive candidates confirmed ({FormatTimestamp(forwardConfirmed.Value)} " +
+                    $"then {FormatTimestamp(candidate)}) - ambiguous, keeping the latter");
+                forwardConfirmed = candidate;
+                forwardHasMore = forwardEnumerator.MoveNext();
                 continue;
             }
-            if (confirmed is { } c)
-                return c;
+            return forwardConfirmed;
         }
-        return confirmed;
+        return forwardConfirmed;
     }
 
     /// <summary>

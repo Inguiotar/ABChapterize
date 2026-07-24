@@ -1245,9 +1245,17 @@ public sealed class ChapterDetectorTests : IDisposable
         // If the phrase can never be confirmed anywhere - every check simulates unrelated audio,
         // as if the real announcement were outside the search horizon entirely - --precise-mark
         // must not guess: it leaves the mark exactly as RefineDefaultMark computed it, rather than
-        // looping forever or picking an arbitrary candidate.
+        // looping forever or picking an arbitrary candidate. --max-jingle-length is capped at 30
+        // (instead of the 45 s default) purely so round 2's fixed-step backward sweep - which now
+        // shares round 1's search span - stays short of 613, the unrelated initial probe decode's
+        // own scripted "Chapter two." transcript a few tens of seconds further back; that entry
+        // has to exist for chapter two to be discovered at all, and this test's fixture (unlike
+        // real ffmpeg decodes) cannot tell a fresh short --precise-mark re-transcription apart
+        // from that much longer probe decode once their start times land within the same script
+        // lookup tolerance, so the sweep must not reach that far to begin with. 30 s still leaves
+        // the probe window (35 s) comfortable room past the phrase's abs-638 offset.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5", "--precise-mark", "--max-jingle-length", "30"),
             [new(610, 613)],
             s =>
             {
@@ -1265,6 +1273,66 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task PreciseMark_Round2FixedStepSweep_FindsAPhraseRound1sVadCandidatesNeverReached()
+    {
+        // Round 2's whole reason to exist: a phrase sitting where no VAD speech segment starts, so
+        // round 1 (limited entirely to VAD candidates) has no way to ever try checking it. Both VAD
+        // candidates round 1 does have (656, 657) are left unscripted (fail, same as the fallback
+        // test above), so round 1's forward and backward searches both come up empty; round 2 must
+        // then blindly step forward from the mark by PreciseMarkFixedStepSeconds (0.1s) until it
+        // reaches the real announcement at 658.55 - well past either VAD candidate. (As in the
+        // fallback test, --max-jingle-length is capped at 30 purely to keep this round-2 sweep from
+        // reaching back into the unrelated initial-probe decode at 613.) The scripted-entry match
+        // tolerance is coarser than the 0.1s step itself, so several consecutive candidates around
+        // 658.55 all alias to the same scripted phrase and confirm in a run; the last of that run
+        // (658.75) is what locks in once the next, genuinely unscripted step finally fails, giving
+        // a final mark of 658.75 - 0.25 = 658.50.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark", "--max-jingle-length", "30"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+                s.Add(658.45, Seg(0, " Chapter two.")); // round-2 fixed-step candidate @ 658.55 - the real phrase
+            },
+            new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 658.5)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PreciseMark_Round2FixedStepSweep_ConfirmsBackwardImmediately_WhenForwardStepsNeverConfirm()
+    {
+        // Round 2's backward leg, mirroring PreciseMark_CorrectsAMarkThatOvershotForward_
+        // BySearchingBackward's shape but with the real announcement at a position no VAD segment
+        // starts at, so round 1's backward search (limited to VAD candidates) cannot find it
+        // either - only round 2's blind backward sweep can, once every forward option (the mark
+        // itself, round 1's forward VAD candidates, and all of round 2's forward fixed steps) has
+        // failed. VAD still reports 656 (the announcement's own blip's stand-in) and 658 (the
+        // unrelated later blip), but both are left unscripted (fail) instead of 656 confirming
+        // immediately as in the mirrored test, forcing the fallthrough into round 2. The scripted
+        // entry's match tolerance is coarser than the 0.1s step, so several consecutive backward
+        // candidates would alias to it, but backward success is now accepted the instant it is
+        // heard rather than waiting for a subsequent failure (see WalkPreciseMarkCandidatesInterleavedAsync):
+        // the *first* of that run, 655.55, is the one returned; final mark = 655.55 - 0.25 = 655.30.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
+                s.Add(655.25, Seg(0, " Chapter two.")); // round-2 backward fixed-step candidate @ 655.55 - the real phrase
+            },
+            new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(658, 658.6), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 655.3)], result.Chapters);
+    }
+
+    [Fact]
     public async Task PreciseMark_CorrectsAMarkThatOvershotForward_BySearchingBackward()
     {
         // Reproduces the opposite failure shape from "ch19 disease" above (Perry Rhodan
@@ -1275,10 +1343,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // yet each blip is individually short enough that ComputeNonSpeechRegions' merge still
         // swallows both into one region. ResolveDefaultPhraseOnset's "first blip of the *last*
         // cluster" rule then lands the mark on the second, unrelated blip (657.75) - almost 2s
-        // past the true announcement. Its own check fails, and so does the only forward candidate
-        // (658, the same wrong blip) and the one after it (660, narration) - the forward search
-        // that fixes "ch19 disease" finds nothing here, so --precise-mark falls through to
-        // searching backward, where the announcement's own blip (656) confirms immediately.
+        // past the true announcement. Its own check fails; round 1 then interleaves backward and
+        // forward candidates, testing backward first on every step (see
+        // WalkPreciseMarkCandidatesInterleavedAsync), so the announcement's own blip (656) is
+        // tried - and confirms - before either forward candidate (658, the same wrong blip; 660,
+        // narration) is ever checked. Those two forward entries are left scripted only to prove
+        // they'd fail if reached; a backward success is accepted immediately, so they never are.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--precise-mark"),
             [new(610, 613)],
@@ -1304,10 +1374,11 @@ public sealed class ChapterDetectorTests : IDisposable
         // check already confirmed can still coincide with a comparatively loud sample - a player
         // seeking there would start playback abruptly mid-waveform, an audible "plop". Chapter
         // two's mark (614.75) is confirmed unchanged exactly as in the simple case above, but here
-        // the surrounding +/-0.1s is scripted as loud (1.0) throughout except for a genuine
-        // 10ms-wide quiet dip 50ms *before* the mark (samples 720-879 of the 3200-sample window
-        // starting at 614.65) - the mark should end up snapped to that dip's centre (614.70)
-        // rather than left at 614.75.
+        // the 0.15s lookback (decode window [614.60, 614.75], padded to 2560 samples so the
+        // mark's own current-position window has enough trailing samples) is scripted as loud
+        // (1.0, sum-of-squares 160 per window) throughout except for a genuine 10ms-wide, fully
+        // silent dip 50ms *before* the mark (samples 1520-1679) - an infinite dB improvement, so
+        // the mark should end up snapped to that dip's centre (614.70) rather than left at 614.75.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--precise-mark"),
             [new(610, 613)],
@@ -1317,10 +1388,10 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(613, Seg(2, " Chapter two.")); // window [613, ...], phrase at 615
                 s.Add(614.65, Seg(0, " Chapter two.")); // check @ 614.75 (chapter two's own mark)
 
-                var samples = new float[3200];
+                var samples = new float[2560];
                 Array.Fill(samples, 1.0f);
-                Array.Clear(samples, 720, 160); // quiet dip: 614.65 + 720/16000 .. + 880/16000
-                s.Audio.AddPcm(614.65, samples); // quiet-snap decode window [614.65, 614.85]
+                Array.Clear(samples, 1520, 160); // quiet dip: 614.60 + 1520/16000 .. + 1680/16000
+                s.Audio.AddPcm(614.60, samples); // quiet-snap decode window starts at 614.60
             });
 
         Assert.False(result.GapRemains);
@@ -1330,11 +1401,10 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task PreciseMark_QuietSnap_LeavesTheMarkInPlace_WhenNothingNearbyIsQuieter()
     {
-        // Guard for the quiet-snap step's tie-break: audio that is uniformly loud throughout the
-        // +/-0.1s search range (not just the trivial all-silent default every other test relies
-        // on) has no single quietest instant to prefer - every sliding window ties. The mark must
-        // resolve back to exactly where it already was (614.75) rather than drifting to whichever
-        // tied window a plain first-found scan happened to hit first.
+        // Guard for the quiet-snap step: audio that is uniformly loud throughout the 0.15s
+        // backward search range (not just the trivial all-silent default every other test relies
+        // on) offers no improvement over the mark's own position at all. The mark must resolve
+        // back to exactly where it already was (614.75) rather than drifting anywhere.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--precise-mark"),
             [new(610, 613)],
@@ -1344,9 +1414,9 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(613, Seg(2, " Chapter two."));
                 s.Add(614.65, Seg(0, " Chapter two."));
 
-                var samples = new float[3200];
+                var samples = new float[2560];
                 Array.Fill(samples, 0.7f);
-                s.Audio.AddPcm(614.65, samples);
+                s.Audio.AddPcm(614.60, samples);
             });
 
         Assert.False(result.GapRemains);
@@ -1354,16 +1424,15 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task PreciseMark_QuietSnap_PrefersBackward_WhenBothSidesAreSimilarlyQuiet()
+    public async Task PreciseMark_QuietSnap_IgnoresAQuietSpotThatOnlyExistsAfterTheMark()
     {
-        // When the quietest stretch before the mark and the quietest stretch after it are in the
-        // same ballpark (within PreciseMarkQuietSnapBiasDb = 3 dB) rather than one being the clear
-        // winner, the snap must prefer the backward (earlier) side - even when the forward dip is
-        // technically a hair quieter. Backward dip (amplitude 0.10, sum-of-squares 1.6) sits 50ms
-        // before the mark; forward dip (amplitude 0.09, sum-of-squares 1.296) sits 50ms after -
-        // 0.92 dB apart, well under the 3 dB threshold, with forward the quieter of the two. A
-        // plain "quietest wins" rule would move the mark forward to 614.80; it must land on the
-        // backward dip's centre (614.70) instead.
+        // The quiet-snap step now only ever looks backward (see SnapToQuietestPointAsync) - never
+        // forward, no matter how quiet a forward spot is. Backward, and the mark's own
+        // current-position window, are both scripted uniformly loud (1.0, no possible
+        // improvement); only the very tail of the decoded window (samples 2480-2559 - past even
+        // the current-position window, which ends at 2480) is silent. That spot sits after the
+        // mark and is never reachable as a backward candidate by construction, so it must have
+        // no effect at all: the mark must stay exactly at 614.75.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--precise-mark"),
             [new(610, 613)],
@@ -1373,11 +1442,63 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(613, Seg(2, " Chapter two."));
                 s.Add(614.65, Seg(0, " Chapter two."));
 
-                var samples = new float[3200];
+                var samples = new float[2560];
                 Array.Fill(samples, 1.0f);
-                for (var i = 720; i < 880; i++) samples[i] = 0.10f;  // backward dip @ 614.70
-                for (var i = 2320; i < 2480; i++) samples[i] = 0.09f; // forward dip @ 614.80
-                s.Audio.AddPcm(614.65, samples);
+                Array.Clear(samples, 2480, 80); // quiet spot strictly after the mark - must be ignored
+                s.Audio.AddPcm(614.60, samples);
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PreciseMark_QuietSnap_DoesNotNudge_WhenBackwardImprovementIsUnderSixDb()
+    {
+        // The new minimum-improvement gate (PreciseMarkQuietSnapMinImprovementDb = 6 dB): a
+        // backward dip that genuinely is quieter than the mark's own position, but not by enough,
+        // must not trigger a nudge. Backward dip amplitude 0.6 (sum-of-squares 57.6) against the
+        // loud (1.0, sum-of-squares 160) baseline is only a ~2.78x power ratio - 10*log10(2.78) =
+        // ~4.44 dB, under the 6 dB bar - so the mark must stay exactly at 614.75.
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(2, " Chapter two."));
+                s.Add(614.65, Seg(0, " Chapter two."));
+
+                var samples = new float[2560];
+                Array.Fill(samples, 1.0f);
+                for (var i = 1520; i < 1680; i++) samples[i] = 0.6f; // backward dip @ 614.70, ~4.44 dB quieter
+                s.Audio.AddPcm(614.60, samples);
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task PreciseMark_QuietSnap_NudgesBackward_WhenAtLeastSixDbQuieter()
+    {
+        // The mirror of the test above, just over the 6 dB bar: backward dip amplitude 0.5
+        // (sum-of-squares 40) against the same loud (160) baseline is exactly a 4x power ratio -
+        // 10*log10(4) = ~6.02 dB, clearing PreciseMarkQuietSnapMinImprovementDb - so this time the
+        // mark must nudge to the dip's centre (614.70).
+        var result = await DetectAsync(
+            Options("--min-silence-length", "1.5", "--precise-mark"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(613, Seg(2, " Chapter two."));
+                s.Add(614.65, Seg(0, " Chapter two."));
+
+                var samples = new float[2560];
+                Array.Fill(samples, 1.0f);
+                for (var i = 1520; i < 1680; i++) samples[i] = 0.5f; // backward dip @ 614.70, ~6.02 dB quieter
+                s.Audio.AddPcm(614.60, samples);
             });
 
         Assert.False(result.GapRemains);
