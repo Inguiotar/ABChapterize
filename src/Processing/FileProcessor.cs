@@ -12,6 +12,7 @@ using ABChapterize.Detection;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;
 using ABChapterize.Vad;
+using static ABChapterize.Processing.RunStatistics;
 
 namespace ABChapterize.Processing;
 
@@ -42,25 +43,10 @@ public sealed class FileProcessor
     /// <summary>Accumulated detection time of the processed files (for the --summary average).</summary>
     private TimeSpan _processingTime;
 
-    /// <summary>Confidence stats (for --summary) across every chapter mark actually written,
-    /// run-wide - not every probe attempted, only the ones that produced a mark.</summary>
-    private double _confidenceMin = double.PositiveInfinity;
-    private double _confidenceMax = double.NegativeInfinity;
-    private double _confidenceSum;
-    private int _confidenceCount;
-
-    /// <summary>Run-wide detection statistics (for --summary), aggregated across every processed
-    /// file: the shortest silence and longest jingle seen before any chapter (each both over all
-    /// chapters and over the inter-chapter subset that excludes chapter 1), and the total audio
-    /// fed to Whisper and time spent transcribing it, against the total run length processed. The
-    /// silence/jingle extremes stay at their infinities when no file contributed one.</summary>
-    private double _minPrecedingSilence = double.PositiveInfinity;
-    private double _minInterChapterSilence = double.PositiveInfinity;
-    private double _maxJingle = double.NegativeInfinity;
-    private double _maxInterChapterJingle = double.NegativeInfinity;
-    private double _whisperAudioSecondsTotal;
-    private double _whisperTranscribeSecondsTotal;
-    private double _runLengthSecondsTotal;
+    /// <summary>Run-wide detection/confidence statistics and formatting for --verbose and
+    /// --summary reporting; thread-safe, so every concurrently-processed file shares one
+    /// instance.</summary>
+    private readonly RunStatistics _runStats = new();
 
     /// <summary>Creates a processor for the given validated options.</summary>
     /// <param name="options">Validated command line options.</param>
@@ -267,26 +253,26 @@ public sealed class FileProcessor
                 ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
                 : "";
             Console.WriteLine($"Total time: {FormatTime(watch.Elapsed)}{average}");
-            if (_confidenceCount > 0)
+            if (_runStats.ConfidenceCount > 0)
                 Console.WriteLine(
-                    $"Confidence of written chapter marks: min {_confidenceMin:0.00}, " +
-                    $"max {_confidenceMax:0.00}, avg {_confidenceSum / _confidenceCount:0.00}");
-            if (_runLengthSecondsTotal > 0)
+                    $"Confidence of written chapter marks: min {_runStats.ConfidenceMin:0.00}, " +
+                    $"max {_runStats.ConfidenceMax:0.00}, avg {_runStats.ConfidenceSum / _runStats.ConfidenceCount:0.00}");
+            if (_runStats.RunLengthSecondsTotal > 0)
             {
                 var extremes = new List<string>();
-                if (!double.IsPositiveInfinity(_minPrecedingSilence))
-                    extremes.Add($"shortest silence before a chapter {_minPrecedingSilence:0.00} s" +
-                                 FormatInterChapter(double.IsPositiveInfinity(_minInterChapterSilence) ? null : _minInterChapterSilence));
-                if (!double.IsNegativeInfinity(_maxJingle))
-                    extremes.Add($"longest jingle before a chapter {_maxJingle:0.00} s" +
-                                 FormatInterChapter(double.IsNegativeInfinity(_maxInterChapterJingle) ? null : _maxInterChapterJingle));
+                if (!double.IsPositiveInfinity(_runStats.MinPrecedingSilence))
+                    extremes.Add($"shortest silence before a chapter {_runStats.MinPrecedingSilence:0.00} s" +
+                                 FormatInterChapter(double.IsPositiveInfinity(_runStats.MinInterChapterSilence) ? null : _runStats.MinInterChapterSilence));
+                if (!double.IsNegativeInfinity(_runStats.MaxJingle))
+                    extremes.Add($"longest jingle before a chapter {_runStats.MaxJingle:0.00} s" +
+                                 FormatInterChapter(double.IsNegativeInfinity(_runStats.MaxInterChapterJingle) ? null : _runStats.MaxInterChapterJingle));
                 if (extremes.Count > 0)
                     Console.WriteLine(string.Join(", ", extremes));
-                var speed = FormatSpeed(_whisperAudioSecondsTotal, _whisperTranscribeSecondsTotal);
+                var speed = FormatSpeed(_runStats.WhisperAudioSecondsTotal, _runStats.WhisperTranscribeSecondsTotal);
                 Console.WriteLine(
-                    $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_whisperAudioSecondsTotal))} " +
-                    $"of {FormatTime(TimeSpan.FromSeconds(_runLengthSecondsTotal))} run length " +
-                    $"({100 * _whisperAudioSecondsTotal / _runLengthSecondsTotal:0.0}%)" +
+                    $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_runStats.WhisperAudioSecondsTotal))} " +
+                    $"of {FormatTime(TimeSpan.FromSeconds(_runStats.RunLengthSecondsTotal))} run length " +
+                    $"({100 * _runStats.WhisperAudioSecondsTotal / _runStats.RunLengthSecondsTotal:0.0}%)" +
                     (speed.Length > 0 ? $", {speed}" : ""));
             }
         }
@@ -378,22 +364,6 @@ public sealed class FileProcessor
         "  suite on Windows, https://github.com/m-ab-s/media-autobuild_suite, or a manual build\n" +
         "  on Linux). Point the FFMPEG_DIR environment variable at that build to use it.";
 
-    /// <summary>Formats a duration as h:mm:ss (or m:ss below one hour) for the summary.</summary>
-    /// <param name="t">The duration to format.</param>
-    private static string FormatTime(TimeSpan t)
-        => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
-
-    /// <summary>
-    /// Builds the ", backup kept" (or "...replaced pre-existing backup") clause appended to a
-    /// per-file summary line. A pre-existing "*.bak" is never treated as an error - see
-    /// <see cref="FfmpegClient.WriteChaptersAsync"/> - it is simply replaced, which is called
-    /// out here so it stays visible without needing --verbose.
-    /// </summary>
-    /// <param name="backupEnabled">--backup itself.</param>
-    /// <param name="existingReplaced">The value <see cref="FfmpegClient.WriteChaptersAsync"/> returned.</param>
-    private static string FormatBackupNote(bool backupEnabled, bool existingReplaced)
-        => backupEnabled ? (existingReplaced ? ", backup kept (replaced pre-existing backup)" : ", backup kept") : "";
-
     /// <summary>
     /// Starts the "Muxing" phase on a file's progress bar and returns a callback translating
     /// ffmpeg's processed play time (what <see cref="FfmpegClient.WriteChaptersAsync"/> reports)
@@ -407,73 +377,6 @@ public sealed class FileProcessor
         work.BeginPhase("Muxing", info.SizeBytes);
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         return seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond));
-    }
-
-    /// <summary>Formats a chapter mark position as h:mm:ss.ff for the --dry-run listing.</summary>
-    /// <param name="seconds">Position in seconds.</param>
-    private static string FormatTimestamp(double seconds)
-        => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff");
-
-    /// <summary>Formats a "(NN.N% of run length)" share, or empty when the run length is unknown.</summary>
-    /// <param name="part">The measured quantity (seconds).</param>
-    /// <param name="whole">The file's or run's total length (seconds).</param>
-    private static string FormatPercent(double part, double whole)
-        => whole > 0 ? $" ({100 * part / whole:0.0}% of run length)" : "";
-
-    /// <summary>Appends " (inter-chapter Y.YY s)" when the chapter-1-excluded value is present,
-    /// marking the extreme taken over the book's regular chapter breaks alone.</summary>
-    /// <param name="interChapter">The extreme excluding chapter 1, or null when unavailable.</param>
-    private static string FormatInterChapter(double? interChapter)
-        => interChapter is { } v ? $" (inter-chapter {v:0.00} s)" : "";
-
-    /// <summary>Formats the Whisper transcription speed as a "NNN% of real-time" clause (audio
-    /// transcribed over the wall-clock time it took), or empty when it could not be measured.</summary>
-    /// <param name="audioSeconds">Audio handed to Whisper.</param>
-    /// <param name="transcribeSeconds">Wall-clock time spent transcribing it.</param>
-    private static string FormatSpeed(double audioSeconds, double transcribeSeconds)
-        => transcribeSeconds > 0 ? $"transcription speed {100 * audioSeconds / transcribeSeconds:0}% of real-time" : "";
-
-    /// <summary>
-    /// Builds the per-file statistics log line shown under --verbose (or --verbose-transcripts):
-    /// the shortest silence and, when the VAD pre-pass ran, the longest jingle preceding a detected chapter
-    /// (each with its inter-chapter, chapter-1-excluded counterpart), the total audio fed to
-    /// Whisper and its share of the file's run length, and the transcription speed.
-    /// </summary>
-    /// <param name="stats">The file's detection statistics.</param>
-    /// <param name="runLengthSeconds">The file's run length, for the Whisper-audio share.</param>
-    private static string FormatFileStats(DetectionStats stats, double runLengthSeconds)
-    {
-        var parts = new List<string>();
-        if (stats.MinPrecedingSilenceSeconds is { } silence)
-            parts.Add($"shortest silence before a chapter {silence:0.00} s" +
-                      FormatInterChapter(stats.MinInterChapterSilenceSeconds));
-        if (stats.MaxJingleLengthSeconds is { } jingle)
-            parts.Add($"longest jingle {jingle:0.00} s" +
-                      FormatInterChapter(stats.MaxInterChapterJingleSeconds));
-        parts.Add($"Whisper audio {FormatTime(TimeSpan.FromSeconds(stats.WhisperAudioSeconds))}" +
-                  FormatPercent(stats.WhisperAudioSeconds, runLengthSeconds));
-        if (FormatSpeed(stats.WhisperAudioSeconds, stats.WhisperTranscribeSeconds) is { Length: > 0 } speed)
-            parts.Add(speed);
-        return "stats - " + string.Join(", ", parts);
-    }
-
-    /// <summary>Folds one processed file's detection statistics into the run-wide totals for the
-    /// --summary report. Must be called while holding <see cref="_statsLock"/>.</summary>
-    /// <param name="stats">The file's detection statistics.</param>
-    /// <param name="runLengthSeconds">The file's run length, summed toward the run-wide share.</param>
-    private void AccumulateStats(DetectionStats stats, double runLengthSeconds)
-    {
-        if (stats.MinPrecedingSilenceSeconds is { } silence)
-            _minPrecedingSilence = Math.Min(_minPrecedingSilence, silence);
-        if (stats.MinInterChapterSilenceSeconds is { } interSilence)
-            _minInterChapterSilence = Math.Min(_minInterChapterSilence, interSilence);
-        if (stats.MaxJingleLengthSeconds is { } jingle)
-            _maxJingle = Math.Max(_maxJingle, jingle);
-        if (stats.MaxInterChapterJingleSeconds is { } interJingle)
-            _maxInterChapterJingle = Math.Max(_maxInterChapterJingle, interJingle);
-        _whisperAudioSecondsTotal += stats.WhisperAudioSeconds;
-        _whisperTranscribeSecondsTotal += stats.WhisperTranscribeSeconds;
-        _runLengthSecondsTotal += runLengthSeconds;
     }
 
     /// <summary>
@@ -499,21 +402,6 @@ public sealed class FileProcessor
             return (chapters, " + intro");
         }
         return (chapters, "");
-    }
-
-    /// <summary>Folds a set of written chapter marks into the run-wide confidence stats
-    /// (for --summary). Takes <see cref="_statsLock"/> itself.</summary>
-    /// <param name="chapters">The chapters whose confidences were actually written.</param>
-    private void AccumulateConfidence(IEnumerable<DetectedChapter> chapters)
-    {
-        lock (_statsLock)
-            foreach (var c in chapters)
-            {
-                _confidenceSum += c.Confidence;
-                _confidenceCount++;
-                _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
-                _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
-            }
     }
 
     /// <summary>
@@ -610,10 +498,10 @@ public sealed class FileProcessor
                 {
                     _processed++;
                     _processingTime += watch.Elapsed;
-                    AccumulateStats(resumed.Stats, info.DurationSeconds);
                 }
+                _runStats.AccumulateStats(resumed.Stats, info.DurationSeconds);
                 log?.Invoke(FormatFileStats(resumed.Stats, info.DurationSeconds));
-                AccumulateConfidence(resumed.Chapters);
+                _runStats.AccumulateConfidence(resumed.Chapters);
                 var (resumedChapters, resumedIntroNote) = BuildChapters(resumed);
 
                 if (resumed.GapRemains)
@@ -722,8 +610,8 @@ public sealed class FileProcessor
             {
                 _processed++;
                 _processingTime += watch.Elapsed;
-                AccumulateStats(result.Stats, info.DurationSeconds);
             }
+            _runStats.AccumulateStats(result.Stats, info.DurationSeconds);
             log?.Invoke(FormatFileStats(result.Stats, info.DurationSeconds));
 
             if (result.GapRemains)
@@ -732,7 +620,7 @@ public sealed class FileProcessor
                 // Rather than discard the work, commit the marks found so far and flag the file by
                 // name (".missing-marks-<n>-<n>-...") so the still-missing chapters are visible and
                 // a future run can pick them up. (Re-processing such files is a separate TODO item.)
-                AccumulateConfidence(result.Chapters);
+                _runStats.AccumulateConfidence(result.Chapters);
                 var (partial, partialIntro) = BuildChapters(result);
                 var target = MissingMarksPath(file, result.MissingNumbers);
                 var missingList = string.Join(", ", result.MissingNumbers);
@@ -771,7 +659,7 @@ public sealed class FileProcessor
                 return;
             }
 
-            AccumulateConfidence(result.Chapters);
+            _runStats.AccumulateConfidence(result.Chapters);
 
             var (chapters, introNote) = BuildChapters(result);
 

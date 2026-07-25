@@ -448,9 +448,9 @@ public sealed class ChapterDetectorTests : IDisposable
     public void MissingNumbersInGap_ReturnsTheChapterNumbersBoundingEachGap()
     {
         var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
-        var gaps = ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 1); // (0, 500) and (900, 2000)
-        Assert.Equal([1], ChapterDetector.MissingNumbersInGap(chapters, gaps[0], expectedStartChapter: 1)); // leading gap: 1
-        Assert.Equal([4, 5], ChapterDetector.MissingNumbersInGap(chapters, gaps[1])); // 3 -> 6: 4, 5
+        var gaps = GapPlanning.FindGaps(chapters, Duration, expectedStartChapter: 1); // (0, 500) and (900, 2000)
+        Assert.Equal([1], GapPlanning.MissingNumbersInGap(chapters, gaps[0], expectedStartChapter: 1)); // leading gap: 1
+        Assert.Equal([4, 5], GapPlanning.MissingNumbersInGap(chapters, gaps[1])); // 3 -> 6: 4, 5
     }
 
     [Fact]
@@ -460,7 +460,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // outright - there is no way to tell a legitimate split-book start from a Pass 2 miss, so
         // guessing "1" is never attempted. Only the interior gap (3 -> 6) is raised.
         var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
-        var gaps = ChapterDetector.FindGaps(chapters, Duration);
+        var gaps = GapPlanning.FindGaps(chapters, Duration);
         Assert.Equal([new(900, 2000)], gaps);
     }
 
@@ -468,10 +468,10 @@ public sealed class ChapterDetectorTests : IDisposable
     public void FindGaps_RaisesLeadingGap_OnlyWhenFirstChapterIsAboveTheExpectedStart()
     {
         var chapters = new List<DetectedChapter> { new(15, 500) };
-        Assert.Empty(ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 15));
-        var gaps = ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 12);
+        Assert.Empty(GapPlanning.FindGaps(chapters, Duration, expectedStartChapter: 15));
+        var gaps = GapPlanning.FindGaps(chapters, Duration, expectedStartChapter: 12);
         Assert.Equal([new(0, 500)], gaps);
-        Assert.Equal([12, 13, 14], ChapterDetector.MissingNumbersInGap(chapters, gaps[0], expectedStartChapter: 12));
+        Assert.Equal([12, 13, 14], GapPlanning.MissingNumbersInGap(chapters, gaps[0], expectedStartChapter: 12));
     }
 
     [Fact]
@@ -2127,7 +2127,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The next window starts far past this one's natural end (612), and the only stored
         // silence ([608, 608.6], mid 608.3) lies before it - nothing in the (612, 617]
         // forward search either, so the window keeps its natural length.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             600, 1200, 12, 3600, [new(608, 608.6)], [], jingle: false);
         Assert.Equal(612, end);
     }
@@ -2138,7 +2138,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Both [604, 605] (mid 604.5) and [610, 611] (mid 610.5) lie within window 2
         // ([603, 615]); the shared border (window 1's natural end, 612) snaps to the nearer
         // mid-point, shortening window 1's decode.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             600, 603, 12, 3600, [new(604, 605), new(610, 611)], [], jingle: false);
         Assert.Equal(610.5, end);
     }
@@ -2149,7 +2149,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The only target ([613, 614]) sits past window 1's natural end (612) - the plan may
         // move the border itself, so window 1 is extended to the mid-point (613.5) and the
         // next window's fresh decode will start exactly there. No hole, no mid-word cut.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             600, 606, 12, 3600, [new(613, 614)], [], jingle: false);
         Assert.Equal(613.5, end);
     }
@@ -2160,7 +2160,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The only silences lie at or before window 2's start - nothing inside (606, 618] to
         // snap to, so the shared border stays the natural end: the raw-border joint is the
         // only kind of overlap the plan leaves behind.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             600, 606, 12, 3600, [new(595, 600), new(601, 606)], [], jingle: false);
         Assert.Equal(612, end);
     }
@@ -2173,8 +2173,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // window 2's border (618) snaps to [616, 617]'s mid-point inside window 3's
         // [612, 624] - each end decided independently, right before its own probe.
         List<Silence> silences = [new(610, 611), new(616, 617)];
-        var first = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, silences, [], jingle: false);
-        var second = ChapterDetector.PlanWindowEnd(606, 612, 12, 3600, silences, [], jingle: false);
+        var first = GapPlanning.PlanWindowEnd(600, 606, 12, 3600, silences, [], jingle: false);
+        var second = GapPlanning.PlanWindowEnd(606, 612, 12, 3600, silences, [], jingle: false);
         Assert.Equal(610.5, first);
         Assert.Equal(616.5, second);
     }
@@ -2185,7 +2185,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Clamped to the file end, both windows end at 3600, so the later one is fully
         // contained in the earlier - there is no shared border to snap even though a target
         // would be available; the contained window is served from cache instead.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             3590, 3595, 12, 3600, [new(3596, 3597)], [], jingle: false);
         Assert.Equal(3600, end);
     }
@@ -2196,9 +2196,9 @@ public sealed class ChapterDetectorTests : IDisposable
         // A VAD non-speech region is a valid seam target when the VAD pre-pass ran, but
         // without it there's no VAD data worth trusting - the same layout must snap only
         // when the region is present.
-        List<ChapterDetector.NonSpeechRegion> regions = [new(608, 609)];
-        var plain = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: false);
-        var jingle = ChapterDetector.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: true);
+        List<NonSpeechRegion> regions = [new(608, 609)];
+        var plain = GapPlanning.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: false);
+        var jingle = GapPlanning.PlanWindowEnd(600, 606, 12, 3600, [], regions, jingle: true);
         Assert.Equal(612, plain);
         Assert.Equal(608.5, jingle);
     }
@@ -2209,7 +2209,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // This window's end (12) does not lie inside the next window ([600, 612]) - no shared
         // border - but a silence sits just past it: the end is extended to its mid-point
         // (13.5) so the decode stops word-safely.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             0, 600, 12, 3600, [new(13, 14)], [], jingle: false);
         Assert.Equal(13.5, end);
     }
@@ -2220,7 +2220,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Neither a target whose mid-point lies before the natural end (extension only - the
         // window must never shrink below its natural span) nor one past the 5 s search limit
         // ([18, 19], mid-point 18.5 > 17) may move the end: it stays at the natural 12.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             0, null, 12, 3600, [new(8, 9), new(18, 19)], [], jingle: false);
         Assert.Equal(12, end);
     }
@@ -2228,9 +2228,9 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public void PlanWindowEnd_StandAloneEndSnap_UsesVadRegionsOnlyInJingleMode()
     {
-        List<ChapterDetector.NonSpeechRegion> regions = [new(13, 14)];
-        var plain = ChapterDetector.PlanWindowEnd(0, null, 12, 3600, [], regions, jingle: false);
-        var jingle = ChapterDetector.PlanWindowEnd(0, null, 12, 3600, [], regions, jingle: true);
+        List<NonSpeechRegion> regions = [new(13, 14)];
+        var plain = GapPlanning.PlanWindowEnd(0, null, 12, 3600, [], regions, jingle: false);
+        var jingle = GapPlanning.PlanWindowEnd(0, null, 12, 3600, [], regions, jingle: true);
         Assert.Equal(12, plain);
         Assert.Equal(13.5, jingle);
     }
@@ -2240,7 +2240,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // The natural end is already clamped to the file end - there is no room to extend
         // into, so the forward search must come up empty regardless of nearby targets.
-        var end = ChapterDetector.PlanWindowEnd(
+        var end = GapPlanning.PlanWindowEnd(
             3592, null, 12, 3600, [new(3596, 3598)], [], jingle: false);
         Assert.Equal(3600, end);
     }
@@ -2274,7 +2274,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // real speech onset is the far end of that non-speech run: silence [830.3, 831.0] hands
         // off to the abutting jingle region [830.5, 836], so the corrected start is 836.
         var segments = new List<TranscriptSegment> { new(830.3, 850, " Chapter two.", 1.0) };
-        var trimmed = ChapterDetector.TrimLeadingNonSpeech(
+        var trimmed = JingleGeometry.TrimLeadingNonSpeech(
             segments, [new(830.3, 831.0)], [new(830.5, 836)], jingle: true);
         Assert.Equal(836, trimmed[0].StartSeconds);
         Assert.Equal(850, trimmed[0].EndSeconds); // the end is never touched
@@ -2286,7 +2286,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The nearest silence ([45, 49]) ends before the segment starts (50) - it does not lead
         // the segment, so the start is untouched.
         var segments = new List<TranscriptSegment> { new(50, 60, " already talking.", 1.0) };
-        var trimmed = ChapterDetector.TrimLeadingNonSpeech(
+        var trimmed = JingleGeometry.TrimLeadingNonSpeech(
             segments, [new(45, 49)], [], jingle: false);
         Assert.Equal(50, trimmed[0].StartSeconds);
     }
@@ -2297,8 +2297,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // A VAD non-speech region leads the segment, but only when the VAD pre-pass ran is
         // that data trusted: without it the region is ignored and the start stays put.
         var segments = new List<TranscriptSegment> { new(830, 850, " Chapter two.", 1.0) };
-        var plain = ChapterDetector.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: false);
-        var jingle = ChapterDetector.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: true);
+        var plain = JingleGeometry.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: false);
+        var jingle = JingleGeometry.TrimLeadingNonSpeech(segments, [], [new(830, 835)], jingle: true);
         Assert.Equal(830, plain[0].StartSeconds);
         Assert.Equal(835, jingle[0].StartSeconds);
     }
@@ -2309,7 +2309,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Whisper's segment start (830) can sit a hair before silencedetect's frame-precise
         // onset (830.4); the small tolerance still recognises the silence as leading it.
         var segments = new List<TranscriptSegment> { new(830, 840, " Chapter two.", 1.0) };
-        var trimmed = ChapterDetector.TrimLeadingNonSpeech(
+        var trimmed = JingleGeometry.TrimLeadingNonSpeech(
             segments, [new(830.4, 835)], [], jingle: false);
         Assert.Equal(835, trimmed[0].StartSeconds);
     }
@@ -2467,8 +2467,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // jingle: the non-speech regions on either side merge into one spanning both.
         var speech = new List<SpeechSegment> { new(0, 100), new(110, 110.5), new(122.5, 200) };
         Assert.Equal(
-            [new ChapterDetector.NonSpeechRegion(100, 122.5)],
-            ChapterDetector.ComputeNonSpeechRegions(speech));
+            [new NonSpeechRegion(100, 122.5)],
+            JingleGeometry.ComputeNonSpeechRegions(speech));
     }
 
     [Fact]
@@ -2481,8 +2481,8 @@ public sealed class ChapterDetectorTests : IDisposable
             new(0, 100), new(108, 108.2), new(115, 115.9), new(120, 200),
         };
         Assert.Equal(
-            [new ChapterDetector.NonSpeechRegion(100, 120)],
-            ChapterDetector.ComputeNonSpeechRegions(speech));
+            [new NonSpeechRegion(100, 120)],
+            JingleGeometry.ComputeNonSpeechRegions(speech));
     }
 
     [Fact]
@@ -2492,8 +2492,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // non-speech regions must stay separate (both are otherwise well above the 2 s floor).
         var speech = new List<SpeechSegment> { new(0, 100), new(110, 111.5), new(120, 200) };
         Assert.Equal(
-            [new ChapterDetector.NonSpeechRegion(100, 110), new ChapterDetector.NonSpeechRegion(111.5, 120)],
-            ChapterDetector.ComputeNonSpeechRegions(speech));
+            [new NonSpeechRegion(100, 110), new NonSpeechRegion(111.5, 120)],
+            JingleGeometry.ComputeNonSpeechRegions(speech));
     }
 
     [Fact]
@@ -2502,7 +2502,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // A 1.2 s non-speech region, not adjacent to anything it could merge with, never reaches
         // the 2 s floor and must be dropped entirely rather than surfacing as a candidate.
         var speech = new List<SpeechSegment> { new(0, 100), new(101.2, 200) };
-        Assert.Empty(ChapterDetector.ComputeNonSpeechRegions(speech));
+        Assert.Empty(JingleGeometry.ComputeNonSpeechRegions(speech));
     }
 
     [Fact]
@@ -2513,8 +2513,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // must be kept.
         var speech = new List<SpeechSegment> { new(0, 100), new(102, 103), new(105, 200) };
         Assert.Equal(
-            [new ChapterDetector.NonSpeechRegion(100, 102), new ChapterDetector.NonSpeechRegion(103, 105)],
-            ChapterDetector.ComputeNonSpeechRegions(speech));
+            [new NonSpeechRegion(100, 102), new NonSpeechRegion(103, 105)],
+            JingleGeometry.ComputeNonSpeechRegions(speech));
     }
 
     [Fact]
@@ -2531,7 +2531,7 @@ public sealed class ChapterDetectorTests : IDisposable
         {
             new(0, 1), new(1.4, 1.7), new(2.4, 2.7), new(3.4, 3.7), new(4.4, 5),
         };
-        Assert.Empty(ChapterDetector.ComputeNonSpeechRegions(speech));
+        Assert.Empty(JingleGeometry.ComputeNonSpeechRegions(speech));
     }
 
     [Fact]
@@ -2543,8 +2543,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // even when mildly fragmented, because it does contain a long continuous non-speech block.
         var speech = new List<SpeechSegment> { new(0, 100), new(105, 105.4), new(106, 200) };
         Assert.Equal(
-            [new ChapterDetector.NonSpeechRegion(100, 106)],
-            ChapterDetector.ComputeNonSpeechRegions(speech));
+            [new NonSpeechRegion(100, 106)],
+            JingleGeometry.ComputeNonSpeechRegions(speech));
     }
 
     [Fact]
@@ -2553,7 +2553,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Scanning forward from a point still in non-speech (100) must land on the start of the
         // next speech segment that clears the noise floor (105), not its end or midpoint.
         var speech = new List<SpeechSegment> { new(0, 50), new(105, 108) };
-        Assert.Equal(105, ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+        Assert.Equal(105, JingleGeometry.AdvancePastNonSpeech(100, speech, 0.1));
     }
 
     [Fact]
@@ -2563,7 +2563,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // not real speech - it must be skipped over (resuming the scan from its own end), landing
         // on the next, genuine (3 s) segment's start instead.
         var speech = new List<SpeechSegment> { new(0, 50), new(102, 102.05), new(105, 108) };
-        Assert.Equal(105, ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+        Assert.Equal(105, JingleGeometry.AdvancePastNonSpeech(100, speech, 0.1));
     }
 
     [Fact]
@@ -2575,7 +2575,7 @@ public sealed class ChapterDetectorTests : IDisposable
         {
             new(0, 50), new(102, 102.05), new(103, 103.08), new(104, 104.05), new(106, 109),
         };
-        Assert.Equal(106, ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+        Assert.Equal(106, JingleGeometry.AdvancePastNonSpeech(100, speech, 0.1));
     }
 
     [Fact]
@@ -2585,7 +2585,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // onset rather than being skipped as a transient. Integer bounds avoid the binary64
         // rounding that a literal like 102.1 - 102 would introduce right at the comparison edge.
         var speech = new List<SpeechSegment> { new(0, 50), new(102, 103) };
-        Assert.Equal(102, ChapterDetector.AdvancePastNonSpeech(100, speech, 1.0));
+        Assert.Equal(102, JingleGeometry.AdvancePastNonSpeech(100, speech, 1.0));
     }
 
     [Fact]
@@ -2594,7 +2594,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The scan start (105) already sits inside a genuine speech segment (100-110) - it must be
         // returned unchanged, never snapped back to the segment's own start.
         var speech = new List<SpeechSegment> { new(0, 50), new(100, 110) };
-        Assert.Equal(105, ChapterDetector.AdvancePastNonSpeech(105, speech, 0.1));
+        Assert.Equal(105, JingleGeometry.AdvancePastNonSpeech(105, speech, 0.1));
     }
 
     [Fact]
@@ -2605,7 +2605,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // beyond a segment" wins over transient-skipping, so it is still returned unchanged rather
         // than being pushed forward past this blip to the next segment.
         var speech = new List<SpeechSegment> { new(0, 50), new(100, 100.05), new(105, 108) };
-        Assert.Equal(100.02, ChapterDetector.AdvancePastNonSpeech(100.02, speech, 0.1));
+        Assert.Equal(100.02, JingleGeometry.AdvancePastNonSpeech(100.02, speech, 0.1));
     }
 
     [Fact]
@@ -2615,7 +2615,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // to find a qualifying onset in - the caller must be told to look further (e.g. by
         // re-running VAD over a wider window) rather than being given a false answer.
         var speech = new List<SpeechSegment> { new(0, 50) };
-        Assert.Null(ChapterDetector.AdvancePastNonSpeech(100, speech, 0.1));
+        Assert.Null(JingleGeometry.AdvancePastNonSpeech(100, speech, 0.1));
     }
 
     [Fact]
@@ -2627,7 +2627,7 @@ public sealed class ChapterDetectorTests : IDisposable
         };
         Assert.Equal(
             [new(1, 10), new(2, 600), new(3, 1200)],
-            ChapterDetector.Normalize(raw));
+            GapPlanning.Normalize(raw));
     }
 
     [Fact]
@@ -2636,7 +2636,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
         Assert.Equal(
             [new(0, 500), new(900, 2000)],
-            ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 1));
+            GapPlanning.FindGaps(chapters, Duration, expectedStartChapter: 1));
     }
 
     [Fact]
@@ -2645,7 +2645,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Even with an expected start of 1, a first chapter within the first 10 s is taken as-is
         // (e.g. a book starting mid-series) rather than triggering a Pass 3 search.
         var chapters = new List<DetectedChapter> { new(2, 8) };
-        Assert.Empty(ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 1));
+        Assert.Empty(GapPlanning.FindGaps(chapters, Duration, expectedStartChapter: 1));
     }
 
     [Fact]
@@ -2925,7 +2925,7 @@ public sealed class ChapterDetectorTests : IDisposable
         {
             new(10, 1, true), new(30, 2, false), new(50, 3, true),
         };
-        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(markings, Duration);
 
         Assert.Equal([new(10, 50, 1, 3)], plan.Regions);
         Assert.Null(plan.TrailingFrom);
@@ -2936,7 +2936,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public void BuildGapRegions_BuildsATrailingRegion_WhenTheLastCheckableMarkingIsUnconfirmed()
     {
         var markings = new List<VerifyMarkingOutcome> { new(10, 1, true), new(610, 2, false) };
-        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(markings, Duration);
 
         Assert.Equal([new(10, Duration, 1, null)], plan.Regions);
         Assert.Equal(10, plan.TrailingFrom);
@@ -2950,7 +2950,7 @@ public sealed class ChapterDetectorTests : IDisposable
         {
             new(10, 1, true), new(20, 2, false), new(30, 3, false), new(40, 4, true),
         };
-        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(markings, Duration);
 
         Assert.Equal([new(10, 40, 1, 4)], plan.Regions);
     }
@@ -2962,7 +2962,7 @@ public sealed class ChapterDetectorTests : IDisposable
         {
             new(10, 1, true), new(20, 2, false), new(30, 3, true), new(40, 4, false), new(50, 5, true),
         };
-        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(markings, Duration);
 
         Assert.Equal([new(10, 30, 1, 3), new(30, 50, 3, 5)], plan.Regions);
     }
@@ -2976,7 +2976,7 @@ public sealed class ChapterDetectorTests : IDisposable
         {
             new(10, 1, true), new(20, 2, false), new(25, null, false), new(30, 3, false), new(40, 4, true),
         };
-        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(markings, Duration);
 
         Assert.Equal([new(10, 40, 1, 4)], plan.Regions);
     }
@@ -2985,7 +2985,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public void BuildGapRegions_ReturnsNoRegions_WhenEveryCheckableMarkingIsConfirmed()
     {
         var markings = new List<VerifyMarkingOutcome> { new(10, 1, true), new(610, 2, true) };
-        var plan = ChapterDetector.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(markings, Duration);
 
         Assert.Empty(plan.Regions);
         Assert.Null(plan.TrailingFrom);

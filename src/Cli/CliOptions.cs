@@ -106,8 +106,9 @@ public sealed class CliOptions
     /// The chapter number this book is expected to start at (--expected-start-chapter / -e), for
     /// a split-book part that does not begin at chapter 1. Null (the default) means no
     /// expectation: Pass 2's first find, whatever its number, is accepted outright and <see
-    /// cref="ChapterDetector.FindGaps"/> never hunts for anything below it - today's behavior,
-    /// unchanged. When set, <see cref="ChapterDetector.FindGaps"/> hunts the leading gap - down
+    /// cref="ABChapterize.Detection.GapPlanning.FindGaps"/> never hunts for anything below it -
+    /// today's behavior, unchanged. When set,
+    /// <see cref="ABChapterize.Detection.GapPlanning.FindGaps"/> hunts the leading gap - down
     /// to this number, instead of never - for any missing chapters below the first one currently
     /// known, via Pass 3, exactly like an interior gap; this applies regardless of which
     /// <see cref="ChapterDetector"/> entry point is running, so a ".missing-marks" resume of a
