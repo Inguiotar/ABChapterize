@@ -377,6 +377,17 @@ public sealed class FileProcessor
         => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
     /// <summary>
+    /// Builds the ", backup kept" (or "...replaced pre-existing backup") clause appended to a
+    /// per-file summary line. A pre-existing "*.bak" is never treated as an error - see
+    /// <see cref="FfmpegClient.WriteChaptersAsync"/> - it is simply replaced, which is called
+    /// out here so it stays visible without needing --verbose.
+    /// </summary>
+    /// <param name="backupEnabled">--backup itself.</param>
+    /// <param name="existingReplaced">The value <see cref="FfmpegClient.WriteChaptersAsync"/> returned.</param>
+    private static string FormatBackupNote(bool backupEnabled, bool existingReplaced)
+        => backupEnabled ? (existingReplaced ? ", backup kept (replaced pre-existing backup)" : ", backup kept") : "";
+
+    /// <summary>
     /// Starts the "Muxing" phase on a file's progress bar and returns a callback translating
     /// ffmpeg's processed play time (what <see cref="FfmpegClient.WriteChaptersAsync"/> reports)
     /// into the byte-based progress <see cref="WorkTracker"/> expects - the same play-time-to-bytes
@@ -460,18 +471,22 @@ public sealed class FileProcessor
 
     /// <summary>
     /// Turns a detection result's chapters into titled <see cref="Chapter"/>s and, when the first
-    /// one starts past the very beginning, prepends the intro chapter - audiobooks open with a
-    /// prelude, and the mp4 muxer would otherwise snap the first mark to 0:00. Shared by the normal
-    /// write path and the partial-marks path so both lay out chapters identically.
+    /// one starts past the very beginning and something was actually spoken there, prepends the
+    /// intro chapter - audiobooks open with a prelude, and the mp4 muxer would otherwise snap the
+    /// first mark to 0:00. When nothing precedes the first chapter's phrase but silence, music or
+    /// a jingle (<see cref="DetectionResult.LeadInHasSpeech"/> false), no intro is inserted either
+    /// - there is no spoken prelude to give its own entry, so that same muxer start-snap is left
+    /// to fold the lead-in into chapter 1 instead. Shared by the normal write path and the
+    /// partial-marks path so both lay out chapters identically. Internal for unit testing.
     /// </summary>
     /// <param name="result">The file's detection result.</param>
     /// <returns>The chapters to write and a note (" + intro" or "") for the summary line.</returns>
-    private static (List<Chapter> Chapters, string IntroNote) BuildChapters(DetectionResult result)
+    internal static (List<Chapter> Chapters, string IntroNote) BuildChapters(DetectionResult result)
     {
         var chapters = result.Chapters
             .Select(c => new Chapter(c.TimeSeconds, $"{result.Profile.Title} {c.Number}"))
             .ToList();
-        if (chapters.Count > 0 && chapters[0].StartSeconds > 1.0)
+        if (chapters.Count > 0 && chapters[0].StartSeconds > 0 && result.LeadInHasSpeech)
         {
             chapters.Insert(0, new Chapter(0, result.Profile.IntroTitle));
             return (chapters, " + intro");
@@ -609,10 +624,10 @@ public sealed class FileProcessor
                             $"{Path.GetFileName(retarget)}:{Environment.NewLine}{partialListing}", important: true);
                         return;
                     }
-                    await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
+                    var resumedPartialBakReplaced = await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
                         BeginMuxingPhase(work, info), ct);
                     File.Move(file, retarget, overwrite: true);
-                    var resumedPartialBackup = _options.Backup ? ", backup kept" : "";
+                    var resumedPartialBackup = FormatBackupNote(_options.Backup, resumedPartialBakReplaced);
                     _progress.FinishWithSummary(work,
                         $"{name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
                         $"{resumed.Chapters.Count} partial mark(s){resumedIntroNote}, re-tagged as " +
@@ -631,10 +646,10 @@ public sealed class FileProcessor
                         $"{resumedIntroNote} and rename to {Path.GetFileName(restored)}:{Environment.NewLine}{listing}");
                     return;
                 }
-                await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
+                var restoredBakReplaced = await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
                     BeginMuxingPhase(work, info), ct);
                 File.Move(file, restored, overwrite: true);
-                var restoredBackup = _options.Backup ? ", backup kept" : "";
+                var restoredBackup = FormatBackupNote(_options.Backup, restoredBakReplaced);
                 _progress.FinishWithSummary(work,
                     $"{name}: resume complete - {resumed.Chapters.Count} chapter(s) written " +
                     $"({resumed.Chapters[0].Number}-{resumed.Chapters[^1].Number}){resumedIntroNote}, renamed to " +
@@ -657,7 +672,11 @@ public sealed class FileProcessor
                     _progress.FinishWithSummary(work, $"{name}: skipped - {verifyNote} (use --force to redo)");
                     return;
                 }
-                if (verify.ConfirmedChapters.Count > 0)
+                // --verify-threshold: too many unconfirmed markings means even the survivors are
+                // no longer trusted as gap-recovery anchors - the whole set is treated exactly
+                // like the "nothing confirmed" case below.
+                var thresholdExceeded = _options.VerifyFailThreshold is { } threshold && verify.Failed > threshold;
+                if (verify.ConfirmedChapters.Count > 0 && !thresholdExceeded)
                 {
                     // At least one marking is trusted - only the gap(s) around the unconfirmed
                     // one(s) get their own Pass 2 (and, for a still-missing trailing chapter,
@@ -668,10 +687,15 @@ public sealed class FileProcessor
                 }
                 else
                 {
-                    // Nothing survived verification - no trustworthy anchor to scope a gap
-                    // recovery around, so fall back to a full whole-file redetect.
+                    // Nothing survived verification, or too many markings failed for the
+                    // --verify-threshold to keep trusting the rest - no anchor(s) trustworthy
+                    // enough to scope a gap recovery around, so fall back to a full whole-file
+                    // redetect.
+                    var thresholdNote = thresholdExceeded
+                        ? $", exceeding --verify-threshold {_options.VerifyFailThreshold}"
+                        : "";
                     discardNote = $", {info.ChapterCount} existing marking(s) discarded " +
-                                  $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed)";
+                                  $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed{thresholdNote})";
                     result = await detector.DetectAsync(file, info, work, log, ct);
                 }
             }
@@ -715,10 +739,10 @@ public sealed class FileProcessor
                         $"{Path.GetFileName(target)}:{Environment.NewLine}{partialListing}", important: true);
                     return;
                 }
-                await ffmpeg.WriteChaptersAsync(file, partial, info.DurationSeconds, _options.Backup,
+                var partialBakReplaced = await ffmpeg.WriteChaptersAsync(file, partial, info.DurationSeconds, _options.Backup,
                     BeginMuxingPhase(work, info), ct);
                 File.Move(file, target, overwrite: true);
-                var partialBackup = _options.Backup ? ", backup kept" : "";
+                var partialBackup = FormatBackupNote(_options.Backup, partialBakReplaced);
                 _progress.FinishWithSummary(work,
                     $"{name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
                     $"wrote {result.Chapters.Count} partial mark(s){partialIntro}, renamed to " +
@@ -729,7 +753,14 @@ public sealed class FileProcessor
             {
                 lock (_statsLock) _noChaptersFound++;
                 var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
-                _progress.FinishWithSummary(work, $"{name}: no chapter phrases found; file unchanged{langHint}");
+                var summary = result.EarlyAborted
+                    ? $"{name}: early-abort - no chapter found within the first " +
+                      $"{_options.EarlyAbortMinutes:0.#} minute(s) of play time; file unchanged{langHint}"
+                    : result.BelowExpectedStartNumber is { } foundNumber
+                        ? $"{name}: first chapter found ({foundNumber}) is below --expected-start-chapter " +
+                          $"{_options.ExpectedStartChapter}; file unchanged{langHint}"
+                        : $"{name}: no chapter phrases found; file unchanged{langHint}";
+                _progress.FinishWithSummary(work, summary);
                 return;
             }
 
@@ -782,10 +813,10 @@ public sealed class FileProcessor
                 return;
             }
 
-            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
+            var bakReplaced = await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
                 BeginMuxingPhase(work, info), ct);
 
-            var backupNote = _options.Backup ? ", backup kept" : "";
+            var backupNote = FormatBackupNote(_options.Backup, bakReplaced);
             _progress.FinishWithSummary(work,
                 $"{name}: {result.Chapters.Count} chapter(s) written " +
                 $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
@@ -882,10 +913,10 @@ public sealed class FileProcessor
                 return;
             }
 
-            await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
+            var bakReplaced = await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
                 BeginMuxingPhase(work, info), ct);
 
-            var backupNote = _options.Backup ? ", backup kept" : "";
+            var backupNote = FormatBackupNote(_options.Backup, bakReplaced);
             _progress.FinishWithSummary(work,
                 $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
                 $"{discardNote}{backupNote}");

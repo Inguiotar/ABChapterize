@@ -396,7 +396,9 @@ public sealed partial class FfmpegClient : IAudioSource
     /// <param name="progress">Called with ffmpeg's processed play time in seconds, parsed from
     /// its "-progress" output; null to skip progress reporting.</param>
     /// <param name="ct">Cancellation token.</param>
-    public async Task WriteChaptersAsync(
+    /// <returns>True when <paramref name="backup"/> is set and a "*.bak" file from an earlier
+    /// run already existed - it was replaced, not treated as an error.</returns>
+    public async Task<bool> WriteChaptersAsync(
         string file, IReadOnlyList<Chapter> chapters, double durationSeconds,
         bool backup, Action<double>? progress, CancellationToken ct)
     {
@@ -431,7 +433,7 @@ public sealed partial class FfmpegClient : IAudioSource
             if (info.ChapterCount != chapters.Count)
                 throw new AppError($"Verification of \"{tmpFile}\" failed: chapter count mismatch.");
 
-            SwapInto(file, tmpFile, backup);
+            return SwapInto(file, tmpFile, backup);
         }
         finally
         {
@@ -442,26 +444,28 @@ public sealed partial class FfmpegClient : IAudioSource
 
     /// <summary>
     /// Replaces <paramref name="file"/> with <paramref name="tmpFile"/>. With backup the original
-    /// is renamed to "*.bak"; otherwise it is parked under a temporary name and only deleted after
-    /// the new file is in place, with rollback on failure.
+    /// is renamed to "*.bak", replacing a pre-existing one of the same name rather than erroring
+    /// out on it (see the return value); otherwise it is parked under a temporary name and only
+    /// deleted after the new file is in place, with rollback on failure.
     /// </summary>
-    private static void SwapInto(string file, string tmpFile, bool backup)
+    /// <returns>True when an already-existing "*.bak" file was replaced by this call.</returns>
+    private static bool SwapInto(string file, string tmpFile, bool backup)
     {
         if (backup)
         {
             var bak = file + ".bak";
-            if (File.Exists(bak))
-                throw new AppError($"Backup file already exists: {bak}");
-            File.Move(file, bak);
+            var existingBakReplaced = File.Exists(bak);
+            File.Move(file, bak, overwrite: true);
             try
             {
                 File.Move(tmpFile, file);
             }
             catch
             {
-                File.Move(bak, file); // roll back
+                File.Move(bak, file, overwrite: true); // roll back
                 throw;
             }
+            return existingBakReplaced;
         }
         else
         {
@@ -477,6 +481,7 @@ public sealed partial class FfmpegClient : IAudioSource
                 throw;
             }
             File.Delete(parked);
+            return false;
         }
     }
 

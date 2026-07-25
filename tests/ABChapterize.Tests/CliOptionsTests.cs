@@ -53,6 +53,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.True(o.AutoMinSilence);
         Assert.Equal(45, o.MaxJingleSeconds);
         Assert.True(o.AutoMaxJingle);
+        Assert.Equal(60, o.EarlyAbortMinutes);
         // Jingle-aware probing (the VAD pre-pass) runs by default now, even without
         // --mark-before-jingle - only --max-jingle-length 0 turns it off.
         Assert.True(o.RunVadPrePass);
@@ -175,6 +176,8 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--precise-mark")]
     [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
+    [InlineData("--early-abort", "30")]
+    [InlineData("--expected-start-chapter", "5")]
     [InlineData("--verify")]
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
     {
@@ -239,6 +242,28 @@ public sealed class CliOptionsTests : IDisposable
         var o = ParseFile("--verify", "--max-chapters", "10")!;
         Assert.True(o.Verify);
         Assert.Equal(10, o.MaxChapters);
+    }
+
+    [Fact]
+    public void VerifyThreshold_IsParsed_LongAndShort_AndDefaultsToNull()
+    {
+        Assert.Null(ParseFile("--verify")!.VerifyFailThreshold);
+        Assert.Equal(3, ParseFile("--verify", "--verify-threshold", "3")!.VerifyFailThreshold);
+        Assert.Equal(3, ParseFile("--verify", "-h", "3")!.VerifyFailThreshold);
+    }
+
+    [Fact]
+    public void VerifyThreshold_WithoutVerify_IsAnError()
+    {
+        var ex = Assert.Throws<CliError>(() => ParseFile("--verify-threshold", "3"));
+        Assert.Contains("requires --verify", ex.Message);
+    }
+
+    [Fact]
+    public void InvalidVerifyThreshold_IsRejected()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--verify", "--verify-threshold", "-1"));
+        Assert.Throws<CliError>(() => ParseFile("--verify", "--verify-threshold", "many"));
     }
 
     [Fact]
@@ -475,6 +500,8 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--mark-before-jingle"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--precise-mark"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--early-abort", "30"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--expected-start-chapter", "5"));
     }
 
     [Fact]
@@ -520,6 +547,8 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--lang", "de"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--dry-run"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--jobs", "2"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--early-abort", "30"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--expected-start-chapter", "5"));
     }
 
     [Fact]
@@ -534,6 +563,25 @@ public sealed class CliOptionsTests : IDisposable
     {
         Assert.True(ParseFile("--cpu-only")!.CpuOnly);
         Assert.True(ParseFile("-C")!.CpuOnly);
+    }
+
+    [Fact]
+    public void EarlyAbort_DefaultsTo60Minutes_WithoutBeingGiven()
+    {
+        Assert.Equal(60, ParseFile()!.EarlyAbortMinutes);
+    }
+
+    [Fact]
+    public void EarlyAbort_IsParsed_LongAndShort()
+    {
+        Assert.Equal(90, ParseFile("--early-abort", "90")!.EarlyAbortMinutes);
+        Assert.Equal(90, ParseFile("-a", "90")!.EarlyAbortMinutes);
+    }
+
+    [Fact]
+    public void EarlyAbort_Zero_DisablesIt()
+    {
+        Assert.Equal(0, ParseFile("--early-abort", "0")!.EarlyAbortMinutes);
     }
 
     [Fact]
@@ -617,6 +665,35 @@ public sealed class CliOptionsTests : IDisposable
     {
         Assert.Throws<CliError>(() => ParseFile("--max-chapters", "-1"));
         Assert.Throws<CliError>(() => ParseFile("--max-chapters", "many"));
+    }
+
+    [Fact]
+    public void InvalidEarlyAbort_IsRejected()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--early-abort", "-1"));
+        Assert.Throws<CliError>(() => ParseFile("--early-abort", "1441"));
+        Assert.Throws<CliError>(() => ParseFile("--early-abort", "soon"));
+    }
+
+    [Fact]
+    public void ExpectedStartChapter_DefaultsToNull_WithoutBeingGiven()
+    {
+        Assert.Null(ParseFile()!.ExpectedStartChapter);
+    }
+
+    [Fact]
+    public void ExpectedStartChapter_IsParsed_LongAndShort()
+    {
+        Assert.Equal(15, ParseFile("--expected-start-chapter", "15")!.ExpectedStartChapter);
+        Assert.Equal(15, ParseFile("-e", "15")!.ExpectedStartChapter);
+    }
+
+    [Fact]
+    public void InvalidExpectedStartChapter_IsRejected()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--expected-start-chapter", "0"));
+        Assert.Throws<CliError>(() => ParseFile("--expected-start-chapter", "-1"));
+        Assert.Throws<CliError>(() => ParseFile("--expected-start-chapter", "many"));
     }
 
     [Fact]

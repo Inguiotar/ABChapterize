@@ -200,28 +200,34 @@ disables this and keeps the window fixed at that value throughout. See the
 
 ### Pass 3 — gap filling (only when needed)
 
-If the detected chapter numbers have sequence gaps (…7, 9…), or the first
-detected chapter is not chapter 1 even though it starts more than 10 seconds
-into the file, the regions where the missing chapters must be hiding are
-transcribed *completely*, in roughly 10-minute chunks. This catches
-announcements that were not preceded by a long-enough silence. Marks found
-here are placed the same way as in pass 2. If a chunk still leaves an
-expected chapter unaccounted for, a stored silence (or, when the VAD
-pre-pass ran, a VAD non-speech region) inside it that the chunk's own
-transcript skipped over entirely gets a second, closer look before the
-chapter is given up as missing — documented in the source.
+If the detected chapter numbers have sequence gaps (…7, 9…), the regions
+where the missing chapters must be hiding are transcribed *completely*, in
+roughly 10-minute chunks. This catches announcements that were not preceded
+by a long-enough silence. Marks found here are placed the same way as in
+pass 2. If a chunk still leaves an expected chapter unaccounted for, a
+stored silence (or, when the VAD pre-pass ran, a VAD non-speech region)
+inside it that the chunk's own transcript skipped over entirely gets a
+second, closer look before the chapter is given up as missing — documented
+in the source.
 
-If a gap *between* detected chapters still remains after pass 3, the chapters
-that *were* found are still written, but a warning is printed and the file is
+A first detected chapter numbered above 1 is, by default, trusted outright:
+there is no way to tell a legitimate split-book start from a spot pass 2
+simply missed, so guessing "1" and searching for it is never attempted (the
+intro chapter covers the leading audio either way — see below).
+`--expected-start-chapter` opts a file into that search instead, down to a
+specific expected number rather than a blind guess — see
+[Detection behaviour](#detection-behaviour) — with the same 10-second grace
+period: a first chapter found within 10 seconds of the file start is still
+taken as-is, not searched past.
+
+If a gap *between* detected chapters (or, with `--expected-start-chapter`,
+before the first one) still remains after pass 3, the chapters that *were*
+found are still written, but a warning is printed and the file is
 **renamed** to `<name>.missing-marks-<n>-<n>-…<ext>` — the tag listing the
 still-missing chapter numbers, `-`-delimited (e.g.
 `My Book.missing-marks-3-7.m4b`). This flags the file for attention and
 preserves the partial work instead of discarding it, rather than committing a
-silently-complete-looking but partially-wrong chapter list. A first chapter
-number above 1 that cannot be pushed down further is tolerated, not treated
-as a gap: some books simply start mid-series (which is also why a first
-chapter within the first 10 seconds is taken as-is), and the intro chapter
-covers the leading audio either way.
+silently-complete-looking but partially-wrong chapter list.
 
 A later run over such a tagged file picks it up automatically (unless
 `--force` is given): the chapters already committed are trusted outright,
@@ -240,10 +246,14 @@ announcement, credits, a prologue. Many players (and the MP4 muxer itself)
 force the first chapter mark to 0:00, which would move "Chapter 1" to the
 very beginning and misplace it.
 
-Therefore, when the first detected chapter starts later than one second into
-the file, a synthetic intro chapter (default title: "Intro", localized by
-`--lang`; customizable with `--intro-title`) is prepended at 0:00. The first
-real chapter keeps its exact detected position.
+Therefore, when the first detected chapter starts later than 0:00, a
+synthetic intro chapter (default title: "Intro", localized by `--lang`;
+customizable with `--intro-title`) is prepended at 0:00, and the first real
+chapter keeps its exact detected position — *unless* nothing precedes that
+first chapter's announcement but silence, music or a jingle: with no actual
+spoken prelude to give its own entry, no intro chapter is inserted, and the
+muxer's own start-snapping folds that lead-in into the first real chapter
+instead, however many minutes long it runs.
 
 ## 4. How chapters are written — file safety
 
@@ -321,8 +331,8 @@ abchapterize --version
 
 Options must precede the file/directory argument, which must come last.
 Short options that take no parameter may be collapsed: `-rb` = `-r -b`.
-Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-F`, `-X`,
-`-n`, `-t`, `-i`) cannot be collapsed with others.
+Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-a`, `-e`, `-h`,
+`-F`, `-X`, `-n`, `-t`, `-i`) cannot be collapsed with others.
 
 ### Target selection
 
@@ -552,6 +562,33 @@ skipped (reported as "skipped").
   discarded, even without `--force`. Files at or below the threshold are
   still skipped unless `--force` is also given.
 
+`-a`, `--early-abort <minutes>`
+: Always on by default (60 minutes; pass `0` to disable it entirely and
+  always probe the whole file). Once pass 2 has probed this many minutes
+  into a file's play time without finding a single chapter, detection for
+  that file is abandoned outright instead of transcribing the rest of what
+  is plainly not going to yield any — a wrong `--chapter-phrase`, wrong
+  `--lang`, or a book that just announces chapters differently. The file is
+  left unchanged, reported exactly like a completed scan that found
+  nothing. Only applies to a fresh, from-scratch run; a `--verify` gap
+  recovery or a `.missing-marks` resume already has a confirmed chapter to
+  build on and is never subject to this.
+
+`-e`, `--expected-start-chapter <n>`
+: For a split-book part that does not begin at chapter 1: the chapter number
+  this file is expected to start at. Without it (the default), whatever
+  number pass 2 finds first is trusted outright and nothing below it is ever
+  searched for — see
+  [Pass 3](#pass-3--gap-filling-only-when-needed). With it, a first chapter
+  found *below* `<n>` aborts the file outright, left unchanged and reported
+  exactly like a completed scan that found nothing — almost certainly the
+  wrong file, `--chapter-phrase` or `--lang`, not a genuine split-book start.
+  A first chapter found *above* `<n>` is instead treated like any other gap:
+  pass 3 searches for the missing numbers down to `<n>`, and if it still
+  can't find all of them, the file is tagged `.missing-marks-…` exactly as
+  an unresolved gap between two detected chapters already is. Only applies
+  to a fresh, from-scratch run, the same restriction as `--early-abort`.
+
 `-V`, `--verify`
 : Instead of trusting pre-existing marks blindly (the default) or discarding
   them outright (`--force`), check each one against the audio: a short
@@ -582,12 +619,21 @@ skipped (reported as "skipped").
   confirmed mark, with any lower one that failed confirmation shown as a
   `(-N)` gap.
 
+`-h`, `--verify-threshold <n>`
+: Requires `--verify`. Sharpens the "at least one confirmed marking keeps
+  the rest as a gap-scoped recovery" rule above: if more than `<n>` markings
+  fail verification, the ones that did pass are no longer trusted as
+  gap-recovery anchors either, and the file falls back to full detection -
+  the same fallback already used when nothing at all is confirmed. Without
+  this option, even a single confirmed marking out of many is enough to
+  keep the rest as a gap-scoped recovery instead of redoing the whole file.
+
 ### Safety and undo
 
 `-b`, `--backup`
 : Keep the original file as `<name>.<ext>.bak` next to the modified file.
-  If a `.bak` file already exists, the file is aborted with an error rather
-  than overwriting the backup.
+  A `.bak` file already left behind by an earlier run is not an error - it is
+  simply replaced, and the summary line notes that it was.
 
 `-R`, `--revert`
 : Restore backups instead of processing: for every supported audio file with
@@ -700,7 +746,8 @@ touching Whisper at all.
   message suggesting `--export`. Because there is nothing to detect,
   `--import` cannot be combined with any detection option — `--lang`,
   `--chapter-phrase`, `--model`, `--pass3-model`, `--mark-before-jingle`,
-  `--max-jingle-length`, `--min-silence-length` — nor with `--revert`. Pre-existing chapter
+  `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
+  `--expected-start-chapter` — nor with `--revert`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters
   have no Whisper confidence, so they never trigger low-confidence

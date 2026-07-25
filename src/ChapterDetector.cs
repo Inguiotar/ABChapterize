@@ -60,10 +60,25 @@ public readonly record struct DetectionStats(
 /// <see cref="ChapterDetector.AutoLanguageProbabilityThreshold"/> and the run fell back to English.</param>
 /// <param name="Stats">Per-file diagnostic statistics (min preceding silence, max jingle, total
 /// Whisper audio) for the --verbose and --summary reports.</param>
+/// <param name="EarlyAborted">True when --early-abort cut detection short because no chapter
+/// was found within its minute threshold; <paramref name="Chapters"/> is always empty in that
+/// case, same as a completed scan that genuinely found nothing.</param>
+/// <param name="BelowExpectedStartNumber">The chapter number Pass 2 found first, when
+/// --expected-start-chapter aborted detection because it was numbered below that expectation;
+/// null otherwise. <paramref name="Chapters"/> is always empty when this is set, same as
+/// <paramref name="EarlyAborted"/>.</param>
+/// <param name="LeadInHasSpeech">True unless the VAD pre-pass ran and found no speech at all
+/// before the first chapter's own mark - i.e. the first words spoken anywhere in the file are
+/// the chapter phrase itself, however much silence, music or a jingle precedes it. <see
+/// cref="FileProcessor"/>'s intro-chapter insertion skips inserting one when this is false,
+/// letting the mp4 muxer's own start-snapping fold that lead-in into chapter 1 instead of
+/// giving it its own titled entry. Always true when the VAD pre-pass did not run (nothing to
+/// check) or <paramref name="Chapters"/> is empty.</param>
 public readonly record struct DetectionResult(
     IReadOnlyList<DetectedChapter> Chapters, bool GapRemains, IReadOnlyList<int> MissingNumbers,
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
-    string? DetectedLanguage, double DetectedProbability, DetectionStats Stats);
+    string? DetectedLanguage, double DetectedProbability, DetectionStats Stats, bool EarlyAborted = false,
+    int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true);
 
 /// <summary>Outcome of checking one pre-existing chapter marking against the audio, in file order -
 /// the raw material <see cref="ChapterDetector.BuildGapRegions"/> groups into gap-scoped
@@ -578,11 +593,18 @@ public sealed class ChapterDetector
         // Re-deriving the gaps from the committed markings themselves - rather than trusting the
         // tag's own number list - means this always agrees with what FindGaps/MissingNumbersInGap
         // would say right now, with no risk of drifting out of sync with the file's actual content.
-        var regions = FindGaps(confirmed, info.DurationSeconds)
-            .Select(gap => new DetectionRegion(
-                gap.FromSeconds, gap.ToSeconds,
-                confirmed.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds).Number,
-                confirmed.First(c => c.TimeSeconds == gap.ToSeconds).Number))
+        // _options.ExpectedStartChapter is passed through so a leading missing-marks tag (only
+        // ever produced when that option was set to begin with) resolves to the same gap on
+        // resume as the run that created it.
+        var regions = FindGaps(confirmed, info.DurationSeconds, _options.ExpectedStartChapter)
+            .Select(gap =>
+            {
+                var boundChapter = confirmed.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds);
+                var lowerNumber = boundChapter.Number != 0 ? boundChapter.Number : (_options.ExpectedStartChapter ?? 1) - 1;
+                return new DetectionRegion(
+                    gap.FromSeconds, gap.ToSeconds, lowerNumber,
+                    confirmed.First(c => c.TimeSeconds == gap.ToSeconds).Number);
+            })
             .ToList();
 
         return await DetectCoreAsync(file, info, work, log, confirmed, regions,
@@ -699,6 +721,26 @@ public sealed class ChapterDetector
         // the same list, so Pass 3's existing gap tail (after the region loop) sees one seamless
         // sequence regardless of which numbers came from --verify and which from fresh probing.
         var found = new List<DetectedChapter>(confirmedSeed);
+
+        // --early-abort (0 disables it): once Pass 2 has probed this many minutes into the
+        // file's play time without a single chapter found, further probing is pointless - abort
+        // detection outright rather than transcribing the rest of a book that plainly is not
+        // going to yield any (wrong --chapter-phrase, wrong --lang, or one that just announces
+        // chapters differently). Only meaningful for a fresh, from-scratch run: confirmedSeed is
+        // always non-empty for a --verify gap recovery or a ".missing-marks" resume, so this can
+        // never fire for those - infinity below just disables the check outright for them.
+        var earlyAbortSeconds = _options.EarlyAbortMinutes > 0 && confirmedSeed.Count == 0
+            ? _options.EarlyAbortMinutes * 60
+            : double.PositiveInfinity;
+        var earlyAborted = false;
+
+        // --expected-start-chapter's abort half: only meaningful for a fresh, from-scratch run,
+        // same reasoning as earlyAbortSeconds above - a --verify gap recovery or a
+        // ".missing-marks" resume always seeds at least one already-confirmed chapter, so the
+        // "first chapter found" this guards can never be the very first of the whole file for
+        // those. Null here disables the check outright for them, same as +infinity does above.
+        var expectedStartChapter = confirmedSeed.Count == 0 ? _options.ExpectedStartChapter : null;
+        int? belowExpectedStartNumber = null;
 
         foreach (var region in regions)
         {
@@ -1069,6 +1111,15 @@ public sealed class ChapterDetector
                 var candidate = candidates[ci];
                 work.SetPhaseProgress((long)(candidate.Start * bytesPerSecond));
 
+                if (candidate.Start >= earlyAbortSeconds && found.Count == 0)
+                {
+                    earlyAborted = true;
+                    _log?.Invoke($"early-abort: no chapter found within the first " +
+                                 $"{_options.EarlyAbortMinutes:0.#} minute(s) of play time " +
+                                 $"(stopped probing at {FormatTimestamp(candidate.Start)})");
+                    break;
+                }
+
                 if (_options.AutoMinSilence && candidate.Silence is { } candidateSilence &&
                     candidateSilence.EndSeconds - candidateSilence.StartSeconds < threshold)
                 {
@@ -1087,8 +1138,25 @@ public sealed class ChapterDetector
                     continue;
                 }
 
+                var foundNoneYet = found.Count == 0;
                 var windowEnd = WindowEndFor(candidates, ci);
                 var probeMarks = await ProbeAsync(candidate, windowEnd);
+
+                // --expected-start-chapter: foundNoneYet means this probe is the one that found
+                // the very first chapter of the whole (fresh) run, whether it added one match or
+                // several - the one case the option cares about; a later, lower in-text mention
+                // never reaches here at all, already rejected by the match.Number <= windowLast
+                // check inside ProbeAsync. found[0] is that first chapter, whichever match
+                // ProbeAsync accepted first.
+                if (expectedStartChapter is { } expected && foundNoneYet && found.Count > 0 &&
+                    found[0].Number < expected)
+                {
+                    belowExpectedStartNumber = found[0].Number;
+                    _log?.Invoke($"expected-start-chapter: first chapter found is {found[0].Number}, " +
+                                 $"below the expected start of {expected} - aborting detection for this file");
+                    found.Clear();
+                    break;
+                }
 
                 foreach (var (n, markSilence, _) in probeMarks)
                 {
@@ -1205,6 +1273,9 @@ public sealed class ChapterDetector
                     }
                 }
             }
+
+            if (earlyAborted || belowExpectedStartNumber != null)
+                break;
         }
 
         var chapters = Normalize(found);
@@ -1215,7 +1286,7 @@ public sealed class ChapterDetector
         // is the same, unmodified mechanism regardless of how `chapters` was seeded - a
         // gap-scoped DetectGapsAsync run's confirmed-plus-region-2 chapters are covered by it
         // exactly like a fresh DetectAsync run's own chapters would be.
-        var gaps = FindGaps(chapters, info.DurationSeconds);
+        var gaps = FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter);
         if (gaps.Count > 0)
         {
             work.BeginPhase("Pass 3",
@@ -1230,9 +1301,10 @@ public sealed class ChapterDetector
             _log?.Invoke($"transcribing suspicious region " +
                          $"{FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)}");
             // The chapter numbers this gap is expected to recover: everything strictly between
-            // the numbers bounding it (or 1 up to the first detected number, for a leading gap).
+            // the numbers bounding it (or --expected-start-chapter, 1 when unset, up to the
+            // first detected number, for a leading gap).
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
-                MissingNumbersInGap(chapters, gap),
+                MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter),
                 allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work, profile!, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters);
@@ -1267,8 +1339,13 @@ public sealed class ChapterDetector
             }
         }
 
-        // Final consistency check: internal gaps that remain are fatal for this file.
+        // Final consistency check: internal gaps that remain are fatal for this file, and so is a
+        // leading gap Pass 3 above could not fully close - but only when --expected-start-chapter
+        // actually named a number to hold it to; without that, there is nothing to be missing.
         var missing = new List<int>();
+        if (_options.ExpectedStartChapter is { } expectedStart && chapters.Count > 0)
+            for (var n = expectedStart; n < chapters[0].Number; n++)
+                missing.Add(n);
         for (var i = 1; i < chapters.Count; i++)
             for (var n = chapters[i - 1].Number + 1; n < chapters[i].Number; n++)
                 missing.Add(n);
@@ -1277,6 +1354,14 @@ public sealed class ChapterDetector
             .Where(c => c.Confidence < LowConfidenceThreshold)
             .Select(c => c.Number)
             .ToList();
+
+        // Whether the very first chapter's mark is preceded by any VAD speech at all - lets
+        // FileProcessor's intro-chapter insertion tell a real spoken prelude ("insert an Intro
+        // entry") apart from just silence, music or a jingle before the phrase ("let chapter 1's
+        // own mp4-muxer start-snap absorb the lead-in instead"). True by default: unknowable
+        // without the VAD pre-pass, and irrelevant with no first chapter to check.
+        var leadInHasSpeech = chapters.Count == 0 || _vad == null ||
+            speechSegments.Any(s => s.StartSeconds < chapters[0].TimeSeconds);
 
         // Per-file statistics, aggregated over only the chapters that survived into the final
         // result (a detection that lost out to Normalize, or a spurious number, contributes
@@ -1303,7 +1388,8 @@ public sealed class ChapterDetector
 
         return new DetectionResult(
             chapters, missing.Count > 0, missing, lowConfidence,
-            profile!, detectedLanguage, detectedProbability, stats);
+            profile!, detectedLanguage, detectedProbability, stats, earlyAborted, belowExpectedStartNumber,
+            leadInHasSpeech);
     }
 
     /// <summary>
@@ -2538,15 +2624,27 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Determines the regions to fully transcribe: between every pair of consecutive detected
-    /// chapters whose numbers are not consecutive, and before the first chapter when its
-    /// number is greater than 1. Internal for unit testing.
+    /// chapters whose numbers are not consecutive, and - only when <paramref
+    /// name="expectedStartChapter"/> is given - before the first chapter when its number is
+    /// greater than that expectation. Without it, whatever number Pass 2 found first is trusted
+    /// outright and no leading gap is ever raised, even when that number is not 1: a plain
+    /// from-scratch run has no way to know whether a low first number is really the book's start
+    /// or just Pass 2 missing an earlier chapter, and guessing "1" wrongly assumed the latter for
+    /// every book, including legitimate split-book parts. Internal for unit testing.
     /// </summary>
-    internal static List<GapRegion> FindGaps(List<DetectedChapter> chapters, double duration)
+    /// <param name="chapters">The currently known chapters, in chronological order.</param>
+    /// <param name="duration">Total play time (currently unused; kept for a symmetric,
+    /// self-explanatory signature alongside <see cref="BuildGapRegions"/>).</param>
+    /// <param name="expectedStartChapter">The chapter number the book is expected to start at
+    /// (--expected-start-chapter), or null to disable the leading-gap search entirely - see
+    /// <see cref="CliOptions.ExpectedStartChapter"/>.</param>
+    internal static List<GapRegion> FindGaps(List<DetectedChapter> chapters, double duration, int? expectedStartChapter = null)
     {
         var gaps = new List<GapRegion>();
         if (chapters.Count == 0)
             return gaps;
-        if (chapters[0].Number > 1 && chapters[0].TimeSeconds > MinLeadingGapSeconds)
+        if (expectedStartChapter is { } expected && chapters[0].Number > expected &&
+            chapters[0].TimeSeconds > MinLeadingGapSeconds)
             gaps.Add(new GapRegion(0, chapters[0].TimeSeconds));
         for (var i = 1; i < chapters.Count; i++)
         {
@@ -2558,20 +2656,26 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// The chapter numbers a gap is expected to recover: every number strictly between the
-    /// detected chapters bounding it, or 1 up to the first detected number for a leading gap
-    /// (whose start is 0, before any chapter). The bounding chapters are located by their exact
-    /// timestamps, which <see cref="FindGaps"/> copied verbatim into the gap, so the float match
-    /// is exact. Pass 3 uses this to stop transcribing a gap the moment all of them are found.
-    /// Internal for unit testing.
+    /// detected chapters bounding it, or <paramref name="expectedStartChapter"/> (1 when null) up
+    /// to the first detected number for a leading gap (whose start is 0, before any chapter). The
+    /// bounding chapters are located by their exact timestamps, which <see cref="FindGaps"/>
+    /// copied verbatim into the gap, so the float match is exact. Pass 3 uses this to stop
+    /// transcribing a gap the moment all of them are found. Internal for unit testing.
     /// </summary>
     /// <param name="chapters">The currently known chapters, in chronological order.</param>
     /// <param name="gap">A gap produced by <see cref="FindGaps"/> over these chapters.</param>
-    internal static List<int> MissingNumbersInGap(List<DetectedChapter> chapters, GapRegion gap)
+    /// <param name="expectedStartChapter">The same value <see cref="FindGaps"/> was called with;
+    /// only ever relevant for a leading gap, which <see cref="FindGaps"/> raises exclusively when
+    /// this is set in the first place, so leaving it null here whenever <see cref="FindGaps"/>
+    /// found no leading gap at all is always safe.</param>
+    internal static List<int> MissingNumbersInGap(List<DetectedChapter> chapters, GapRegion gap, int? expectedStartChapter = null)
     {
         var upper = chapters.First(c => c.TimeSeconds == gap.ToSeconds).Number;
-        // A leading gap starts at 0 with no chapter there; FirstOrDefault yields Number 0, so the
-        // expected set becomes 1..upper-1 exactly as intended.
-        var lower = chapters.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds).Number;
+        // A leading gap starts at 0 with no chapter there; FirstOrDefault yields a default
+        // DetectedChapter (Number 0), the signal to fall back to expectedStartChapter - 1 (or 0,
+        // when null) so the expected set becomes expectedStartChapter..upper-1 as intended.
+        var boundChapter = chapters.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds);
+        var lower = boundChapter.Number != 0 ? boundChapter.Number : (expectedStartChapter ?? 1) - 1;
         var missing = new List<int>();
         for (var n = lower + 1; n < upper; n++)
             missing.Add(n);

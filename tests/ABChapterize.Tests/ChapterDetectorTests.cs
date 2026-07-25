@@ -294,6 +294,111 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
     }
 
+    /// <summary>Candidates every 300 s, none of which ever yield a chapter phrase - the
+    /// scenario --early-abort exists to cut short.</summary>
+    private static readonly List<Silence> NoChapterSilences =
+        [.. Enumerable.Range(1, 11).Select(i => new Silence(i * 300 - 5, i * 300))];
+
+    [Fact]
+    public async Task EarlyAbort_StopsProbing_OnceThresholdReached_WithNoChapterFound()
+    {
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--early-abort", "10"),
+            NoChapterSilences,
+            _ => { });
+
+        Assert.True(result.EarlyAborted);
+        Assert.Empty(result.Chapters);
+        // Candidates at 0 and 300 s are probed (both under the 600 s/10 min threshold);
+        // the candidate at 600 s triggers the abort before it is ever probed.
+        Assert.Equal([0.0, 300.0], audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task EarlyAbort_Zero_DisablesTheFeature_AndProbesTheWholeFile()
+    {
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--early-abort", "0"),
+            NoChapterSilences,
+            _ => { });
+
+        Assert.False(result.EarlyAborted);
+        Assert.Empty(result.Chapters);
+        Assert.Contains(3300.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task EarlyAbort_DoesNotFire_OnceAChapterHasBeenFound()
+    {
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--early-abort", "10"),
+            NoChapterSilences,
+            s => s.Add(300, Seg(0.3, " Chapter one.")));
+
+        Assert.False(result.EarlyAborted);
+        Assert.Equal([new DetectedChapter(1, 300.05)], result.Chapters);
+        Assert.Contains(3300.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task ExpectedStartChapter_Aborts_WhenFirstChapterFoundIsBelowExpectation()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--expected-start-chapter", "15"),
+            [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Chapter three.")));
+
+        Assert.Equal(3, result.BelowExpectedStartNumber);
+        Assert.Empty(result.Chapters);
+        Assert.False(result.GapRemains);
+    }
+
+    [Fact]
+    public async Task ExpectedStartChapter_DoesNotFire_WhenFirstChapterMeetsOrExceedsExpectation()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--expected-start-chapter", "3"),
+            [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Chapter three.")));
+
+        Assert.Null(result.BelowExpectedStartNumber);
+        Assert.Equal([new DetectedChapter(3, 0.25)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task ExpectedStartChapter_HuntsAndFillsLeadingGap_ForANonOneStart()
+    {
+        // Pass 2 only finds chapter 13; with --expected-start-chapter 12, pass 3 must hunt the
+        // leading gap for chapter 12 and finds it in the very first chunk.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--expected-start-chapter", "12"),
+            [new(1195, 1200)],
+            s =>
+            {
+                s.Add(1200, Seg(0.2, " Chapter thirteen."));
+                s.Add(0, Seg(10, " Chapter twelve.")); // pass-3 chunk 1 [0, 600], phrase at 10
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(12, 9.75), new(13, 1199.95)], result.Chapters);
+        Assert.DoesNotContain(590.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task ExpectedStartChapter_ReportsGapRemains_WhenPass3CannotFillTheLeadingGap()
+    {
+        // Pass 2 finds only chapter 4; with --expected-start-chapter 1, pass 3 hunts for 1-3, but
+        // the audio never actually says them, so the leading gap stays unresolved.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--expected-start-chapter", "1"),
+            [new(1195, 1200)],
+            s => s.Add(1200, Seg(0.2, " Chapter four.")));
+
+        Assert.True(result.GapRemains);
+        Assert.Equal([1, 2, 3], result.MissingNumbers);
+        Assert.Equal([new(4, 1199.95)], result.Chapters);
+    }
+
     [Fact]
     public async Task SequenceGap_IsResolved_ByFullTranscription()
     {
@@ -337,23 +442,46 @@ public sealed class ChapterDetectorTests : IDisposable
     public void MissingNumbersInGap_ReturnsTheChapterNumbersBoundingEachGap()
     {
         var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
-        var gaps = ChapterDetector.FindGaps(chapters, Duration); // (0, 500) and (900, 2000)
-        Assert.Equal([1], ChapterDetector.MissingNumbersInGap(chapters, gaps[0]));    // leading gap: 1
+        var gaps = ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 1); // (0, 500) and (900, 2000)
+        Assert.Equal([1], ChapterDetector.MissingNumbersInGap(chapters, gaps[0], expectedStartChapter: 1)); // leading gap: 1
         Assert.Equal([4, 5], ChapterDetector.MissingNumbersInGap(chapters, gaps[1])); // 3 -> 6: 4, 5
+    }
+
+    [Fact]
+    public void FindGaps_RaisesNoLeadingGap_WithoutAnExpectedStartChapter()
+    {
+        // Without --expected-start-chapter, a first-found chapter numbered above 1 is trusted
+        // outright - there is no way to tell a legitimate split-book start from a Pass 2 miss, so
+        // guessing "1" is never attempted. Only the interior gap (3 -> 6) is raised.
+        var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
+        var gaps = ChapterDetector.FindGaps(chapters, Duration);
+        Assert.Equal([new(900, 2000)], gaps);
+    }
+
+    [Fact]
+    public void FindGaps_RaisesLeadingGap_OnlyWhenFirstChapterIsAboveTheExpectedStart()
+    {
+        var chapters = new List<DetectedChapter> { new(15, 500) };
+        Assert.Empty(ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 15));
+        var gaps = ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 12);
+        Assert.Equal([new(0, 500)], gaps);
+        Assert.Equal([12, 13, 14], ChapterDetector.MissingNumbersInGap(chapters, gaps[0], expectedStartChapter: 12));
     }
 
     [Fact]
     public async Task RegionBeforeFirstChapter_IsSearched_WhenItStartsAboveOne()
     {
-        // Only chapter 2 is found by the probes, so pass 3 transcribes the file start looking for
-        // chapter 1. It is not in the first chunk [0, 600] but past its end, so the search must
+        // Only chapter 2 is found by the probes; with --expected-start-chapter 1 given, pass 3
+        // transcribes the file start looking for chapter 1 (without it, FindGaps would never
+        // raise this leading gap at all - see FindGaps_* below). It is not in the first chunk
+        // [0, 600] but past its end, so the search must
         // continue into the second chunk: that chunk's border (natural end 600) has no seam target
         // within reach, so the unsnapped fallback keeps the 10-second overlap and the second chunk
         // starts at 590, not 600 - and that is where chapter 1 (phrase at 610) is found. (Were
         // chapter 1 already in the first chunk, the gap's sole missing number would be complete and
         // pass 3 would stop before decoding the second chunk at all - see GapCompletes_* below.)
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options("--max-jingle-length", "0", "--expected-start-chapter", "1"),
             [new(1195, 1200)],
             s =>
             {
@@ -373,7 +501,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // [0, 600] (at 10). The gap's sole missing number is then complete after that chunk, so
         // transcription stops immediately - the second chunk at 590 is never decoded.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options("--max-jingle-length", "0", "--expected-start-chapter", "1"),
             [new(1195, 1200)],
             s =>
             {
@@ -2502,15 +2630,16 @@ public sealed class ChapterDetectorTests : IDisposable
         var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
         Assert.Equal(
             [new(0, 500), new(900, 2000)],
-            ChapterDetector.FindGaps(chapters, Duration));
+            ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 1));
     }
 
     [Fact]
     public void FindGaps_SkipsLeadingRegion_WhenFirstChapterIsNearTheStart()
     {
-        // A chapter > 1 within the first 10 s is taken as-is (e.g. a book starting mid-series).
+        // Even with an expected start of 1, a first chapter within the first 10 s is taken as-is
+        // (e.g. a book starting mid-series) rather than triggering a Pass 3 search.
         var chapters = new List<DetectedChapter> { new(2, 8) };
-        Assert.Empty(ChapterDetector.FindGaps(chapters, Duration));
+        Assert.Empty(ChapterDetector.FindGaps(chapters, Duration, expectedStartChapter: 1));
     }
 
     [Fact]

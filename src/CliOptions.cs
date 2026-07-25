@@ -89,6 +89,39 @@ public sealed class CliOptions
     public int? MaxChapters { get; private set; }
 
     /// <summary>
+    /// Minutes of a file's play time Pass 2 may probe without finding a single chapter before
+    /// giving up on it outright (--early-abort / -a, default 60; 0 disables the feature
+    /// entirely). Always active by default - guards against burning a full, expensive
+    /// whole-book transcription on a file that plainly is not going to yield any chapters
+    /// (wrong --chapter-phrase, wrong --lang, or a book that just announces chapters
+    /// differently). Only ever applies to a fresh, from-scratch detection run: a --verify gap
+    /// recovery or a ".missing-marks" resume always seeds at least one already-confirmed
+    /// chapter, so <see cref="ChapterDetector"/> never aborts those early. An aborted file is
+    /// left unchanged, exactly as if no chapter phrases had been found after a full scan.
+    /// </summary>
+    public double EarlyAbortMinutes { get; private set; } = 60;
+
+    /// <summary>
+    /// The chapter number this book is expected to start at (--expected-start-chapter / -e), for
+    /// a split-book part that does not begin at chapter 1. Null (the default) means no
+    /// expectation: Pass 2's first find, whatever its number, is accepted outright and <see
+    /// cref="ChapterDetector.FindGaps"/> never hunts for anything below it - today's behavior,
+    /// unchanged. When set, <see cref="ChapterDetector.FindGaps"/> hunts the leading gap - down
+    /// to this number, instead of never - for any missing chapters below the first one currently
+    /// known, via Pass 3, exactly like an interior gap; this applies regardless of which
+    /// <see cref="ChapterDetector"/> entry point is running, so a ".missing-marks" resume of a
+    /// leading gap keeps re-deriving the same gap it was tagged with. If Pass 3 cannot find them
+    /// either, the file is tagged with a ".missing-marks-..." suffix, exactly as an unresolved
+    /// interior gap already is. Separately, and only for a fresh, from-scratch detection run (the
+    /// same restriction as <see cref="EarlyAbortMinutes"/> - a --verify gap recovery or a
+    /// ".missing-marks" resume always seeds at least one already-confirmed chapter, so this check
+    /// never fires for those), the file is aborted outright, left unchanged, if the very first
+    /// chapter Pass 2 finds is numbered below this value - almost certainly the wrong file,
+    /// phrase or language, not a gap worth hunting for.
+    /// </summary>
+    public int? ExpectedStartChapter { get; private set; }
+
+    /// <summary>
     /// Check pre-existing chapter markings against the audio instead of trusting them
     /// blindly (--verify / -V): a short window around each marking's own timestamp is probed
     /// with Whisper for the chapter phrase and the expected number. Markings that all check
@@ -99,6 +132,18 @@ public sealed class CliOptions
     /// makes a --max-chapters rejection stricter.
     /// </summary>
     public bool Verify { get; private set; }
+
+    /// <summary>
+    /// Maximum number of unconfirmed --verify markings a file may have and still get the
+    /// gap-scoped recovery <see cref="ChapterDetector.DetectGapsAsync"/> normally runs around
+    /// them (--verify-threshold / -h). Above it, the confirmed markings are no longer trusted
+    /// either - the file's whole marking set is treated as bogus and discarded outright, the
+    /// same full, from-scratch detection a --verify run with nothing confirmed at all already
+    /// falls back to. Guards against trusting a couple of lucky survivors as gap-recovery
+    /// anchors in a file whose markings are otherwise mostly wrong. Null (the default) never
+    /// overrides the plain "at least one confirmed marking" rule; requires --verify.
+    /// </summary>
+    public int? VerifyFailThreshold { get; private set; }
 
     /// <summary>
     /// Anchors the chapter mark to a jingle/pause preceding the announcement instead of the
@@ -312,16 +357,16 @@ public sealed class CliOptions
         ['p'] = "--precise-mark",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
-        ['x'] = "--max-chapters", ['F'] = "--filter", ['X'] = "--max-jingle-length",
+        ['x'] = "--max-chapters", ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
-        ['J'] = "--jobs", ['V'] = "--verify", ['C'] = "--cpu-only", ['O'] = "--no-op",
+        ['J'] = "--jobs", ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet;
+    private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet;
 
     /// <summary>
     /// File extensions of the container formats that ffmpeg can both read and write chapter
@@ -440,7 +485,7 @@ public sealed class CliOptions
 
         // Semantic validation.
         if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.PreciseMark || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                         || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
+                         || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
@@ -448,22 +493,26 @@ public sealed class CliOptions
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
         if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.PreciseMark || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                       || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet
+                       || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                        || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
 
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o.MarkBeforeJingle || o.PreciseMark || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o.MarkBeforeJingle || o.PreciseMark || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
-                "--mark-before-jingle, --precise-mark, --max-jingle-length, --min-silence-length and --verify have no effect and cannot be combined with it.");
+                "--mark-before-jingle, --precise-mark, --max-jingle-length, --min-silence-length, --early-abort, " +
+                "--expected-start-chapter and --verify have no effect and cannot be combined with it.");
 
         if (o.Force && o.Verify)
             throw new CliError(
                 "--force and --verify cannot be combined: --force always discards pre-existing " +
                 "chapter markings, while --verify decides that based on whether they check out.");
+
+        if (o.VerifyFailThreshold != null && !o.Verify)
+            throw new CliError("--verify-threshold requires --verify.");
 
         if (o.MarkBeforeJingle && o.PreciseMark)
             throw new CliError(
@@ -573,7 +622,10 @@ public sealed class CliOptions
             case "--chapter-phrase": ChapterPhrase = nextParam(); _phraseSet = true; return true;
             case "--model": Model = nextParam(); _modelSet = true; return true;
             case "--pass3-model": Pass3Model = nextParam(); _pass3ModelSet = true; return true;
-            case "--max-chapters": MaxChapters = ParseMax(nextParam()); _maxSet = true; return true;
+            case "--max-chapters": MaxChapters = ParseNonNegativeInt("--max-chapters", nextParam()); _maxSet = true; return true;
+            case "--early-abort": EarlyAbortMinutes = ParseEarlyAbort(nextParam()); _earlyAbortSet = true; return true;
+            case "--expected-start-chapter": ExpectedStartChapter = ParseExpectedStartChapter(nextParam()); _expectedStartSet = true; return true;
+            case "--verify-threshold": VerifyFailThreshold = ParseNonNegativeInt("--verify-threshold", nextParam()); return true;
             case "--title": Title = nextParam(); _titleSet = true; return true;
             case "--intro-title": IntroTitle = nextParam(); _introSet = true; return true;
             case "--filter": ParseFilter(nextParam()); return true;
@@ -665,11 +717,31 @@ public sealed class CliOptions
         return n;
     }
 
-    /// <summary>Parses the --max-chapters parameter into a positive integer.</summary>
-    private static int ParseMax(string value)
+    /// <summary>Parses a non-negative integer parameter, shared by --max-chapters and
+    /// --verify-threshold.</summary>
+    /// <param name="optName">Long option name, for the error message.</param>
+    /// <param name="value">The raw parameter.</param>
+    private static int ParseNonNegativeInt(string optName, string value)
     {
         if (!int.TryParse(value, out var n) || n < 0)
-            throw new CliError($"Invalid --max-chapters value \"{value}\": expected a non-negative number.");
+            throw new CliError($"Invalid {optName} value \"{value}\": expected a non-negative number.");
+        return n;
+    }
+
+    /// <summary>Parses the --early-abort parameter into 0 (disables the feature) or a number of
+    /// minutes between 0 and 1440 (24 hours).</summary>
+    private static double ParseEarlyAbort(string value)
+    {
+        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var n) || n < 0 || n > 1440)
+            throw new CliError($"Invalid --early-abort value \"{value}\": expected 0 (disabled) or minutes between 0 and 1440.");
+        return n;
+    }
+
+    /// <summary>Parses the --expected-start-chapter parameter into a chapter number of 1 or higher.</summary>
+    private static int ParseExpectedStartChapter(string value)
+    {
+        if (!int.TryParse(value, out var n) || n < 1)
+            throw new CliError($"Invalid --expected-start-chapter value \"{value}\": expected a chapter number of 1 or higher.");
         return n;
     }
 
@@ -797,6 +869,24 @@ public sealed class CliOptions
                                     that already have chapter markings are skipped.
           -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter markings,
                                     they are considered bogus and are discarded.
+          -a, --early-abort <minutes>
+                                    Abort a file's detection outright, leaving it unchanged as
+                                    if no chapters were found, once this many minutes of play
+                                    time have been probed without a single chapter (default:
+                                    60; 0 disables this and always probes the whole file). Only
+                                    applies to a fresh, from-scratch detection run - never to a
+                                    --verify gap recovery or a ".missing-marks" resume, which
+                                    already have a confirmed chapter to build on.
+          -e, --expected-start-chapter <n>
+                                    The chapter number this book is expected to start at, for a
+                                    split-book part that does not begin at chapter 1 (default:
+                                    none - whatever Pass 2 finds first is accepted outright). If
+                                    the first chapter found is numbered below <n>, the file is
+                                    aborted and left unchanged; if numbered above <n>, the
+                                    numbers in between are hunted via Pass 3 like any other gap,
+                                    and the file is tagged with a ".missing-marks-..." suffix if
+                                    any are still unresolved afterward. Only applies to a fresh,
+                                    from-scratch detection run, same restriction as --early-abort.
           -V, --verify              Check pre-existing chapter markings against the audio
                                     instead of trusting them blindly: a short window around
                                     each marking is probed for the chapter phrase and the
@@ -805,6 +895,14 @@ public sealed class CliOptions
                                     through full detection, same as --force would. A file
                                     already rejected by --max-chapters skips verification and
                                     stays bogus. Cannot be combined with --force or --import.
+          -h, --verify-threshold <n>
+                                    Requires --verify. If more than <n> markings fail
+                                    verification, the ones that did pass are no longer trusted
+                                    as gap-recovery anchors either - the whole marking set is
+                                    discarded and the file goes through full detection, the
+                                    same fallback used when --verify confirms nothing at all.
+                                    Without this option, even a single confirmed marking is
+                                    enough to keep the rest as a gap-scoped recovery instead.
           -j, --mark-before-jingle  [EXPERIMENTAL] A short jingle may precede the chapter
                                     phrase; anchor the mark to it instead of the default fixed
                                     offset (see --max-jingle-length below). A silence scan and
