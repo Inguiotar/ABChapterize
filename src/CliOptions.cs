@@ -818,18 +818,20 @@ public sealed class CliOptions
           abchapterize --help | -?
 
         Options (must precede the file/directory argument):
+
+        File selection:
           -r, --recurse             Recursively descend into subdirectories (directories only).
-          -b, --backup              Keep the original file with the added suffix ".bak".
-          -R, --revert              Restore backups: for every supported audio file with an
-                                    added ".bak" suffix, delete the corresponding original and
-                                    rename the .bak file back. Combinable with --recurse,
-                                    --filter and the output options, but nothing else.
-          -O, --no-op               List every file --filter (and --recurse) would select, then
-                                    exit without loading a Whisper model, invoking ffmpeg or
-                                    touching any file. A quick way to check that a --filter
-                                    regexp or extension list actually matches the intended files
-                                    before a real run. Requires --filter; combinable with
-                                    --recurse and the output options, but nothing else.
+          -F, --filter <filter>     Only process matching files. Either "/regexp/" - matched
+                                    case-insensitively against the whole path of each file -
+                                    or a comma-separated list of permissible file extensions,
+                                    e.g. "mp3,m4b". One filter of each kind may be given;
+                                    they also select which backups --revert restores.
+          -f, --force               Discard pre-existing chapter markings. Without --force, files
+                                    that already have chapter markings are skipped.
+          -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter markings,
+                                    they are considered bogus and are discarded.
+
+        Detection tuning:
           -l, --lang <code|auto>    Two-letter language hint for Whisper, or "auto" (the
                                     default): each file's language is detected from a short
                                     clip and used for that file, falling back to "en" when
@@ -860,49 +862,6 @@ public sealed class CliOptions
                                     already always runs on CPU regardless of this option, so it
                                     only affects Whisper. Useful to leave a GPU free for other
                                     work, or to sidestep a flaky/unsupported GPU backend.
-          -F, --filter <filter>     Only process matching files. Either "/regexp/" - matched
-                                    case-insensitively against the whole path of each file -
-                                    or a comma-separated list of permissible file extensions,
-                                    e.g. "mp3,m4b". One filter of each kind may be given;
-                                    they also select which backups --revert restores.
-          -f, --force               Discard pre-existing chapter markings. Without --force, files
-                                    that already have chapter markings are skipped.
-          -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter markings,
-                                    they are considered bogus and are discarded.
-          -a, --early-abort <minutes>
-                                    Abort a file's detection outright, leaving it unchanged as
-                                    if no chapters were found, once this many minutes of play
-                                    time have been probed without a single chapter (default:
-                                    60; 0 disables this and always probes the whole file). Only
-                                    applies to a fresh, from-scratch detection run - never to a
-                                    --verify gap recovery or a ".missing-marks" resume, which
-                                    already have a confirmed chapter to build on.
-          -e, --expected-start-chapter <n>
-                                    The chapter number this book is expected to start at, for a
-                                    split-book part that does not begin at chapter 1 (default:
-                                    none - whatever Pass 2 finds first is accepted outright). If
-                                    the first chapter found is numbered below <n>, the file is
-                                    aborted and left unchanged; if numbered above <n>, the
-                                    numbers in between are hunted via Pass 3 like any other gap,
-                                    and the file is tagged with a ".missing-marks-..." suffix if
-                                    any are still unresolved afterward. Only applies to a fresh,
-                                    from-scratch detection run, same restriction as --early-abort.
-          -V, --verify              Check pre-existing chapter markings against the audio
-                                    instead of trusting them blindly: a short window around
-                                    each marking is probed for the chapter phrase and the
-                                    expected number. Markings that all check out are left
-                                    alone; if any fails, they are discarded and the file goes
-                                    through full detection, same as --force would. A file
-                                    already rejected by --max-chapters skips verification and
-                                    stays bogus. Cannot be combined with --force or --import.
-          -h, --verify-threshold <n>
-                                    Requires --verify. If more than <n> markings fail
-                                    verification, the ones that did pass are no longer trusted
-                                    as gap-recovery anchors either - the whole marking set is
-                                    discarded and the file goes through full detection, the
-                                    same fallback used when --verify confirms nothing at all.
-                                    Without this option, even a single confirmed marking is
-                                    enough to keep the rest as a gap-scoped recovery instead.
           -j, --mark-before-jingle  [EXPERIMENTAL] A short jingle may precede the chapter
                                     phrase; anchor the mark to it instead of the default fixed
                                     offset (see --max-jingle-length below). A silence scan and
@@ -959,17 +918,51 @@ public sealed class CliOptions
                                     disables this and probes every such silence instead -
                                     useful if the breaks are known to vary a lot, or for
                                     troubleshooting.
-          -q, --quiet               Suppress per-file output; warnings and errors are still shown.
-          -v, --verbose             Print processing details as timestamped log lines. Probe,
-                                    gap and verify lines stop at their "<length>@<time>" header;
-                                    use -T to also see the transcribed segments.
-          -T, --verbose-transcripts Like --verbose, but also dumps every Whisper transcript's
-                                    segments (to see exactly what the recognizer heard). Implies
-                                    --verbose.
-          -B, --no-bar              Do not display progress bars; per-file summary lines are
-                                    printed in the same timestamped format as --verbose logs.
-          -s, --summary             Print a summary at the end: file counts, total and average
-                                    processing time.
+
+        Detection safety nets:
+          -a, --early-abort <minutes>
+                                    Abort a file's detection outright, leaving it unchanged as
+                                    if no chapters were found, once this many minutes of play
+                                    time have been probed without a single chapter (default:
+                                    60; 0 disables this and always probes the whole file). Only
+                                    applies to a fresh, from-scratch detection run - never to a
+                                    --verify gap recovery or a ".missing-marks" resume, which
+                                    already have a confirmed chapter to build on.
+          -e, --expected-start-chapter <n>
+                                    The chapter number this book is expected to start at, for a
+                                    split-book part that does not begin at chapter 1 (default:
+                                    none - whatever Pass 2 finds first is accepted outright). If
+                                    the first chapter found is numbered below <n>, the file is
+                                    aborted and left unchanged; if numbered above <n>, the
+                                    numbers in between are hunted via Pass 3 like any other gap,
+                                    and the file is tagged with a ".missing-marks-..." suffix if
+                                    any are still unresolved afterward. Only applies to a fresh,
+                                    from-scratch detection run, same restriction as --early-abort.
+          -V, --verify              Check pre-existing chapter markings against the audio
+                                    instead of trusting them blindly: a short window around
+                                    each marking is probed for the chapter phrase and the
+                                    expected number. Markings that all check out are left
+                                    alone; if any fails, they are discarded and the file goes
+                                    through full detection, same as --force would. A file
+                                    already rejected by --max-chapters skips verification and
+                                    stays bogus. Cannot be combined with --force or --import.
+          -h, --verify-threshold <n>
+                                    Requires --verify. If more than <n> markings fail
+                                    verification, the ones that did pass are no longer trusted
+                                    as gap-recovery anchors either - the whole marking set is
+                                    discarded and the file goes through full detection, the
+                                    same fallback used when --verify confirms nothing at all.
+                                    Without this option, even a single confirmed marking is
+                                    enough to keep the rest as a gap-scoped recovery instead.
+
+        Chapter titles:
+          -t, --title <word>        Word used for chapter titles; the chapter number is appended
+                                    (default: Chapter, localized by --lang).
+          -i, --intro-title <word>  Title of the chapter mark covering the audio before the
+                                    first detected chapter, e.g. a prelude (default: Intro,
+                                    localized by --lang, e.g. "Giriş" with --lang tr).
+
+        Output & review:
           -d, --dry-run             Run detection but write nothing; print the chapters that
                                     would be written (timestamps, numbers, titles) instead.
           -E, --export              Also write detected chapters to a sidecar file next to
@@ -982,14 +975,39 @@ public sealed class CliOptions
                                     --max-jingle-length, --min-silence-length or --revert.
           -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
                                     of FFMETADATA for --export/--import. Requires one of them.
+
+        File & backup management:
+          -b, --backup              Keep the original file with the added suffix ".bak".
+          -R, --revert              Restore backups: for every supported audio file with an
+                                    added ".bak" suffix, delete the corresponding original and
+                                    rename the .bak file back. Combinable with --recurse,
+                                    --filter and the output options, but nothing else.
+          -O, --no-op               List every file --filter (and --recurse) would select, then
+                                    exit without loading a Whisper model, invoking ffmpeg or
+                                    touching any file. A quick way to check that a --filter
+                                    regexp or extension list actually matches the intended files
+                                    before a real run. Requires --filter; combinable with
+                                    --recurse and the output options, but nothing else.
+
+        Logging & display:
+          -q, --quiet               Suppress per-file output; warnings and errors are still shown.
+          -v, --verbose             Print processing details as timestamped log lines. Probe,
+                                    gap and verify lines stop at their "<length>@<time>" header;
+                                    use -T to also see the transcribed segments.
+          -T, --verbose-transcripts Like --verbose, but also dumps every Whisper transcript's
+                                    segments (to see exactly what the recognizer heard). Implies
+                                    --verbose.
+          -B, --no-bar              Do not display progress bars; per-file summary lines are
+                                    printed in the same timestamped format as --verbose logs.
+          -s, --summary             Print a summary at the end: file counts, total and average
+                                    processing time.
+
+        Performance:
           -J, --jobs <n|auto>       Number of files processed concurrently (default: auto -
                                     adjusted between 1 and a hardware-derived ceiling based on
                                     live CPU load). "1" forces strictly sequential processing.
-          -t, --title <word>        Word used for chapter titles; the chapter number is appended
-                                    (default: Chapter, localized by --lang).
-          -i, --intro-title <word>  Title of the chapter mark covering the audio before the
-                                    first detected chapter, e.g. a prelude (default: Intro,
-                                    localized by --lang, e.g. "Giriş" with --lang tr).
+
+        Info:
           -?, --help                Show this help.
               --version             Show version information.
 
