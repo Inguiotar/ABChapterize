@@ -90,9 +90,37 @@ public class ProgressRendererTests
         t.HighestChapter = 6;
         var line = ProgressRenderer.BuildLine((t, "book.m4b"));
 
-        Assert.Contains("| Muxing... | book.m4b", line);
+        Assert.Contains("| Muxing... | 0:00 | book.m4b", line);
         Assert.DoesNotContain("ch 6", line);
         Assert.DoesNotContain(" Muxing 50%", line);
+    }
+
+    [Fact]
+    public void BuildLine_ShowsElapsedTimer_AsItsOwnSectionBeforeTheFileName()
+    {
+        // A freshly built tracker is always at "0:00" - real elapsed-time values are covered
+        // directly by FormatElapsedTimer_* below, without needing to wait on a live Stopwatch.
+        var line = ProgressRenderer.BuildLine(Slot(50, 100));
+        Assert.Contains("| 0:00 | book.m4b", line);
+    }
+
+    [Theory]
+    [InlineData(0, "0:00")]
+    [InlineData(45, "0:45")]
+    [InlineData(59, "0:59")]
+    [InlineData(60, "1:00")]
+    [InlineData(65, "1:05")]
+    [InlineData(150, "2:30")]
+    public void FormatElapsedTimer_UsesHourColonMinutesFormat(int minutes, string expected)
+    {
+        Assert.Equal(expected, ProgressRenderer.FormatElapsedTimer(TimeSpan.FromMinutes(minutes)));
+    }
+
+    [Fact]
+    public void FormatElapsedTimer_TruncatesPartialMinutes()
+    {
+        // Granularity is whole minutes: 59.9s still reads "0:00", not rounded up to "0:01".
+        Assert.Equal("0:00", ProgressRenderer.FormatElapsedTimer(TimeSpan.FromSeconds(59.9)));
     }
 
     [Fact]

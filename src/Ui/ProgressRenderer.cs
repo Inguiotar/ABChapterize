@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using System.Diagnostics;
+
 namespace ABChapterize.Ui;
 
 /// <summary>
@@ -13,9 +15,15 @@ namespace ABChapterize.Ui;
 /// </summary>
 public sealed class WorkTracker
 {
+    private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
     private long _phaseTotalBytes;
     private long _phaseDoneBytes;
     private long _phaseCurrentBytes;
+
+    /// <summary>Wall-clock time since this tracker was constructed, i.e. since this file's
+    /// processing began - shown as a coarse timer in front of the file name in the progress bar
+    /// (see <see cref="ProgressRenderer.FormatElapsedTimer"/>).</summary>
+    public TimeSpan Elapsed => _stopwatch.Elapsed;
 
     /// <summary>Short name of the current phase (e.g. "Pass 1"); shown directly after the bar.</summary>
     public string PhaseLabel { get; private set; } = "";
@@ -217,21 +225,35 @@ public sealed class ProgressRenderer : IDisposable
         const int barWidth = 24;
         var filled = (int)Math.Round(fraction * barWidth);
         var bar = new string('#', filled).PadRight(barWidth, '-');
+        var timer = FormatElapsedTimer(slot.Tracker.Elapsed);
 
         // Muxing has no chapter count of its own to show (the chapters were already decided
         // by the time it runs) - it gets a plain "Muxing..." in the slot instead, with no
         // separate phase label after the bar since that would just repeat the same word.
         if (slot.Tracker.PhaseLabel == "Muxing")
-            return $"[{bar}] {percent,3}% | Muxing... | {slot.Label}";
+            return $"[{bar}] {percent,3}% | Muxing... | {timer} | {slot.Label}";
 
-        var phase = slot.Tracker.PhaseLabel is { Length: > 0 } label ? $" {label}" : "";
+        var phase = slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel ? $" {phaseLabel}" : "";
         // "----" until the first chapter is found (nothing can change during Pass 1 anyway);
         // then the highest detected chapter number, with the count of still-missing earlier
         // chapters - the ones Pass 3 would have to chase - as e.g. "ch 6(-2)".
         var chapters = slot.Tracker.HighestChapter is var highest and > 0
             ? $"ch {highest}" + (slot.Tracker.MissingChapters is var missing and > 0 ? $"(-{missing})" : "")
             : "----";
-        return $"[{bar}]{phase} {percent,3}% | {chapters} | {slot.Label}";
+        return $"[{bar}]{phase} {percent,3}% | {chapters} | {timer} | {slot.Label}";
+    }
+
+    /// <summary>
+    /// Formats how long a file has been processed, shown as its own "H:MM" section of the
+    /// progress bar, ahead of the file name. Deliberately coarse - whole minutes only, no
+    /// seconds - since a book takes many minutes to hours to process, so second-level precision
+    /// would only add noise. Internal for unit testing.
+    /// </summary>
+    /// <param name="elapsed">Time since this file's processing began.</param>
+    internal static string FormatElapsedTimer(TimeSpan elapsed)
+    {
+        var totalMinutes = (int)elapsed.TotalMinutes;
+        return $"{totalMinutes / 60}:{totalMinutes % 60:00}";
     }
 
     /// <summary>

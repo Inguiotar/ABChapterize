@@ -1057,6 +1057,10 @@ file or a slow disk, since this step still has to shuffle the whole file's
 data through ffmpeg even though it only copies streams rather than
 re-encoding them.
 
+Ahead of the file name, a coarse `H:MM` timer (whole minutes only, e.g.
+`1:05`) shows how long that file has been in progress, so a run stuck on
+one book is easy to spot at a glance.
+
 With more than one file processed concurrently (see
 [`--jobs`](#parallel-file-processing)), one bar is shown per file currently
 in flight, stacked in a block capped to the terminal's height (a terminal
