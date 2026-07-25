@@ -5,6 +5,7 @@
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Microsoft.ML.OnnxRuntime;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using ABChapterize.Audio;
 
 namespace ABChapterize.Vad;
@@ -66,6 +67,34 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
     private const int StateLayers = 2;
 
     private readonly InferenceSession _session;
+
+    /// <summary>Redirects Microsoft.ML.OnnxRuntime's native "onnxruntime" P/Invoke lookup to
+    /// <c>runtimes\&lt;rid&gt;\</c> next to the executable, matching where the deployment puts
+    /// it (see the csproj's PruneForeignRuntimes target) instead of the flat publish-root
+    /// layout the package's own default probing expects. Registered here, rather than at some
+    /// process-wide startup site, because this is the only file in the codebase that touches
+    /// OnnxRuntime - the CLR guarantees this runs before <see cref="InferenceSession"/> is first
+    /// constructed below.</summary>
+    static SileroVadDetector()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(InferenceSession).Assembly, ResolveOnnxRuntimeNativeLibrary);
+    }
+
+    /// <summary>Loads "onnxruntime" from <c>runtimes\&lt;rid&gt;\</c> when it's there (the
+    /// published layout); otherwise returns <see cref="IntPtr.Zero"/> to fall back to the
+    /// default search (an unpublished build output, where the native still sits flat next to
+    /// the assembly). Any other library name also falls through unchanged -
+    /// "onnxruntime_providers_shared", the only other native OnnxRuntime ships, is never
+    /// P/Invoked from managed code; onnxruntime itself loads it from its own directory, so
+    /// moving both together is enough without a second entry here.</summary>
+    private static IntPtr ResolveOnnxRuntimeNativeLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        if (libraryName != "onnxruntime")
+            return IntPtr.Zero;
+        var fileName = OperatingSystem.IsWindows() ? "onnxruntime.dll" : "libonnxruntime.so";
+        var path = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, fileName);
+        return File.Exists(path) ? NativeLibrary.Load(path) : IntPtr.Zero;
+    }
 
     /// <summary>Creates a detector that loads the bundled model once, reused for every file
     /// processed through this instance.</summary>

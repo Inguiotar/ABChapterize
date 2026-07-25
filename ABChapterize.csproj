@@ -144,6 +144,18 @@
                            Include="$(PublishDir)onnxruntime.dll;$(PublishDir)onnxruntime_providers_shared.dll" />
     </ItemGroup>
     <Delete Files="@(_ForeignPublishFile)" />
+
+    <!-- Move the correct-platform OnnxRuntime natives out of the publish root and into
+         runtimes\<rid>\ alongside the Whisper natives, instead of leaving them loose next to
+         the exe. SileroVadDetector registers a DllImportResolver that loads "onnxruntime" from
+         this exact location, so the two must be kept in sync. -->
+    <ItemGroup>
+      <_OnnxRuntimeNativeFile Condition="'$(RuntimeIdentifier)' == 'win-x64'"
+                              Include="$(PublishDir)onnxruntime.dll;$(PublishDir)onnxruntime_providers_shared.dll" />
+      <_OnnxRuntimeNativeFile Condition="'$(RuntimeIdentifier)' == 'linux-x64'"
+                              Include="$(PublishDir)libonnxruntime.so;$(PublishDir)libonnxruntime_providers_shared.so" />
+    </ItemGroup>
+    <Move SourceFiles="@(_OnnxRuntimeNativeFile)" DestinationFolder="$(PublishDir)runtimes\$(RuntimeIdentifier)\" />
   </Target>
 
 </Project>
