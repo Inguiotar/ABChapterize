@@ -18,7 +18,10 @@ Prebuilt binaries for Windows and Linux are available on the
 ## Highlights
 
 - **Finds chapters by listening** — it detects the narrator's actual chapter
-  announcements, not just gaps in the audio.
+  announcements, not just gaps in the audio, by first probing short candidate
+  windows at silences and jingles and only falling back to transcribing a full
+  suspicious region when that isn't enough — keeping the time-consuming
+  Whisper work to a minimum.
 - **Writes marks in place, safely** — chapters are written by stream-copy
   remuxing into a temporary file that is verified before it atomically replaces
   the original. Your audiobook cannot be lost, even without `--backup`.
