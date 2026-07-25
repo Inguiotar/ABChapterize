@@ -25,7 +25,7 @@
        compile the sources directly (which also makes internal members reachable);
        only Program.cs stays out because the test host provides its own entry point. -->
   <ItemGroup>
-    <Compile Include="..\..\src\**\*.cs" Exclude="..\..\src\Program.cs" LinkBase="src" />
+    <Compile Include="..\..\src\**\*.cs" Exclude="..\..\src\Cli\Program.cs" LinkBase="src" />
   </ItemGroup>
 
 </Project>

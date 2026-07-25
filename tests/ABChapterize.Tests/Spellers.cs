@@ -491,7 +491,7 @@ public static class Spellers
     /// <remarks>
     /// Only the number's last nonzero place is ordinal-marked; anything before it (a
     /// hundreds word ahead of a nonzero remainder) stays in cardinal form, matching how
-    /// <see cref="ABChapterize.Lang.PolishNumberParser"/> reads it back.
+    /// <see cref="ABChapterize.Language.Parsers.PolishNumberParser"/> reads it back.
     /// </remarks>
     public static string PolishOrdinal(int n)
     {
@@ -537,7 +537,7 @@ public static class Spellers
     /// <summary>Spells 1-999 as a Swedish ordinal ("tredje", "tjugotredje", "hundraförsta").</summary>
     /// <remarks>
     /// Like the Polish ordinal, only the last part inflects; a hundreds word ahead of a
-    /// nonzero remainder stays cardinal, matching <see cref="ABChapterize.Lang.SwedishNumberParser"/>.
+    /// nonzero remainder stays cardinal, matching <see cref="ABChapterize.Language.Parsers.SwedishNumberParser"/>.
     /// </remarks>
     public static string SwedishOrdinal(int n)
     {

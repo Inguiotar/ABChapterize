@@ -1,0 +1,600 @@
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
+// MIT license - see the LICENSE file in the repository root.
+
+using System.Diagnostics;
+using System.Globalization;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Text;
+
+namespace ABChapterize.Audio;
+
+/// <summary>A chapter marking with start time and title.</summary>
+/// <param name="StartSeconds">Chapter start in seconds from the beginning of the file.</param>
+/// <param name="Title">Chapter title as written into the file metadata.</param>
+public readonly record struct Chapter(double StartSeconds, string Title);
+
+/// <summary>Result of probing a media file with ffprobe.</summary>
+/// <param name="DurationSeconds">Total play time in seconds.</param>
+/// <param name="SizeBytes">File size in bytes.</param>
+/// <param name="ChapterCount">Number of pre-existing chapter markings.</param>
+/// <param name="AudioCodec">Codec name of the first audio stream (e.g. "aac"), or "" if unknown.</param>
+/// <param name="AudioProfile">Codec profile of the first audio stream (e.g. "LC", "xHE-AAC"), or "" if unknown.</param>
+/// <param name="InputDecoder">Explicit ffmpeg input decoder to use for this file (e.g. "libfdk_aac"), or null for ffmpeg's default.</param>
+/// <param name="ExistingChapterList">Backing field for <see cref="ExistingChapters"/>; null when
+/// not probed for (e.g. the xHE-AAC-without-decoder early return) or when there are none.</param>
+public readonly record struct MediaInfo(
+    double DurationSeconds, long SizeBytes, int ChapterCount,
+    string AudioCodec = "", string AudioProfile = "", string? InputDecoder = null,
+    IReadOnlyList<Chapter>? ExistingChapterList = null)
+{
+    /// <summary>True when the audio stream uses the xHE-AAC (USAC) profile of AAC.</summary>
+    public bool IsXheAac => AudioProfile.Contains("xHE", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The file's pre-existing chapter markings (start time and title), in the order ffprobe
+    /// reported them. Used by --verify to probe near each one instead of trusting it blindly.
+    /// </summary>
+    public IReadOnlyList<Chapter> ExistingChapters => ExistingChapterList ?? [];
+}
+
+/// <summary>
+/// Thin wrapper around the ffmpeg and ffprobe command line tools: media probing,
+/// silence detection, PCM decoding for Whisper, and safe chapter writing.
+/// </summary>
+public sealed partial class FfmpegClient : IAudioSource
+{
+    private readonly string _ffmpeg;
+    private readonly string _ffprobe;
+
+    /// <summary>Sample rate of decoded PCM audio; Whisper requires 16 kHz.</summary>
+    public const int SampleRate = 16000;
+
+    /// <summary>Creates a client using the given executable paths (see <see cref="FfmpegLocator"/>).</summary>
+    /// <param name="ffmpegPath">Full path of ffmpeg.exe.</param>
+    /// <param name="ffprobePath">Full path of ffprobe.exe.</param>
+    public FfmpegClient(string ffmpegPath, string ffprobePath)
+    {
+        _ffmpeg = ffmpegPath;
+        _ffprobe = ffprobePath;
+    }
+
+    /// <summary>
+    /// Reads duration, size, pre-existing chapter count, and the codec/profile of the
+    /// first audio stream of a media file.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="ct">Cancellation token for graceful Ctrl+C handling.</param>
+    public async Task<MediaInfo> ProbeAsync(string file, CancellationToken ct)
+    {
+        var (stdout, stderr, exit) = await RunAsync(_ffprobe,
+            ["-hide_banner", "-v", "warning", "-print_format", "json", "-show_format", "-show_chapters",
+             "-show_streams", "-select_streams", "a:0", file],
+            null, ct);
+        if (exit != 0)
+        {
+            // An ffmpeg build without a capable decoder cannot even probe xHE-AAC (USAC)
+            // files: it dies with "Failed to open codec" on an AAC stream reported with
+            // 0 channels. Return that diagnosis instead of a generic probe failure so the
+            // caller can print the libfdk_aac hint.
+            if (stderr.Contains("Failed to open codec") && stderr.Contains("Audio: aac"))
+                return new MediaInfo(0, new FileInfo(file).Length, 0, "aac", "xHE-AAC (suspected)");
+            throw new AppError($"ffprobe failed for \"{file}\".");
+        }
+
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        // ffprobe reports the duration as a string; some containers yield "N/A".
+        double duration = 0;
+        if (root.TryGetProperty("format", out var format) &&
+            format.TryGetProperty("duration", out var dur) &&
+            double.TryParse(dur.GetString(), CultureInfo.InvariantCulture, out var d))
+            duration = d;
+        var existingChapters = new List<Chapter>();
+        if (root.TryGetProperty("chapters", out var ch))
+        {
+            foreach (var c in ch.EnumerateArray())
+            {
+                var start = c.TryGetProperty("start_time", out var st) &&
+                            double.TryParse(st.GetString(), CultureInfo.InvariantCulture, out var s) ? s : 0;
+                var title = c.TryGetProperty("tags", out var tags) && tags.TryGetProperty("title", out var t)
+                    ? t.GetString() ?? ""
+                    : "";
+                existingChapters.Add(new Chapter(start, title));
+            }
+        }
+        string codec = "", profile = "";
+        if (root.TryGetProperty("streams", out var streams) && streams.GetArrayLength() > 0)
+        {
+            var stream = streams[0];
+            if (stream.TryGetProperty("codec_name", out var cn))
+                codec = cn.GetString() ?? "";
+            if (stream.TryGetProperty("profile", out var pr))
+                profile = pr.GetString() ?? "";
+        }
+        var size = new FileInfo(file).Length;
+        return new MediaInfo(duration, size, existingChapters.Count, codec, profile, ExistingChapterList: existingChapters);
+    }
+
+    /// <summary>Cached result of the libfdk_aac decoder availability check.</summary>
+    private bool? _hasLibFdkAac;
+
+    /// <summary>
+    /// Checks (once, then cached) whether the installed ffmpeg was built with the
+    /// libfdk_aac decoder, which is required to decode xHE-AAC (USAC) audio reliably.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<bool> SupportsLibFdkAacAsync(CancellationToken ct)
+    {
+        if (_hasLibFdkAac is { } cached)
+            return cached;
+        var (stdout, _, exit) = await RunAsync(_ffmpeg, ["-hide_banner", "-decoders"], null, ct);
+        var has = exit == 0 && Regex.IsMatch(stdout, @"\blibfdk_aac\b");
+        _hasLibFdkAac = has;
+        return has;
+    }
+
+    /// <summary>Matches the silence start lines of ffmpeg's silencedetect filter.</summary>
+    [GeneratedRegex(@"silence_start:\s*(-?[\d.]+)")]
+    private static partial Regex SilenceStartRegex();
+
+    /// <summary>Matches the silence end lines of ffmpeg's silencedetect filter.</summary>
+    [GeneratedRegex(@"silence_end:\s*(-?[\d.]+)")]
+    private static partial Regex SilenceEndRegex();
+
+    /// <summary>Matches the processed-time lines of ffmpeg's "-progress" output.</summary>
+    [GeneratedRegex(@"out_time_us=(\d+)")]
+    private static partial Regex ProgressTimeRegex();
+
+    /// <inheritdoc/>
+    /// <remarks>Uses ffmpeg's silencedetect filter in a full decode pass over the file.</remarks>
+    public async Task<List<Silence>> DetectSilencesAsync(
+        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        Action<double>? progress, string? inputDecoder, CancellationToken ct)
+    {
+        var silences = new List<Silence>();
+        double? pendingStart = null;
+        double processedSeconds = 0;
+
+        List<string> args = ["-hide_banner", "-nostats", "-nostdin"];
+        if (inputDecoder != null)
+            args.AddRange(["-c:a", inputDecoder]);
+        args.AddRange(
+            [
+                "-i", file,
+                // Audio only: an embedded cover art is a one-frame video stream whose
+                // immediate EOF would otherwise end the whole run after a fraction of
+                // a second, silently skipping the rest of the file.
+                "-vn", "-sn", "-dn",
+                "-af", $"silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}",
+                "-progress", "pipe:1",
+                "-f", "null", "-"
+            ]);
+        var (_, _, exit) = await RunAsync(_ffmpeg, args,
+            line =>
+            {
+                var m = SilenceStartRegex().Match(line);
+                if (m.Success)
+                {
+                    pendingStart = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                    return;
+                }
+                m = SilenceEndRegex().Match(line);
+                if (m.Success && pendingStart is { } s)
+                {
+                    silences.Add(new Silence(Math.Max(0, s),
+                        double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)));
+                    pendingStart = null;
+                    return;
+                }
+                m = ProgressTimeRegex().Match(line);
+                if (m.Success)
+                {
+                    processedSeconds = long.Parse(m.Groups[1].Value) / 1_000_000.0;
+                    progress?.Invoke(processedSeconds);
+                }
+            }, ct);
+
+        if (exit != 0)
+            throw new AppError($"ffmpeg silence detection failed for \"{file}\".");
+
+        // Guard against silent early termination: the scan must have covered the whole file.
+        if (processedSeconds < durationSeconds - Math.Max(30, durationSeconds * 0.02))
+            throw new AppError(
+                $"Silence scan of \"{file}\" ended prematurely after {processedSeconds:0.#} of " +
+                $"{durationSeconds:0.#} seconds.");
+
+        // A silence still open at the end of the file gets closed at the file's duration.
+        if (pendingStart is { } open)
+            silences.Add(new Silence(Math.Max(0, open), durationSeconds));
+        return silences;
+    }
+
+    /// <inheritdoc/>
+    public async Task<float[]> DecodePcmAsync(
+        string file, double startSeconds, double? durationSeconds, string? inputDecoder, CancellationToken ct)
+    {
+        var args = new List<string>
+        {
+            "-hide_banner", "-v", "error", "-nostdin",
+            "-ss", startSeconds.ToString("0.###", CultureInfo.InvariantCulture),
+        };
+        if (inputDecoder != null)
+            args.AddRange(["-c:a", inputDecoder]);
+        if (durationSeconds is { } d)
+        {
+            args.Add("-t");
+            args.Add(d.ToString("0.###", CultureInfo.InvariantCulture));
+        }
+        args.AddRange(["-i", file, "-ac", "1", "-ar", SampleRate.ToString(), "-f", "f32le", "pipe:1"]);
+
+        using var proc = StartProcess(_ffmpeg, args, redirectStdout: true);
+        using var reg = ct.Register(() => TryKill(proc));
+
+        using var ms = new MemoryStream();
+        await proc.StandardOutput.BaseStream.CopyToAsync(ms, ct);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        ct.ThrowIfCancellationRequested();
+        if (proc.ExitCode != 0)
+            throw new AppError($"ffmpeg PCM decoding failed for \"{file}\": {stderr.Trim()}");
+
+        var bytes = ms.GetBuffer();
+        var count = (int)(ms.Length / sizeof(float));
+        var samples = new float[count];
+        Buffer.BlockCopy(bytes, 0, samples, 0, count * sizeof(float));
+        return samples;
+    }
+
+    /// <summary>Chunk size for <see cref="ReadRawPcmAsync"/>: 65536 samples is ~4 s of 16 kHz
+    /// audio, 256 KB per chunk - large enough to keep per-chunk overhead low, small enough that
+    /// the whole file is never held in memory at once.</summary>
+    private const int StreamChunkSamples = 65536;
+
+    /// <inheritdoc/>
+    public async Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
+        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        Func<IAsyncEnumerable<float[]>, CancellationToken, Task> consumePcm,
+        Action<double>? progress, string? inputDecoder, CancellationToken ct)
+    {
+        var silences = new List<Silence>();
+        double? pendingStart = null;
+        double processedSeconds = 0;
+
+        List<string> args = ["-hide_banner", "-nostats", "-nostdin", "-progress", "pipe:2"];
+        if (inputDecoder != null)
+            args.AddRange(["-c:a", inputDecoder]);
+        args.AddRange(
+            [
+                "-i", file,
+                // A single decode forked into two independent filter branches instead of two
+                // full-file ffmpeg passes: one through silencedetect (as in
+                // DetectSilencesAsync, discarded to a null muxer - only its stderr log
+                // matters), the other resampled for the VAD model and streamed as raw PCM on
+                // stdout. Explicit -map'd outputs from a filtergraph, so (unlike
+                // DetectSilencesAsync) no automatic stream selection ever needs -vn/-sn/-dn to
+                // keep cover art or subtitle streams out.
+                "-filter_complex",
+                "[0:a]asplit=2[sd][pcm];" +
+                $"[sd]silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}[sdout];" +
+                $"[pcm]aresample={SampleRate},aformat=sample_fmts=flt:channel_layouts=mono[pcmout]",
+                "-map", "[sdout]", "-f", "null", "-",
+                "-map", "[pcmout]", "-f", "f32le", "pipe:1",
+            ]);
+
+        using var proc = StartProcess(_ffmpeg, args, redirectStdout: true);
+        using var reg = ct.Register(() => TryKill(proc));
+
+        var pcmTask = consumePcm(ReadRawPcmAsync(proc.StandardOutput.BaseStream, ct), ct);
+        var stderrTask = PumpSilenceAndProgressAsync(proc, silences, s => pendingStart = s, () => pendingStart,
+            s => { processedSeconds = s; progress?.Invoke(s); }, ct);
+
+        // Await whichever finishes first: a fault in either (VAD model failure, or a
+        // stderr-parsing error) must kill the process so the other task's pipe read reaches
+        // EOF instead of hanging forever on a stdout/stderr pipe nothing writes to or reads
+        // from anymore. A clean finish on one side needs no such nudge - the process closes
+        // both pipes together at real EOF - so this only ever fires on an actual fault.
+        var first = await Task.WhenAny(pcmTask, stderrTask);
+        if (first.IsFaulted || first.IsCanceled)
+            TryKill(proc);
+        await Task.WhenAll(pcmTask, stderrTask);
+
+        await proc.WaitForExitAsync(ct);
+        ct.ThrowIfCancellationRequested();
+        if (proc.ExitCode != 0)
+            throw new AppError($"ffmpeg silence/VAD scan failed for \"{file}\".");
+
+        // Guard against silent early termination: the scan must have covered the whole file.
+        if (processedSeconds < durationSeconds - Math.Max(30, durationSeconds * 0.02))
+            throw new AppError(
+                $"Silence scan of \"{file}\" ended prematurely after {processedSeconds:0.#} of " +
+                $"{durationSeconds:0.#} seconds.");
+
+        // A silence still open at the end of the file gets closed at the file's duration.
+        if (pendingStart is { } open)
+            silences.Add(new Silence(Math.Max(0, open), durationSeconds));
+        return silences;
+    }
+
+    /// <summary>Reads ffmpeg's stderr for <see cref="DetectSilencesAndStreamPcmAsync"/>: silence
+    /// start/end markers (appended to <paramref name="silences"/>) and "-progress pipe:2" time
+    /// markers (forwarded via <paramref name="onProgress"/>).</summary>
+    private static async Task PumpSilenceAndProgressAsync(
+        Process proc, List<Silence> silences, Action<double?> setPendingStart, Func<double?> getPendingStart,
+        Action<double> onProgress, CancellationToken ct)
+    {
+        while (await proc.StandardError.ReadLineAsync(ct) is { } line)
+        {
+            var m = SilenceStartRegex().Match(line);
+            if (m.Success)
+            {
+                setPendingStart(double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture));
+                continue;
+            }
+            m = SilenceEndRegex().Match(line);
+            if (m.Success && getPendingStart() is { } s)
+            {
+                silences.Add(new Silence(Math.Max(0, s),
+                    double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)));
+                setPendingStart(null);
+                continue;
+            }
+            m = ProgressTimeRegex().Match(line);
+            if (m.Success)
+                onProgress(long.Parse(m.Groups[1].Value) / 1_000_000.0);
+        }
+    }
+
+    /// <summary>Reads a stdout stream of raw f32le PCM in bounded-size chunks, for scanning a
+    /// full audiobook without holding the entire decoded file in memory.</summary>
+    private static async IAsyncEnumerable<float[]> ReadRawPcmAsync(
+        Stream stream, [EnumeratorCancellation] CancellationToken ct)
+    {
+        var byteBuffer = new byte[StreamChunkSamples * sizeof(float)];
+        var filled = 0;
+        while (true)
+        {
+            var read = await stream.ReadAsync(byteBuffer.AsMemory(filled, byteBuffer.Length - filled), ct);
+            if (read == 0)
+                break;
+            filled += read;
+            if (filled < byteBuffer.Length)
+                continue;
+            yield return BytesToFloats(byteBuffer, filled);
+            filled = 0;
+        }
+        // A trailing partial chunk; f32le byte counts are always a multiple of 4 in practice,
+        // but guard against a stray truncated sample regardless.
+        var wholeBytes = filled - filled % sizeof(float);
+        if (wholeBytes > 0)
+            yield return BytesToFloats(byteBuffer, wholeBytes);
+    }
+
+    /// <summary>Converts the first <paramref name="byteCount"/> bytes of an f32le buffer to samples.</summary>
+    private static float[] BytesToFloats(byte[] bytes, int byteCount)
+    {
+        var count = byteCount / sizeof(float);
+        var floats = new float[count];
+        Buffer.BlockCopy(bytes, 0, floats, 0, count * sizeof(float));
+        return floats;
+    }
+
+    /// <summary>
+    /// Writes chapter markings into the file by remuxing (stream copy) into a temporary file
+    /// and atomically swapping it in. The original data is never deleted before the new file
+    /// has been written and verified, so audiobooks cannot be lost even without --backup.
+    /// Stream-copy remuxing does no decode/encode work, but still has to shuffle the entire
+    /// file's data through ffmpeg, which on a large audiobook (or a slow disk/network share)
+    /// takes long enough to warrant its own progress reporting.
+    /// </summary>
+    /// <param name="file">Path of the audio file to modify.</param>
+    /// <param name="chapters">Chapter markings sorted by start time.</param>
+    /// <param name="durationSeconds">Total duration; used as the end of the last chapter.</param>
+    /// <param name="backup">True to keep the original file as "*.bak".</param>
+    /// <param name="progress">Called with ffmpeg's processed play time in seconds, parsed from
+    /// its "-progress" output; null to skip progress reporting.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True when <paramref name="backup"/> is set and a "*.bak" file from an earlier
+    /// run already existed - it was replaced, not treated as an error.</returns>
+    public async Task<bool> WriteChaptersAsync(
+        string file, IReadOnlyList<Chapter> chapters, double durationSeconds,
+        bool backup, Action<double>? progress, CancellationToken ct)
+    {
+        var metaFile = Path.Combine(Path.GetTempPath(), $"abchapterize-{Guid.NewGuid():N}.ffmeta");
+        var tmpFile = file + ".abchapterize.tmp" + Path.GetExtension(file);
+        try
+        {
+            await File.WriteAllTextAsync(metaFile, BuildFfMetadata(chapters, durationSeconds), new UTF8Encoding(false), ct);
+
+            var (_, stderr, exit) = await RunAsync(_ffmpeg,
+                [
+                    "-hide_banner", "-v", "error", "-nostdin", "-y",
+                    "-i", file, "-f", "ffmetadata", "-i", metaFile,
+                    // Map only audio and cover art; a pre-existing chapter text track must
+                    // not be copied (it would clash with the new chapter markings).
+                    "-map", "0:a", "-map", "0:v?", "-map_metadata", "0", "-map_chapters", "1",
+                    "-c", "copy", "-progress", "pipe:1", tmpFile
+                ],
+                line =>
+                {
+                    var m = ProgressTimeRegex().Match(line);
+                    if (m.Success)
+                        progress?.Invoke(long.Parse(m.Groups[1].Value) / 1_000_000.0);
+                }, ct);
+            if (exit != 0)
+                throw new AppError($"ffmpeg failed to write chapters for \"{file}\": {stderr.Trim()}");
+
+            // Verify the new file before touching the original.
+            var info = await ProbeAsync(tmpFile, ct);
+            if (Math.Abs(info.DurationSeconds - durationSeconds) > 2.0)
+                throw new AppError($"Verification of \"{tmpFile}\" failed: duration mismatch.");
+            if (info.ChapterCount != chapters.Count)
+                throw new AppError($"Verification of \"{tmpFile}\" failed: chapter count mismatch.");
+
+            return SwapInto(file, tmpFile, backup);
+        }
+        finally
+        {
+            TryDelete(metaFile);
+            TryDelete(tmpFile);
+        }
+    }
+
+    /// <summary>
+    /// Replaces <paramref name="file"/> with <paramref name="tmpFile"/>. With backup the original
+    /// is renamed to "*.bak", replacing a pre-existing one of the same name rather than erroring
+    /// out on it (see the return value); otherwise it is parked under a temporary name and only
+    /// deleted after the new file is in place, with rollback on failure.
+    /// </summary>
+    /// <returns>True when an already-existing "*.bak" file was replaced by this call.</returns>
+    private static bool SwapInto(string file, string tmpFile, bool backup)
+    {
+        if (backup)
+        {
+            var bak = file + ".bak";
+            var existingBakReplaced = File.Exists(bak);
+            File.Move(file, bak, overwrite: true);
+            try
+            {
+                File.Move(tmpFile, file);
+            }
+            catch
+            {
+                File.Move(bak, file, overwrite: true); // roll back
+                throw;
+            }
+            return existingBakReplaced;
+        }
+        else
+        {
+            var parked = file + ".abchapterize.orig";
+            File.Move(file, parked);
+            try
+            {
+                File.Move(tmpFile, file);
+            }
+            catch
+            {
+                File.Move(parked, file); // roll back
+                throw;
+            }
+            File.Delete(parked);
+            return false;
+        }
+    }
+
+    /// <summary>Builds an FFMETADATA1 document containing only the chapter list.
+    /// Internal for unit testing.</summary>
+    /// <param name="chapters">Chapter markings sorted by start time.</param>
+    /// <param name="durationSeconds">End time of the last chapter.</param>
+    internal static string BuildFfMetadata(IReadOnlyList<Chapter> chapters, double durationSeconds)
+    {
+        var sb = new StringBuilder(";FFMETADATA1\n");
+        for (var i = 0; i < chapters.Count; i++)
+        {
+            var startMs = (long)Math.Round(chapters[i].StartSeconds * 1000);
+            var endMs = i + 1 < chapters.Count
+                ? (long)Math.Round(chapters[i + 1].StartSeconds * 1000)
+                : (long)Math.Round(durationSeconds * 1000);
+            sb.Append("[CHAPTER]\nTIMEBASE=1/1000\n");
+            sb.Append("START=").Append(startMs).Append('\n');
+            sb.Append("END=").Append(Math.Max(endMs, startMs + 1)).Append('\n');
+            sb.Append("title=").Append(EscapeMeta(chapters[i].Title)).Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Escapes the characters '=', ';', '#', '\' and newline for FFMETADATA files.
+    /// Internal for unit testing.</summary>
+    internal static string EscapeMeta(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+        {
+            if (c is '=' or ';' or '#' or '\\')
+                sb.Append('\\');
+            if (c == '\n') { sb.Append("\\\n"); continue; }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Reverses <see cref="EscapeMeta"/>: strips the backslash before an escaped
+    /// '=', ';', '#', '\' or newline. Internal for unit testing.</summary>
+    internal static string UnescapeMeta(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\\' && i + 1 < s.Length)
+            {
+                i++;
+                sb.Append(s[i]);
+                continue;
+            }
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Starts a child process with redirected streams and hidden window.</summary>
+    private static Process StartProcess(string exe, IEnumerable<string> args, bool redirectStdout)
+    {
+        var psi = new ProcessStartInfo(exe)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = redirectStdout,
+            RedirectStandardError = true,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        foreach (var a in args)
+            psi.ArgumentList.Add(a);
+        var proc = Process.Start(psi) ?? throw new AppError($"Could not start {exe}.");
+        return proc;
+    }
+
+    /// <summary>
+    /// Runs a process to completion, optionally forwarding every stdout/stderr line to a callback.
+    /// </summary>
+    /// <returns>Captured stdout, captured stderr and the exit code.</returns>
+    private static async Task<(string Stdout, string Stderr, int ExitCode)> RunAsync(
+        string exe, IEnumerable<string> args, Action<string>? lineCallback, CancellationToken ct)
+    {
+        using var proc = StartProcess(exe, args, redirectStdout: true);
+        using var reg = ct.Register(() => TryKill(proc));
+
+        var stdoutSb = new StringBuilder();
+        var stderrSb = new StringBuilder();
+
+        async Task Pump(StreamReader reader, StringBuilder sink)
+        {
+            while (await reader.ReadLineAsync(ct) is { } line)
+            {
+                sink.AppendLine(line);
+                lineCallback?.Invoke(line);
+            }
+        }
+
+        var outTask = Pump(proc.StandardOutput, stdoutSb);
+        var errTask = Pump(proc.StandardError, stderrSb);
+        await Task.WhenAll(outTask, errTask);
+        await proc.WaitForExitAsync(ct);
+        ct.ThrowIfCancellationRequested();
+        return (stdoutSb.ToString(), stderrSb.ToString(), proc.ExitCode);
+    }
+
+    /// <summary>Kills a process, ignoring races with normal termination.</summary>
+    private static void TryKill(Process proc)
+    {
+        try { proc.Kill(entireProcessTree: true); } catch { /* already exited */ }
+    }
+
+    /// <summary>Deletes a file if it exists, ignoring any error.</summary>
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+    }
+}
