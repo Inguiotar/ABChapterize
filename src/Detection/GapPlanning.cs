@@ -378,14 +378,28 @@ internal static class GapPlanning
     /// detection list: the highest chapter number found so far, and which numbers below it are
     /// still undetected (the gaps Pass 3 would have to chase). Runs the input through
     /// <see cref="Normalize"/> first so in-text mentions of earlier chapters (regressions that
-    /// Normalize drops anyway) cannot make a genuinely missing chapter look found.
+    /// Normalize drops anyway) cannot make a genuinely missing chapter look found. Mirrors
+    /// <see cref="ChapterDetector.BuildDetectionResult"/>'s leading-gap rule: without
+    /// <paramref name="expectedStartChapter"/>, nothing below the lowest number actually found is
+    /// "missing" - a split-book part starting at chapter 2 must not report chapter 1 as missing.
     /// Internal for unit testing.
     /// </summary>
-    internal static (int Highest, List<int> Missing) ChapterProgress(IEnumerable<DetectedChapter> found)
+    /// <param name="found">The chapters detected so far.</param>
+    /// <param name="expectedStartChapter">The chapter number the book is expected to start at
+    /// (<see cref="CliOptions.ExpectedStartChapter"/>), or null for no expectation.</param>
+    internal static (int Highest, List<int> Missing) ChapterProgress(
+        IEnumerable<DetectedChapter> found, int? expectedStartChapter = null)
     {
         var numbers = Normalize(found.ToList()).Select(c => c.Number).ToHashSet();
-        var highest = numbers.Count == 0 ? 0 : numbers.Max();
-        var missing = Enumerable.Range(1, Math.Max(0, highest)).Where(n => !numbers.Contains(n)).ToList();
+        if (numbers.Count == 0)
+            return (0, []);
+        var highest = numbers.Max();
+        // Clamped to highest: the first chapter found can transiently be numbered below
+        // expectedStartChapter for one call, right before ChapterDetector's own "below
+        // expectation" check aborts the run - without the clamp that would make the range
+        // below negative-length and throw.
+        var lowest = Math.Min(highest, expectedStartChapter ?? numbers.Min());
+        var missing = Enumerable.Range(lowest, highest - lowest + 1).Where(n => !numbers.Contains(n)).ToList();
         return (highest, missing);
     }
 }

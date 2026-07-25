@@ -454,6 +454,56 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void ChapterProgress_ReportsNoMissingLeadingChapters_WithoutAnExpectedStartChapter()
+    {
+        // A split-book part starting at chapter 2 must not report chapter 1 as missing - mirrors
+        // FindGaps_RaisesNoLeadingGap_WithoutAnExpectedStartChapter below for the live progress
+        // display/log line (GitHub-reported regression: "still missing: 1" with no -e given).
+        var chapters = new List<DetectedChapter> { new(2, 500) };
+        var (highest, missing) = GapPlanning.ChapterProgress(chapters);
+        Assert.Equal(2, highest);
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public void ChapterProgress_StillReportsInteriorGaps_WithoutAnExpectedStartChapter()
+    {
+        var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
+        var (highest, missing) = GapPlanning.ChapterProgress(chapters);
+        Assert.Equal(6, highest);
+        Assert.Equal([4, 5], missing);
+    }
+
+    [Fact]
+    public void ChapterProgress_ReportsLeadingGap_WhenExpectedStartChapterIsGiven()
+    {
+        var chapters = new List<DetectedChapter> { new(2, 500) };
+        var (highest, missing) = GapPlanning.ChapterProgress(chapters, expectedStartChapter: 1);
+        Assert.Equal(2, highest);
+        Assert.Equal([1], missing);
+    }
+
+    [Fact]
+    public void ChapterProgress_ReturnsNoMissingChapters_WhenNoneFoundYet()
+    {
+        var (highest, missing) = GapPlanning.ChapterProgress([]);
+        Assert.Equal(0, highest);
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public void ChapterProgress_DoesNotThrow_WhenExpectedStartChapterExceedsHighestFound()
+    {
+        // The very first chapter Pass 2 finds can transiently be numbered below
+        // expectedStartChapter for one ChapterProgress call, right before ChapterDetector's own
+        // "below expectation" check aborts the run - must not crash on a negative-length range.
+        var chapters = new List<DetectedChapter> { new(2, 500) };
+        var (highest, missing) = GapPlanning.ChapterProgress(chapters, expectedStartChapter: 5);
+        Assert.Equal(2, highest);
+        Assert.Empty(missing);
+    }
+
+    [Fact]
     public void FindGaps_RaisesNoLeadingGap_WithoutAnExpectedStartChapter()
     {
         // Without --expected-start-chapter, a first-found chapter numbered above 1 is trusted

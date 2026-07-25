@@ -747,7 +747,7 @@ public sealed class ChapterDetector
                 marks.Add((match.Number, markSilence, match.Confidence));
                 RecordChapterStats(match.Number, markSilence, markRegion, phraseAbs);
                 windowLast = match.Number;
-                var (highest, missingNumbers) = ChapterProgress(found);
+                var (highest, missingNumbers) = ChapterProgress(found, _options.ExpectedStartChapter);
                 ctx.Work.HighestChapter = highest;
                 ctx.Work.MissingChapters = missingNumbers.Count;
                 _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)} " +
@@ -1044,7 +1044,7 @@ public sealed class ChapterDetector
                 MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter),
                 allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work, profile, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
-            var (highest, missingNumbers) = ChapterProgress(chapters);
+            var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
         }
@@ -1069,7 +1069,7 @@ public sealed class ChapterDetector
                     stillMissing, allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
                     profile, chapters, ct);
                 chapters = Normalize(chapters.Concat(fills).ToList());
-                var (highest, missingNumbers) = ChapterProgress(chapters);
+                var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
                 work.HighestChapter = highest;
                 work.MissingChapters = missingNumbers.Count;
                 _log?.Invoke("Pass 3 finished (trailing)");
@@ -1297,7 +1297,7 @@ public sealed class ChapterDetector
                 failed++;
             else
                 confirmedChapters.Add(new DetectedChapter(expected, marking.StartSeconds));
-            var (highest, missingNumbers) = ChapterProgress(confirmedChapters);
+            var (highest, missingNumbers) = ChapterProgress(confirmedChapters, _options.ExpectedStartChapter);
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
             work.Advance(1);
@@ -1703,7 +1703,7 @@ public sealed class ChapterDetector
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
         RecordChapterStats(match.Number, statSilence, statRegion, phraseAbs);
         remaining.Remove(match.Number);
-        var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found));
+        var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), _options.ExpectedStartChapter);
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)} " +
