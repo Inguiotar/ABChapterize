@@ -807,7 +807,9 @@ public sealed class CliOptions
           Install e.g. with: sudo apt install ffmpeg
           """;
 
-    /// <summary>Comprehensive usage info printed on --help or on any command line error.</summary>
+    /// <summary>Comprehensive usage info printed on --help / -?. A command line error prints
+    /// just a pointer to --help instead - see <see cref="Program.Main"/> - since this has grown
+    /// too long to usefully repeat after every syntax mistake.</summary>
     public static string UsageText => $"""
         abchapterize {Version} - mark chapter starts in audiobooks using Whisper speech recognition
         Copyright (c) 2026 Jan O. Gretza - MIT license - written with Claude (Anthropic)

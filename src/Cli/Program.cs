@@ -39,8 +39,7 @@ public static class Program
         catch (CliError ex)
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
-            Console.Error.WriteLine();
-            Console.Error.WriteLine(CliOptions.UsageText);
+            Console.Error.WriteLine("Run \"abchapterize --help\" for usage.");
             return 2;
         }
 
