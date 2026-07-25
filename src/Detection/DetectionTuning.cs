@@ -58,8 +58,13 @@ internal static class DetectionTuning
     /// still fits into the probe window.</summary>
     internal const double PhraseMarginSeconds = 5.0;
 
-    /// <summary>With --mark-before-jingle, chapter marks are placed this many seconds before
-    /// a jingle (per specification).</summary>
+    /// <summary>
+    /// The fallback lead <see cref="ComputeMarkBeforeJingle"/>'s step 5 backs off by when its
+    /// backward walk runs out of VAD data before ever finding the previous chapter's real
+    /// trailing narration (typically a jingle sitting at the very start of the file, before
+    /// chapter 1). The same flat 0.5 s lead used elsewhere as a last resort when nothing more
+    /// precise is known.
+    /// </summary>
     internal const double JingleLeadSeconds = 0.5;
 
     /// <summary>
@@ -92,6 +97,17 @@ internal static class DetectionTuning
     /// false-candidate gaps of several seconds or more.
     /// </summary>
     internal const double LeadingSilenceStartToleranceSeconds = 1.5;
+
+    /// <summary>
+    /// How close a silencedetect silence boundary and a VAD speech segment's end must be to
+    /// count as describing the same transition, when <see cref="ComputeMarkBeforeJingle"/>'s
+    /// step 2 asks "does real narration end essentially where this silence begins" - the plain
+    /// in-narration-pause case, with no jingle to walk back through. Reuses <see
+    /// cref="LeadingSilenceStartToleranceSeconds"/>'s own value under its own name: both absorb
+    /// the same silencedetect-vs-VAD detector jitter, just for a different boundary pairing
+    /// (silence vs. VAD region start there, silence vs. VAD speech end here).
+    /// </summary>
+    internal const double JingleWalkAdjacencyToleranceSeconds = LeadingSilenceStartToleranceSeconds;
 
     /// <summary>
     /// Longest stretch of VAD-speech "glue" the anchor-time jingle edge adjustment (see

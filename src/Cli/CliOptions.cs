@@ -148,38 +148,40 @@ public sealed class CliOptions
     public int? VerifyFailThreshold { get; private set; }
 
     /// <summary>
-    /// Anchors the chapter mark to a jingle/pause preceding the announcement instead of the
-    /// default fixed offset (--mark-before-jingle / -j): 0.5 s before a leading silence, or -
-    /// absent one - at a silence-less jingle's own VAD-detected start. This is the exact
-    /// placement rule this tool's original "--jingle" mode used, preserved unchanged; only its
-    /// name and default-off/on status changed, since the VAD pre-pass and widened jingle
-    /// probing this placement relies on now run unconditionally (see
-    /// <see cref="RunVadPrePass"/>). Without this option, see <see cref="ChapterDetector"/>'s
+    /// Anchors the chapter mark to a jingle preceding the announcement instead of the default
+    /// fixed offset (--mark-before-jingle / -j): starting from whatever mark default-mode
+    /// placement (optionally already corrected by <see cref="PreciseMark"/>) computed for the
+    /// phrase, walks backward through any leading silence and then the jingle's own music to the
+    /// previous chapter's actual trailing narration, and marks right there - see <see
+    /// cref="ChapterDetector"/>'s <c>ComputeMarkBeforeJingle</c> for the mechanics. Being built on
+    /// top of default-mode placement rather than replacing it outright is what makes this
+    /// compatible with <see cref="PreciseMark"/>, unlike this tool's original "--jingle" mode this
+    /// option is descended from. Without this option, see <see cref="ChapterDetector"/>'s
     /// <c>DefaultMarkLeadSeconds</c> for the placement used instead.
     /// <para><b>Experimental.</b></para>
     /// </summary>
     public bool MarkBeforeJingle { get; private set; }
 
     /// <summary>
-    /// Verifies (and if necessary, corrects) every default-mode mark - i.e. one not produced by
-    /// <see cref="MarkBeforeJingle"/> - by directly re-transcribing the audio at the mark instead
-    /// of trusting the VAD/duration heuristics that produced it (--precise-mark / -p): if the
-    /// chapter phrase is the first thing heard there, the mark is left alone (the common case,
-    /// and the only extra cost paid for a chapter that was already right). If not - typically
-    /// because the mark landed on a jingle's own spurious VAD "speech" blip rather than the real
-    /// announcement - each subsequent VAD speech-segment start after the mark is checked the same
-    /// way in turn until one succeeds and the next one after it fails again; only that
-    /// success-then-fail pattern confirms the phrase truly begins at the earlier candidate, rather
-    /// than at some other unrelated false positive further inside the jingle. If that forward
-    /// search finds nothing, the same check runs backward through VAD speech-segment starts before
-    /// the mark instead, for the rarer opposite failure - the mark landing generously past the
-    /// true announcement rather than short of it. A chapter whose phrase can never be confirmed
-    /// either way keeps its original mark rather than guessing. Substantially more expensive than
-    /// the default algorithm alone - most of all for chapters preceded by a jingle with several
-    /// spurious VAD blips, since each one needs its own extra transcription - so this is off by
-    /// default; see <see cref="ChapterDetector"/> for the mechanics. Cannot be combined with
-    /// <see cref="MarkBeforeJingle"/>, which replaces default-mode placement with its own,
-    /// unrelated jingle/silence anchor - there is nothing here left for this to correct.
+    /// Verifies (and if necessary, corrects) the default-mode mark by directly re-transcribing
+    /// the audio at the mark instead of trusting the VAD/duration heuristics that produced it
+    /// (--precise-mark / -p): if the chapter phrase is the first thing heard there, the mark is
+    /// left alone (the common case, and the only extra cost paid for a chapter that was already
+    /// right). If not - typically because the mark landed on a jingle's own spurious VAD "speech"
+    /// blip rather than the real announcement - each subsequent VAD speech-segment start after
+    /// the mark is checked the same way in turn until one succeeds and the next one after it
+    /// fails again; only that success-then-fail pattern confirms the phrase truly begins at the
+    /// earlier candidate, rather than at some other unrelated false positive further inside the
+    /// jingle. If that forward search finds nothing, the same check runs backward through VAD
+    /// speech-segment starts before the mark instead, for the rarer opposite failure - the mark
+    /// landing generously past the true announcement rather than short of it. A chapter whose
+    /// phrase can never be confirmed either way keeps its original mark rather than guessing.
+    /// Substantially more expensive than the default algorithm alone - most of all for chapters
+    /// preceded by a jingle with several spurious VAD blips, since each one needs its own extra
+    /// transcription - so this is off by default; see <see cref="ChapterDetector"/> for the
+    /// mechanics. Combinable with <see cref="MarkBeforeJingle"/>, which corrects the default-mode
+    /// mark this option already settled on one step further, walking it back to the jingle's own
+    /// start.
     /// <para><b>Experimental.</b></para>
     /// </summary>
     public bool PreciseMark { get; private set; }
@@ -515,12 +517,6 @@ public sealed class CliOptions
 
         if (o.VerifyFailThreshold != null && !o.Verify)
             throw new CliError("--verify-threshold requires --verify.");
-
-        if (o.MarkBeforeJingle && o.PreciseMark)
-            throw new CliError(
-                "--mark-before-jingle and --precise-mark cannot be combined: --precise-mark only " +
-                "corrects the default (non -j) mark placement, which --mark-before-jingle replaces " +
-                "with its own, unrelated jingle/silence anchor.");
 
         if (o.SimpleMetadata && !o.Export && !o.Import)
             throw new CliError("--simple-metadata requires --export or --import.");
@@ -871,25 +867,29 @@ public sealed class CliOptions
                                     offset (see --max-jingle-length below). A silence scan and
                                     a voice-activity (VAD) pre-pass already run over the whole
                                     file regardless of this option, so jingles are found
-                                    whether or not they are preceded by a silence: when a
-                                    silence precedes the jingle, the chapter mark is placed 0.5
-                                    seconds before it; when the jingle abuts speech with no
-                                    silence (or is itself the only thing separating chapters),
-                                    the mark is placed at the start of the jingle instead.
-                                    Without this option, the mark is always placed 0.25 seconds
-                                    before the chapter phrase, no matter what precedes it.
-          -p, --precise-mark        [EXPERIMENTAL] Verify every mark placed without
-                                    --mark-before-jingle by re-transcribing the audio right at
-                                    it: if the chapter phrase is heard there, the mark is left
-                                    alone (the common case - no extra cost beyond that one
-                                    check). Otherwise, further candidate positions are checked
-                                    the same way until the real onset is confirmed and the mark
-                                    is corrected to it; a mark that can never be confirmed this
-                                    way is left as originally placed. Substantially slower than
-                                    without this option, since it costs one or more extra
-                                    Whisper transcriptions per chapter, most of all for ones
-                                    preceded by a jingle with several false-positive candidates.
-                                    Cannot be combined with --mark-before-jingle.
+                                    whether or not they are preceded by a silence: starting
+                                    from wherever the mark would otherwise be placed (with
+                                    --precise-mark, its corrected mark), this walks backward
+                                    through any leading silence and then the jingle's own
+                                    music to the previous chapter's actual trailing narration,
+                                    and marks right there. When VAD finds no jingle - an
+                                    ordinary in-narration pause - the mark is left exactly
+                                    where it would otherwise be. Without this option, the mark
+                                    is always placed 0.25 seconds before the chapter phrase, no
+                                    matter what precedes it.
+          -p, --precise-mark        [EXPERIMENTAL] Verify the default-mode mark by
+                                    re-transcribing the audio right at it: if the chapter
+                                    phrase is heard there, the mark is left alone (the common
+                                    case - no extra cost beyond that one check). Otherwise,
+                                    further candidate positions are checked the same way until
+                                    the real onset is confirmed and the mark is corrected to
+                                    it; a mark that can never be confirmed this way is left as
+                                    originally placed. Substantially slower than without this
+                                    option, since it costs one or more extra Whisper
+                                    transcriptions per chapter, most of all for ones preceded
+                                    by a jingle with several false-positive candidates.
+                                    Combinable with --mark-before-jingle, which then walks the
+                                    corrected mark back to the jingle's own start.
           -X, --max-jingle-length <seconds|auto>
                                     Maximum expected jingle duration (default, and ceiling with
                                     "auto": 45), or 0 if no jingle is expected at all. Above 0,

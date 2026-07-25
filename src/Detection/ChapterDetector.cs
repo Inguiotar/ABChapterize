@@ -702,11 +702,9 @@ public sealed class ChapterDetector
                         ctx.NonSpeechRegions, candidateRegion, ctx.SpeechSegments, trimmedAbs);
                     if (markSilence == null && markRegion == null)
                         markSilence = candidate.Silence;
-                    time = _options.MarkBeforeJingle
-                        ? ComputeJingleMark(phraseAbs, markSilence, markRegion?.StartSeconds)
-                        : RefineDefaultMark(
-                            Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, ctx.SpeechSegments) - DefaultMarkLeadSeconds),
-                            ctx.SpeechSegments);
+                    time = RefineDefaultMark(
+                        Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, ctx.SpeechSegments) - DefaultMarkLeadSeconds),
+                        ctx.SpeechSegments);
                 }
                 else if (match.PhraseStartSeconds <= PhraseLatestStart)
                 {
@@ -736,8 +734,10 @@ public sealed class ChapterDetector
                     markSilence = a;
                 }
 
-                if (_options.PreciseMark && !_options.MarkBeforeJingle)
+                if (_options.PreciseMark)
                     time = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, ctx.File, ctx.Info.InputDecoder, profile!, ctx.SpeechSegments, ct);
+                if (_options.MarkBeforeJingle)
+                    time = await ApplyMarkBeforeJingleAsync(time, ctx.AllSilences, ctx.SpeechSegments, ctx.File, ctx.Info.InputDecoder, ct);
 
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
@@ -1171,8 +1171,8 @@ public sealed class ChapterDetector
     /// where the jingle abuts speech on both sides with no amplitude gap; VAD sees that transition
     /// as a non-speech region (music, like silence, reads as non-speech to a speech detector)
     /// regardless of amplitude, so it can catch what silencedetect misses. See <see
-    /// cref="ComputeJingleMark"/> for how the two detectors' findings combine to place the mark
-    /// with --mark-before-jingle.
+    /// cref="JingleGeometry.ComputeMarkBeforeJingle"/> for how the two detectors' findings
+    /// combine to place the mark with --mark-before-jingle.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
@@ -1448,6 +1448,35 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Applies --mark-before-jingle on top of a mark default-mode placement (optionally already
+    /// corrected by --precise-mark) already computed: <see
+    /// cref="JingleGeometry.ComputeMarkBeforeJingle"/> walks it backward to the jingle's true
+    /// leading edge (or leaves it unchanged when VAD finds no jingle there at all), then the same
+    /// backward-only quiet-point snap --precise-mark's own final step applies runs on the result,
+    /// so a player seeking to a --mark-before-jingle mark starts in near-silence just as it would
+    /// for any other mark.
+    /// </summary>
+    /// <param name="mark">The mark to walk backward from.</param>
+    /// <param name="allSilences">Every silence Pass 1 stored, for the backward walk.</param>
+    /// <param name="speechSegments">Raw VAD speech segments for the whole file, for the backward
+    /// walk.</param>
+    /// <param name="file">Path of the audio file, for the final quiet-point snap's own decode.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<double> ApplyMarkBeforeJingleAsync(
+        double mark, List<Silence> allSilences, List<SpeechSegment> speechSegments,
+        string file, string? inputDecoder, CancellationToken ct)
+    {
+        var walked = ComputeMarkBeforeJingle(mark, allSilences, speechSegments);
+        var quietest = await _preciseMarkRefiner!.SnapToQuietestPointAsync(walked, file, inputDecoder, ct);
+        if (walked != mark)
+            _log?.Invoke($"--mark-before-jingle: walked mark back from {FormatTimestamp(mark)} to {FormatTimestamp(walked)}");
+        if (quietest != walked)
+            _log?.Invoke($"--mark-before-jingle: nudged {FormatTimestamp(walked)} to quieter {FormatTimestamp(quietest)}");
+        return quietest;
+    }
+
+    /// <summary>
     /// Records, for one detected chapter, the length of the silence and (when the VAD pre-pass
     /// ran) the jingle that preceded its phrase - the raw material for the per-file
     /// minimum-silence and maximum-jingle statistics. This runs regardless of
@@ -1633,8 +1662,8 @@ public sealed class ChapterDetector
     /// <summary>
     /// Records one phrase match found while scanning a Pass 3 gap chunk (its normal transcript,
     /// or <see cref="ScanGapRetriesAsync"/>'s fallback) as a detected chapter: resolves where the
-    /// mark itself goes (a fixed offset before the phrase by default, or with
-    /// --mark-before-jingle its VAD region), records the chapter's per-file statistics, updates
+    /// mark itself goes (a fixed offset before the phrase by default, further walked back to a
+    /// jingle's own start with --mark-before-jingle), records the chapter's per-file statistics, updates
     /// <paramref name="found"/>/<paramref name="remaining"/> and the progress bar's chapter
     /// state, and logs it. Shared between both callers so the mark-placement logic - the same
     /// rules <see cref="TranscribeRegionAsync"/>'s doc comment describes - stays in exactly one
@@ -1674,19 +1703,16 @@ public sealed class ChapterDetector
         {
             // Same VAD-region-primary anchor resolution as Pass 2 (ResolveJingleAnchor), just
             // against a fixed lookback since a gap chunk has no meaningful probe window start of
-            // its own; ComputeJingleMark then decides the mark exactly as Pass 2 would when
-            // --mark-before-jingle is set. Resolving from the region rather than the nearest
-            // silence keeps this from anchoring a silence-less jingle transition to a false
-            // in-text pause that merely happens to fall within the lookback.
+            // its own - used here for default-mode placement and the auto-mechanism statistics;
+            // --mark-before-jingle's own correction (below) does not consume it, resolving
+            // instead from whatever default-mode mark this computes.
             var lookback = _options.MaxJingleSeconds + PhraseMarginSeconds;
             var (anchorSilence, vadRegion) = ResolveJingleAnchor(
                 phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
                 nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
-            time = _options.MarkBeforeJingle
-                ? ComputeJingleMark(phraseAbs, anchorSilence, vadRegion?.StartSeconds)
-                : RefineDefaultMark(
-                    Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, speechSegments) - DefaultMarkLeadSeconds),
-                    speechSegments);
+            time = RefineDefaultMark(
+                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, speechSegments) - DefaultMarkLeadSeconds),
+                speechSegments);
             (statSilence, statRegion) = (anchorSilence, vadRegion);
         }
         else
@@ -1698,8 +1724,10 @@ public sealed class ChapterDetector
             time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
             statSilence = anchor;
         }
-        if (_options.PreciseMark && !_options.MarkBeforeJingle)
+        if (_options.PreciseMark)
             time = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, file, inputDecoder, profile, speechSegments, ct);
+        if (_options.MarkBeforeJingle)
+            time = await ApplyMarkBeforeJingleAsync(time, allSilences, speechSegments, file, inputDecoder, ct);
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
         RecordChapterStats(match.Number, statSilence, statRegion, phraseAbs);
         remaining.Remove(match.Number);

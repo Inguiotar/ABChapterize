@@ -165,11 +165,13 @@ internal static class JingleGeometry
     /// <returns><c>AnchorSilence</c>: the silence leading the jingle (or, when no jingle region
     /// was found, the silence directly preceding the phrase), or null for a silence-less jingle.
     /// <c>VadRegion</c>: the jingle region the phrase belongs to - its start already corrected
-    /// by <see cref="AdjustJingleRegion"/>, so callers can use it for the mark and the jingle
-    /// length directly - or null when none was found.
+    /// by <see cref="AdjustJingleRegion"/>, so callers can use it for the --min-silence-length/
+    /// --max-jingle-length auto statistics and (via <see cref="ResolveDefaultPhraseOnset"/>) for
+    /// default-mode mark placement directly - or null when none was found.
     /// The region is returned even when <c>AnchorSilence</c> also is (the "silence then jingle"
-    /// shape), so a caller can measure the jingle; the mark itself is unaffected because
-    /// <see cref="ComputeJingleMark"/> already prefers the silence over the region.</returns>
+    /// shape), so a caller can measure the jingle for the auto statistics regardless of which of
+    /// the two --mark-before-jingle's own placement (<see cref="ComputeMarkBeforeJingle"/>) ends
+    /// up walking back to.</returns>
     internal static (Silence? AnchorSilence, NonSpeechRegion? VadRegion) ResolveJingleAnchor(
         double phraseAbs, double phraseEndAbs, double earliestAnchor, List<Silence> silences,
         List<NonSpeechRegion> nonSpeechRegions, NonSpeechRegion? candidateVadRegion,
@@ -321,30 +323,121 @@ internal static class JingleGeometry
     }
 
     /// <summary>
-    /// Computes where --mark-before-jingle places a chapter mark, given the phrase time and the
-    /// silence/VAD non-speech region the caller has already resolved to truly precede it (Pass
-    /// 2's ProbeAsync and Pass 3's RecordGapChapterMatch each resolve these their own way, but
-    /// share this decision): a preceding silence takes priority (mark 0.5 s before it, clamped
-    /// to the silence's own length so the lead can never overshoot into the previous chapter's
-    /// trailing narration); absent one, a preceding VAD non-speech region places the mark at
-    /// its start with no lead (a lead here would cut into the previous chapter's narration,
-    /// since there is no absorbable silence to place it in); absent both, a last-resort
-    /// fallback backs up from the phrase itself.
+    /// Computes --mark-before-jingle's final mark by walking backward from <paramref
+    /// name="originalMark"/> - the mark default-mode placement already computed (<see
+    /// cref="RefineDefaultMark"/>/<see cref="ResolveDefaultPhraseOnset"/>, further corrected by
+    /// --precise-mark first when that option is also set) - to the true edge of whatever jingle
+    /// precedes the announcement, by literally retracing the audio via the same two detectors
+    /// used everywhere else in this file, rather than picking from a short list of pre-resolved
+    /// shapes (a preceding silence, else a VAD region's start, else a flat lead) the way the
+    /// placement this replaces did. Being independent of whichever silence/region a probe
+    /// happened to resolve is also what makes this compatible with --precise-mark, which that
+    /// older rule was not: it starts from whatever mark --precise-mark already settled on and
+    /// corrects it further, rather than replacing default-mode placement outright.
+    /// <para>
+    /// <b>Step 1:</b> back out of any silencedetect silence <paramref name="originalMark"/>
+    /// itself sits in - a leading hush directly before the phrase, whether or not a jingle
+    /// precedes it in turn.
+    /// </para>
+    /// <para>
+    /// <b>Step 2:</b> if real (<see cref="TransientSpeechFloorSeconds"/>-or-longer) VAD speech
+    /// covers - or ends essentially right at, within <see
+    /// cref="JingleWalkAdjacencyToleranceSeconds"/> of absorbing silencedetect/VAD boundary
+    /// jitter - that point, the previous chapter's own narration led straight into an ordinary
+    /// pause with no jingle in it at all: <paramref name="originalMark"/> needs no correction
+    /// and is returned unchanged.
+    /// </para>
+    /// <para>
+    /// <b>Steps 3-4:</b> otherwise, keep retreating - now through the jingle's own music - via
+    /// <see cref="RetreatPastNonSpeech"/>, which treats any VAD speech blip shorter than <see
+    /// cref="TransientSpeechFloorSeconds"/> as a musical/vocal transient rather than a genuine
+    /// return to narration and does not stop for it (a silencedetect silence that short never
+    /// reaches this algorithm at all - <see cref="MinStoredSilenceSeconds"/> already floors
+    /// every stored interval well above it, so there is nothing extra to ignore on that side).
+    /// The first point where real speech precedes is the jingle's true leading edge - the
+    /// previous chapter's own trailing narration ends exactly there - and is returned as-is,
+    /// with no further lead: unlike step 2's case, a real jingle sits here, and the mark
+    /// belongs right at its start.
+    /// </para>
+    /// <para>
+    /// <b>Step 5:</b> if that walk runs out of VAD data before ever finding real preceding
+    /// speech (the jingle sits at the very start of the file, before there was any narration to
+    /// find), the reached position is backed off by <see cref="JingleLeadSeconds"/> instead of
+    /// being trusted outright - the same flat safety lead used elsewhere as a last resort.
+    /// </para>
+    /// A final backward-only quiet-point snap - the same one --precise-mark's own final step
+    /// applies - still runs on whatever this returns; see <see
+    /// cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> and its caller in
+    /// <see cref="ChapterDetector"/>.
     /// </summary>
-    /// <param name="phraseAbs">Absolute phrase start time.</param>
-    /// <param name="silence">The silence immediately preceding the phrase, if any.</param>
-    /// <param name="vadRegionStart">Start of the VAD non-speech region immediately preceding
-    /// the phrase, if any; only consulted when <paramref name="silence"/> is null.</param>
-    internal static double ComputeJingleMark(double phraseAbs, Silence? silence, double? vadRegionStart)
+    /// <param name="originalMark">The mark default-mode placement (optionally already corrected
+    /// by --precise-mark) computed for this phrase.</param>
+    /// <param name="silences">Every silence Pass 1 stored, down to
+    /// <see cref="MinStoredSilenceSeconds"/>.</param>
+    /// <param name="speech">The raw VAD speech segments for the whole file, chronological.</param>
+    internal static double ComputeMarkBeforeJingle(
+        double originalMark, List<Silence> silences, List<SpeechSegment> speech)
     {
-        if (silence is { } s)
+        var afterSilence = silences
+            .Where(s => s.StartSeconds <= originalMark && originalMark <= s.EndSeconds)
+            .Cast<Silence?>().FirstOrDefault()
+            is { } leadIn ? leadIn.StartSeconds : originalMark;
+
+        if (RealSpeechAt(afterSilence, speech))
+            return originalMark;
+
+        var (position, foundSpeech) = RetreatPastNonSpeech(afterSilence, speech, TransientSpeechFloorSeconds);
+        return foundSpeech ? position : Math.Max(0, position - JingleLeadSeconds);
+    }
+
+    /// <summary>
+    /// Whether real (<see cref="TransientSpeechFloorSeconds"/>-or-longer) VAD speech is
+    /// happening right at <paramref name="t"/> - either because <paramref name="t"/> falls
+    /// inside such a segment (continuous narration straight through, e.g. an amplitude-only
+    /// silencedetect dip that VAD never stopped hearing as speech), or because one ends within
+    /// <see cref="JingleWalkAdjacencyToleranceSeconds"/> of it (the cross-detector boundary
+    /// case). Used by <see cref="ComputeMarkBeforeJingle"/>'s step 2.
+    /// </summary>
+    private static bool RealSpeechAt(double t, List<SpeechSegment> speech)
+        => speech.Any(b => b.EndSeconds - b.StartSeconds >= TransientSpeechFloorSeconds
+                         && (b.StartSeconds <= t && t <= b.EndSeconds
+                             || Math.Abs(b.EndSeconds - t) <= JingleWalkAdjacencyToleranceSeconds));
+
+    /// <summary>
+    /// Backward mirror of <see cref="AdvancePastNonSpeech"/>: scans from <paramref name="from"/>
+    /// toward the start of the file through VAD's raw speech/non-speech classification for the
+    /// nearest preceding genuine speech offset, ignoring any speech blip shorter than <paramref
+    /// name="minSpeechSeconds"/> as detector noise rather than real spoken content - used by
+    /// <see cref="ComputeMarkBeforeJingle"/> to walk back through a jingle's own music to the
+    /// previous chapter's trailing narration.
+    /// </summary>
+    /// <param name="from">The point to scan backward from.</param>
+    /// <param name="speech">Raw VAD speech segments, chronological.</param>
+    /// <param name="minSpeechSeconds">Speech segments shorter than this are treated as noise and
+    /// skipped over rather than accepted as the true offset.</param>
+    /// <returns><c>(Position, true)</c>: the end of the last qualifying speech segment at or
+    /// before <paramref name="from"/>, or <paramref name="from"/> itself when it already falls
+    /// inside one (never moves further than necessary). <c>(Position, false)</c>: <paramref
+    /// name="speech"/> does not reach far enough back to find one - <c>Position</c> is then
+    /// however far the retreat got before running out of data, for the caller's own fallback.</returns>
+    internal static (double Position, bool FoundSpeech) RetreatPastNonSpeech(
+        double from, List<SpeechSegment> speech, double minSpeechSeconds)
+    {
+        var t = from;
+        while (true)
         {
-            var lead = Math.Min(JingleLeadSeconds, s.EndSeconds - s.StartSeconds);
-            return Math.Max(0, s.EndSeconds - lead);
+            var prev = speech.Where(b => b.StartSeconds < t).Cast<SpeechSegment?>().LastOrDefault();
+            if (prev is not { } blip)
+                return (t, false);
+            if (blip.EndSeconds >= t)
+                return (t, true);
+            if (blip.EndSeconds - blip.StartSeconds < minSpeechSeconds)
+            {
+                t = blip.StartSeconds;
+                continue;
+            }
+            return (blip.EndSeconds, true);
         }
-        if (vadRegionStart is { } vs)
-            return Math.Max(0, vs);
-        return Math.Max(0, phraseAbs - JingleLeadSeconds);
     }
 
     /// <summary>

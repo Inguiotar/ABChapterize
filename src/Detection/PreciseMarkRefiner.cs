@@ -210,11 +210,14 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
-    /// --precise-mark's final cleanup step: nudges <paramref name="mark"/> backward to a quieter
-    /// point within <see cref="PreciseMarkQuietSnapRadiusSeconds"/> before it, so a player seeking
-    /// there starts playback as close to true silence as the audio actually offers nearby. Even a
-    /// mark sitting exactly on the chapter phrase's own onset can coincide with a comparatively
-    /// loud sample - it is, after all, the start of someone speaking - and abruptly starting
+    /// Final quiet-point cleanup step shared by --precise-mark's own placement (see
+    /// <see cref="RefinePreciseMarkAsync"/>) and --mark-before-jingle's (<see
+    /// cref="ChapterDetector"/>, after <see cref="JingleGeometry.ComputeMarkBeforeJingle"/>):
+    /// nudges <paramref name="mark"/> backward to a quieter point within <see
+    /// cref="PreciseMarkQuietSnapRadiusSeconds"/> before it, so a player seeking there starts
+    /// playback as close to true silence as the audio actually offers nearby. Even a mark sitting
+    /// exactly on the chapter phrase's own onset (or the previous chapter's last spoken sound, for
+    /// --mark-before-jingle) can coincide with a comparatively loud sample, and abruptly starting
     /// playback there is audible as a "plop".
     /// <para>
     /// Never moves the mark later: only positions before <paramref name="mark"/> are ever
@@ -242,7 +245,7 @@ internal sealed class PreciseMarkRefiner
     /// <returns>A quieter position before <paramref name="mark"/>, or <paramref name="mark"/>
     /// unchanged when nothing nearby is quiet enough to be worth moving to, or when too little
     /// audio decoded to analyze.</returns>
-    private async Task<double> SnapToQuietestPointAsync(
+    internal async Task<double> SnapToQuietestPointAsync(
         double mark, string file, string? inputDecoder, CancellationToken ct)
     {
         var decodeStart = Math.Max(0, mark - PreciseMarkQuietSnapRadiusSeconds);

@@ -839,10 +839,14 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task JingleMark_IsAnchoredBeforeTheLatestSilenceBeforeThePhrase()
+    public async Task JingleMark_WithContinuousSpeechAroundTheSilence_KeepsTheOriginalMark()
     {
-        // Probe window at 600: jingle until 615, short silence 615-618, phrase at 618.2.
-        // The mark belongs 0.5 s before the end of the silence directly preceding the phrase.
+        // Probe window at 600: continuous speech until 615, short silence 615-618, phrase at
+        // 618.2. The default-mode original mark (617.95, 0.25 s before the phrase) sits inside
+        // that silence, so step 1 backs out to the silence's own start (615) - but real VAD
+        // speech (continuous [0, 3600]) covers that point too, so step 2 recognises this as an
+        // ordinary in-narration pause with no jingle in it at all and returns the original mark
+        // unchanged, rather than the old fixed "0.5 s before the silence" placement (617.5).
         var result = await DetectAsync(
             Options("--mark-before-jingle"),
             [new(595, 600), new(615, 618)],
@@ -856,7 +860,7 @@ public sealed class ChapterDetectorTests : IDisposable
             // falls back to the plain silence-based rule exactly as it would without VAD at all.
             new FakeVad { Speech = [new(0, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 617.5), result.Chapters);
+        Assert.Contains(new DetectedChapter(2, 617.95), result.Chapters);
     }
 
     [Fact]
@@ -884,12 +888,17 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task JingleWithLeadingSilence_MarkUnchanged_AndVadDoesNotDoubleProbe()
+    public async Task JingleWithLeadingSilence_WalksBackThroughBothToTheRealNarrationEnd_AndVadDoesNotDoubleProbe()
     {
-        // A silence precedes the jingle - the existing silence-based candidate already probes
-        // this transition, so the VAD non-speech region covering the same silence+jingle span
-        // must not add a second, duplicate candidate (dedup): the silence path stays primary,
-        // and the mark lands 0.5 s before it exactly as it would without VAD at all.
+        // A silence (695-700) precedes the jingle's own music (700-703) - the existing
+        // silence-based candidate already probes this transition, so the VAD non-speech region
+        // covering the same silence+jingle span must not add a second, duplicate candidate
+        // (dedup): the silence path stays primary. VAD itself draws no line between the silence
+        // and the jingle music that follows it - both read as one continuous non-speech stretch
+        // (695-703) - so ComputeMarkBeforeJingle's backward walk does not stop at the stored
+        // silence's own boundary the way the old fixed "0.5 s before it" rule did: it retreats
+        // straight through both to the real narration end at 695, the true edge of the whole
+        // non-speech stretch.
         var (result, _, audio) = await DetectFullAsync(
             Options("--mark-before-jingle"),
             [new(695, 700)],
@@ -900,7 +909,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 699.5), result.Chapters);
+        Assert.Contains(new DetectedChapter(2, 695), result.Chapters);
         Assert.Single(audio.DecodeStarts, d => Math.Abs(d - 700) < 0.5);
     }
 
@@ -951,10 +960,13 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task MarkBeforeJingleWithMaxJingleLengthZero_StillAnchorsViaVad_ButKeepsTheNarrowWindow()
     {
-        // --mark-before-jingle turns on the VAD pre-pass and its 0.5 s jingle-anchor placement,
-        // but --max-jingle-length 0 says no jingle is expected, so Pass 2's probe window must
-        // stay at the plain 12 s width rather than widening to the jingle ceiling - the two
-        // options are independent: one controls mark placement, the other the probe width.
+        // --mark-before-jingle turns on the VAD pre-pass and its own backward-walk mark
+        // placement (see JingleWithLeadingSilence_WalksBackThroughBothToTheRealNarrationEnd_...
+        // for why this lands at 695, the true edge of the silence+jingle stretch, not 0.5 s
+        // before the stored silence), but --max-jingle-length 0 says no jingle is expected, so
+        // Pass 2's probe window must stay at the plain 12 s width rather than widening to the
+        // jingle ceiling - the two options are independent: one controls mark placement, the
+        // other the probe width.
         var (result, _, audio) = await DetectFullAsync(
             Options("--mark-before-jingle", "--max-jingle-length", "0"),
             [new(695, 700)],
@@ -965,7 +977,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 699.5), result.Chapters);
+        Assert.Contains(new DetectedChapter(2, 695), result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 700 && w.Duration is { } d && Math.Abs(d - 12) < 0.01);
     }
@@ -990,7 +1002,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 610), new(613, 640), new(645, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1052,7 +1064,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 610), new(613, 640), new(645.3, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1078,7 +1090,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(650, 3600)] }); // jingle region 640-650 envelops 645
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1103,7 +1115,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 610), new(613, 640), new(660, 3600)] }); // jingle region 640-660, unbroken
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1128,7 +1140,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(640.8, 641.6), new(642.4, 643.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 643.2)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 643.2)], result.Chapters);
     }
 
     [Fact]
@@ -1154,18 +1166,25 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(641.2, 642.0), new(642.8, 643.6), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 643.6)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 643.6)], result.Chapters);
     }
 
     [Fact]
-    public async Task JingleSplitByAnUntranscribedVocal_IsBridgedBackToItsRealStart()
+    public async Task JingleSplitByAnUntranscribedVocal_StopsAtTheBlip_NotBridgedAllTheWayBack()
     {
         // The chapter-20 shape: a vocal-like passage in the jingle's own music (blip 645-646.2,
         // just over the 1 s merge limit) splits one continuous jingle into two VAD regions
-        // ([640, 645] and [646.2, 660]). The phrase (655) selects the later fragment, whose start
-        // sits mid-jingle. Whisper transcribed no words over the splitting blip - by the
-        // only-speech-in-a-jingle-is-the-phrase rule that makes it music, so the region must be
-        // bridged backward across it and the mark placed at the true jingle start (640).
+        // ([640, 645] and [646.2, 660]). ResolveDefaultPhraseOnset still finds the blip as a
+        // "swallowed" onset inside the region ResolveJingleAnchor's transcript-aware bridging
+        // reassembles, landing the default-mode original mark right after it (644.75). But
+        // --mark-before-jingle's own backward walk (ComputeMarkBeforeJingle) has no transcript
+        // awareness at all - it only asks whether a VAD blip is >= TransientSpeechFloorSeconds
+        // (0.4 s), and this one (1.2 s) clears that floor easily, so step 2 reads it as real
+        // preceding speech and returns the original mark unchanged rather than retreating past it
+        // to the true jingle start (640). A blip this long is well outside the transient range
+        // TransientSpeechFloorSeconds was calibrated against (real transients topped out around
+        // 0.35 s) - a deliberate simplification the new backward-walk algorithm accepts in
+        // exchange for not needing the transcript at all.
         var result = await DetectAsync(
             Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [],
@@ -1177,7 +1196,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(645, 646.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 644.75)], result.Chapters);
     }
 
     [Fact]
@@ -1201,7 +1220,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 643), new(645, 646.5), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 646.5)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 646.5)], result.Chapters);
     }
 
     [Fact]
@@ -1225,7 +1244,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0), new(2, 640)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1910,10 +1929,14 @@ public sealed class ChapterDetectorTests : IDisposable
         // Chapter one's wide VAD-widened window [600, 650] also contains chapter two's
         // announcement 40 s in. Both marks must come out of this single probe: segment
         // timestamps plus the stored silence list pinpoint chapter two at its own preceding
-        // silence ([638, 640], mark 0.5 s before its end) even though the window was triggered
-        // by chapter one's silence. The confident marks then settle the overlapping window
-        // sequence, so the candidate at 640 is never probed at all - neither its start (640)
-        // nor the shared border (650) is ever decoded.
+        // silence ([638, 640]) even though the window was triggered by chapter one's silence.
+        // With continuous VAD speech throughout, --mark-before-jingle's backward walk finds real
+        // speech covering the default-mode original mark (639.75, 0.25 s before the phrase) and
+        // returns it unchanged - the same "ordinary in-narration pause, no jingle here" case as
+        // JingleMark_WithContinuousSpeechAroundTheSilence_KeepsTheOriginalMark, not the old fixed
+        // "0.5 s before the silence" placement (639.5). The confident marks then settle the
+        // overlapping window sequence, so the candidate at 640 is never probed at all - neither
+        // its start (640) nor the shared border (650) is ever decoded.
         var (result, _, audio) = await DetectFullAsync(
             Options("--mark-before-jingle"),
             [new(598, 600), new(638, 640)],
@@ -1921,7 +1944,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 3600)] });
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
-        Assert.Contains(new DetectedChapter(2, 639.5), result.Chapters);
+        Assert.Contains(new DetectedChapter(2, 639.75), result.Chapters);
         Assert.DoesNotContain(650.0, audio.DecodeStarts);
         Assert.DoesNotContain(640.0, audio.DecodeStarts);
     }

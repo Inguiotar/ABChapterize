@@ -230,11 +230,13 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void PreciseMarkWithMarkBeforeJingle_IsAnError()
+    public void PreciseMarkWithMarkBeforeJingle_IsAllowed()
     {
-        // --precise-mark only corrects default-mode placement, which --mark-before-jingle
-        // replaces with its own, unrelated anchor - there is nothing left for it to correct.
-        Assert.Throws<CliError>(() => ParseFile("--precise-mark", "--mark-before-jingle"));
+        // --mark-before-jingle now walks back from whatever mark default-mode (optionally
+        // refined by --precise-mark) already produced, so the two compose.
+        var o = ParseFile("--precise-mark", "--mark-before-jingle")!;
+        Assert.True(o.PreciseMark);
+        Assert.True(o.MarkBeforeJingle);
     }
 
     [Fact]
