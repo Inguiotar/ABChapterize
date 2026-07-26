@@ -305,7 +305,7 @@ keeps its exact position.
   whisper.cpp's own
   [figures](https://github.com/ggml-org/whisper.cpp#memory-usage) are ~852 MB
   for `small`, ~2.1 GB for `medium` and ~3.9 GB for `large`, with the default
-  `turbo` landing around 2 GB. (Figures quoted for OpenAI's Python
+  `turbo` landing around 2.2 GB. (Figures quoted for OpenAI's Python
   implementation are two to three times higher; they do not apply here.) It
   comes out of video memory on a GPU backend and out of system RAM on a CPU
   backend, where concurrent files each load their own copy (`--jobs 1` keeps it

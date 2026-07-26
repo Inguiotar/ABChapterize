@@ -979,10 +979,10 @@ the engine underneath ABChapterize, publishes its own
 | `medium` | 1.5 GiB | ~2.1 GB |
 | `large` | 2.9 GiB | ~3.9 GB |
 
-That table has no `turbo` row — it predates the model. Since `turbo` has about
-as many parameters as `medium` (809 M against 769 M) but a larger file, expect
-very roughly 2 GB for the default model. Treat that one as an estimate rather
-than a published number.
+That table has no `turbo` row — it predates the model. Expect roughly 2.2 GB
+for the default model, consistent with `turbo` having about as many parameters
+as `medium` (809 M against 769 M) on a larger file. Treat that one as an
+estimate rather than a published number.
 
 Be aware that figures quoted for Whisper elsewhere are often much higher —
 OpenAI's
