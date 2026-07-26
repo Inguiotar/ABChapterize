@@ -182,6 +182,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--min-silence-length", "2")]
     [InlineData("--early-abort", "30")]
     [InlineData("--expected-start-chapter", "5")]
+    [InlineData("--max-chapter-number", "50")]
     [InlineData("--verify")]
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
     {
@@ -530,6 +531,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--quick-marks"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--expected-start-chapter", "5"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapter-number", "50"));
     }
 
     [Fact]
@@ -577,6 +579,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--jobs", "2"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--expected-start-chapter", "5"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--max-chapter-number", "50"));
     }
 
     [Fact]
@@ -722,6 +725,36 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseFile("--expected-start-chapter", "0"));
         Assert.Throws<CliError>(() => ParseFile("--expected-start-chapter", "-1"));
         Assert.Throws<CliError>(() => ParseFile("--expected-start-chapter", "many"));
+    }
+
+    [Fact]
+    public void MaxChapterNumber_DefaultsToNull_WithoutBeingGiven()
+    {
+        Assert.Null(ParseFile()!.MaxChapterNumber);
+    }
+
+    [Fact]
+    public void MaxChapterNumber_IsParsed_LongAndShort()
+    {
+        Assert.Equal(120, ParseFile("--max-chapter-number", "120")!.MaxChapterNumber);
+        Assert.Equal(120, ParseFile("-N", "120")!.MaxChapterNumber);
+    }
+
+    [Fact]
+    public void InvalidMaxChapterNumber_IsRejected()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--max-chapter-number", "0"));
+        Assert.Throws<CliError>(() => ParseFile("--max-chapter-number", "-1"));
+        Assert.Throws<CliError>(() => ParseFile("--max-chapter-number", "lots"));
+    }
+
+    [Fact]
+    public void MaxChapterNumber_BelowExpectedStartChapter_IsRejected()
+    {
+        Assert.Throws<CliError>(() =>
+            ParseFile("--expected-start-chapter", "20", "--max-chapter-number", "10"));
+        // Equal is fine: a single-chapter part.
+        Assert.NotNull(ParseFile("--expected-start-chapter", "20", "--max-chapter-number", "20"));
     }
 
     [Fact]

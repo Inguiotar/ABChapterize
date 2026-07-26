@@ -286,6 +286,60 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task ChapterNumberAboveTheCap_IsDiscarded()
+    {
+        // "Chapter five hundred and ten" in a three-chapter book is a mishearing, not a chapter:
+        // with --max-chapter-number it never enters the sequence, so nothing is left to hunt for.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--max-chapter-number", "12"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter five hundred ten."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+            });
+
+        Assert.Equal([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        Assert.False(result.GapRemains);
+        Assert.Contains(log, l => l.Contains("discarded chapter 510"));
+    }
+
+    [Fact]
+    public async Task ChapterNumberAboveTheCap_IsAccepted_WithoutTheCap()
+    {
+        // The same script without --max-chapter-number: the mishearing becomes a chapter of its
+        // own and turns everything below it into a gap - exactly what the cap exists to prevent.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter five hundred ten."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+            });
+
+        Assert.Contains(result.Chapters, c => c.Number == 510);
+        Assert.True(result.GapRemains);
+    }
+
+    [Fact]
+    public async Task ChapterNumberAtTheCap_IsStillAccepted()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--max-chapter-number", "2"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+    }
+
+    [Fact]
     public async Task PhraseTooLongAfterSilence_IsIgnored_WithoutJingle()
     {
         var result = await DetectAsync(

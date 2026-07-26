@@ -116,6 +116,51 @@ public sealed class FileEnumerationTests : IDisposable
         Assert.False(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.m4b")));
     }
 
+    [Fact]
+    public void MissingMarksPath_OmitsTheNumbers_WhenTooManyChaptersAreMissing()
+    {
+        // Eleven missing chapters is one past the cap - the name must not spell any of them out.
+        var path = FileProcessor.MissingMarksPath(
+            Path.Combine("lib", "Book.m4b"), [.. Enumerable.Range(5, 11)]);
+        Assert.Equal(Path.Combine("lib", "Book.missing-marks.m4b"), path);
+    }
+
+    [Fact]
+    public void MissingMarksPath_StillNamesExactlyTheCappedCount()
+    {
+        var path = FileProcessor.MissingMarksPath(
+            Path.Combine("lib", "Book.m4b"), [.. Enumerable.Range(5, FileProcessor.MaxNamedMissingNumbers)]);
+        Assert.Equal(Path.Combine("lib", "Book.missing-marks-5-6-7-8-9-10-11-12-13-14.m4b"), path);
+    }
+
+    [Fact]
+    public void MissingMarksPath_ReplacesAnUnnumberedTag_RatherThanStackingIt()
+    {
+        var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.missing-marks.m4b"), [7]);
+        Assert.Equal(Path.Combine("lib", "Book.missing-marks-7.m4b"), path);
+    }
+
+    [Fact]
+    public void HasMissingMarksTag_IsFalse_ForAnUnnumberedTag()
+    {
+        // The unnumbered form is deliberately outside the auto-resume scope: a gap that wide
+        // wants a human look, not another automatic run.
+        Assert.False(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.missing-marks.m4b")));
+    }
+
+    [Fact]
+    public void FormatMissingList_ListsEverythingUpToTheCap()
+    {
+        Assert.Equal("3, 7, 8", FileProcessor.FormatMissingList([3, 7, 8]));
+    }
+
+    [Fact]
+    public void FormatMissingList_SummarizesTheRest_BeyondTheCap()
+    {
+        Assert.Equal("1, 2, 3, 4, 5, 6, 7, 8, 9, 10 and 2 more",
+            FileProcessor.FormatMissingList([.. Enumerable.Range(1, 12)]));
+    }
+
     /// <summary>Runs --no-op against the temp directory and returns everything written to
     /// Console.Out, restoring the original writer afterward regardless of outcome.</summary>
     private async Task<string> RunNoOpAsync(params string[] extraArgs)

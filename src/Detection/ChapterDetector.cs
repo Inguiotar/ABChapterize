@@ -657,7 +657,7 @@ public sealed class ChapterDetector
 
             // profile is resolved on the first probe, which is always a full decode (the cache is
             // empty then), so it is non-null by the time any transcript-reuse branch above runs.
-            foreach (var match in FindPhraseMatches(segments, profile!, mergeBoundarySegIndex))
+            foreach (var match in FindCappedPhraseMatches(segments, profile!, mergeBoundarySegIndex))
             {
                 // A duplicate or regression (an in-text mention like "as seen in chapter
                 // three", or a re-detection of an already-marked chapter) does not end the
@@ -1285,7 +1285,7 @@ public sealed class ChapterDetector
             LogTranscript($"verify @{FormatTimestamp(marking.StartSeconds)}", segments);
 
             checkedCount++;
-            var confirmed = FindPhraseMatches(segments, profile).Any(m => m.Number == expected);
+            var confirmed = FindCappedPhraseMatches(segments, profile).Any(m => m.Number == expected);
             if (!confirmed)
                 confirmed = await TryConfirmViaGapRetranscribeAsync(
                     file, info, windowStart, windowLen, segments, profile, expected, ct);
@@ -1396,7 +1396,7 @@ public sealed class ChapterDetector
                 var gapSamples = await _audio.DecodePcmAsync(file, absStart, len, info.InputDecoder, ct);
                 var gapSegments = await _transcriber.TranscribeAsync(gapSamples, ct);
                 LogTranscript($"verify gap retry {len:0.0}s@{FormatTimestamp(absStart)}", gapSegments);
-                if (FindPhraseMatches(gapSegments, profile).Any(m => m.Number == expected))
+                if (FindCappedPhraseMatches(gapSegments, profile).Any(m => m.Number == expected))
                     return true;
             }
         }
@@ -1623,7 +1623,7 @@ public sealed class ChapterDetector
 
             // Unlike Pass 2 there is no window-relative timing rule here, so matching simply
             // runs in absolute file time: a match's PhraseStartSeconds is already absolute.
-            foreach (var match in FindPhraseMatches(matchSegments, profile,
+            foreach (var match in FindCappedPhraseMatches(matchSegments, profile,
                          carried.Count > 0 ? carried.Count : null))
             {
                 var phraseAbs = match.PhraseStartSeconds;
@@ -1835,7 +1835,7 @@ public sealed class ChapterDetector
                 var subAbs = TrimLeadingNonSpeech(
                     ShiftSegments(subSegments, subStart), allSilences, nonSpeechRegions, _vad != null);
 
-                foreach (var match in FindPhraseMatches(subAbs, profile))
+                foreach (var match in FindCappedPhraseMatches(subAbs, profile))
                 {
                     if (!remaining.Contains(match.Number) || knownChapters.Any(k => k.Number == match.Number))
                         continue;
@@ -1868,6 +1868,34 @@ public sealed class ChapterDetector
             : $"{context}: " + string.Join(" | ",
                 segments.Select(s =>
                     $"{s.StartSeconds:0.0}-{s.EndSeconds:0.0} (p={s.Probability:0.00}) \"{s.Text.Trim()}\"")));
+    }
+
+    /// <summary>
+    /// <see cref="PhraseMatching.FindPhraseMatches"/> with <see cref="CliOptions.MaxChapterNumber"/>
+    /// applied: a match whose parsed number sits above the cap is dropped (and logged under
+    /// --verbose) rather than handed on. Every pass funnels its matching through here - Pass 2,
+    /// Pass 3, the gap chunk scan and --verify alike - so an implausible number can never enter the
+    /// chapter sequence through any route, be it as a mark of its own or as the upper bound that
+    /// turns everything below it into a gap to hunt for. Without a cap configured this is exactly
+    /// <see cref="PhraseMatching.FindPhraseMatches"/>.
+    /// </summary>
+    /// <param name="segments">The transcript segments to search, in whatever time base the caller
+    /// works in (this method neither reads nor rewrites the timings).</param>
+    /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
+    /// <param name="mergeBoundarySegIndex">Passed straight through to
+    /// <see cref="PhraseMatching.FindPhraseMatches"/>.</param>
+    private IEnumerable<PhraseMatch> FindCappedPhraseMatches(
+        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null)
+    {
+        foreach (var match in FindPhraseMatches(segments, profile, mergeBoundarySegIndex))
+        {
+            if (_options.MaxChapterNumber is { } cap && match.Number > cap)
+            {
+                _log?.Invoke($"discarded chapter {match.Number} - above the --max-chapter-number cap of {cap}");
+                continue;
+            }
+            yield return match;
+        }
     }
 
     /// <summary>

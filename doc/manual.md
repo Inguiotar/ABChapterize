@@ -240,7 +240,16 @@ still-missing chapter numbers, `-`-delimited (e.g.
 preserves the partial work instead of discarding it, rather than committing a
 silently-complete-looking but partially-wrong chapter list.
 
-A later run over such a tagged file picks it up automatically (unless
+More than ten missing chapters are not spelled out — the tag is just
+`<name>.missing-marks<ext>`, since the full list would make for an unwieldy
+(and possibly over-long) file name. Such a file is also *not* picked up
+automatically by a later run: a gap that wide usually means detection went
+off the rails somewhere, which is worth a look before handing the file back
+to another automatic attempt. See
+[`--max-chapter-number`](#handling-of-pre-existing-chapters) for the most
+common cause.
+
+A later run over a *numbered* tagged file picks it up automatically (unless
 `--force` is given): the chapters already committed are trusted outright,
 and only the still-tagged gap(s) get their own pass 2 and, if needed, pass 3,
 exactly as after a failed `--verify` (see
@@ -342,8 +351,9 @@ abchapterize --version
 
 Options must precede the file/directory argument, which must come last.
 Short options that take no parameter may be collapsed: `-rb` = `-r -b`.
-Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-a`, `-e`, `-h`,
-`-F`, `-X`, `-n`, `-t`, `-i`) cannot be collapsed with others.
+Short options that take a parameter (`-l`, `-c`, `-m`, `-M`, `-x`, `-N`, `-a`,
+`-e`, `-h`, `-F`, `-X`, `-n`, `-t`, `-i`, `-J`) cannot be collapsed with
+others.
 
 ### Target selection
 
@@ -624,6 +634,18 @@ skipped (reported as "skipped").
   an unresolved gap between two detected chapters already is. Only applies
   to a fresh, from-scratch run, the same restriction as `--early-abort`.
 
+`-N`, `--max-chapter-number <n>`
+: The highest chapter number this book plausibly has (default: no limit). A
+  detected chapter numbered above `<n>` is discarded on the spot as a
+  mishearing rather than becoming a mark. Worth setting whenever you know the
+  chapter count roughly: a single "chapter five hundred and ten" misheard in a
+  twelve-chapter book otherwise stretches the expected sequence to 510, leaves
+  pass 3 hunting for the ~500 chapters "missing" in between, and ends with the
+  file tagged as missing all of them. Lighter Whisper models (`tiny`, `base`)
+  are the usual source of such numbers. Not to be confused with
+  `--max-chapters`, which counts a file's *pre-existing* marks rather than the
+  numbers heard in the audio.
+
 `-V`, `--verify`
 : Instead of trusting pre-existing marks blindly (the default) or discarding
   them outright (`--force`), check each one against the audio: a short
@@ -782,7 +804,8 @@ touching Whisper at all.
   `--import` cannot be combined with any detection option — `--lang`,
   `--chapter-phrase`, `--model`, `--pass3-model`, `--mark-before-jingle`,
   `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
-  `--expected-start-chapter` — nor with `--revert`. Pre-existing chapter
+  `--expected-start-chapter`, `--max-chapter-number`, `--quick-marks`,
+  `--verify` — nor with `--revert`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters
   have no Whisper confidence, so they never trigger low-confidence
@@ -1229,6 +1252,16 @@ by the ordering heuristics, but a phrase like "chapter twelve" right after a
 long pause can fool the tool. Use `--backup`, inspect the result, and
 `--revert` if needed; a regexp phrase (`-c "/^\s*chapter (\d+)/"`) can help
 with stubborn cases.
+
+**A wildly wrong chapter number appeared, and everything below it is now
+"missing"** — Whisper misheard a number (lighter models such as `tiny` and
+`base` are prone to this), and everything between the last real chapter and
+that number counts as a gap. Set `--max-chapter-number` to roughly the book's
+real chapter count and the bogus number is thrown away as it is found. If the
+run already left the file tagged, note that a tag naming more than ten
+missing chapters is shortened to a plain `.missing-marks` and is *not*
+resumed automatically — rerun it with `--force` (and the new option) once you
+know what went wrong.
 
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes),
 `--max-jingle-length` (smaller probe windows, or `0` if there's no jingle at

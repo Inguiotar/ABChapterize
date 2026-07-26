@@ -405,11 +405,25 @@ public sealed class FileProcessor
     }
 
     /// <summary>
+    /// The most chapter numbers <see cref="MissingMarksPath"/> spells out in a file name before
+    /// falling back to the unnumbered ".missing-marks" tag. A file missing this many chapters or
+    /// fewer is worth naming them all - beyond that the name grows unwieldy (and can hit the
+    /// platform's path length limit), and a gap that large is a sign that detection went off the
+    /// rails rather than a shortlist worth resuming from.
+    /// </summary>
+    internal const int MaxNamedMissingNumbers = 10;
+
+    /// <summary>
     /// Builds the name a file is renamed to when pass 3 leaves an unresolved chapter-sequence gap:
     /// the original name with a ".missing-marks-&lt;n&gt;-&lt;n&gt;-..." tag (the still-missing
     /// chapter numbers, "-"-delimited) inserted before the extension, e.g.
-    /// "Book.m4b" with chapters 3 and 7 missing becomes "Book.missing-marks-3-7.m4b". Any such tag
-    /// already present is replaced rather than stacked. Internal for unit testing.
+    /// "Book.m4b" with chapters 3 and 7 missing becomes "Book.missing-marks-3-7.m4b". Beyond
+    /// <see cref="MaxNamedMissingNumbers"/> missing chapters the numbers are left out entirely
+    /// ("Book.missing-marks.m4b"), which also takes the file out of
+    /// <see cref="HasMissingMarksTag"/>'s auto-resume scope on purpose: a gap that wide is
+    /// something to look at by hand, not to hand straight back to another automatic run. Any such
+    /// tag already present is replaced rather than stacked, in either form. Internal for unit
+    /// testing.
     /// </summary>
     /// <param name="file">Path of the file being renamed.</param>
     /// <param name="missingNumbers">The chapter numbers still missing after pass 3.</param>
@@ -418,25 +432,29 @@ public sealed class FileProcessor
         var dir = Path.GetDirectoryName(file) ?? "";
         var stem = StripMissingMarksTag(Path.GetFileNameWithoutExtension(file));
         var ext = Path.GetExtension(file);
-        return Path.Combine(dir, $"{stem}.missing-marks-{string.Join("-", missingNumbers)}{ext}");
+        var tag = missingNumbers.Count is > 0 and <= MaxNamedMissingNumbers
+            ? $".missing-marks-{string.Join("-", missingNumbers)}"
+            : ".missing-marks";
+        return Path.Combine(dir, $"{stem}{tag}{ext}");
     }
 
-    /// <summary>Removes a trailing ".missing-marks-&lt;digits and dashes&gt;" tag from a file
-    /// stem, so re-tagging an already-tagged file replaces the tag instead of appending a second.</summary>
+    /// <summary>Removes a trailing ".missing-marks" tag - with or without its number list - from a
+    /// file stem, so re-tagging an already-tagged file replaces the tag instead of appending a
+    /// second one.</summary>
     /// <param name="stem">File name without directory or extension.</param>
     private static string StripMissingMarksTag(string stem)
-        => System.Text.RegularExpressions.Regex.Replace(stem, @"\.missing-marks-[0-9-]+$", "");
+        => System.Text.RegularExpressions.Regex.Replace(stem, @"\.missing-marks(-[0-9-]+)?$", "");
 
-    /// <summary>True when a file name still carries a ".missing-marks-&lt;n&gt;-..." tag (see
-    /// <see cref="MissingMarksPath"/>) - i.e. a previous run left it with an unresolved
-    /// chapter-sequence gap, and it is a candidate for <see cref="ProcessOneAsync"/>'s auto-resume
-    /// branch. Internal for unit testing.</summary>
+    /// <summary>True when a file name still carries a numbered ".missing-marks-&lt;n&gt;-..." tag
+    /// (see <see cref="MissingMarksPath"/>) - i.e. a previous run left it with an unresolved
+    /// chapter-sequence gap small enough to name, and it is a candidate for
+    /// <see cref="ProcessOneAsync"/>'s auto-resume branch. The unnumbered ".missing-marks" form
+    /// deliberately does not qualify; see <see cref="MissingMarksPath"/>. Internal for unit
+    /// testing.</summary>
     /// <param name="file">Path of the file being considered.</param>
     internal static bool HasMissingMarksTag(string file)
-    {
-        var stem = Path.GetFileNameWithoutExtension(file);
-        return StripMissingMarksTag(stem) != stem;
-    }
+        => System.Text.RegularExpressions.Regex.IsMatch(
+            Path.GetFileNameWithoutExtension(file), @"\.missing-marks-[0-9-]+$");
 
     /// <summary>The file's own original name, with any ".missing-marks-..." tag stripped - what a
     /// resumed file is renamed back to once every previously-missing chapter is found.</summary>
@@ -447,6 +465,21 @@ public sealed class FileProcessor
         var stem = StripMissingMarksTag(Path.GetFileNameWithoutExtension(file));
         var ext = Path.GetExtension(file);
         return Path.Combine(dir, stem + ext);
+    }
+
+    /// <summary>
+    /// Formats still-missing chapter numbers for a summary line, listing at most
+    /// <see cref="MaxNamedMissingNumbers"/> of them and summarizing the rest as a count - the same
+    /// cut-off <see cref="MissingMarksPath"/> applies to the file name, so the message and the name
+    /// it announces stay in step. Internal for unit testing.
+    /// </summary>
+    /// <param name="missingNumbers">The chapter numbers still missing.</param>
+    internal static string FormatMissingList(IReadOnlyList<int> missingNumbers)
+    {
+        if (missingNumbers.Count <= MaxNamedMissingNumbers)
+            return string.Join(", ", missingNumbers);
+        return string.Join(", ", missingNumbers.Take(MaxNamedMissingNumbers)) +
+               $" and {missingNumbers.Count - MaxNamedMissingNumbers} more";
     }
 
     /// <summary>Processes a single audiobook file and prints its summary line.</summary>
@@ -508,7 +541,7 @@ public sealed class FileProcessor
                 {
                     lock (_statsLock) _warnings++;
                     var retarget = MissingMarksPath(file, resumed.MissingNumbers);
-                    var stillMissing = string.Join(", ", resumed.MissingNumbers);
+                    var stillMissing = FormatMissingList(resumed.MissingNumbers);
                     if (_options.DryRun)
                     {
                         var partialListing = string.Join(Environment.NewLine,
@@ -623,7 +656,7 @@ public sealed class FileProcessor
                 _runStats.AccumulateConfidence(result.Chapters);
                 var (partial, partialIntro) = BuildChapters(result);
                 var target = MissingMarksPath(file, result.MissingNumbers);
-                var missingList = string.Join(", ", result.MissingNumbers);
+                var missingList = FormatMissingList(result.MissingNumbers);
                 if (_options.DryRun)
                 {
                     var partialListing = string.Join(Environment.NewLine,

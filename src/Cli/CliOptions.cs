@@ -90,6 +90,18 @@ public sealed class CliOptions
     public int? MaxChapters { get; private set; }
 
     /// <summary>
+    /// Highest chapter number considered plausible for this book (--max-chapter-number / -N).
+    /// Null (the default) means no cap. Any chapter phrase whose parsed number exceeds it is
+    /// discarded the moment it is found, before it can become a mark or widen the expected
+    /// chapter sequence - a Whisper mishearing turning "chapter ten" into "chapter 510" otherwise
+    /// leaves a 500-chapter "gap" for Pass 3 to hunt through and a file tagged with a
+    /// ".missing-marks" suffix listing all of them. Unrelated to <see cref="MaxChapters"/>, which
+    /// counts a file's <i>pre-existing markings</i> rather than the numbers detection itself reads
+    /// out of the audio.
+    /// </summary>
+    public int? MaxChapterNumber { get; private set; }
+
+    /// <summary>
     /// Minutes of a file's play time Pass 2 may probe without finding a single chapter before
     /// giving up on it outright (--early-abort / -a, default 60; 0 disables the feature
     /// entirely). Always active by default - guards against burning a full, expensive
@@ -385,7 +397,8 @@ public sealed class CliOptions
         ['Q'] = "--quick-marks",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
-        ['x'] = "--max-chapters", ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['F'] = "--filter", ['X'] = "--max-jingle-length",
+        ['x'] = "--max-chapters", ['N'] = "--max-chapter-number",
+        ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
@@ -394,7 +407,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet;
+    private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet;
 
     /// <summary>
     /// File extensions of the container formats that ffmpeg can both read and write chapter
@@ -513,7 +526,7 @@ public sealed class CliOptions
 
         // Semantic validation.
         if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                         || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
+                         || o._pass3ModelSet || o._maxSet || o._maxChapterNumberSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
 
@@ -521,18 +534,24 @@ public sealed class CliOptions
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
         if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                       || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
+                       || o._pass3ModelSet || o._maxSet || o._maxChapterNumberSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                        || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
 
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o.MarkBeforeJingle || o.QuickMarks || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --max-jingle-length, --min-silence-length, --early-abort, " +
-                "--expected-start-chapter and --verify have no effect and cannot be combined with it.");
+                "--expected-start-chapter, --max-chapter-number and --verify have no effect and cannot be " +
+                "combined with it.");
+
+        if (o.MaxChapterNumber is { } cap && o.ExpectedStartChapter is { } start && cap < start)
+            throw new CliError(
+                $"--max-chapter-number ({cap}) is below --expected-start-chapter ({start}): " +
+                "no chapter could ever be accepted.");
 
         if (o.Force && o.Verify)
             throw new CliError(
@@ -645,6 +664,7 @@ public sealed class CliOptions
             case "--model": Model = nextParam(); _modelSet = true; return true;
             case "--pass3-model": Pass3Model = nextParam(); _pass3ModelSet = true; return true;
             case "--max-chapters": MaxChapters = ParseNonNegativeInt("--max-chapters", nextParam()); _maxSet = true; return true;
+            case "--max-chapter-number": MaxChapterNumber = ParseMaxChapterNumber(nextParam()); _maxChapterNumberSet = true; return true;
             case "--early-abort": EarlyAbortMinutes = ParseEarlyAbort(nextParam()); _earlyAbortSet = true; return true;
             case "--expected-start-chapter": ExpectedStartChapter = ParseExpectedStartChapter(nextParam()); _expectedStartSet = true; return true;
             case "--verify-threshold": VerifyFailThreshold = ParseNonNegativeInt("--verify-threshold", nextParam()); return true;
@@ -756,6 +776,16 @@ public sealed class CliOptions
     {
         if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var n) || n < 0 || n > 1440)
             throw new CliError($"Invalid --early-abort value \"{value}\": expected 0 (disabled) or minutes between 0 and 1440.");
+        return n;
+    }
+
+    /// <summary>Parses the --max-chapter-number parameter into a chapter number of 1 or higher.
+    /// Zero is rejected rather than treated as "disabled": a cap of 0 would discard every chapter
+    /// there is, which is never what anyone means.</summary>
+    private static int ParseMaxChapterNumber(string value)
+    {
+        if (!int.TryParse(value, out var n) || n < 1)
+            throw new CliError($"Invalid --max-chapter-number value \"{value}\": expected a chapter number of 1 or higher.");
         return n;
     }
 
@@ -972,6 +1002,15 @@ public sealed class CliOptions
                                     and the file is tagged with a ".missing-marks-..." suffix if
                                     any are still unresolved afterward. Only applies to a fresh,
                                     from-scratch detection run, same restriction as --early-abort.
+          -N, --max-chapter-number <n>
+                                    Highest chapter number this book plausibly has (default: none).
+                                    A detected chapter numbered above <n> is discarded on the spot
+                                    as a mishearing - without it, a single "chapter 510" heard in a
+                                    twelve-chapter book leaves a 500-chapter hole for pass 3 to
+                                    hunt through and a file tagged as missing all of them. Not to
+                                    be confused with --max-chapters, which counts a file's
+                                    pre-existing markings rather than the numbers heard in the
+                                    audio.
           -V, --verify              Check pre-existing chapter markings against the audio
                                     instead of trusting them blindly: a short window around
                                     each marking is probed for the chapter phrase and the

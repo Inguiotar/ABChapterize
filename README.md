@@ -193,6 +193,7 @@ when chapters are written. The most useful knobs:
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 | `-a`, `--early-abort <minutes>` | Always on (default: 60; `0` disables it). Give up on a file, unchanged, once this many minutes of play time have been probed with no chapter found — avoids transcribing a whole book that plainly isn't going to yield any. Only applies to a fresh detection run. |
 | `-e`, `--expected-start-chapter <n>` | For a split-book part that doesn't start at chapter 1: the number this file is expected to start at. Without it (the default), whatever number pass 2 finds first is trusted outright and nothing below it is ever searched for. With it, a first chapter found *below* `<n>` aborts the file outright, unchanged; a first chapter found *above* `<n>` has pass 3 search for the missing numbers down to `<n>`, tagging the file `.missing-marks-…` if it still can't find them all. Only applies to a fresh detection run. |
+| `-N`, `--max-chapter-number <n>` | Highest chapter number this book plausibly has (default: no limit). A detected chapter numbered above `<n>` is discarded as a mishearing — without it, one misheard "chapter 510" in a twelve-chapter book turns everything in between into a gap to hunt for. Not to be confused with `--max-chapters` above, which counts *pre-existing* marks. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
 | `-h`, `--verify-threshold <n>` | Requires `--verify`. If more than `<n>` marks fail verification, the ones that passed are no longer trusted as gap-recovery anchors either — the whole file falls back to full detection, same as when nothing at all is confirmed. |
 | `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
@@ -277,6 +278,10 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    `--verify`. The file is renamed back to its original name once every
    chapter is found, or re-tagged with the (possibly shorter) remaining list
    otherwise; `--force` bypasses this and redoes the whole file from scratch.
+   More than ten missing chapters are left out of the tag (just
+   `.missing-marks`), and such a file is not resumed automatically — a gap that
+   wide wants a look by hand first, usually starting with
+   `--max-chapter-number`.
 
 A synthetic "Intro" mark (localized by `--lang`, customizable with
 `--intro-title`) covers everything before the first detected chapter
@@ -312,6 +317,10 @@ keeps its exact position.
   to one). Nothing is checked up front; if the memory isn't there you'll hear it
   from the model loader, not from ABChapterize. See
   [memory requirements](doc/manual.md#memory-requirements) for the details.
+- **Absurd chapter numbers:** if a run reports a chapter number far beyond
+  anything the book has (and then a long list of "missing" ones below it),
+  Whisper misheard a number — smaller models do this now and then. Cap it with
+  `--max-chapter-number` set to roughly the real chapter count.
 - **Unusual announcements:** `--chapter-phrase` accepts a regexp between
   slashes, e.g. `-c "/part (\d+)/"` — a capturing group is used as the chapter
   number directly.
