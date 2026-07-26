@@ -965,6 +965,30 @@ still error-prone, especially for non-English audio. For real audiobooks,
 use `small` or bigger; the default `turbo` is the best choice on almost
 any hardware that can run it.
 
+### Memory requirements
+
+The download sizes above are **not** the memory the model needs while it runs.
+A loaded model wants noticeably more than its file: OpenAI's
+[available models](https://github.com/openai/whisper#available-models-and-languages)
+table quotes ~2 GB for `small`, ~5 GB for `medium`, ~6 GB for the default
+`turbo` and ~10 GB for `large`. Those figures are for OpenAI's own
+implementation rather than the GGML build used here, which is usually somewhat
+leaner — but treat them as the right order of magnitude, and budget for the
+default model wanting several gigabytes, not the 1.6 GB it downloads.
+
+On a GPU backend (CUDA or Vulkan) this comes out of video memory, and the
+default is one file at a time, so one model is loaded. On a CPU backend it
+comes out of system RAM, and several files are processed concurrently by
+default — each with its own copy of the model — so the requirement multiplies
+accordingly. Specifying a different `--pass3-model` adds one further copy,
+loaded only if pass 3 actually runs.
+
+ABChapterize does not check any of this up front. If the memory is not there,
+you will find out from the model loader or the operating system rather than
+from a friendly message, so on a memory-constrained machine pick the model
+deliberately: `small` is the smallest size that gives dependable results, and
+`--jobs 1` keeps a CPU-backend run down to a single copy.
+
 Models live in the `models` folder next to the executable. A missing model is
 downloaded automatically on first use from the
 [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/main)
