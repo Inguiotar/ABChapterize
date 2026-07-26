@@ -7,11 +7,13 @@ using System.Diagnostics;
 namespace ABChapterize.Ui;
 
 /// <summary>
-/// Tracks the byte-based work of the current processing phase of one file. Each phase
-/// (e.g. silence scan, probing) has its own bar running from 0 to 100 %. Work is measured
-/// in processed bytes (file size for full passes, proportional amounts for partial decodes),
-/// never in play time. Safe to update from one file's worker while the renderer's timer
-/// thread reads it concurrently for redraws.
+/// Tracks the progress of the current processing phase of one file. Each phase (e.g. silence
+/// scan, probing) has its own bar running from 0 to 100 %. The unit of work is chosen per phase:
+/// usually processed bytes (file size for full passes, or a play-time position rescaled to the
+/// same byte unit via the file's bytes-per-second rate for windowed passes), but a plain item
+/// count for phases with no continuous audio position (e.g. --verify's per-chapter checks).
+/// Safe to update from one file's worker while the renderer's timer thread reads it
+/// concurrently for redraws.
 /// </summary>
 public sealed class WorkTracker
 {
