@@ -12,7 +12,7 @@ using static ABChapterize.Detection.DetectionTuning;
 
 namespace ABChapterize.Detection;
 
-/// <summary>Implements the --precise-mark correction (<see cref="CliOptions.PreciseMark"/>):
+/// <summary>Implements the precise marking correction (<see cref="CliOptions.PreciseMark"/>):
 /// verifies a default-mode mark by directly asking Whisper whether the chapter phrase starts
 /// there, and if not, searches nearby VAD-candidate and fixed-step positions - see
 /// <see cref="RefinePreciseMarkAsync"/>, the entry point <see cref="ChapterDetector"/> calls,
@@ -45,7 +45,7 @@ internal sealed class PreciseMarkRefiner
     /// <summary>
     /// Checks whether <paramref name="profile"/>'s chapter phrase is really the first thing heard
     /// starting at <paramref name="start"/>, by transcribing a short, isolated window there
-    /// directly - the --precise-mark correction's basic building block (see
+    /// directly - the precise marking correction's basic building block (see
     /// <see cref="RefinePreciseMarkAsync"/>), used both for the mark itself and for every
     /// candidate position considered while correcting it. Sidesteps Whisper's own segment
     /// timestamps entirely, which is the point: those are demonstrably unreliable close to a
@@ -77,7 +77,7 @@ internal sealed class PreciseMarkRefiner
     /// <summary>
     /// Verifies (and if necessary, corrects) a default-mode mark by directly asking Whisper
     /// "does the chapter phrase start right here?" instead of trusting the VAD/duration
-    /// heuristics <see cref="RefineDefaultMark"/> already applied - the --precise-mark option
+    /// heuristics <see cref="RefineDefaultMark"/> already applied - the precise marking option
     /// (<see cref="CliOptions.PreciseMark"/>). Those heuristics rest on a floor deliberately
     /// calibrated to err toward not skipping real speech (see
     /// <see cref="TransientSpeechFloorSeconds"/>'s remarks on cross-language uncertainty), which
@@ -116,9 +116,9 @@ internal sealed class PreciseMarkRefiner
     /// confirming, by further forward candidates alone. Both spans are bounded to the same
     /// jingle-plus-phrase distance from <paramref name="mark"/>, so neither direction can wander
     /// into a neighbouring chapter's own territory. This deliberately does not touch <see
-    /// cref="ResolveDefaultPhraseOnset"/> itself - default-mode marking (without --precise-mark)
-    /// must stay exactly as heuristically accurate as it already is, since it alone is what makes
-    /// plain marks usable for jumping to a chapter.
+    /// cref="ResolveDefaultPhraseOnset"/> itself - default-mode marking, which is all --quick-marks
+    /// leaves in place, must stay exactly as heuristically accurate as it already is, since it
+    /// alone is what makes quick marks usable for jumping to a chapter.
     /// </para>
     /// <para>
     /// If round 1 never confirms anything in either direction - it relies entirely on
@@ -164,7 +164,7 @@ internal sealed class PreciseMarkRefiner
         double result;
         if (await PreciseMarkPhraseFoundAsync(mark, file, inputDecoder, profile, ct))
         {
-            _log?.Invoke($"--precise-mark: confirmed at {FormatTimestamp(mark)} - unchanged");
+            _log?.Invoke($"mark confirmed at {FormatTimestamp(mark)} - unchanged");
             result = mark;
         }
         else
@@ -192,28 +192,28 @@ internal sealed class PreciseMarkRefiner
             if (confirmed is { } onset)
             {
                 _log?.Invoke(
-                    $"--precise-mark: corrected mark from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
+                    $"mark corrected from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
                 result = Math.Max(0, onset - DefaultMarkLeadSeconds);
             }
             else
             {
                 _log?.Invoke(
-                    $"--precise-mark: could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
+                    $"could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
                 result = mark;
             }
         }
 
         var quietest = await SnapToQuietestPointAsync(result, file, inputDecoder, ct);
         if (quietest != result)
-            _log?.Invoke($"--precise-mark: nudged {FormatTimestamp(result)} to quieter {FormatTimestamp(quietest)}");
+            _log?.Invoke($"nudged {FormatTimestamp(result)} to quieter {FormatTimestamp(quietest)}");
         return quietest;
     }
 
     /// <summary>
-    /// --precise-mark-gated verification/correction for --mark-before-jingle's own backward-walked
-    /// mark (<see cref="JingleGeometry.ComputeMarkBeforeJingle"/>), called only when <see
-    /// cref="CliOptions.PreciseMark"/> is also set - the walk's own VAD/silencedetect heuristics
-    /// are trusted as "close enough" on their own otherwise. Mirrors <see
+    /// Precise-marking-gated verification/correction for --mark-before-jingle's own backward-walked
+    /// mark (<see cref="JingleGeometry.ComputeMarkBeforeJingle"/>), called whenever <see
+    /// cref="CliOptions.PreciseMark"/> holds - i.e. always unless --quick-marks opted out, in
+    /// which case the walk's own VAD/silencedetect heuristics are trusted as "close enough". Mirrors <see
     /// cref="RefinePreciseMarkAsync"/>'s "ask Whisper directly instead of trusting the heuristic"
     /// philosophy, applied to a different question: not "is the phrase heard right here" (default
     /// mode's question - the walked mark is deliberately placed <em>before</em> the announcement,
@@ -226,12 +226,12 @@ internal sealed class PreciseMarkRefiner
     /// silence can make the backward walk accept a stop that still sits essentially on the
     /// announcement's own audio - short of the jingle's true edge by anywhere from a few seconds
     /// to most of a minute. <see cref="PreciseMarkPhraseFoundAsync"/> - the same "is the phrase
-    /// the first thing heard here" check --precise-mark's own placement relies on - answers
+    /// the first thing heard here" check precise marking's own placement relies on - answers
     /// exactly that for <paramref name="walked"/> directly: if the phrase is <em>not</em> the
     /// first thing heard there, the walk already reached clear of it and is trusted outright (the
     /// common case, and the only cost paid for an already-correct walk). If it <em>is</em>, the
     /// walk stopped too late, and <paramref name="walked"/> is corrected by searching backward
-    /// from it - VAD speech-segment starts within the same jingle-plus-margin span --precise-mark's
+    /// from it - VAD speech-segment starts within the same jingle-plus-margin span precise marking's
     /// own round 1 already searches (see <see cref="RefinePreciseMarkAsync"/>), falling back to
     /// the same fixed-step blind scan as its round 2 - for the first (nearest) candidate where the
     /// phrase is no longer the first thing heard: exactly the boundary this method exists to find.
@@ -278,20 +278,20 @@ internal sealed class PreciseMarkRefiner
             if (!await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
             {
                 _log?.Invoke(
-                    $"--mark-before-jingle: --precise-mark verification moved {FormatTimestamp(walked)} " +
+                    $"--mark-before-jingle: verification moved {FormatTimestamp(walked)} " +
                     $"back to {FormatTimestamp(candidate)} (the announcement was still audible)");
                 return candidate;
             }
         }
 
         _log?.Invoke(
-            $"--mark-before-jingle: --precise-mark verification found the announcement audible " +
+            $"--mark-before-jingle: verification found the announcement audible " +
             $"all the way back to {FormatTimestamp(walked - span)} - mark left unchanged");
         return walked;
     }
 
     /// <summary>
-    /// Final quiet-point cleanup step shared by --precise-mark's own placement (see
+    /// Final quiet-point cleanup step shared by precise marking's own placement (see
     /// <see cref="RefinePreciseMarkAsync"/>) and --mark-before-jingle's (<see
     /// cref="ChapterDetector"/>, after <see cref="JingleGeometry.ComputeMarkBeforeJingle"/>):
     /// nudges <paramref name="mark"/> backward to a quieter point within <see
@@ -412,7 +412,7 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
-    /// Generates --precise-mark round 2's blind, fixed-step candidate positions (see
+    /// Generates precise marking round 2's blind, fixed-step candidate positions (see
     /// <see cref="RefinePreciseMarkAsync"/>): <paramref name="mark"/> plus/minus
     /// <see cref="PreciseMarkFixedStepSeconds"/>, 2x that, 3x that, and so on out to
     /// <paramref name="span"/>, unlike round 1's candidates, which come from actual VAD
@@ -503,7 +503,7 @@ internal sealed class PreciseMarkRefiner
             if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
             {
                 _log?.Invoke(
-                    $"--precise-mark: consecutive candidates confirmed ({FormatTimestamp(forwardConfirmed.Value)} " +
+                    $"consecutive candidates confirmed ({FormatTimestamp(forwardConfirmed.Value)} " +
                     $"then {FormatTimestamp(candidate)}) - ambiguous, keeping the latter");
                 forwardConfirmed = candidate;
                 forwardHasMore = forwardEnumerator.MoveNext();

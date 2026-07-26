@@ -326,13 +326,13 @@ internal static class JingleGeometry
     /// Computes --mark-before-jingle's final mark by walking backward from <paramref
     /// name="originalMark"/> - the mark default-mode placement already computed (<see
     /// cref="RefineDefaultMark"/>/<see cref="ResolveDefaultPhraseOnset"/>, further corrected by
-    /// --precise-mark first when that option is also set) - to the true edge of whatever jingle
+    /// precise marking first, unless --quick-marks turned that off) - to the true edge of whatever jingle
     /// precedes the announcement, by literally retracing the audio via the same two detectors
     /// used everywhere else in this file, rather than picking from a short list of pre-resolved
     /// shapes (a preceding silence, else a VAD region's start, else a flat lead) the way the
     /// placement this replaces did. Being independent of whichever silence/region a probe
-    /// happened to resolve is also what makes this compatible with --precise-mark, which that
-    /// older rule was not: it starts from whatever mark --precise-mark already settled on and
+    /// happened to resolve is also what makes this compatible with precise marking, which that
+    /// older rule was not: it starts from whatever mark precise marking already settled on and
     /// corrects it further, rather than replacing default-mode placement outright.
     /// <para>
     /// <b>Step 1:</b> back out of any silencedetect silence <paramref name="originalMark"/>
@@ -388,13 +388,13 @@ internal static class JingleGeometry
     /// instead of being trusted outright - the same flat safety lead used elsewhere as a last
     /// resort.
     /// </para>
-    /// A final backward-only quiet-point snap - the same one --precise-mark's own final step
+    /// A final backward-only quiet-point snap - the same one precise marking's own final step
     /// applies - still runs on whatever this returns; see <see
     /// cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> and its caller in
     /// <see cref="ChapterDetector"/>.
     /// </summary>
     /// <param name="originalMark">The mark default-mode placement (optionally already corrected
-    /// by --precise-mark) computed for this phrase.</param>
+    /// by precise marking) computed for this phrase.</param>
     /// <param name="silences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="speech">The raw VAD speech segments for the whole file, chronological.</param>

@@ -29,7 +29,7 @@ Prebuilt binaries for Windows and Linux are available on the
   catch a jingle (a music sting) before the announcement, and a bundled
   voice-activity model (Silero VAD) finds jingles even when they abut speech
   with no silence on either side, which a plain amplitude scan would miss
-  entirely. `--mark-before-jingle` (experimental) anchors the written mark to
+  entirely. `--mark-before-jingle` anchors the written mark to
   the jingle/silence itself instead of the default fixed offset before the
   phrase.
 - **Self-healing** — when the detected chapter numbers have gaps (e.g. chapter 12
@@ -127,7 +127,7 @@ abchapterize --lang de buch.m4b
 abchapterize hoerbuch.m4b
 
 # ...want the mark anchored to the jingle/silence itself instead of the
-# default fixed offset before the phrase? (experimental):
+# default fixed offset before the phrase?
 abchapterize --mark-before-jingle hoerbuch.m4b
 
 # Redo files that already have (wrong) chapter marks:
@@ -195,8 +195,8 @@ when chapters are written. The most useful knobs:
 | `-e`, `--expected-start-chapter <n>` | For a split-book part that doesn't start at chapter 1: the number this file is expected to start at. Without it (the default), whatever number pass 2 finds first is trusted outright and nothing below it is ever searched for. With it, a first chapter found *below* `<n>` aborts the file outright, unchanged; a first chapter found *above* `<n>` has pass 3 search for the missing numbers down to `<n>`, tagging the file `.missing-marks-…` if it still can't find them all. Only applies to a fresh detection run. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
 | `-h`, `--verify-threshold <n>` | Requires `--verify`. If more than `<n>` marks fail verification, the ones that passed are no longer trusted as gap-recovery anchors either — the whole file falls back to full detection, same as when nothing at all is confirmed. |
-| `-j`, `--mark-before-jingle` | **Experimental.** Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Best combined with `-p`, which supplies a corrected starting point — on its own the walk starts from default placement, which occasionally overshoots the announcement and leaves the mark after it. |
-| `-p`, `--precise-mark` | **Experimental.** Double-check every default-placed mark by re-transcribing the audio right at it, correcting it if the phrase isn't actually there (see [How it works](#how-it-works)). Slower — costs one or more extra transcriptions per chapter. Combinable with `-j`, which walks the result further back. |
+| `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
+| `-Q`, `--quick-marks` | **Experimental.** Skip the refinement that normally re-transcribes the audio at every mark to confirm the phrase is really there (see [How it works](#how-it-works)). Faster — saves one or more transcriptions per chapter — but marks, while usually usable, may end up after the chapter phrase rather than before it, even together with `-j`. |
 | `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
@@ -254,15 +254,15 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    starting from the second jingle mark found, it resizes to 1.25x the
    longest jingle actually observed so far, capped at the 45 s ceiling — an
    explicit `--max-jingle-length` value keeps the window fixed at it instead.
-2b. **Precise-mark check (only with `--precise-mark`/`-p`, experimental):** for
-   the rare mark that still lands on the wrong spot — usually a jingle whose
+2b. **Mark refinement (skip with `--quick-marks`/`-Q`):** for
+   the mark that still lands on the wrong spot — usually a jingle whose
    music briefly fools the voice-activity detector into sounding like speech —
    every mark is double-checked by re-transcribing a short, isolated clip of
    the audio right at it; if the phrase isn't really there, nearby candidates
    are checked the same way until it's found and the mark is corrected,
    falling back to a wider sweep of the same area on the rare chapter where
    even that doesn't confirm anything. Costs one or more extra transcriptions
-   per chapter, so it's off by default.
+   per chapter, which is what `--quick-marks` trades away for speed.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in chunks whose borders snap to

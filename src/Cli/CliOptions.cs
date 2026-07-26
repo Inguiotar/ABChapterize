@@ -150,7 +150,7 @@ public sealed class CliOptions
     /// <summary>
     /// Anchors the chapter mark to a jingle preceding the announcement instead of the default
     /// fixed offset (--mark-before-jingle / -j): starting from whatever mark default-mode
-    /// placement (optionally already corrected by <see cref="PreciseMark"/>) computed for the
+    /// placement (normally already corrected by <see cref="PreciseMark"/>) computed for the
     /// phrase, walks backward through any leading silence and then the jingle's own music to the
     /// previous chapter's actual trailing narration - or, where two jingles play back to back
     /// with an audible break between them, to the second one's start rather than in front of the
@@ -158,39 +158,57 @@ public sealed class CliOptions
     /// cref="ChapterDetector"/>'s <c>ComputeMarkBeforeJingle</c> for the mechanics. Being built on
     /// top of default-mode placement rather than replacing it outright is what makes this
     /// compatible with <see cref="PreciseMark"/>, unlike this tool's original "--jingle" mode this
-    /// option is descended from. With <see cref="PreciseMark"/> also enabled, the walked result
-    /// itself is verified the same way afterward - see <see cref="PreciseMarkRefiner"/>'s
-    /// <c>VerifyMarkBeforeJingleAsync</c> - rather than being trusted purely on the VAD/silence
-    /// heuristics above. Without this option, see <see cref="ChapterDetector"/>'s
-    /// <c>DefaultMarkLeadSeconds</c> for the placement used instead.
-    /// <para><b>Experimental.</b></para>
+    /// option is descended from. Because <see cref="PreciseMark"/> is on unless <see
+    /// cref="QuickMarks"/> asks otherwise, the walked result is normally verified afterward too -
+    /// see <see cref="PreciseMarkRefiner"/>'s <c>VerifyMarkBeforeJingleAsync</c> - rather than
+    /// being trusted purely on the VAD/silence heuristics above; under <see cref="QuickMarks"/>
+    /// neither the starting mark nor the walked result gets that check. Without this option, see
+    /// <see cref="ChapterDetector"/>'s <c>DefaultMarkLeadSeconds</c> for the placement used
+    /// instead.
     /// </summary>
     public bool MarkBeforeJingle { get; private set; }
 
     /// <summary>
-    /// Verifies (and if necessary, corrects) the default-mode mark by directly re-transcribing
-    /// the audio at the mark instead of trusting the VAD/duration heuristics that produced it
-    /// (--precise-mark / -p): if the chapter phrase is the first thing heard there, the mark is
-    /// left alone (the common case, and the only extra cost paid for a chapter that was already
-    /// right). If not - typically because the mark landed on a jingle's own spurious VAD "speech"
-    /// blip rather than the real announcement - each subsequent VAD speech-segment start after
-    /// the mark is checked the same way in turn until one succeeds and the next one after it
-    /// fails again; only that success-then-fail pattern confirms the phrase truly begins at the
-    /// earlier candidate, rather than at some other unrelated false positive further inside the
-    /// jingle. If that forward search finds nothing, the same check runs backward through VAD
-    /// speech-segment starts before the mark instead, for the rarer opposite failure - the mark
-    /// landing generously past the true announcement rather than short of it. A chapter whose
-    /// phrase can never be confirmed either way keeps its original mark rather than guessing.
-    /// Substantially more expensive than the default algorithm alone - most of all for chapters
-    /// preceded by a jingle with several spurious VAD blips, since each one needs its own extra
-    /// transcription - so this is off by default; see <see cref="ChapterDetector"/> for the
-    /// mechanics. Combinable with <see cref="MarkBeforeJingle"/>, which corrects the default-mode
-    /// mark this option already settled on one step further, walking it back to the jingle's own
-    /// start - and whose own walked result this option then verifies in turn, the same way it
-    /// verifies a default-mode mark.
+    /// Opts out of the mark refinement that normally runs on every mark (--quick-marks / -Q),
+    /// trading placement accuracy for speed: probing alone decides where each mark goes, with no
+    /// re-transcription to confirm it. Marks placed this way are usually usable, but a mark can
+    /// land after the chapter phrase rather than before it - even together with <see
+    /// cref="MarkBeforeJingle"/>, whose backward walk can only be as good as the mark it starts
+    /// from (see <see cref="JingleGeometry.RetreatPastNonSpeech"/>'s known-limitation note).
+    /// For the refinement this switches off, see <see cref="PreciseMark"/>.
     /// <para><b>Experimental.</b></para>
     /// </summary>
-    public bool PreciseMark { get; private set; }
+    public bool QuickMarks { get; private set; }
+
+    /// <summary>
+    /// Whether marks are verified (and if necessary corrected) by directly re-transcribing the
+    /// audio at the mark instead of trusting the VAD/duration heuristics that produced it - the
+    /// default, and simply the inverse of <see cref="QuickMarks"/>. The CLI expresses this as an
+    /// opt-out while the detection engine reads it as a capability, so that the two never have to
+    /// reason about a double negative.
+    /// <para>
+    /// If the chapter phrase is the first thing heard at the mark, it is left alone (the common
+    /// case, and the only cost paid for a chapter that was already right). If not - typically
+    /// because the mark landed on a jingle's own spurious VAD "speech" blip rather than the real
+    /// announcement - each subsequent VAD speech-segment start after the mark is checked the same
+    /// way in turn until one succeeds and the next one after it fails again; only that
+    /// success-then-fail pattern confirms the phrase truly begins at the earlier candidate,
+    /// rather than at some other unrelated false positive further inside the jingle. If that
+    /// forward search finds nothing, the same check runs backward through VAD speech-segment
+    /// starts before the mark instead, for the rarer opposite failure - the mark landing
+    /// generously past the true announcement rather than short of it. A chapter whose phrase can
+    /// never be confirmed either way keeps its original mark rather than guessing.
+    /// </para>
+    /// <para>
+    /// Costs one or more extra Whisper transcriptions per chapter - most of all for chapters
+    /// preceded by a jingle with several spurious VAD blips, since each one needs its own - which
+    /// is what <see cref="QuickMarks"/> exists to skip; see <see cref="ChapterDetector"/> for the
+    /// mechanics. Combines with <see cref="MarkBeforeJingle"/>, which takes the mark this
+    /// refinement settled on one step further, walking it back to the jingle's own start - and
+    /// whose own walked result is then verified in turn, the same way a default-mode mark is.
+    /// </para>
+    /// </summary>
+    public bool PreciseMark => !QuickMarks;
 
     /// <summary>
     /// Maximum expected jingle duration in seconds (--max-jingle-length / -X, default 45), or 0
@@ -364,7 +382,7 @@ public sealed class CliOptions
     private static readonly Dictionary<char, string> ShortOptions = new()
     {
         ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--mark-before-jingle",
-        ['p'] = "--precise-mark",
+        ['Q'] = "--quick-marks",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
         ['x'] = "--max-chapters", ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['F'] = "--filter", ['X'] = "--max-jingle-length",
@@ -494,7 +512,7 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.PreciseMark || o.DryRun || o._langSet || o._phraseSet || o._modelSet
+        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                          || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
@@ -502,7 +520,7 @@ public sealed class CliOptions
         if (o.NoOp && o.FilterRegex == null && o.FilterExtensions == null)
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
-        if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.PreciseMark || o.DryRun || o._langSet || o._phraseSet || o._modelSet
+        if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                        || o._pass3ModelSet || o._maxSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                        || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
@@ -510,10 +528,10 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o.MarkBeforeJingle || o.PreciseMark || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o.MarkBeforeJingle || o.QuickMarks || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
-                "--mark-before-jingle, --precise-mark, --max-jingle-length, --min-silence-length, --early-abort, " +
+                "--mark-before-jingle, --quick-marks, --max-jingle-length, --min-silence-length, --early-abort, " +
                 "--expected-start-chapter and --verify have no effect and cannot be combined with it.");
 
         if (o.Force && o.Verify)
@@ -596,7 +614,7 @@ public sealed class CliOptions
             case "--cpu-only": CpuOnly = true; return true;
             case "--force": Force = true; return true;
             case "--mark-before-jingle": MarkBeforeJingle = true; return true;
-            case "--precise-mark": PreciseMark = true; return true;
+            case "--quick-marks": QuickMarks = true; return true;
             case "--quiet": Quiet = true; return true;
             case "--verbose": Verbose = true; return true;
             case "--verbose-transcripts": VerboseTranscripts = Verbose = true; return true;
@@ -868,37 +886,40 @@ public sealed class CliOptions
                                     already always runs on CPU regardless of this option, so it
                                     only affects Whisper. Useful to leave a GPU free for other
                                     work, or to sidestep a flaky/unsupported GPU backend.
-          -j, --mark-before-jingle  [EXPERIMENTAL] A short jingle may precede the chapter
-                                    phrase; anchor the mark to it instead of the default fixed
-                                    offset (see --max-jingle-length below). A silence scan and
-                                    a voice-activity (VAD) pre-pass already run over the whole
+          -j, --mark-before-jingle  A short jingle may precede the chapter phrase; anchor the
+                                    mark to it instead of the default fixed offset (see
+                                    --max-jingle-length below). A silence scan and a
+                                    voice-activity (VAD) pre-pass already run over the whole
                                     file regardless of this option, so jingles are found
                                     whether or not they are preceded by a silence: starting
-                                    from wherever the mark would otherwise be placed (with
-                                    --precise-mark, its corrected mark), this walks backward
-                                    through any leading silence and then the jingle's own
-                                    music to the previous chapter's actual trailing narration,
-                                    and marks right there. Two jingles playing back to back
-                                    with an audible break between them stop the walk at that
-                                    break, so the mark lands at the second jingle's start
-                                    rather than in front of the first. When VAD finds no jingle - an
-                                    ordinary in-narration pause - the mark is left exactly
-                                    where it would otherwise be. Without this option, the mark
-                                    is always placed 0.25 seconds before the chapter phrase, no
-                                    matter what precedes it.
-          -p, --precise-mark        [EXPERIMENTAL] Verify the default-mode mark by
-                                    re-transcribing the audio right at it: if the chapter
-                                    phrase is heard there, the mark is left alone (the common
-                                    case - no extra cost beyond that one check). Otherwise,
-                                    further candidate positions are checked the same way until
-                                    the real onset is confirmed and the mark is corrected to
-                                    it; a mark that can never be confirmed this way is left as
-                                    originally placed. Substantially slower than without this
-                                    option, since it costs one or more extra Whisper
-                                    transcriptions per chapter, most of all for ones preceded
-                                    by a jingle with several false-positive candidates.
-                                    Combinable with --mark-before-jingle, which then walks the
-                                    corrected mark back to the jingle's own start.
+                                    from wherever the mark would otherwise be placed, this
+                                    walks backward through any leading silence and then the
+                                    jingle's own music to the previous chapter's actual
+                                    trailing narration, and marks right there. Two jingles
+                                    playing back to back with an audible break between them
+                                    stop the walk at that break, so the mark lands at the
+                                    second jingle's start rather than in front of the first.
+                                    When VAD finds no jingle - an ordinary in-narration
+                                    pause - the mark is left exactly where it would otherwise
+                                    be. Without this option, the mark is always placed 0.25
+                                    seconds before the chapter phrase, no matter what
+                                    precedes it.
+          -Q, --quick-marks         [EXPERIMENTAL] Skip the refinement that normally verifies
+                                    every mark, and take probing's own placement as final.
+                                    Normally each mark is checked by re-transcribing the audio
+                                    right at it: if the chapter phrase is heard there the mark
+                                    stands (the common case - no cost beyond that one check),
+                                    otherwise further candidate positions are checked the same
+                                    way until the real onset is confirmed and the mark is
+                                    corrected to it. Skipping all that is markedly faster,
+                                    since the checks cost one or more extra Whisper
+                                    transcriptions per chapter - most of all for chapters
+                                    preceded by a jingle with several false-positive
+                                    candidates - but the marks it leaves behind, while usually
+                                    usable, may sit after the chapter phrase instead of before
+                                    it. That can happen even together with
+                                    --mark-before-jingle, whose backward walk can only be as
+                                    good as the mark it starts from.
           -X, --max-jingle-length <seconds|auto>
                                     Maximum expected jingle duration (default, and ceiling with
                                     "auto": 45), or 0 if no jingle is expected at all. Above 0,

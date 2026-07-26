@@ -137,13 +137,13 @@ timestamp still comes back smeared to before the jingle even starts, the mark
 is floored at the jingle's own end instead of landing early, back in the
 previous chapter's narration.
 
-`--precise-mark`/`-p` (**experimental**) adds one more layer on top of that,
-for the rare case where even this still lands on the wrong spot — typically a
+One more layer sits on top of that by default, for the case where even this
+still lands on the wrong spot — typically a
 jingle whose own music briefly resembles speech closely enough to fool the
 voice-activity detector, in either direction: short of the true announcement
 or generously past it. Every mark placed by default-mode probing — including
-the starting point `--mark-before-jingle` (now combinable with this flag)
-would otherwise walk backward from — is double-checked by
+the starting point `--mark-before-jingle` would otherwise walk backward
+from — is double-checked by
 transcribing a short, isolated clip of the audio right at it: if the chapter
 phrase is really the first thing heard there, nothing changes; otherwise
 further candidate positions nearby — both before and after it — are checked
@@ -160,14 +160,14 @@ audible "plop") without ever risking eating into the announcement itself.
 This costs one or more extra Whisper transcriptions per chapter on top of pass
 2's own probe — most of all for chapters preceded by a jingle with several
 false-positive candidates, or the rarer chapter needing that second, wider
-sweep — so it is off by default; turn it on for a book where marks keep
-landing inside jingles even without it (the machinery is documented in the
-source).
+sweep. `--quick-marks`/`-Q` skips the whole layer when that time matters more
+than the last few tenths of a second of accuracy (the machinery is documented
+in the source).
 
-`--mark-before-jingle` (**experimental**) anchors the mark to the end of the
+`--mark-before-jingle` anchors the mark to the end of the
 previous chapter's actual narration instead, by walking backward from
-whatever mark default mode (optionally already refined by `--precise-mark`,
-which this option can now be combined with) found: first out of any silence
+whatever mark default mode (normally already refined as described above)
+found: first out of any silence
 the mark sits in, then — if no real speech is heard right there — back
 through the jingle's own music, until real narration is found and the mark is
 placed there; a mark with real narration already right before it is left
@@ -176,12 +176,12 @@ sting followed by this chapter's own, with an audible break between them —
 the walk stops at that break, so the mark lands at the start of the second
 jingle rather than in front of the first. When a jingle opens the file with
 nothing spoken before it at all, the mark instead backs off by a small fixed
-margin. With `--precise-mark` also
-enabled, the walked result is itself double-checked the same way afterward —
+margin. Unless `--quick-marks` turned the refinement off, the walked result is
+itself double-checked the same way afterward —
 re-transcribed right at its own position, and corrected further back if the
 announcement is still audible there — rather than being trusted purely on the
 VAD/silence heuristics above. The result is then nudged earlier to a nearby,
-clearly quieter point the same way `--precise-mark` does (see above) (the
+clearly quieter point in the same way (see above) (the
 machinery for all of this is documented in the source).
 In-text mentions ("…as we learned in chapter three…") are rejected by requiring the
 announcement to follow a real pause; out-of-order detections and duplicates of
@@ -436,11 +436,11 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-a`, `-e`, `-h`,
   chapters go missing if it's set too high.
 
 `-j`, `--mark-before-jingle`
-: **Experimental.** Anchor the chapter mark to the end of the previous
+: Anchor the chapter mark to the end of the previous
   chapter's actual narration instead of the default fixed 0.25-second offset
   (see `--max-jingle-length` below): starting from whatever mark default mode
-  (optionally already refined by `--precise-mark`, which this option can now
-  be combined with) found, the mark is walked backward — out of any silence
+  (normally already refined, see `--quick-marks` below)
+  found, the mark is walked backward — out of any silence
   it sits in, then, if no real speech is heard right there, back through the
   jingle's own music — until real narration is found, and placed there; a
   mark with real narration already right before it is left unchanged. Two
@@ -450,34 +450,40 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-a`, `-e`, `-h`,
   before it at all, the mark instead backs off by a small fixed margin from
   the earliest point reached.
   The same backward-only quietest-point nudge described under
-  `--precise-mark` below is then applied to the result.
-  **Best combined with `--precise-mark`.** The walk can only be as good as the
-  mark it starts from, and on its own it starts from default placement — which
-  occasionally lands *past* the announcement rather than before it. When that
-  happens the walk stops at the pause following the announcement, leaving the
-  mark after it instead of before the jingle (seconds to tens of seconds late,
-  on the odd chapter). `--precise-mark` corrects the starting point first, so
-  the two options together avoid this; `-j` alone is a reasonable approximation
-  but not a precise one. The probe-window
+  `--quick-marks` below is then applied to the result.
+  **Avoid combining this with `--quick-marks`.** The walk can only be as good
+  as the mark it starts from, and `--quick-marks` leaves it at raw default
+  placement — which occasionally lands *past* the announcement rather than
+  before it. When that happens the walk stops at the pause following the
+  announcement, leaving the mark after it instead of before the jingle
+  (seconds to tens of seconds late, on the odd chapter). The refinement that
+  runs by default corrects the starting point first, which avoids this. The probe-window
   widening and VAD pre-pass this placement relies on (see
   [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) already run by default
   regardless of this option. Without `--mark-before-jingle`, a mark is
   always placed 0.25 seconds before the chapter phrase, no matter what
   precedes it.
 
-`-p`, `--precise-mark`
-: **Experimental.** Verify every mark placed by default-mode probing —
-  including the starting point `--mark-before-jingle` (now combinable with
-  this option) would otherwise walk backward from — by
+`-Q`, `--quick-marks`
+: **Experimental.** Skip the mark refinement that normally runs, and take
+  probing's own placement as final. By default every mark — including the
+  starting point `--mark-before-jingle` walks backward from — is verified by
   re-transcribing the audio right at it: if the chapter phrase is heard there,
-  the mark is left alone — the common case, and the only cost paid for a
-  chapter that needed no correction. Otherwise, further candidate positions
+  the mark is left alone (the common case, and the only cost paid for a
+  chapter that needed no correction); otherwise further candidate positions
   nearby are checked the same way until the true announcement is confirmed and
-  the mark is corrected to it; a mark that can never be confirmed this way is
-  left as originally placed rather than guessed at. Substantially slower than
-  without this option, since it costs one or more extra Whisper transcriptions
-  per chapter, most of all for chapters preceded by a jingle with several
-  false-positive candidates — see [Pass 2](#pass-2--probing).
+  the mark is corrected to it. A mark that can never be confirmed this way is
+  left as originally placed rather than guessed at. Whatever mark results is
+  then nudged up to 0.15 seconds earlier to the quietest point in that
+  stretch, but only when that is a clear (at least 6 dB) improvement; a mark
+  is never moved later, so a player never starts mid-word.
+  `--quick-marks` skips all of it, which is markedly faster — the checks cost
+  one or more extra Whisper transcriptions per chapter, most of all for
+  chapters preceded by a jingle with several false-positive candidates (see
+  [Pass 2](#pass-2--probing)) — at the price of accuracy: the marks it leaves
+  are usually usable for jumping to a chapter, but one can sit *after* the
+  chapter phrase instead of before it, so playback starts a moment into the
+  announcement. That can happen even together with `--mark-before-jingle`.
 
 `-X`, `--max-jingle-length <seconds|auto>`
 : Longest expected jingle (0, or 1–600); this is always the probe window's

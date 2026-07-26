@@ -146,7 +146,7 @@ public sealed class ChapterDetector
 
     private readonly IVoiceActivityDetector? _vad;
 
-    /// <summary>Implements the --precise-mark correction; constructed once <see cref="_log"/> is
+    /// <summary>Implements the precise marking correction; constructed once <see cref="_log"/> is
     /// known for the current file (see <see cref="DetectCoreAsync"/>), since its delegate-based
     /// constructor closes over this detector's own <see cref="TranscribeCountingAsync"/> so its
     /// transcriptions count toward the same per-file statistics.</summary>
@@ -200,7 +200,7 @@ public sealed class ChapterDetector
     }
 
     /// <summary>Sets the per-file --verbose log sink and refreshes <see cref="_preciseMarkRefiner"/>
-    /// to close over it, so its own --precise-mark log lines land in the same sink as the rest of
+    /// to close over it, so its own precise marking log lines land in the same sink as the rest of
     /// this file's detection log.</summary>
     /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
     private void SetLog(Action<string>? log)
@@ -1448,28 +1448,29 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Applies --mark-before-jingle on top of a mark default-mode placement (optionally already
-    /// corrected by --precise-mark) already computed: <see
+    /// Applies --mark-before-jingle on top of a mark default-mode placement (normally already
+    /// corrected by precise marking) already computed: <see
     /// cref="JingleGeometry.ComputeMarkBeforeJingle"/> walks it backward to the jingle's true
-    /// leading edge (or leaves it unchanged when VAD finds no jingle there at all). When
-    /// --precise-mark is also set, <see cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>
+    /// leading edge (or leaves it unchanged when VAD finds no jingle there at all). Unless
+    /// --quick-marks turned precise marking off, <see
+    /// cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>
     /// then double-checks the walked result against direct re-transcription and corrects it
-    /// further if the walk still stopped too late - a cost only paid under --precise-mark, per
-    /// its own "ask Whisper directly" philosophy. Either way, the same backward-only quiet-point
-    /// snap --precise-mark's own final step applies runs on the result, so a player seeking to a
+    /// further if the walk still stopped too late - a cost --quick-marks skips along with the
+    /// rest, per precise marking's own "ask Whisper directly" philosophy. Either way, the same backward-only quiet-point
+    /// snap precise marking's own final step applies runs on the result, so a player seeking to a
     /// --mark-before-jingle mark starts in near-silence just as it would for any other mark.
     /// </summary>
     /// <param name="mark">The mark to walk backward from.</param>
     /// <param name="allSilences">Every silence Pass 1 stored, for the backward walk.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, for the backward
-    /// walk and (under --precise-mark) its verification search.</param>
+    /// walk and (under precise marking) its verification search.</param>
     /// <param name="transcriptAbs">The window's transcript in absolute file time, so the backward
     /// walk can tell genuine preceding narration apart from a musical/vocal transient in the
     /// jingle - see <see cref="JingleGeometry.IsGenuineSpeech"/>.</param>
     /// <param name="file">Path of the audio file, for the final quiet-point snap's own decode.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="profile">Language profile supplying the phrase to look for, for the
-    /// --precise-mark verification step.</param>
+    /// precise marking verification step.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<double> ApplyMarkBeforeJingleAsync(
         double mark, List<Silence> allSilences, List<SpeechSegment> speechSegments,
@@ -1698,11 +1699,11 @@ public sealed class ChapterDetector
     /// <param name="nonSpeechRegions">VAD non-speech regions (empty when the VAD pre-pass did
     /// not run), for the jingle anchor resolution.</param>
     /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment and,
-    /// with --precise-mark, as its candidate positions.</param>
+    /// with precise marking, as its candidate positions.</param>
     /// <param name="work">The file's progress tracker.</param>
-    /// <param name="file">Path of the audio file, for --precise-mark's own extra transcriptions.</param>
+    /// <param name="file">Path of the audio file, for precise marking's own extra transcriptions.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="profile">Language profile supplying the phrase --precise-mark looks for.</param>
+    /// <param name="profile">Language profile supplying the phrase precise marking looks for.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task RecordGapChapterMatch(
         PhraseMatch match, List<TranscriptSegment> matchSegments,

@@ -59,7 +59,10 @@ public sealed class CliOptionsTests : IDisposable
         // --mark-before-jingle - only --max-jingle-length 0 turns it off.
         Assert.True(o.RunVadPrePass);
         Assert.False(o.TargetIsDirectory);
-        Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.PreciseMark | o.Quiet | o.Verbose
+        // Mark refinement is on by default; --quick-marks is the opt-out, so it starts false
+        // while PreciseMark itself starts true (asserted separately).
+        Assert.True(o.PreciseMark);
+        Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.QuickMarks | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
         Assert.Null(o.Jobs);
     }
@@ -174,7 +177,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--model", "small")]
     [InlineData("--pass3-model", "large")]
     [InlineData("--mark-before-jingle")]
-    [InlineData("--precise-mark")]
+    [InlineData("--quick-marks")]
     [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
     [InlineData("--early-abort", "30")]
@@ -223,19 +226,41 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void PreciseMark_IsParsed_LongAndShort()
+    public void QuickMarks_IsParsed_LongAndShort()
     {
-        Assert.True(ParseFile("--precise-mark")!.PreciseMark);
-        Assert.True(ParseFile("-p")!.PreciseMark);
+        Assert.True(ParseFile("--quick-marks")!.QuickMarks);
+        Assert.True(ParseFile("-Q")!.QuickMarks);
+    }
+
+    // Mark refinement is the default: PreciseMark is simply the inverse of the opt-out flag,
+    // so it holds for a bare run and stops holding exactly when --quick-marks is given.
+    [Fact]
+    public void PreciseMark_IsOnByDefault_AndOffOnlyWithQuickMarks()
+    {
+        Assert.True(ParseFile()!.PreciseMark);
+        Assert.False(ParseFile()!.QuickMarks);
+        Assert.False(ParseFile("--quick-marks")!.PreciseMark);
+    }
+
+    // -q stays --quiet; --quick-marks deliberately took the capital -Q instead, so an existing
+    // -q never silently changes meaning.
+    [Fact]
+    public void LowercaseQ_IsStillQuiet_NotQuickMarks()
+    {
+        var o = ParseFile("-q")!;
+        Assert.True(o.Quiet);
+        Assert.False(o.QuickMarks);
+        Assert.True(o.PreciseMark);
     }
 
     [Fact]
-    public void PreciseMarkWithMarkBeforeJingle_IsAllowed()
+    public void QuickMarksWithMarkBeforeJingle_IsAllowed()
     {
-        // --mark-before-jingle now walks back from whatever mark default-mode (optionally
-        // refined by --precise-mark) already produced, so the two compose.
-        var o = ParseFile("--precise-mark", "--mark-before-jingle")!;
-        Assert.True(o.PreciseMark);
+        // --mark-before-jingle walks back from whatever mark default-mode placement produced,
+        // refined or not, so the two compose even though combining them is discouraged.
+        var o = ParseFile("--quick-marks", "--mark-before-jingle")!;
+        Assert.True(o.QuickMarks);
+        Assert.False(o.PreciseMark);
         Assert.True(o.MarkBeforeJingle);
     }
 
@@ -502,7 +527,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--verify"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--mark-before-jingle"));
-        Assert.Throws<CliError>(() => ParseDir("--revert", "--precise-mark"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--quick-marks"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--expected-start-chapter", "5"));
     }

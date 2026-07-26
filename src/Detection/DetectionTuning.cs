@@ -225,7 +225,7 @@ internal static class DetectionTuning
     internal const double MaxPaceScrutinizedBlipSeconds = 2.0;
 
     /// <summary>
-    /// Length of the decode --precise-mark transcribes to check whether a mark's chapter phrase
+    /// Length of the decode precise marking transcribes to check whether a mark's chapter phrase
     /// is really the first thing heard there (see <see cref="RefinePreciseMarkAsync"/>). A real
     /// chapter announcement is never anywhere close to this long, and a jingle - the only other
     /// thing a mark can land on - is rarely shorter than it, so a single window is normally
@@ -234,7 +234,7 @@ internal static class DetectionTuning
     internal const double PreciseMarkCheckWindowSeconds = 4.0;
 
     /// <summary>
-    /// Real audio lead-in --precise-mark decodes before every position it checks (widening the
+    /// Real audio lead-in precise marking decodes before every position it checks (widening the
     /// window backward rather than shifting it, so <see cref="PreciseMarkCheckWindowSeconds"/> of
     /// fresh audio is never lost off the tail). Needed because a VAD-detected onset can lag the
     /// true acoustic word-start by a moment (a soft consonant takes VAD's amplitude threshold a
@@ -251,7 +251,7 @@ internal static class DetectionTuning
     internal const double PreciseMarkLeadInSeconds = 0.1;
 
     /// <summary>
-    /// Step size --precise-mark's round 2 (<see cref="RefinePreciseMarkAsync"/>) advances by when
+    /// Step size precise marking's round 2 (<see cref="RefinePreciseMarkAsync"/>) advances by when
     /// blindly sweeping for the chapter phrase after round 1's VAD-speech-segment candidates never
     /// confirmed it in either direction. Matches <see cref="PreciseMarkLeadInSeconds"/>'s own
     /// magnitude - both are about the finest granularity worth probing at, given
@@ -261,7 +261,7 @@ internal static class DetectionTuning
     internal const double PreciseMarkFixedStepSeconds = 0.1;
 
     /// <summary>
-    /// How far <em>before</em> a confirmed/left-as-is --precise-mark mark
+    /// How far <em>before</em> a confirmed/left-as-is precise marking mark
     /// <see cref="SnapToQuietestPointAsync"/> is allowed to search for a quieter point to move it
     /// to - the final cleanup step's own radius, independent of (and larger than) the candidate
     /// search step size above it. Backward-only (see <see cref="SnapToQuietestPointAsync"/>), so

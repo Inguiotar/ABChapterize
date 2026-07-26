@@ -61,7 +61,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         /// <summary>Scripts real PCM sample amplitudes for the decode window starting near
         /// <paramref name="start"/> - for tests that need actual waveform content (e.g.
-        /// --precise-mark's quiet-snap step), unlike <see cref="ScriptedTranscriber"/>'s
+        /// precise marking's quiet-snap step), unlike <see cref="ScriptedTranscriber"/>'s
         /// text-only script, which ignores samples entirely. Decodes with no script still return
         /// the default all-zero buffer below.</summary>
         public void AddPcm(double start, float[] samples) => _pcmScript.Add((start, samples));
@@ -414,7 +414,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // pass-3 chunk's border (natural end 600.5) snaps to the [595, 600] silence's mid-point
         // (597.5), so the second chunk starts exactly there - that is where the phrase is heard.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options("--quick-marks", "--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -849,7 +849,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ordinary in-narration pause with no jingle in it at all and returns the original mark
         // unchanged, rather than the old fixed "0.5 s before the silence" placement (617.5).
         var result = await DetectAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(595, 600), new(615, 618)],
             s =>
             {
@@ -874,7 +874,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // must land at the jingle's own start, with no lead, since there is no absorbable
         // silence to place the usual 0.5 s lead in.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [],
             s =>
             {
@@ -904,7 +904,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // with a real silence between them, landed at the first jingle's start rather than the
         // second's).
         var (result, _, audio) = await DetectFullAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(695, 700)],
             s =>
             {
@@ -974,7 +974,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the plain 12 s width rather than widening to the jingle ceiling - the two options are
         // independent: one controls mark placement, the other the probe width.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--mark-before-jingle", "--max-jingle-length", "0"),
+            Options("--quick-marks", "--mark-before-jingle", "--max-jingle-length", "0"),
             [new(695, 700)],
             s =>
             {
@@ -998,7 +998,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // pause (612.5). The pause does not lead the jingle's VAD region, so it must not be
         // mistaken for the anchor.
         var result = await DetectAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(610, 613)],
             s =>
             {
@@ -1028,7 +1028,7 @@ public sealed class ChapterDetectorTests : IDisposable
         //     and narrows it to ~11 s. The spurious 20 s music-bed region at 700-720 must then
         //     be skipped (too long to be this book's jingle) rather than probed.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--mark-before-jingle", "--max-jingle-length", "auto"),
+            Options("--quick-marks", "--mark-before-jingle", "--max-jingle-length", "auto"),
             [new(610, 613), new(1000, 1002)],
             s =>
             {
@@ -1060,7 +1060,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // lands at its start (640); without the tolerance it would be missed and the transition
         // would wrongly fall back to the false in-text pause at 610-613 (marking at 612.5).
         var result = await DetectAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(610, 613)],
             s =>
             {
@@ -1086,7 +1086,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (its end overshoots the phrase) and fall back to placing the mark 0.5 s before the
         // phrase (644.5) - seconds late, and on the wrong side of the jingle.
         var result = await DetectAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(610, 613)],
             s =>
             {
@@ -1118,7 +1118,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // announcement instead of overshooting past it - lands inside 654.5-655), rather than
         // needing to re-litigate the pause deep inside its own retreat loop.
         var result = await DetectAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(610, 613), new(654.5, 655)],
             s =>
             {
@@ -1199,7 +1199,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // recognised as more of the jingle's own music and walked straight through - past it, to
         // the true jingle start (640) - rather than accepted as real preceding speech.
         var result = await DetectAsync(
-            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
+            Options("--quick-marks", "--mark-before-jingle", "--min-silence-length", "1.5"),
             [],
             s =>
             {
@@ -1247,7 +1247,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the smear: it overlaps the region by 18 s, so the region is rescued as the jingle and
         // the mark lands at its start (640).
         var result = await DetectAsync(
-            Options("--mark-before-jingle", "--min-silence-length", "1.5"),
+            Options("--quick-marks", "--mark-before-jingle", "--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1272,7 +1272,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // back to flooring phraseAbs at the resolved region's own end (660), so the mark instead
         // lands at 659.75 - late into the jingle rather than early into the wrong chapter.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--quick-marks", "--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1302,7 +1302,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // anywhere in it is not expected on real audio (jingle announcements are reliably
         // VAD-detectable), so this is a synthetic edge case, not a live-observed regression.
         var result = await DetectAsync(
-            Options(),
+            Options("--quick-marks"),
             [new(610, 613)],
             s =>
             {
@@ -1331,7 +1331,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // land 0.25s before its start (655.75), not at the region's end (656.75) as a plain floor
         // would give.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--quick-marks", "--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1358,7 +1358,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // blip of the *last* cluster, lands on "Kapitel"'s own onset (655.2) instead of "31"'s
         // (656).
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--quick-marks", "--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1384,7 +1384,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // to it. The mark must still land at the true (later) cluster's own start (656), matching
         // the single-blip case above.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5"),
+            Options("--quick-marks", "--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1403,17 +1403,17 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task PreciseMark_LeavesAnAlreadyCorrectMarkUnchanged()
     {
-        // --precise-mark's cheap path: re-transcribing right at the mark already computed (here,
+        // precise marking's cheap path: re-transcribing right at the mark already computed (here,
         // chapter one's plain 0.25 s lead) finds the phrase as the very first thing heard, so
         // the mark is confirmed and left exactly as is - no candidate search needed.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, Seg(2, " Chapter two.")); // window [613, ...], phrase at 615
-                // --precise-mark checks, keyed by their own decode start (checked position - 0.1s
+                // precise marking checks, keyed by their own decode start (checked position - 0.1s
                 // lead-in): chapter one's mark (0.25) decodes from max(0, 0.25-0.1) = 0.15, landing
                 // (within the script's 0.25s match tolerance) on the very same script entry already
                 // used for the real probe window at 0 - the phrase really is the first thing there,
@@ -1432,13 +1432,13 @@ public sealed class ChapterDetectorTests : IDisposable
         // a jingle's own musical/vocal transient can be long enough to clear
         // TransientSpeechFloorSeconds, fooling RefineDefaultMark's VAD-duration heuristic into
         // stopping on it (656) instead of the real announcement (657) - both blips look identical
-        // to that heuristic, which only ever looks at duration. --precise-mark catches what the
+        // to that heuristic, which only ever looks at duration. precise marking catches what the
         // heuristic cannot: its own first check (at 655.75, the heuristic's mark) fails, then
         // every later VAD speech-segment start is checked in turn - 656 fails too (still the
         // transient), 657 succeeds (the real phrase), and 660 fails again (narration resumes),
         // which is exactly the success-then-fail pattern that confirms 657 as the true onset.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1459,19 +1459,19 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task PreciseMark_FallsBackToTheOriginalMark_WhenNoCandidateEverConfirms()
     {
         // If the phrase can never be confirmed anywhere - every check simulates unrelated audio,
-        // as if the real announcement were outside the search horizon entirely - --precise-mark
+        // as if the real announcement were outside the search horizon entirely - precise marking
         // must not guess: it leaves the mark exactly as RefineDefaultMark computed it, rather than
         // looping forever or picking an arbitrary candidate. --max-jingle-length is capped at 30
         // (instead of the 45 s default) purely so round 2's fixed-step backward sweep - which now
         // shares round 1's search span - stays short of 613, the unrelated initial probe decode's
         // own scripted "Chapter two." transcript a few tens of seconds further back; that entry
         // has to exist for chapter two to be discovered at all, and this test's fixture (unlike
-        // real ffmpeg decodes) cannot tell a fresh short --precise-mark re-transcription apart
+        // real ffmpeg decodes) cannot tell a fresh short precise marking re-transcription apart
         // from that much longer probe decode once their start times land within the same script
         // lookup tolerance, so the sweep must not reach that far to begin with. 30 s still leaves
         // the probe window (35 s) comfortable room past the phrase's abs-638 offset.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark", "--max-jingle-length", "30"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
             [new(610, 613)],
             s =>
             {
@@ -1504,7 +1504,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (658.75) is what locks in once the next, genuinely unscripted step finally fails, giving
         // a final mark of 658.75 - 0.25 = 658.50.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark", "--max-jingle-length", "30"),
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
             [new(610, 613)],
             s =>
             {
@@ -1534,7 +1534,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // heard rather than waiting for a subsequent failure (see WalkPreciseMarkCandidatesInterleavedAsync):
         // the *first* of that run, 655.55, is the one returned; final mark = 655.55 - 0.25 = 655.30.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1566,7 +1566,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // narration) is ever checked. Those two forward entries are left scripted only to prove
         // they'd fail if reached; a backward success is accepted immediately, so they never are.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1586,7 +1586,7 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task PreciseMark_SnapsToTheQuietestNearbyPoint()
     {
-        // --precise-mark's final cleanup step (SnapToQuietestPointAsync): even a mark the phrase
+        // precise marking's final cleanup step (SnapToQuietestPointAsync): even a mark the phrase
         // check already confirmed can still coincide with a comparatively loud sample - a player
         // seeking there would start playback abruptly mid-waveform, an audible "plop". Chapter
         // two's mark (614.75) is confirmed unchanged exactly as in the simple case above, but here
@@ -1596,7 +1596,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // silent dip 50ms *before* the mark (samples 1520-1679) - an infinite dB improvement, so
         // the mark should end up snapped to that dip's centre (614.70) rather than left at 614.75.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1622,7 +1622,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // on) offers no improvement over the mark's own position at all. The mark must resolve
         // back to exactly where it already was (614.75) rather than drifting anywhere.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1650,7 +1650,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // mark and is never reachable as a backward candidate by construction, so it must have
         // no effect at all: the mark must stay exactly at 614.75.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1677,7 +1677,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // loud (1.0, sum-of-squares 160) baseline is only a ~2.78x power ratio - 10*log10(2.78) =
         // ~4.44 dB, under the 6 dB bar - so the mark must stay exactly at 614.75.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1703,7 +1703,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 10*log10(4) = ~6.02 dB, clearing PreciseMarkQuietSnapMinImprovementDb - so this time the
         // mark must nudge to the dip's centre (614.70).
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--precise-mark"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -1951,7 +1951,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // overlapping window sequence, so the candidate at 640 is never probed at all - neither
         // its start (640) nor the shared border (650) is ever decoded.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(598, 600), new(638, 640)],
             s => s.Add(600, Seg(2, " Chapter one."), Seg(40, " Chapter two.")),
             new FakeVad { Speech = [new(0, 3600)] });
@@ -2418,7 +2418,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // preference default-mode placement already has via LeadingSilence, and the same shape
         // validated in JingleWithLeadingSilence_WalksBackToTheSilenceEnd_....
         var result = await DetectAsync(
-            Options("--mark-before-jingle"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(595, 600), new(820, 823), new(830.3, 831.0)],
             s =>
             {
@@ -2504,7 +2504,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ([198, 208]) rather than the whole [2.5, 494.5] stretch between the chunk's two
         // segments, and finds the phrase in the first 8 s sub-chunk (starting at 198).
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options("--quick-marks", "--max-jingle-length", "0"),
             [new(495, 500), new(200, 206)],
             s =>
             {
@@ -2532,7 +2532,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 198 are expected, never something like 50 or 300 that a naive "scan the whole gap"
         // approach would also have visited.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options("--quick-marks", "--max-jingle-length", "0"),
             [new(495, 500), new(200, 206)],
             s =>
             {
@@ -3107,7 +3107,7 @@ public sealed class ChapterDetectorTests : IDisposable
             Options().DefaultProfile, null, 0);
 
         var (result, audio) = await DetectGapsAsync(
-            Options("--max-jingle-length", "0"), verify, [],
+            Options("--quick-marks", "--max-jingle-length", "0"), verify, [],
             s => s.Add(10, Seg(0.3, " Chapter 2.")));
 
         Assert.False(result.GapRemains);
@@ -3190,7 +3190,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // marking (@10, so its own window would start at 0) that --lang auto would otherwise add,
         // keeping the decode-start assertion below solely about the gap-scoped Pass 2 region.
         var (result, audio, _) = await ResumeMissingMarksAsync(
-            Options("--lang", "en", "--max-jingle-length", "0"),
+            Options("--quick-marks", "--lang", "en", "--max-jingle-length", "0"),
             [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
             s => s.Add(10, Seg(0.3, " Chapter 2.")));
 
@@ -3250,7 +3250,7 @@ public sealed class ChapterDetectorTests : IDisposable
     /// <summary>Creates a <see cref="PreciseMarkRefiner"/> wired directly to a fake audio source
     /// and scripted transcriber, bypassing the full detection pipeline - <see
     /// cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>'s own search span typically
-    /// overlaps the span --precise-mark's first (pre-walk) correction already searches, so
+    /// overlaps the span precise marking's first (pre-walk) correction already searches, so
     /// exercising it through <see cref="DetectAsync"/> risks that earlier stage confirming the
     /// same scripted "phrase found" entries first and never reaching --mark-before-jingle's walk
     /// at all (confirmed while designing these tests). Testing the method directly sidesteps that
@@ -3265,7 +3265,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The chapter-1/8/10 shape (2026-07-26): a blip inside the jingle, falsely corroborated as
         // genuine trailing narration, stops ComputeMarkBeforeJingle's own walk at its end (646.2)
         // rather than the true jingle start - but the corroborating text was in truth the
-        // announcement's own quiet opening, so a direct --precise-mark check right there still
+        // announcement's own quiet opening, so a direct precise marking check right there still
         // hears "Chapter two." as the very first thing heard. VerifyMarkBeforeJingleAsync catches
         // this and searches backward: the nearest VAD candidate (645, the blip's own start) is no
         // longer inside the announcement, confirming it as the corrected mark.
