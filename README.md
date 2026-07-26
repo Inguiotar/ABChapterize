@@ -301,15 +301,17 @@ keeps its exact position.
   the recognizer catching a single short phrase, and `tiny` in particular
   mishears or drops chapter announcements so often that it is supported
   mostly for completeness (quick experiments, toy examples).
-- **Memory:** a model needs considerably more memory to *run* than to download.
-  OpenAI's [available models](https://github.com/openai/whisper#available-models-and-languages)
-  table quotes ~6 GB for the default `turbo` and ~10 GB for `large`, against
-  download sizes of 1.6 GB and 3.1 GB — so budget several gigabytes, not the
-  download size. It comes out of video memory on a GPU backend and out of
-  system RAM on a CPU backend, where concurrent files each load their own copy
-  (`--jobs 1` keeps it to one). Nothing is checked up front; if the memory
-  isn't there you'll hear it from the model loader, not from ABChapterize.
-  See [memory requirements](doc/manual.md#memory-requirements) for the details.
+- **Memory:** a model needs somewhat more memory to run than its download size —
+  whisper.cpp's own
+  [figures](https://github.com/ggml-org/whisper.cpp#memory-usage) are ~852 MB
+  for `small`, ~2.1 GB for `medium` and ~3.9 GB for `large`, with the default
+  `turbo` landing around 2 GB. (Figures quoted for OpenAI's Python
+  implementation are two to three times higher; they do not apply here.) It
+  comes out of video memory on a GPU backend and out of system RAM on a CPU
+  backend, where concurrent files each load their own copy (`--jobs 1` keeps it
+  to one). Nothing is checked up front; if the memory isn't there you'll hear it
+  from the model loader, not from ABChapterize. See
+  [memory requirements](doc/manual.md#memory-requirements) for the details.
 - **Unusual announcements:** `--chapter-phrase` accepts a regexp between
   slashes, e.g. `-c "/part (\d+)/"` — a capturing group is used as the chapter
   number directly.

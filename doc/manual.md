@@ -967,14 +967,30 @@ any hardware that can run it.
 
 ### Memory requirements
 
-The download sizes above are **not** the memory the model needs while it runs.
-A loaded model wants noticeably more than its file: OpenAI's
+A loaded model needs somewhat more memory than its file on disk. whisper.cpp,
+the engine underneath ABChapterize, publishes its own
+[memory usage](https://github.com/ggml-org/whisper.cpp#memory-usage) figures:
+
+| Model | Disk | Memory |
+| --- | --- | --- |
+| `tiny` | 75 MiB | ~273 MB |
+| `base` | 142 MiB | ~388 MB |
+| `small` | 466 MiB | ~852 MB |
+| `medium` | 1.5 GiB | ~2.1 GB |
+| `large` | 2.9 GiB | ~3.9 GB |
+
+That table has no `turbo` row — it predates the model. Since `turbo` has about
+as many parameters as `medium` (809 M against 769 M) but a larger file, expect
+very roughly 2 GB for the default model. Treat that one as an estimate rather
+than a published number.
+
+Be aware that figures quoted for Whisper elsewhere are often much higher —
+OpenAI's
 [available models](https://github.com/openai/whisper#available-models-and-languages)
-table quotes ~2 GB for `small`, ~5 GB for `medium`, ~6 GB for the default
-`turbo` and ~10 GB for `large`. Those figures are for OpenAI's own
-implementation rather than the GGML build used here, which is usually somewhat
-leaner — but treat them as the right order of magnitude, and budget for the
-default model wanting several gigabytes, not the 1.6 GB it downloads.
+table says ~5 GB for `medium` and ~10 GB for `large`. Those describe OpenAI's
+own Python implementation, not the GGML build used here, which is roughly two
+to three times leaner. Read them for the model lineup and the speed/accuracy
+tradeoff, not for sizing your machine.
 
 On a GPU backend (CUDA or Vulkan) this comes out of video memory, and the
 default is one file at a time, so one model is loaded. On a CPU backend it
@@ -988,6 +1004,10 @@ you will find out from the model loader or the operating system rather than
 from a friendly message, so on a memory-constrained machine pick the model
 deliberately: `small` is the smallest size that gives dependable results, and
 `--jobs 1` keeps a CPU-backend run down to a single copy.
+
+Audio is decoded and transcribed in bounded windows rather than a file at a
+time, so memory does not grow with the length of the audiobook — a 30-hour
+book costs no more than a 3-hour one.
 
 Models live in the `models` folder next to the executable. A missing model is
 downloaded automatically on first use from the
