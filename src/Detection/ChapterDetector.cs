@@ -795,7 +795,7 @@ public sealed class ChapterDetector
                 }
                 if (skipTo > ci)
                 {
-                    _log?.Invoke($"{skipTo - ci} overlapping windows skipped");
+                    _log?.Invoke($"{skipTo - ci} overlapping window(s) skipped");
                     for (var si = ci + 1; si <= skipTo; si++)
                         skippedSinceLastMark.Add(candidates[si]);
                     ci = skipTo;
