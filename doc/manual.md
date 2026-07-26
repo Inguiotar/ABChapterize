@@ -171,8 +171,12 @@ which this option can now be combined with) found: first out of any silence
 the mark sits in, then — if no real speech is heard right there — back
 through the jingle's own music, until real narration is found and the mark is
 placed there; a mark with real narration already right before it is left
-unchanged. When a jingle opens the file with nothing spoken before it at all,
-the mark instead backs off by a small fixed margin. With `--precise-mark` also
+unchanged. Where two jingles play back to back — the previous chapter's outro
+sting followed by this chapter's own, with an audible break between them —
+the walk stops at that break, so the mark lands at the start of the second
+jingle rather than in front of the first. When a jingle opens the file with
+nothing spoken before it at all, the mark instead backs off by a small fixed
+margin. With `--precise-mark` also
 enabled, the walked result is itself double-checked the same way afterward —
 re-transcribed right at its own position, and corrected further back if the
 announcement is still audible there — rather than being trusted purely on the
@@ -439,9 +443,12 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-a`, `-e`, `-h`,
   be combined with) found, the mark is walked backward — out of any silence
   it sits in, then, if no real speech is heard right there, back through the
   jingle's own music — until real narration is found, and placed there; a
-  mark with real narration already right before it is left unchanged. If a
-  jingle opens the file with nothing spoken before it at all, the mark
-  instead backs off by a small fixed margin from the earliest point reached.
+  mark with real narration already right before it is left unchanged. Two
+  jingles playing back to back with an audible break between them stop the
+  walk at that break, placing the mark at the second jingle's start rather
+  than in front of the first. If a jingle opens the file with nothing spoken
+  before it at all, the mark instead backs off by a small fixed margin from
+  the earliest point reached.
   The same backward-only quietest-point nudge described under
   `--precise-mark` below is then applied to the result. The probe-window
   widening and VAD pre-pass this placement relies on (see

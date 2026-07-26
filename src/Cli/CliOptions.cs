@@ -152,7 +152,9 @@ public sealed class CliOptions
     /// fixed offset (--mark-before-jingle / -j): starting from whatever mark default-mode
     /// placement (optionally already corrected by <see cref="PreciseMark"/>) computed for the
     /// phrase, walks backward through any leading silence and then the jingle's own music to the
-    /// previous chapter's actual trailing narration, and marks right there - see <see
+    /// previous chapter's actual trailing narration - or, where two jingles play back to back
+    /// with an audible break between them, to the second one's start rather than in front of the
+    /// first - and marks right there; see <see
     /// cref="ChapterDetector"/>'s <c>ComputeMarkBeforeJingle</c> for the mechanics. Being built on
     /// top of default-mode placement rather than replacing it outright is what makes this
     /// compatible with <see cref="PreciseMark"/>, unlike this tool's original "--jingle" mode this
@@ -876,7 +878,10 @@ public sealed class CliOptions
                                     --precise-mark, its corrected mark), this walks backward
                                     through any leading silence and then the jingle's own
                                     music to the previous chapter's actual trailing narration,
-                                    and marks right there. When VAD finds no jingle - an
+                                    and marks right there. Two jingles playing back to back
+                                    with an audible break between them stop the walk at that
+                                    break, so the mark lands at the second jingle's start
+                                    rather than in front of the first. When VAD finds no jingle - an
                                     ordinary in-narration pause - the mark is left exactly
                                     where it would otherwise be. Without this option, the mark
                                     is always placed 0.25 seconds before the chapter phrase, no

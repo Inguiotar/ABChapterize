@@ -66,14 +66,13 @@ public class JingleGeometryTests
         Assert.Equal(80, result);
     }
 
-    // Confirmed on real audio (chapters 1, 8 and 10 of a test audiobook): a genuine, already-
-    // stored silence encountered while retreating through a jingle's own music - one directly
-    // preceded by the previous chapter's own trailing narration (here, speech ends exactly at
-    // the silence's own start) - is a stop at its own end - the true jingle start, matching
-    // LeadingSilence's own anchor rule elsewhere in this file - rather than something to be
-    // walked straight through into the narration beyond. This is the "two jingles separated by
-    // a real silence" shape: retreating past the second jingle's music must land at the silence
-    // between the two, not sail on through it into the tail of the first.
+    // Confirmed on real audio (chapters 1, 8, 10 and 34 of a test audiobook): a stored silence
+    // encountered while retreating through what VAD reports as one unbroken non-speech run is a
+    // stop at its own end - the true jingle start, matching LeadingSilence's own anchor rule
+    // elsewhere in this file - rather than something to be walked straight through into whatever
+    // lies beyond. This is the "two jingles separated by a real silence" shape: retreating past
+    // the second jingle's music must land at the silence between the two, not sail on through it
+    // into the tail of the first (the previous chapter's outro sting).
     [Fact]
     public void ComputeMarkBeforeJingle_RetreatCrossesAGenuineSilence_StopsAtItsEndRatherThanThroughIt()
     {
@@ -214,6 +213,51 @@ public class JingleGeometryTests
         Assert.Equal(expected, result);
     }
 
+    // The four two-jingle chapters of the German test audiobook, at their real measured
+    // geometry (whole-file VAD + silencedetect, 2026-07-26). Each has the previous chapter's
+    // outro sting, a silence, then this chapter's own jingle - which Silero VAD reports as one
+    // undifferentiated non-speech run, so only silencedetect's separator distinguishes them.
+    // Stopping at that separator puts the mark at the second jingle's start; walking through it
+    // (as the retreat used to) overshot by 9-37 s, into the previous chapter's sting.
+    [Theory]
+    // mark, narration, separator, pre-announcement hush, announcement, expected
+    [InlineData(179.75, 142.240, 143.360, 162.837, 166.171, 186.462, 187.565, 187.840, 188.448, 166.171)]
+    [InlineData(12185.606, 12157.312, 12159.072, 12166.079, 12167.989, 12184.212, 12185.654, 12185.856, 12187.0, 12167.989)]
+    [InlineData(15657.158, 15629.888, 15630.848, 15635.989, 15639.271, 15655.663, 15657.359, 15657.408, 15658.5, 15639.271)]
+    [InlineData(49954.790, 49918.560, 49920.096, 49929.554, 49931.249, 49952.451, 49954.899, 49955.040, 49956.192, 49931.249)]
+    public void ComputeMarkBeforeJingle_TwoJinglesSeparatedByASilence_MarksTheSecondOnesStart(
+        double originalMark, double narrationStart, double narrationEnd,
+        double separatorStart, double separatorEnd, double hushStart, double hushEnd,
+        double announcementStart, double announcementEnd, double expected)
+    {
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            originalMark,
+            [new(separatorStart, separatorEnd), new(hushStart, hushEnd)],
+            [new(narrationStart, narrationEnd), new(announcementStart, announcementEnd)],
+            []);
+
+        Assert.Equal(expected, result);
+    }
+
+    // The counterpart safety case, at the real geometry of one of the same book's correctly
+    // marked chapters: a single jingle whose music never dips below silencedetect's threshold,
+    // so the only silences in the traversed stretch are the leading hush (whose end is the
+    // jingle start - the right answer) and the pre-announcement hush that step 1 exits. Stopping
+    // unconditionally at silences must therefore leave chapters of this shape exactly where they
+    // already were; measured against all ten known-good chapters, none of them has a silence
+    // inside its jingle at all.
+    [Fact]
+    public void ComputeMarkBeforeJingle_ASilenceFreeJingle_IsUnaffectedByTheSilenceStop()
+    {
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            9966.376,
+            [new(9941.758, 9945.162), new(9965.418, 9966.626)],
+            [new(9940.800, 9941.824), new(9966.784, 9967.520)],
+            []);
+
+        Assert.Equal(9945.162, result);
+    }
+
     // RetreatPastNonSpeech itself: starting inside a qualifying segment never moves the
     // position further than necessary - it is returned unchanged.
     [Fact]
@@ -226,10 +270,10 @@ public class JingleGeometryTests
         Assert.True(foundBoundary);
     }
 
-    // The chapter-12 shape (2026-07-26): after a falsely-corroborated leading silence just past
-    // it is correctly rejected (see the "skipped over" tests below), the retreat can land exactly
-    // inside a sub-floor musical transient deep in the jingle. The straddling check above must
-    // apply the same duration/corroboration gate the other blip-handling branch already has,
+    // The chapter-12 shape (2026-07-26): the retreat can land exactly inside a sub-floor musical
+    // transient deep in the jingle, with no stored silence anywhere between it and the starting
+    // position. The straddling check above must apply the same duration/corroboration gate the
+    // other blip-handling branch already has,
     // rather than accepting outright just because the position happens to fall inside some VAD
     // speech segment - otherwise a too-short transient like this one (0.384 s, under the 0.4 s
     // floor) is trusted as the true jingle edge, undershooting the walk by most of the jingle's
@@ -256,10 +300,9 @@ public class JingleGeometryTests
         Assert.True(foundBoundary);
     }
 
-    // A genuine, already-passed stored silence nearer to the starting position than the nearest
+    // An already-passed stored silence nearer to the starting position than the nearest
     // qualifying speech blip is a stop at its own end, without ever needing to fall back to that
-    // more distant blip - here because real narration ends essentially right at the silence's
-    // own start, the genuine "trailing narration then leading silence" shape.
+    // more distant blip - the "trailing narration, then leading silence, then jingle" shape.
     [Fact]
     public void RetreatPastNonSpeech_AGenuineSilenceIsCloser_StopsAtItsEnd()
     {
@@ -270,35 +313,31 @@ public class JingleGeometryTests
         Assert.True(foundBoundary);
     }
 
-    // Confirmed on real audio (chapter 1): a stored silence not backed by genuine speech ending
-    // near its own start is an ordinary trailing pause - sitting between the announcement's own
-    // end and the *next* chapter's real narration - rather than a genuine leading silence. It is
-    // skipped over exactly like a too-short or uncorroborated speech blip, and the retreat
-    // continues past it to where real speech actually ends further back - same setup as the
-    // previous test, but with the gap between the silence and that speech now far beyond
-    // JingleWalkAdjacencyToleranceSeconds.
+    // A stored silence stops the walk whatever precedes it - no corroboration from nearby speech
+    // is asked for, and none is needed: silencedetect does not read jingle music as silence, so
+    // the silence marks a real break in the music, and the mark belongs at the start of whatever
+    // plays after it. Same setup as the previous test, but with the nearest speech now far beyond
+    // JingleWalkAdjacencyToleranceSeconds from the silence - which changes nothing.
     [Fact]
-    public void RetreatPastNonSpeech_ASilenceNotBackedByNearbyTrailingNarration_IsSkippedOver()
+    public void RetreatPastNonSpeech_ASilenceStopsTheWalk_WhateverPrecedesIt()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
             70, [new(0, 40)], [new(50, 60)], [], 0.4);
 
-        Assert.Equal(40, position);
+        Assert.Equal(60, position);
         Assert.True(foundBoundary);
     }
 
-    // Confirmed on real audio (chapter 1): the "two silences" shape - an unbacked trailing pause
-    // sitting closer to the starting position, with the true, narration-backed leading silence
-    // further back behind it. The retreat must skip the first (per the previous test) and
-    // continue past the intervening jingle music to find the second, rather than stopping at the
-    // nearer, spurious one.
+    // With several silences behind the starting position, the walk stops at the nearest one and
+    // never reaches those further back: it is looking for the start of the music that immediately
+    // precedes the announcement, not for the earliest break anywhere in a long non-speech stretch.
     [Fact]
-    public void RetreatPastNonSpeech_SkipsAnUnbackedTrailingPause_ToReachTheGenuineLeadingSilenceBehindIt()
+    public void RetreatPastNonSpeech_SeveralSilencesBehind_StopsAtTheNearestOne()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
             100, [new(0, 50)], [new(50, 52), new(95, 97)], [], 0.4);
 
-        Assert.Equal(52, position);
+        Assert.Equal(97, position);
         Assert.True(foundBoundary);
     }
 

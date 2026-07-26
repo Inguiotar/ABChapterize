@@ -353,24 +353,20 @@ internal static class JingleGeometry
     /// step, whichever is nearer to the current position wins, and the walk never continues past
     /// it:
     /// <list type="bullet">
-    /// <item>A stored silencedetect silence <em>directly preceded by genuine trailing narration</em>
-    /// (confirmed on real audio: every stored silence already clears <see
-    /// cref="TransientSpeechFloorSeconds"/> by construction, since <see
-    /// cref="MinStoredSilenceSeconds"/> floors every stored interval well above it - so there is
-    /// no separate floor to apply to the silence itself). Silencedetect never reads jingle music
-    /// as silence, so a stored silence found while retreating through a jingle is a candidate for
-    /// the genuine hush between the previous chapter's trailing narration and the jingle itself -
-    /// the same relationship <see cref="LeadingSilence"/> already anchors default-mode placement
-    /// to - but is only trusted as such when real speech actually ends near its own start (see
-    /// <see cref="RealSpeechAt"/>); otherwise it is an ordinary trailing pause with
-    /// no narration backing it, and the walk skips past it rather than stopping. Requiring that
-    /// corroboration is itself confirmed on real audio (a trailing pause after the announcement,
-    /// before the next chapter's own jingle, was otherwise mistaken for the leading silence,
-    /// stopping the retreat one jingle too late), the same way crossing straight through a
-    /// genuine leading silence would land the mark at an unrelated, much earlier jingle (two
-    /// separate jingles merged into one VAD region by a short gap, with a genuine silence sitting
-    /// between them) - both failure modes call for the same fix: stop only where real narration
-    /// actually ends.</item>
+    /// <item>Any stored silencedetect silence at all, with no further qualification - every stored
+    /// silence already clears <see cref="TransientSpeechFloorSeconds"/> by construction, since
+    /// <see cref="MinStoredSilenceSeconds"/> floors every stored interval well above it, so there
+    /// is no separate floor to apply either. Silencedetect never reads jingle music as silence, so
+    /// a stored silence encountered while retreating through what VAD reports as one unbroken
+    /// non-speech run marks a real break in the music, and the walk stops at its end. Whether that
+    /// break is the hush between the previous chapter's trailing narration and the jingle (the
+    /// relationship <see cref="LeadingSilence"/> already anchors default-mode placement to) or the
+    /// gap between two <em>separate</em> jingles - a preceding chapter's outro sting, or the book's
+    /// own title theme before chapter 1 - is deliberately not judged: either way the music that
+    /// follows the silence is this chapter's own jingle, and either way its start is where the mark
+    /// belongs. Attempting the distinction is also futile in practice, since the separating
+    /// silence's length does not carry it: real audio has a 3.28 s inter-jingle gap in one chapter
+    /// and a 1.70 s one in another whose pre-announcement hush is a longer 2.45 s.</item>
     /// <item>Real VAD speech, exactly as step 2 defines "real" - <see
     /// cref="TransientSpeechFloorSeconds"/>-or-longer <em>and</em> corroborated by the transcript
     /// (see <see cref="IsGenuineSpeech"/>). The corroboration matters here specifically: a
@@ -520,24 +516,24 @@ internal static class JingleGeometry
     /// jingle's own music to the previous chapter's trailing narration, or to a genuine leading
     /// silence when the jingle has one.
     /// <para>
-    /// At each step, whichever of the nearest preceding qualifying stored silence (its own end is
-    /// the stop) or the nearest preceding genuine speech blip (its own end is the stop) lies
-    /// closer to the current position wins; a speech blip that fails either the duration floor or
-    /// the corroboration check is skipped over instead, exactly like <see
+    /// At each step, whichever of the nearest preceding stored silence (its own end is the stop) or
+    /// the nearest preceding genuine speech blip (its own end is the stop) lies closer to the
+    /// current position wins; a speech blip that fails either the duration floor or the
+    /// corroboration check is skipped over instead, exactly like <see
     /// cref="AdvancePastNonSpeech"/> does going forward.
     /// </para>
     /// <para>
-    /// A stored silence only qualifies as the stop when <see cref="RealSpeechAt">genuine speech
-    /// precedes its own start</see> - i.e. it directly follows the previous chapter's trailing
-    /// narration, the "silence then jingle" shape silencedetect is trusted for. Without that
-    /// check, silencedetect never reading jingle music as silence is not enough by itself: a
-    /// silence can just as well be an ordinary <em>trailing</em> pause sitting between the
-    /// announcement's own end and the jingle/narration that follows it, with no narration backing
-    /// its start at all (confirmed on real audio: a chapter's announcement was itself followed by
-    /// a pause before the *next* chapter's jingle, and retreating from there stopped at that pause
-    /// instead of continuing back through the actual jingle to the true previous narration). A
-    /// silence that fails the check is skipped over exactly like a too-short or uncorroborated
-    /// speech blip, and the retreat continues from its own start.
+    /// A stored silence is an unconditional stop - it needs no corroboration of its own, and is
+    /// never walked through. Silencedetect does not read jingle music as silence, so a silence met
+    /// while retreating is a real break in the music no matter what surrounds it, and the mark
+    /// belongs at the start of whatever plays after it. Notably this makes no attempt to tell the
+    /// hush before a single jingle apart from the gap between two consecutive ones (an outro sting
+    /// followed by this chapter's own jingle, say): the answer is the same either way, so the
+    /// distinction is not worth drawing - and real audio shows it could not be drawn from the
+    /// silence's length anyway. Confirmed against a German test audiobook (2026-07-26) where the
+    /// retreat previously walked past inter-jingle gaps and landed the mark 9-37 s early, in front
+    /// of the <em>previous</em> chapter's sting, while every correctly-marked chapter in the same
+    /// book has a completely silence-free jingle and is therefore untouched by stopping here.
     /// </para>
     /// <para>
     /// The same duration/corroboration gate applies when the current position already sits inside
@@ -545,11 +541,10 @@ internal static class JingleGeometry
     /// itself starting there): a blip clearing the bar is trusted immediately, since real narration
     /// already covers the position and there is nothing to gain by moving further. One that does
     /// not clear it is skipped exactly like an uncorroborated blip found any other way - the retreat
-    /// resumes from the blip's own start rather than stopping inside it (confirmed on real audio: a
-    /// sub-floor musical transient deep inside a long jingle, reached only after a falsely
-    /// corroborated silence just past it was correctly rejected, was otherwise accepted outright
-    /// here without ever being floor- or corroboration-checked, landing the mark tens of seconds
-    /// short of the jingle's true start).
+    /// resumes from the blip's own start rather than stopping inside it. This branch once accepted
+    /// any straddling blip outright, without applying either check, and a sub-floor musical
+    /// transient deep inside a long jingle was observed on real audio landing the mark tens of
+    /// seconds short of the jingle's true start.
     /// </para>
     /// </summary>
     /// <param name="from">The point to scan backward from.</param>
@@ -585,12 +580,7 @@ internal static class JingleGeometry
 
             var prevSilence = silences.Where(s => s.EndSeconds <= t).Cast<Silence?>().LastOrDefault();
             if (prevSilence is { } sil && sil.EndSeconds >= (prevSpeech?.EndSeconds ?? double.NegativeInfinity))
-            {
-                if (RealSpeechAt(sil.StartSeconds, speech, transcriptAbs))
-                    return (sil.EndSeconds, true);
-                t = sil.StartSeconds;
-                continue;
-            }
+                return (sil.EndSeconds, true);
 
             if (prevSpeech is not { } blip)
                 return (t, false);
