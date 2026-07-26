@@ -210,6 +210,87 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
+    /// --precise-mark-gated verification/correction for --mark-before-jingle's own backward-walked
+    /// mark (<see cref="JingleGeometry.ComputeMarkBeforeJingle"/>), called only when <see
+    /// cref="CliOptions.PreciseMark"/> is also set - the walk's own VAD/silencedetect heuristics
+    /// are trusted as "close enough" on their own otherwise. Mirrors <see
+    /// cref="RefinePreciseMarkAsync"/>'s "ask Whisper directly instead of trusting the heuristic"
+    /// philosophy, applied to a different question: not "is the phrase heard right here" (default
+    /// mode's question - the walked mark is deliberately placed <em>before</em> the announcement,
+    /// so asking that here would always fail) but "is the announcement <em>not</em> immediately
+    /// audible any more" - the condition that actually confirms the walk reached the far side of
+    /// the jingle rather than stopping short of it.
+    /// <para>
+    /// Confirmed real-audio failure mode this exists to catch (chapters 1, 8 and 10 of a test
+    /// audiobook, 2026-07-26): a false corroboration or a genuine-looking but unbacked leading
+    /// silence can make the backward walk accept a stop that still sits essentially on the
+    /// announcement's own audio - short of the jingle's true edge by anywhere from a few seconds
+    /// to most of a minute. <see cref="PreciseMarkPhraseFoundAsync"/> - the same "is the phrase
+    /// the first thing heard here" check --precise-mark's own placement relies on - answers
+    /// exactly that for <paramref name="walked"/> directly: if the phrase is <em>not</em> the
+    /// first thing heard there, the walk already reached clear of it and is trusted outright (the
+    /// common case, and the only cost paid for an already-correct walk). If it <em>is</em>, the
+    /// walk stopped too late, and <paramref name="walked"/> is corrected by searching backward
+    /// from it - VAD speech-segment starts within the same jingle-plus-margin span --precise-mark's
+    /// own round 1 already searches (see <see cref="RefinePreciseMarkAsync"/>), falling back to
+    /// the same fixed-step blind scan as its round 2 - for the first (nearest) candidate where the
+    /// phrase is no longer the first thing heard: exactly the boundary this method exists to find.
+    /// </para>
+    /// <para>
+    /// Search is backward-only and never re-tries forward: the observed failure always left the
+    /// walk too late, never too early, and --mark-before-jingle's whole purpose is landing before
+    /// the jingle, not after it, so there is no symmetric "too early" case to correct for here.
+    /// When no backward candidate ever clears the check - the announcement's own audio, or
+    /// whatever the transcript keeps mistaking for it, extends across the entire searched span, an
+    /// extreme case never observed on real audio - <paramref name="walked"/> is returned unchanged
+    /// rather than guessing further back with nothing to support it.
+    /// </para>
+    /// </summary>
+    /// <param name="walked">The mark <see cref="JingleGeometry.ComputeMarkBeforeJingle"/> already
+    /// computed.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
+    /// empty when the VAD pre-pass did not run, in which case there is nothing to search beyond
+    /// <paramref name="walked"/> itself.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns><paramref name="walked"/> itself once confirmed clear of the announcement (either
+    /// immediately, or after a correction), or unchanged when no backward candidate ever cleared
+    /// the check.</returns>
+    internal async Task<double> VerifyMarkBeforeJingleAsync(
+        double walked, string file, string? inputDecoder, LanguageProfile profile,
+        List<SpeechSegment> speechSegments, CancellationToken ct)
+    {
+        if (!await PreciseMarkPhraseFoundAsync(walked, file, inputDecoder, profile, ct))
+            return walked;
+
+        var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var vadCandidates = speechSegments
+            .Where(s => s.StartSeconds < walked && s.StartSeconds >= walked - span)
+            .Select(s => s.StartSeconds)
+            .OrderByDescending(s => s);
+        var candidates = vadCandidates.Concat(FixedStepCandidates(walked, span, forward: false));
+
+        foreach (var candidate in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+            {
+                _log?.Invoke(
+                    $"--mark-before-jingle: --precise-mark verification moved {FormatTimestamp(walked)} " +
+                    $"back to {FormatTimestamp(candidate)} (the announcement was still audible)");
+                return candidate;
+            }
+        }
+
+        _log?.Invoke(
+            $"--mark-before-jingle: --precise-mark verification found the announcement audible " +
+            $"all the way back to {FormatTimestamp(walked - span)} - mark left unchanged");
+        return walked;
+    }
+
+    /// <summary>
     /// Final quiet-point cleanup step shared by --precise-mark's own placement (see
     /// <see cref="RefinePreciseMarkAsync"/>) and --mark-before-jingle's (<see
     /// cref="ChapterDetector"/>, after <see cref="JingleGeometry.ComputeMarkBeforeJingle"/>):

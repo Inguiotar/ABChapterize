@@ -172,9 +172,13 @@ the mark sits in, then — if no real speech is heard right there — back
 through the jingle's own music, until real narration is found and the mark is
 placed there; a mark with real narration already right before it is left
 unchanged. When a jingle opens the file with nothing spoken before it at all,
-the mark instead backs off by a small fixed margin. The result is then nudged
-earlier to a nearby, clearly quieter point the same way `--precise-mark` does
-(see above) (the machinery for all of this is documented in the source).
+the mark instead backs off by a small fixed margin. With `--precise-mark` also
+enabled, the walked result is itself double-checked the same way afterward —
+re-transcribed right at its own position, and corrected further back if the
+announcement is still audible there — rather than being trusted purely on the
+VAD/silence heuristics above. The result is then nudged earlier to a nearby,
+clearly quieter point the same way `--precise-mark` does (see above) (the
+machinery for all of this is documented in the source).
 In-text mentions ("…as we learned in chapter three…") are rejected by requiring the
 announcement to follow a real pause; out-of-order detections and duplicates of
 an already-marked chapter are dropped, keeping the earliest position. Each

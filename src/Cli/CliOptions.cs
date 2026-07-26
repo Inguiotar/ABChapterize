@@ -156,7 +156,10 @@ public sealed class CliOptions
     /// cref="ChapterDetector"/>'s <c>ComputeMarkBeforeJingle</c> for the mechanics. Being built on
     /// top of default-mode placement rather than replacing it outright is what makes this
     /// compatible with <see cref="PreciseMark"/>, unlike this tool's original "--jingle" mode this
-    /// option is descended from. Without this option, see <see cref="ChapterDetector"/>'s
+    /// option is descended from. With <see cref="PreciseMark"/> also enabled, the walked result
+    /// itself is verified the same way afterward - see <see cref="PreciseMarkRefiner"/>'s
+    /// <c>VerifyMarkBeforeJingleAsync</c> - rather than being trusted purely on the VAD/silence
+    /// heuristics above. Without this option, see <see cref="ChapterDetector"/>'s
     /// <c>DefaultMarkLeadSeconds</c> for the placement used instead.
     /// <para><b>Experimental.</b></para>
     /// </summary>
@@ -181,7 +184,8 @@ public sealed class CliOptions
     /// transcription - so this is off by default; see <see cref="ChapterDetector"/> for the
     /// mechanics. Combinable with <see cref="MarkBeforeJingle"/>, which corrects the default-mode
     /// mark this option already settled on one step further, walking it back to the jingle's own
-    /// start.
+    /// start - and whose own walked result this option then verifies in turn, the same way it
+    /// verifies a default-mode mark.
     /// <para><b>Experimental.</b></para>
     /// </summary>
     public bool PreciseMark { get; private set; }

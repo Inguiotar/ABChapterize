@@ -6,6 +6,7 @@ using Xunit;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Detection;
+using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;
 using ABChapterize.Vad;
@@ -888,17 +889,20 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task JingleWithLeadingSilence_WalksBackThroughBothToTheRealNarrationEnd_AndVadDoesNotDoubleProbe()
+    public async Task JingleWithLeadingSilence_WalksBackToTheSilenceEnd_AndVadDoesNotDoubleProbe()
     {
         // A silence (695-700) precedes the jingle's own music (700-703) - the existing
         // silence-based candidate already probes this transition, so the VAD non-speech region
         // covering the same silence+jingle span must not add a second, duplicate candidate
         // (dedup): the silence path stays primary. VAD itself draws no line between the silence
         // and the jingle music that follows it - both read as one continuous non-speech stretch
-        // (695-703) - so ComputeMarkBeforeJingle's backward walk does not stop at the stored
-        // silence's own boundary the way the old fixed "0.5 s before it" rule did: it retreats
-        // straight through both to the real narration end at 695, the true edge of the whole
-        // non-speech stretch.
+        // (695-703) - but silencedetect does, and ComputeMarkBeforeJingle's backward walk stops
+        // at that stored silence's own end (700, the jingle's true start) rather than crossing it
+        // into the previous chapter's narration beyond. An earlier version of the walk retreated
+        // straight through both all the way to 695 instead; confirmed wrong on real audio (a
+        // chapter transition with two genuinely separate jingles, merged by VAD into one region
+        // with a real silence between them, landed at the first jingle's start rather than the
+        // second's).
         var (result, _, audio) = await DetectFullAsync(
             Options("--mark-before-jingle"),
             [new(695, 700)],
@@ -909,8 +913,11 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 695), result.Chapters);
-        Assert.Single(audio.DecodeStarts, d => Math.Abs(d - 700) < 0.5);
+        Assert.Contains(new DetectedChapter(2, 700), result.Chapters);
+        // Exact 700.0 is the anchor probe itself; the walked mark now also landing at 700
+        // means the final quiet-point snap's own decode sits nearby (699.85) but is a distinct
+        // value, so this still isolates "no duplicate probe decode" without being confused by it.
+        Assert.Single(audio.DecodeStarts, d => d == 700.0);
     }
 
     [Fact]
@@ -961,12 +968,11 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task MarkBeforeJingleWithMaxJingleLengthZero_StillAnchorsViaVad_ButKeepsTheNarrowWindow()
     {
         // --mark-before-jingle turns on the VAD pre-pass and its own backward-walk mark
-        // placement (see JingleWithLeadingSilence_WalksBackThroughBothToTheRealNarrationEnd_...
-        // for why this lands at 695, the true edge of the silence+jingle stretch, not 0.5 s
-        // before the stored silence), but --max-jingle-length 0 says no jingle is expected, so
-        // Pass 2's probe window must stay at the plain 12 s width rather than widening to the
-        // jingle ceiling - the two options are independent: one controls mark placement, the
-        // other the probe width.
+        // placement (see JingleWithLeadingSilence_WalksBackToTheSilenceEnd_... for why this lands
+        // at 700, the stored silence's own end and the jingle's true start), but
+        // --max-jingle-length 0 says no jingle is expected, so Pass 2's probe window must stay at
+        // the plain 12 s width rather than widening to the jingle ceiling - the two options are
+        // independent: one controls mark placement, the other the probe width.
         var (result, _, audio) = await DetectFullAsync(
             Options("--mark-before-jingle", "--max-jingle-length", "0"),
             [new(695, 700)],
@@ -977,7 +983,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 695), result.Chapters);
+        Assert.Contains(new DetectedChapter(2, 700), result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 700 && w.Duration is { } d && Math.Abs(d - 12) < 0.01);
     }
@@ -1103,7 +1109,14 @@ public sealed class ChapterDetectorTests : IDisposable
         // start. LeadingSilence must not mistake that unrelated pause for the region's lead-in
         // hush: the mark belongs at the jingle's own start (640), not 0.5 s before the pause
         // (654.5) or the phrase. The 610-613 false in-text pause triggers the probe, exactly as
-        // in the sibling tests above.
+        // in the sibling tests above. VAD also picks up a short blip right at the announcement
+        // itself (654.8-655.3) - confirmed on real audio (the same chapter 4): a real spoken
+        // "Kapitel N" is reliably VAD-detectable even inside a jingle, so a scripted VAD that is
+        // blind to it entirely would not be representative. That blip is what lets
+        // --mark-before-jingle's own backward walk step out of the breath-pause silence via its
+        // ordinary Step 1 containment check (originalMark - now correctly anchored close to the
+        // announcement instead of overshooting past it - lands inside 654.5-655), rather than
+        // needing to re-litigate the pause deep inside its own retreat loop.
         var result = await DetectAsync(
             Options("--mark-before-jingle"),
             [new(610, 613), new(654.5, 655)],
@@ -1112,7 +1125,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, Seg(42, " Chapter two.")); // window [613, ...], phrase at 655
             },
-            new FakeVad { Speech = [new(0, 610), new(613, 640), new(660, 3600)] }); // jingle region 640-660, unbroken
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(654.8, 655.3), new(660, 3600)] }); // jingle region 640-660, unbroken
 
         Assert.False(result.GapRemains);
         Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
@@ -1170,21 +1183,21 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task JingleSplitByAnUntranscribedVocal_StopsAtTheBlip_NotBridgedAllTheWayBack()
+    public async Task JingleSplitByAnUntranscribedVocal_RetreatsPastTheBlip_ToTheTrueJingleStart()
     {
         // The chapter-20 shape: a vocal-like passage in the jingle's own music (blip 645-646.2,
         // just over the 1 s merge limit) splits one continuous jingle into two VAD regions
         // ([640, 645] and [646.2, 660]). ResolveDefaultPhraseOnset still finds the blip as a
         // "swallowed" onset inside the region ResolveJingleAnchor's transcript-aware bridging
-        // reassembles, landing the default-mode original mark right after it (644.75). But
-        // --mark-before-jingle's own backward walk (ComputeMarkBeforeJingle) has no transcript
-        // awareness at all - it only asks whether a VAD blip is >= TransientSpeechFloorSeconds
-        // (0.4 s), and this one (1.2 s) clears that floor easily, so step 2 reads it as real
-        // preceding speech and returns the original mark unchanged rather than retreating past it
-        // to the true jingle start (640). A blip this long is well outside the transient range
-        // TransientSpeechFloorSeconds was calibrated against (real transients topped out around
-        // 0.35 s) - a deliberate simplification the new backward-walk algorithm accepts in
-        // exchange for not needing the transcript at all.
+        // reassembles, landing the default-mode original mark right after it (644.75).
+        // --mark-before-jingle's own backward walk (ComputeMarkBeforeJingle) now carries the same
+        // transcript awareness ResolveJingleAnchor's own bridging already relies on (see
+        // IsGenuineSpeech): the blip clears TransientSpeechFloorSeconds (0.4 s) easily on
+        // duration alone (confirmed on real audio - a blip this long is well outside the
+        // transient range the floor was calibrated against, real transients topping out around
+        // 0.35 s), but nothing in the transcript corroborates it as spoken words, so it is
+        // recognised as more of the jingle's own music and walked straight through - past it, to
+        // the true jingle start (640) - rather than accepted as real preceding speech.
         var result = await DetectAsync(
             Options("--mark-before-jingle", "--min-silence-length", "1.5"),
             [],
@@ -1196,7 +1209,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(645, 646.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 644.75)], result.Chapters);
+        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -2398,7 +2411,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // to no jingle region and no preceding silence, dumping the mark 0.5 s before that false
         // pause (822.5) - back in chapter one's narration. Correcting the start to the real onset
         // (836) instead finds the jingle region [830.5, 836], whose leading silence [830.3, 831.0]
-        // is the true anchor: the mark lands 0.5 s before its end, at 830.5.
+        // is the true anchor - the classic "silence then jingle" shape. --mark-before-jingle's own
+        // backward walk lands the mark right at that silence's own end (831.0, the jingle's true
+        // start per silencedetect's amplitude-based measurement) rather than at VAD's slightly
+        // jittery speech-segment boundary a moment earlier (830.5) - the same silence-anchoring
+        // preference default-mode placement already has via LeadingSilence, and the same shape
+        // validated in JingleWithLeadingSilence_WalksBackToTheSilenceEnd_....
         var result = await DetectAsync(
             Options("--mark-before-jingle"),
             [new(595, 600), new(820, 823), new(830.3, 831.0)],
@@ -2409,7 +2427,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 830.5), new(836, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 830.5), result.Chapters);
+        Assert.Contains(new DetectedChapter(2, 831.0), result.Chapters);
         Assert.DoesNotContain(result.Chapters, c => c.Number == 2 && c.TimeSeconds < 830);
     }
 
@@ -3227,5 +3245,71 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal("de", result.Profile.Language);
         Assert.Contains("de", transcriber.LanguageChanges);
         Assert.Equal(1, transcriber.DetectLanguageCalls);
+    }
+
+    /// <summary>Creates a <see cref="PreciseMarkRefiner"/> wired directly to a fake audio source
+    /// and scripted transcriber, bypassing the full detection pipeline - <see
+    /// cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>'s own search span typically
+    /// overlaps the span --precise-mark's first (pre-walk) correction already searches, so
+    /// exercising it through <see cref="DetectAsync"/> risks that earlier stage confirming the
+    /// same scripted "phrase found" entries first and never reaching --mark-before-jingle's walk
+    /// at all (confirmed while designing these tests). Testing the method directly sidesteps that
+    /// entirely.</summary>
+    private (PreciseMarkRefiner Refiner, LanguageProfile Profile) MakeVerifier(ScriptedTranscriber transcriber)
+        => (new PreciseMarkRefiner(transcriber.Audio, Options(), null, transcriber.TranscribeAsync),
+            Options().ResolveProfile("en"));
+
+    [Fact]
+    public async Task VerifyMarkBeforeJingleAsync_MovesTheMarkBackWhenTheAnnouncementIsStillAudible()
+    {
+        // The chapter-1/8/10 shape (2026-07-26): a blip inside the jingle, falsely corroborated as
+        // genuine trailing narration, stops ComputeMarkBeforeJingle's own walk at its end (646.2)
+        // rather than the true jingle start - but the corroborating text was in truth the
+        // announcement's own quiet opening, so a direct --precise-mark check right there still
+        // hears "Chapter two." as the very first thing heard. VerifyMarkBeforeJingleAsync catches
+        // this and searches backward: the nearest VAD candidate (645, the blip's own start) is no
+        // longer inside the announcement, confirming it as the corrected mark.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(646.1, Seg(0, " Chapter two.")); // check @ 646.2 (the walked mark): still the phrase
+        transcriber.Add(644.9, Seg(0, " Er nickte."));    // check @ 645 (nearest VAD candidate): not the phrase
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.VerifyMarkBeforeJingleAsync(
+            646.2, _file, null, profile, [new(0, 640), new(645, 646.2), new(660, 3600)], CancellationToken.None);
+
+        Assert.Equal(645, result);
+    }
+
+    [Fact]
+    public async Task VerifyMarkBeforeJingleAsync_ReturnsTheWalkedMarkUnchanged_WhenTheAnnouncementIsNoLongerAudible()
+    {
+        // The common case: the walk already reached clear of the announcement, so the very first
+        // check (at the walked mark itself) fails and the mark is trusted outright - no candidate
+        // search performed at all, proven here by asserting only that one check was ever decoded.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource()); // nothing scripted: every check finds no phrase
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.VerifyMarkBeforeJingleAsync(
+            640, _file, null, profile, [new(0, 640), new(660, 3600)], CancellationToken.None);
+
+        Assert.Equal(640, result);
+        Assert.Single(transcriber.Audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task VerifyMarkBeforeJingleAsync_LeavesTheMarkUnchanged_WhenNoBackwardCandidateEverClears()
+    {
+        // The extreme, never-observed-on-real-audio case the doc comment calls out: the
+        // announcement is still audible at the walked mark, but there is nothing earlier left to
+        // search at all (the mark already sits at the very start of the file), so the search must
+        // give up and leave it exactly as walked rather than looping or throwing.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(0, Seg(0, " Chapter two.")); // phrase audible all the way back to the start
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.VerifyMarkBeforeJingleAsync(
+            0.05, _file, null, profile, [], CancellationToken.None);
+
+        Assert.Equal(0.05, result);
     }
 }

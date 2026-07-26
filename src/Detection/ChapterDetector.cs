@@ -737,7 +737,7 @@ public sealed class ChapterDetector
                 if (_options.PreciseMark)
                     time = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, ctx.File, ctx.Info.InputDecoder, profile!, ctx.SpeechSegments, ct);
                 if (_options.MarkBeforeJingle)
-                    time = await ApplyMarkBeforeJingleAsync(time, ctx.AllSilences, ctx.SpeechSegments, ctx.File, ctx.Info.InputDecoder, ct);
+                    time = await ApplyMarkBeforeJingleAsync(time, ctx.AllSilences, ctx.SpeechSegments, trimmedAbs, ctx.File, ctx.Info.InputDecoder, profile!, ct);
 
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
@@ -1451,28 +1451,45 @@ public sealed class ChapterDetector
     /// Applies --mark-before-jingle on top of a mark default-mode placement (optionally already
     /// corrected by --precise-mark) already computed: <see
     /// cref="JingleGeometry.ComputeMarkBeforeJingle"/> walks it backward to the jingle's true
-    /// leading edge (or leaves it unchanged when VAD finds no jingle there at all), then the same
-    /// backward-only quiet-point snap --precise-mark's own final step applies runs on the result,
-    /// so a player seeking to a --mark-before-jingle mark starts in near-silence just as it would
-    /// for any other mark.
+    /// leading edge (or leaves it unchanged when VAD finds no jingle there at all). When
+    /// --precise-mark is also set, <see cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>
+    /// then double-checks the walked result against direct re-transcription and corrects it
+    /// further if the walk still stopped too late - a cost only paid under --precise-mark, per
+    /// its own "ask Whisper directly" philosophy. Either way, the same backward-only quiet-point
+    /// snap --precise-mark's own final step applies runs on the result, so a player seeking to a
+    /// --mark-before-jingle mark starts in near-silence just as it would for any other mark.
     /// </summary>
     /// <param name="mark">The mark to walk backward from.</param>
     /// <param name="allSilences">Every silence Pass 1 stored, for the backward walk.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, for the backward
-    /// walk.</param>
+    /// walk and (under --precise-mark) its verification search.</param>
+    /// <param name="transcriptAbs">The window's transcript in absolute file time, so the backward
+    /// walk can tell genuine preceding narration apart from a musical/vocal transient in the
+    /// jingle - see <see cref="JingleGeometry.IsGenuineSpeech"/>.</param>
     /// <param name="file">Path of the audio file, for the final quiet-point snap's own decode.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="profile">Language profile supplying the phrase to look for, for the
+    /// --precise-mark verification step.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<double> ApplyMarkBeforeJingleAsync(
         double mark, List<Silence> allSilences, List<SpeechSegment> speechSegments,
-        string file, string? inputDecoder, CancellationToken ct)
+        List<TranscriptSegment> transcriptAbs, string file, string? inputDecoder,
+        LanguageProfile profile, CancellationToken ct)
     {
-        var walked = ComputeMarkBeforeJingle(mark, allSilences, speechSegments);
-        var quietest = await _preciseMarkRefiner!.SnapToQuietestPointAsync(walked, file, inputDecoder, ct);
+        var walked = ComputeMarkBeforeJingle(mark, allSilences, speechSegments, transcriptAbs);
         if (walked != mark)
             _log?.Invoke($"--mark-before-jingle: walked mark back from {FormatTimestamp(mark)} to {FormatTimestamp(walked)}");
-        if (quietest != walked)
-            _log?.Invoke($"--mark-before-jingle: nudged {FormatTimestamp(walked)} to quieter {FormatTimestamp(quietest)}");
+
+        var verified = walked;
+        if (_options.PreciseMark)
+        {
+            verified = await _preciseMarkRefiner!.VerifyMarkBeforeJingleAsync(
+                walked, file, inputDecoder, profile, speechSegments, ct);
+        }
+
+        var quietest = await _preciseMarkRefiner!.SnapToQuietestPointAsync(verified, file, inputDecoder, ct);
+        if (quietest != verified)
+            _log?.Invoke($"--mark-before-jingle: nudged {FormatTimestamp(verified)} to quieter {FormatTimestamp(quietest)}");
         return quietest;
     }
 
@@ -1727,7 +1744,7 @@ public sealed class ChapterDetector
         if (_options.PreciseMark)
             time = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, file, inputDecoder, profile, speechSegments, ct);
         if (_options.MarkBeforeJingle)
-            time = await ApplyMarkBeforeJingleAsync(time, allSilences, speechSegments, file, inputDecoder, ct);
+            time = await ApplyMarkBeforeJingleAsync(time, allSilences, speechSegments, matchSegments, file, inputDecoder, profile, ct);
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
         RecordChapterStats(match.Number, statSilence, statRegion, phraseAbs);
         remaining.Remove(match.Number);

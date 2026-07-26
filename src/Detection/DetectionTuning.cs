@@ -184,6 +184,47 @@ internal static class DetectionTuning
     internal const double TransientSpeechFloorSeconds = 0.4;
 
     /// <summary>
+    /// Minimum letters-plus-digits-per-second a transcript segment must average for <see
+    /// cref="JingleGeometry"/>'s corroboration checks (<c>IsGenuineSpeech</c>) to trust it as
+    /// evidence that a VAD blip is real spoken narration rather than jingle music. "The
+    /// transcript covers this blip with real words" has a hidden assumption baked in: ordinary
+    /// narration runs several times this fast, so a segment claiming coverage at a small
+    /// fraction of that pace is not continuous speech at all - it is a long stretch of
+    /// near-silent jingle music/reverb that Whisper folded into one oversized segment together
+    /// with only a few real words at its edges (a single merged segment has been observed
+    /// spanning almost 30s of audio while containing at most a couple of seconds of actual
+    /// speech). Confirmed on real audio (Perry Rhodan "Die Dritte Macht", chapters 8 and 10,
+    /// 2026-07-26): two genuine, un-smeared narration segments in the same book measured roughly
+    /// 10-12 letters/second, while two segments smeared this way - one merging a full preceding
+    /// sentence together with the following "Kapitel 8", the other stretching "Kapitel 10"
+    /// itself across musically-paced syllable gaps - measured roughly 0.4-1.0 letters/second, an
+    /// order of magnitude slower. Set well below the real-narration floor to leave comfortable
+    /// margin for legitimately slow delivery or short, punctuation-heavy segments, while still
+    /// rejecting anything smeared by an order of magnitude.
+    /// </summary>
+    internal const double MinPlausibleSpeechCharsPerSecond = 3.0;
+
+    /// <summary>
+    /// Ceiling on a VAD speech blip's own duration for <see cref="MinPlausibleSpeechCharsPerSecond"/>'s
+    /// pace check to apply to it at all: only a blip this short or shorter could plausibly <em>be</em>
+    /// the brief musical/vocal transient the pace check exists to unmask - the same premise <see
+    /// cref="TransientSpeechFloorSeconds"/> is built on, just applied from the other side. A VAD
+    /// blip already many seconds (let alone minutes) long is unambiguously substantial spoken
+    /// content by duration alone, regardless of how an overlapping transcript segment happens to be
+    /// timestamped; scrutinising its corroborating segment's pace would only risk rejecting it over
+    /// an artifact of <em>that segment's</em> smearing rather than anything wrong with the blip
+    /// itself (confirmed by a regression this ceiling fixes: a 640 s VAD blip covering an entire
+    /// preceding chapter's narration was wrongly rejected because the only transcript segment
+    /// reaching that far was itself a smeared chapter-announcement span with a low apparent pace -
+    /// the blip was never in doubt, only the segment's own timestamp was). Set comfortably above the
+    /// longest wrongly-corroborated blip actually observed (under 2 s in both the chapter 8 and
+    /// chapter 10 real-audio cases <see cref="MinPlausibleSpeechCharsPerSecond"/> was calibrated
+    /// against) and comfortably below ordinary narration blip lengths, which the same real audio
+    /// shows commonly running several seconds once mid-sentence micro-pauses are cleared.
+    /// </summary>
+    internal const double MaxPaceScrutinizedBlipSeconds = 2.0;
+
+    /// <summary>
     /// Length of the decode --precise-mark transcribes to check whether a mark's chapter phrase
     /// is really the first thing heard there (see <see cref="RefinePreciseMarkAsync"/>). A real
     /// chapter announcement is never anywhere close to this long, and a jingle - the only other

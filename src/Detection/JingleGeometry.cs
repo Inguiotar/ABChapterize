@@ -349,21 +349,48 @@ internal static class JingleGeometry
     /// </para>
     /// <para>
     /// <b>Steps 3-4:</b> otherwise, keep retreating - now through the jingle's own music - via
-    /// <see cref="RetreatPastNonSpeech"/>, which treats any VAD speech blip shorter than <see
-    /// cref="TransientSpeechFloorSeconds"/> as a musical/vocal transient rather than a genuine
-    /// return to narration and does not stop for it (a silencedetect silence that short never
-    /// reaches this algorithm at all - <see cref="MinStoredSilenceSeconds"/> already floors
-    /// every stored interval well above it, so there is nothing extra to ignore on that side).
-    /// The first point where real speech precedes is the jingle's true leading edge - the
-    /// previous chapter's own trailing narration ends exactly there - and is returned as-is,
-    /// with no further lead: unlike step 2's case, a real jingle sits here, and the mark
-    /// belongs right at its start.
+    /// <see cref="RetreatPastNonSpeech"/>. Two independent stop conditions are checked at every
+    /// step, whichever is nearer to the current position wins, and the walk never continues past
+    /// it:
+    /// <list type="bullet">
+    /// <item>A stored silencedetect silence <em>directly preceded by genuine trailing narration</em>
+    /// (confirmed on real audio: every stored silence already clears <see
+    /// cref="TransientSpeechFloorSeconds"/> by construction, since <see
+    /// cref="MinStoredSilenceSeconds"/> floors every stored interval well above it - so there is
+    /// no separate floor to apply to the silence itself). Silencedetect never reads jingle music
+    /// as silence, so a stored silence found while retreating through a jingle is a candidate for
+    /// the genuine hush between the previous chapter's trailing narration and the jingle itself -
+    /// the same relationship <see cref="LeadingSilence"/> already anchors default-mode placement
+    /// to - but is only trusted as such when real speech actually ends near its own start (see
+    /// <see cref="RealSpeechAt"/>); otherwise it is an ordinary trailing pause with
+    /// no narration backing it, and the walk skips past it rather than stopping. Requiring that
+    /// corroboration is itself confirmed on real audio (a trailing pause after the announcement,
+    /// before the next chapter's own jingle, was otherwise mistaken for the leading silence,
+    /// stopping the retreat one jingle too late), the same way crossing straight through a
+    /// genuine leading silence would land the mark at an unrelated, much earlier jingle (two
+    /// separate jingles merged into one VAD region by a short gap, with a genuine silence sitting
+    /// between them) - both failure modes call for the same fix: stop only where real narration
+    /// actually ends.</item>
+    /// <item>Real VAD speech, exactly as step 2 defines "real" - <see
+    /// cref="TransientSpeechFloorSeconds"/>-or-longer <em>and</em> corroborated by the transcript
+    /// (see <see cref="IsGenuineSpeech"/>). The corroboration matters here specifically: a
+    /// musical or vocal-like transient inside jingle music can run well past the floor - longer
+    /// than any transient the floor itself was calibrated against - so duration alone is not
+    /// always enough this deep into the music, unlike right at the announcement's own edge where
+    /// step 2 operates. A blip that fails corroboration is treated as more of the jingle and
+    /// walked straight through, exactly like a too-short one.</item>
+    /// </list>
+    /// The first point where either condition is met is the jingle's true leading edge - the
+    /// previous chapter's own trailing narration ends exactly there - and is returned as-is, with
+    /// no further lead: unlike step 2's case, a real jingle sits here, and the mark belongs right
+    /// at its start.
     /// </para>
     /// <para>
-    /// <b>Step 5:</b> if that walk runs out of VAD data before ever finding real preceding
-    /// speech (the jingle sits at the very start of the file, before there was any narration to
-    /// find), the reached position is backed off by <see cref="JingleLeadSeconds"/> instead of
-    /// being trusted outright - the same flat safety lead used elsewhere as a last resort.
+    /// <b>Step 5:</b> if that walk runs out of both VAD and silencedetect data before ever
+    /// finding a stop (the jingle sits at the very start of the file, before there was any
+    /// narration to find), the reached position is backed off by <see cref="JingleLeadSeconds"/>
+    /// instead of being trusted outright - the same flat safety lead used elsewhere as a last
+    /// resort.
     /// </para>
     /// A final backward-only quiet-point snap - the same one --precise-mark's own final step
     /// applies - still runs on whatever this returns; see <see
@@ -375,63 +402,199 @@ internal static class JingleGeometry
     /// <param name="silences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="speech">The raw VAD speech segments for the whole file, chronological.</param>
+    /// <param name="transcriptAbs">The window's transcript in absolute file time, for telling
+    /// genuine preceding narration apart from a musical/vocal transient in the jingle (see
+    /// <see cref="IsGenuineSpeech"/>).</param>
     internal static double ComputeMarkBeforeJingle(
-        double originalMark, List<Silence> silences, List<SpeechSegment> speech)
+        double originalMark, List<Silence> silences, List<SpeechSegment> speech,
+        List<TranscriptSegment> transcriptAbs)
     {
         var afterSilence = silences
             .Where(s => s.StartSeconds <= originalMark && originalMark <= s.EndSeconds)
             .Cast<Silence?>().FirstOrDefault()
             is { } leadIn ? leadIn.StartSeconds : originalMark;
 
-        if (RealSpeechAt(afterSilence, speech))
+        if (RealSpeechAt(afterSilence, speech, transcriptAbs))
             return originalMark;
 
-        var (position, foundSpeech) = RetreatPastNonSpeech(afterSilence, speech, TransientSpeechFloorSeconds);
-        return foundSpeech ? position : Math.Max(0, position - JingleLeadSeconds);
+        var (position, foundBoundary) = RetreatPastNonSpeech(afterSilence, speech, silences, transcriptAbs, TransientSpeechFloorSeconds);
+        return foundBoundary ? position : Math.Max(0, position - JingleLeadSeconds);
     }
 
     /// <summary>
-    /// Whether real (<see cref="TransientSpeechFloorSeconds"/>-or-longer) VAD speech is
-    /// happening right at <paramref name="t"/> - either because <paramref name="t"/> falls
-    /// inside such a segment (continuous narration straight through, e.g. an amplitude-only
-    /// silencedetect dip that VAD never stopped hearing as speech), or because one ends within
-    /// <see cref="JingleWalkAdjacencyToleranceSeconds"/> of it (the cross-detector boundary
-    /// case). Used by <see cref="ComputeMarkBeforeJingle"/>'s step 2.
+    /// Whether a VAD speech blip is genuine spoken narration rather than a musical or vocal-like
+    /// transient in jingle music, by the same transcript-corroboration principle <see
+    /// cref="IsTrailingNarrationBlip"/> already relies on: real speech gets transcribed by
+    /// Whisper, music does not. Unlike <see cref="IsTrailingNarrationBlip"/> - which is bounded to
+    /// narration ending before the announcement, since it classifies blips at a jingle region's
+    /// leading edge where the announcement itself is a candidate match - this has no such bound:
+    /// it is used only deep in a backward retreat, already past the announcement's own position,
+    /// where any transcribed overlap can only be prior narration.
+    /// <para>
+    /// Falls back to trusting the blip's VAD duration alone when it lies entirely outside the
+    /// transcript's covered span - there is nothing to corroborate against there, and the window
+    /// Whisper was actually asked to transcribe does not necessarily reach as far back as the
+    /// retreat walk does.
+    /// </para>
+    /// <para>
+    /// A covering segment for a <see cref="MaxPaceScrutinizedBlipSeconds"/>-or-shorter blip must
+    /// also be <see cref="IsPlausiblyPacedSpeech">plausibly paced</see>: Whisper can merge genuine
+    /// narration together with a reverb-smeared or musically-stretched announcement into one
+    /// abnormally long segment (confirmed on real audio: "Abschied genommen. Kapitel 8" spanning
+    /// 29 s for ~29 characters, and "Kapitel 10" alone spanning 27 s), and a short VAD blip
+    /// anywhere within that oversized span - including deep inside the jingle music that follows
+    /// the real words - would otherwise be wrongly corroborated just because it falls inside the
+    /// segment's time range. The pace check does not apply to a longer blip - see <see
+    /// cref="MaxPaceScrutinizedBlipSeconds"/> for why duration alone already settles it there.
+    /// </para>
     /// </summary>
-    private static bool RealSpeechAt(double t, List<SpeechSegment> speech)
+    /// <param name="blip">The VAD speech segment to classify.</param>
+    /// <param name="transcriptAbs">The window's transcript in absolute file time.</param>
+    private static bool IsGenuineSpeech(SpeechSegment blip, List<TranscriptSegment> transcriptAbs)
+    {
+        if (transcriptAbs.Count == 0)
+            return true;
+        var coveredStart = transcriptAbs.Min(t => t.StartSeconds);
+        var coveredEnd = transcriptAbs.Max(t => t.EndSeconds);
+        if (blip.EndSeconds <= coveredStart || blip.StartSeconds >= coveredEnd)
+            return true;
+        var scrutinizePace = blip.EndSeconds - blip.StartSeconds <= MaxPaceScrutinizedBlipSeconds;
+        return transcriptAbs.Any(t => !string.IsNullOrWhiteSpace(t.Text)
+                                     && t.StartSeconds < blip.EndSeconds && t.EndSeconds > blip.StartSeconds
+                                     && (!scrutinizePace || IsPlausiblyPacedSpeech(t)));
+    }
+
+    /// <summary>
+    /// Whether a transcript segment's average speaking pace - letters and digits per second of
+    /// its own span - is fast enough to be trusted as continuous real speech, rather than a
+    /// segment Whisper stretched across a run of near-silent jingle music/reverb along with just
+    /// a few real words (see <see cref="MinPlausibleSpeechCharsPerSecond"/> for the real-audio
+    /// measurements behind the floor). A zero-or-negative span (should not occur in practice) is
+    /// treated as trivially plausible rather than dividing by it.
+    /// </summary>
+    /// <param name="segment">The transcript segment to evaluate.</param>
+    private static bool IsPlausiblyPacedSpeech(TranscriptSegment segment)
+    {
+        var duration = segment.EndSeconds - segment.StartSeconds;
+        if (duration <= 0)
+            return true;
+        var chars = segment.Text.Count(char.IsLetterOrDigit);
+        return chars / duration >= MinPlausibleSpeechCharsPerSecond;
+    }
+
+    /// <summary>
+    /// Whether real (<see cref="TransientSpeechFloorSeconds"/>-or-longer, transcript-corroborated
+    /// - see <see cref="IsGenuineSpeech"/>) VAD speech precedes <paramref name="t"/> - either
+    /// because it also covers <paramref name="t"/> (continuous narration straight through, e.g.
+    /// an amplitude-only silencedetect dip that VAD never stopped hearing as speech), or because
+    /// it ends within <see cref="JingleWalkAdjacencyToleranceSeconds"/> before it (the
+    /// cross-detector boundary case). Deliberately directional - a blip that only *starts* before
+    /// <paramref name="t"/> but ends after it is covered by the first branch, while a blip
+    /// starting after <paramref name="t"/> never qualifies no matter how close, since it lies
+    /// ahead of the point being tested, not behind it (confirmed on real audio: an undirected
+    /// distance check let the chapter announcement's own trailing word - spoken just after the
+    /// point under test - masquerade as "preceding" speech and short-circuit the retreat before
+    /// it ever reached the jingle). Used by <see cref="ComputeMarkBeforeJingle"/>'s step 2, and
+    /// by <see cref="RetreatPastNonSpeech"/> to tell a genuine leading silence (directly preceded
+    /// by the previous chapter's own trailing narration - possibly still running, per silencedetect,
+    /// a hair past the silence's own start, exactly the cross-detector jitter the "covers or ends
+    /// nearby" shape already exists to absorb) apart from an ordinary trailing pause that merely
+    /// happens to sit somewhere in the jingle's vicinity (confirmed on real audio: a silence whose
+    /// own start sat 0.2 s inside VAD's still-reported speech needed the same covering case step 2
+    /// already relies on, not just the end-nearby case - a first version of the retreat's own
+    /// check omitted it and wrongly treated the genuine leading silence as unbacked).
+    /// </summary>
+    private static bool RealSpeechAt(double t, List<SpeechSegment> speech, List<TranscriptSegment> transcriptAbs)
         => speech.Any(b => b.EndSeconds - b.StartSeconds >= TransientSpeechFloorSeconds
-                         && (b.StartSeconds <= t && t <= b.EndSeconds
-                             || Math.Abs(b.EndSeconds - t) <= JingleWalkAdjacencyToleranceSeconds));
+                         && b.StartSeconds <= t
+                         && t - b.EndSeconds <= JingleWalkAdjacencyToleranceSeconds
+                         && IsGenuineSpeech(b, transcriptAbs));
 
     /// <summary>
     /// Backward mirror of <see cref="AdvancePastNonSpeech"/>: scans from <paramref name="from"/>
-    /// toward the start of the file through VAD's raw speech/non-speech classification for the
-    /// nearest preceding genuine speech offset, ignoring any speech blip shorter than <paramref
-    /// name="minSpeechSeconds"/> as detector noise rather than real spoken content - used by
-    /// <see cref="ComputeMarkBeforeJingle"/> to walk back through a jingle's own music to the
-    /// previous chapter's trailing narration.
+    /// toward the start of the file through VAD's raw speech/non-speech classification and
+    /// silencedetect's stored silences for the nearest preceding genuine boundary, ignoring any
+    /// speech blip shorter than <paramref name="minSpeechSeconds"/> or lacking transcript
+    /// corroboration (see <see cref="IsGenuineSpeech"/>) as a musical/vocal transient rather than
+    /// real spoken content - used by <see cref="ComputeMarkBeforeJingle"/> to walk back through a
+    /// jingle's own music to the previous chapter's trailing narration, or to a genuine leading
+    /// silence when the jingle has one.
+    /// <para>
+    /// At each step, whichever of the nearest preceding qualifying stored silence (its own end is
+    /// the stop) or the nearest preceding genuine speech blip (its own end is the stop) lies
+    /// closer to the current position wins; a speech blip that fails either the duration floor or
+    /// the corroboration check is skipped over instead, exactly like <see
+    /// cref="AdvancePastNonSpeech"/> does going forward.
+    /// </para>
+    /// <para>
+    /// A stored silence only qualifies as the stop when <see cref="RealSpeechAt">genuine speech
+    /// precedes its own start</see> - i.e. it directly follows the previous chapter's trailing
+    /// narration, the "silence then jingle" shape silencedetect is trusted for. Without that
+    /// check, silencedetect never reading jingle music as silence is not enough by itself: a
+    /// silence can just as well be an ordinary <em>trailing</em> pause sitting between the
+    /// announcement's own end and the jingle/narration that follows it, with no narration backing
+    /// its start at all (confirmed on real audio: a chapter's announcement was itself followed by
+    /// a pause before the *next* chapter's jingle, and retreating from there stopped at that pause
+    /// instead of continuing back through the actual jingle to the true previous narration). A
+    /// silence that fails the check is skipped over exactly like a too-short or uncorroborated
+    /// speech blip, and the retreat continues from its own start.
+    /// </para>
+    /// <para>
+    /// The same duration/corroboration gate applies when the current position already sits inside
+    /// a speech blip (walked back into it by a preceding step, or - rarer - <paramref name="from"/>
+    /// itself starting there): a blip clearing the bar is trusted immediately, since real narration
+    /// already covers the position and there is nothing to gain by moving further. One that does
+    /// not clear it is skipped exactly like an uncorroborated blip found any other way - the retreat
+    /// resumes from the blip's own start rather than stopping inside it (confirmed on real audio: a
+    /// sub-floor musical transient deep inside a long jingle, reached only after a falsely
+    /// corroborated silence just past it was correctly rejected, was otherwise accepted outright
+    /// here without ever being floor- or corroboration-checked, landing the mark tens of seconds
+    /// short of the jingle's true start).
+    /// </para>
     /// </summary>
     /// <param name="from">The point to scan backward from.</param>
     /// <param name="speech">Raw VAD speech segments, chronological.</param>
+    /// <param name="silences">Every silence Pass 1 stored, down to
+    /// <see cref="MinStoredSilenceSeconds"/>.</param>
+    /// <param name="transcriptAbs">The window's transcript in absolute file time, for <see
+    /// cref="IsGenuineSpeech"/>.</param>
     /// <param name="minSpeechSeconds">Speech segments shorter than this are treated as noise and
     /// skipped over rather than accepted as the true offset.</param>
-    /// <returns><c>(Position, true)</c>: the end of the last qualifying speech segment at or
-    /// before <paramref name="from"/>, or <paramref name="from"/> itself when it already falls
-    /// inside one (never moves further than necessary). <c>(Position, false)</c>: <paramref
-    /// name="speech"/> does not reach far enough back to find one - <c>Position</c> is then
-    /// however far the retreat got before running out of data, for the caller's own fallback.</returns>
-    internal static (double Position, bool FoundSpeech) RetreatPastNonSpeech(
-        double from, List<SpeechSegment> speech, double minSpeechSeconds)
+    /// <returns><c>(Position, true)</c>: the end of the qualifying silence or speech segment
+    /// nearest to (at or before) <paramref name="from"/>, or <paramref name="from"/> itself when
+    /// it already falls inside a qualifying speech segment (never moves further than necessary).
+    /// <c>(Position, false)</c>: neither <paramref name="speech"/> nor <paramref name="silences"/>
+    /// reach far enough back to find one - <c>Position</c> is then however far the retreat got
+    /// before running out of data, for the caller's own fallback.</returns>
+    internal static (double Position, bool FoundBoundary) RetreatPastNonSpeech(
+        double from, List<SpeechSegment> speech, List<Silence> silences,
+        List<TranscriptSegment> transcriptAbs, double minSpeechSeconds)
     {
         var t = from;
         while (true)
         {
-            var prev = speech.Where(b => b.StartSeconds < t).Cast<SpeechSegment?>().LastOrDefault();
-            if (prev is not { } blip)
+            var prevSpeech = speech.Where(b => b.StartSeconds < t).Cast<SpeechSegment?>().LastOrDefault();
+            if (prevSpeech is { } straddling && straddling.EndSeconds >= t)
+            {
+                if (straddling.EndSeconds - straddling.StartSeconds >= minSpeechSeconds
+                    && IsGenuineSpeech(straddling, transcriptAbs))
+                    return (t, true);
+                t = straddling.StartSeconds;
+                continue;
+            }
+
+            var prevSilence = silences.Where(s => s.EndSeconds <= t).Cast<Silence?>().LastOrDefault();
+            if (prevSilence is { } sil && sil.EndSeconds >= (prevSpeech?.EndSeconds ?? double.NegativeInfinity))
+            {
+                if (RealSpeechAt(sil.StartSeconds, speech, transcriptAbs))
+                    return (sil.EndSeconds, true);
+                t = sil.StartSeconds;
+                continue;
+            }
+
+            if (prevSpeech is not { } blip)
                 return (t, false);
-            if (blip.EndSeconds >= t)
-                return (t, true);
-            if (blip.EndSeconds - blip.StartSeconds < minSpeechSeconds)
+            if (blip.EndSeconds - blip.StartSeconds < minSpeechSeconds || !IsGenuineSpeech(blip, transcriptAbs))
             {
                 t = blip.StartSeconds;
                 continue;
