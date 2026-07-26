@@ -62,7 +62,7 @@ public sealed class CliOptionsTests : IDisposable
         // Mark refinement is on by default; --quick-marks is the opt-out, so it starts false
         // while PreciseMark itself starts true (asserted separately).
         Assert.True(o.PreciseMark);
-        Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.QuickMarks | o.Quiet | o.Verbose
+        Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.QuickMarks | o.TrailingScan | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
         Assert.Null(o.Jobs);
     }
@@ -178,6 +178,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--pass3-model", "large")]
     [InlineData("--mark-before-jingle")]
     [InlineData("--quick-marks")]
+    [InlineData("--trailing-scan")]
     [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
     [InlineData("--early-abort", "30")]
@@ -256,6 +257,13 @@ public sealed class CliOptionsTests : IDisposable
     {
         Assert.True(ParseFile("--quick-marks")!.QuickMarks);
         Assert.True(ParseFile("-Q")!.QuickMarks);
+    }
+
+    [Fact]
+    public void TrailingScan_IsParsed_LongAndShort()
+    {
+        Assert.True(ParseFile("--trailing-scan")!.TrailingScan);
+        Assert.True(ParseFile("-L")!.TrailingScan);
     }
 
     // Mark refinement is the default: PreciseMark is simply the inverse of the opt-out flag,
@@ -554,6 +562,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--mark-before-jingle"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--quick-marks"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--trailing-scan"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--expected-start-chapter", "5"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapter-number", "50"));

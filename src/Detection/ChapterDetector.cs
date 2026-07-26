@@ -201,9 +201,9 @@ public sealed class ChapterDetector
     /// continuation of whatever an earlier region's Pass 2 happened to learn. The sequence-gap
     /// Pass 3 tail (over the accumulated <c>chapters</c> and the file's full duration) is the final
     /// net for any interior gap regardless of how <c>chapters</c> was seeded;
-    /// <paramref name="trailingFallback"/> exists only for the one case that tail structurally
-    /// cannot catch - a still-missing chapter after the last one found, which nothing bounds from
-    /// above to even notice.
+    /// <paramref name="trailingFallback"/> and --trailing-scan exist only for the one case that
+    /// tail structurally cannot catch - a still-missing chapter after the last one found, which
+    /// nothing bounds from above to even notice.
     /// </summary>
     /// <param name="confirmedSeed">Chapters trusted verbatim, with no Whisper re-check of their
     /// own - empty for a fresh <see cref="DetectAsync"/> run.</param>
@@ -292,12 +292,13 @@ public sealed class ChapterDetector
         var chapters = Normalize(found);
         _log?.Invoke("Pass 2 finished");
 
-        if (!earlyAborted && belowExpectedStartNumber == null)
+        var pass2Completed = !earlyAborted && belowExpectedStartNumber == null;
+        if (pass2Completed)
             chapters = await RunPass25Async(file, info, work, chapters, jingleCeilingSeconds,
                 allSilences, silences, nonSpeechRegions, speechSegments, bytesPerSecond, profile!, ct);
 
         chapters = await RunPass3Async(file, info, work, chapters, allSilences, nonSpeechRegions,
-            speechSegments, bytesPerSecond, profile!, trailingFallback, ct);
+            speechSegments, bytesPerSecond, profile!, trailingFallback, pass2Completed, ct);
 
         return BuildDetectionResult(
             chapters, speechSegments, profile!, detectedLanguage, detectedProbability,
@@ -956,13 +957,15 @@ public sealed class ChapterDetector
     /// <param name="trailingFallback">The trailing region's start and expected chapter numbers,
     /// when <see cref="BuildGapRegions"/> found the last checkable --verify marking unconfirmed;
     /// null otherwise (including for a fresh <see cref="DetectAsync"/> run).</param>
+    /// <param name="trailingScanAllowed">Whether --trailing-scan may run; see <see
+    /// cref="ResolveTrailingRegion"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns><paramref name="chapters"/> plus anything Pass 3 recovered.</returns>
     private async Task<List<DetectedChapter>> RunPass3Async(
         string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
         double bytesPerSecond, LanguageProfile profile, (double From, List<int> Targets)? trailingFallback,
-        CancellationToken ct)
+        bool trailingScanAllowed, CancellationToken ct)
     {
         var gaps = FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter);
         if (gaps.Count > 0)
@@ -992,31 +995,65 @@ public sealed class ChapterDetector
         if (gaps.Count > 0)
             _log?.Invoke("Pass 3 finished");
 
-        // Trailing fallback: only for a gap-scoped DetectGapsAsync run whose last checkable
-        // --verify marking was unconfirmed. FindGaps above has no way to notice a still-missing
-        // trailing chapter (nothing bounds it from above to compare against), so this is the one
-        // safety net that is not already covered by the untouched Pass 3 tail just above.
-        if (trailingFallback is { } tf)
+        // The trailing region - the one thing FindGaps above structurally cannot flag, since
+        // nothing bounds a still-missing last chapter from above to compare against. Two
+        // independent things ask for it (see ResolveTrailingRegion), and both end up here.
+        if (ResolveTrailingRegion(trailingFallback, chapters, trailingScanAllowed) is { } trailing)
         {
-            var stillMissing = tf.Targets.Where(n => !chapters.Any(c => c.Number == n)).ToList();
-            if (stillMissing.Count > 0)
-            {
-                _log?.Invoke($"transcribing suspicious trailing region " +
-                             $"{FormatTimestamp(tf.From)} - {FormatTimestamp(info.DurationSeconds)}");
-                work.BeginPhase("Pass 3", (long)((info.DurationSeconds - tf.From) * bytesPerSecond));
-                if (!ReferenceEquals(_pass3Transcriber, _transcriber))
-                    _pass3Transcriber.ChangeLanguage(profile.Language);
-                var fills = await TranscribeRegionAsync(file, info, tf.From, info.DurationSeconds,
-                    stillMissing, allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
-                    profile, chapters, ct);
-                chapters = Normalize(chapters.Concat(fills).ToList());
-                var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
-                work.HighestChapter = highest;
-                work.MissingChapters = missingNumbers.Count;
-                _log?.Invoke("Pass 3 finished (trailing)");
-            }
+            // "suspicious" only fits the --verify fallback, which is chasing specific numbers it
+            // has reason to believe are there; a --trailing-scan sweep is speculative by design.
+            var what = trailing.Targets is null ? "trailing region" : "suspicious trailing region";
+            _log?.Invoke($"transcribing {what} " +
+                         $"{FormatTimestamp(trailing.From)} - {FormatTimestamp(info.DurationSeconds)}");
+            work.BeginPhase("Pass 3", (long)((info.DurationSeconds - trailing.From) * bytesPerSecond));
+            if (!ReferenceEquals(_pass3Transcriber, _transcriber))
+                _pass3Transcriber.ChangeLanguage(profile.Language);
+            var fills = await TranscribeRegionAsync(file, info, trailing.From, info.DurationSeconds,
+                trailing.Targets, allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
+                profile, chapters, ct);
+            chapters = Normalize(chapters.Concat(fills).ToList());
+            var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
+            work.HighestChapter = highest;
+            work.MissingChapters = missingNumbers.Count;
+            _log?.Invoke("Pass 3 finished (trailing)");
         }
         return chapters;
+    }
+
+    /// <summary>
+    /// Decides whether Pass 3 gets a trailing region to transcribe, and of which kind. Two
+    /// independent things ask for one:
+    /// <list type="bullet">
+    /// <item><description>the --verify fallback, for a gap-scoped <see cref="DetectGapsAsync"/> run
+    /// whose last checkable marking was unconfirmed: it knows exactly which numbers it is after, so
+    /// it is skipped entirely once they have all turned up elsewhere;</description></item>
+    /// <item><description>--trailing-scan, which sweeps from the last detected chapter to the end of
+    /// the file with no expectation of what it will find - the only way to catch a chapter after the
+    /// last one detected, which nothing bounds from above.</description></item>
+    /// </list>
+    /// --trailing-scan subsumes the fallback when both apply: an open-ended scan accepts everything
+    /// the targeted one would and starts no later, so the two are merged into a single sweep rather
+    /// than transcribing the tail twice.
+    /// </summary>
+    /// <param name="verifyFallback">The --verify fallback's region start and expected numbers, or
+    /// null when this is not a gap-scoped run (or its last marking was confirmed).</param>
+    /// <param name="chapters">Everything detected so far, in chronological order.</param>
+    /// <param name="trailingScanAllowed">Whether --trailing-scan may run at all - false once Pass 2
+    /// aborted, since a run that gave up on the file has no meaningful "last chapter" to sweep from.</param>
+    /// <returns>The region's start and its expected chapter numbers (null for an open-ended
+    /// --trailing-scan sweep), or null when no trailing region is needed.</returns>
+    private (double From, IReadOnlyList<int>? Targets)? ResolveTrailingRegion(
+        (double From, List<int> Targets)? verifyFallback, List<DetectedChapter> chapters,
+        bool trailingScanAllowed)
+    {
+        // Nothing found at all means no anchor to sweep from - the whole file would be "the
+        // trailing region", which is Pass 2's job, not this one's.
+        if (_options.TrailingScan && trailingScanAllowed && chapters.Count > 0)
+            return (Math.Min(chapters[^1].TimeSeconds, verifyFallback?.From ?? double.MaxValue), null);
+        if (verifyFallback is not { } tf)
+            return null;
+        var stillMissing = tf.Targets.Where(n => !chapters.Any(c => c.Number == n)).ToList();
+        return stillMissing.Count > 0 ? (tf.From, stillMissing) : null;
     }
 
     /// <summary>
@@ -1508,7 +1545,15 @@ public sealed class ChapterDetector
     /// <param name="expectedNumbers">The chapter numbers this gap exists to recover (see
     /// <see cref="MissingNumbersInGap"/>). Transcription stops as soon as all of them are found -
     /// continuing would only re-scan audio that cannot yield anything new - so the caller can
-    /// advance to the next gap (or finish Pass 3) immediately.</param>
+    /// advance to the next gap (or finish Pass 3) immediately.
+    /// <para>
+    /// Null instead runs the region <em>open-ended</em>, as --trailing-scan needs: there is no
+    /// known set of numbers to satisfy, so nothing can ever be complete and the region is always
+    /// scanned through to its end. With no target list to filter by, the only thing that makes a
+    /// match new is being numbered above every chapter already known - otherwise an in-text
+    /// mention of an earlier chapter would be reported as a find and merely dropped later by
+    /// <see cref="Normalize"/>.
+    /// </para></param>
     /// <param name="allSilences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/> - used both as seam targets and to pinpoint each
     /// mark at the end of the silence directly preceding its phrase.</param>
@@ -1520,7 +1565,7 @@ public sealed class ChapterDetector
     /// than just this region's finds.</param>
     private async Task<List<DetectedChapter>> TranscribeRegionAsync(
         string file, MediaInfo info, double fromSeconds, double toSeconds,
-        IReadOnlyList<int> expectedNumbers,
+        IReadOnlyList<int>? expectedNumbers,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
         List<SpeechSegment> speechSegments, double bytesPerSecond,
         WorkTracker work, LanguageProfile profile, IReadOnlyList<DetectedChapter> knownChapters,
@@ -1528,8 +1573,10 @@ public sealed class ChapterDetector
     {
         var found = new List<DetectedChapter>();
         // The still-missing chapter numbers of this gap; emptied as they are found, at which
-        // point there is nothing left to recover here and transcription can stop early.
-        var remaining = new HashSet<int>(expectedNumbers);
+        // point there is nothing left to recover here and transcription can stop early. Null for
+        // an open-ended --trailing-scan region, which has no such list and therefore no way to
+        // finish early - see the expectedNumbers doc above.
+        var remaining = expectedNumbers is null ? null : new HashSet<int>(expectedNumbers);
         // The previous chunk's own transcript in absolute file time, and whether the seam it
         // ends at was snapped (overlap-free) - the inputs to the cross-chunk bridging below.
         List<TranscriptSegment> previousChunkAbs = [];
@@ -1583,6 +1630,16 @@ public sealed class ChapterDetector
                 // rather than risking Normalize picking this re-detection's timestamp instead.
                 if (knownChapters.Any(k => k.Number == match.Number))
                     continue;
+                // An open-ended region has no expected-number list to check a match against, so
+                // the one thing that makes a match new here is topping every chapter already
+                // known. Without this an in-text mention of an earlier number would be reported
+                // as a find, only to be dropped again by Normalize - a lie in the log.
+                if (remaining is null && !IsAboveEveryKnownChapter(match.Number, knownChapters, found))
+                {
+                    _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
+                                 "not above every chapter already found (in-text mention?)");
+                    continue;
+                }
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans a Pass 3 chunk seam " +
                                  "(bridged from the previous chunk) - worth a spot check");
@@ -1594,7 +1651,7 @@ public sealed class ChapterDetector
             // for gets one more look: long inner gaps that line up with a real silence/jingle
             // (not just an ordinary narration pause) are re-scanned in small chunks, the same
             // fallback --verify uses for the same underlying Whisper failure mode.
-            if (remaining.Count > 0)
+            if (remaining is null or { Count: > 0 })
                 await ScanGapRetriesAsync(file, info, chunkStart, chunkEnd, freshAbs, profile,
                     found, remaining, knownChapters, allSilences, nonSpeechRegions, speechSegments, work, ct);
 
@@ -1604,7 +1661,7 @@ public sealed class ChapterDetector
             // only hold audio already accounted for by the chapters bounding it, so stop here and
             // let the caller move on to the next gap. The unscanned remainder still counts as this
             // gap's work done, so advance it to keep the Pass 3 progress bar honest.
-            if (remaining.Count == 0)
+            if (remaining is { Count: 0 })
             {
                 _log?.Invoke("gap complete - all expected chapters found");
                 if (chunkEnd < toSeconds)
@@ -1623,6 +1680,21 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Whether a phrase match found in an <em>open-ended</em> Pass 3 region (see the null
+    /// <c>expectedNumbers</c> case of <see cref="TranscribeRegionAsync"/>) is genuinely new. Such a
+    /// region has no expected-number list to test against, so the only usable criterion is the one
+    /// <see cref="Normalize"/> would apply anyway: the number has to top every chapter already
+    /// known, both the ones detected elsewhere and the ones this region has found so far. Anything
+    /// at or below that is a repeat or an in-text mention, not a chapter this scan recovered.
+    /// </summary>
+    /// <param name="number">The matched chapter number.</param>
+    /// <param name="knownChapters">Chapters already detected outside this region.</param>
+    /// <param name="found">Chapters this region has found so far.</param>
+    private static bool IsAboveEveryKnownChapter(
+        int number, IReadOnlyList<DetectedChapter> knownChapters, IReadOnlyList<DetectedChapter> found)
+        => knownChapters.Concat(found).All(c => number > c.Number);
+
+    /// <summary>
     /// Records one phrase match found while scanning a Pass 3 gap chunk (its normal transcript, or
     /// <see cref="ScanGapRetriesAsync"/>'s fallback) as a detected chapter: resolves the
     /// default-mode mark - a fixed offset before the phrase - hands it to <see cref="MarkPlacer"/>
@@ -1635,7 +1707,7 @@ public sealed class ChapterDetector
     /// for the VAD edge adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
     /// <param name="found">Chapters found in this gap so far; appended to.</param>
     /// <param name="remaining">Still-missing chapter numbers for this gap; the match's number is
-    /// removed from it.</param>
+    /// removed from it. Null for an open-ended region, which keeps no such list.</param>
     /// <param name="knownChapters">Chapters already detected outside this gap, so the progress
     /// bar's chapter state reflects the whole file.</param>
     /// <param name="allSilences">Every silence Pass 1 stored, for anchor resolution.</param>
@@ -1650,7 +1722,7 @@ public sealed class ChapterDetector
     /// <param name="ct">Cancellation token.</param>
     private async Task RecordGapChapterMatch(
         PhraseMatch match, List<TranscriptSegment> matchSegments,
-        List<DetectedChapter> found, HashSet<int> remaining, IReadOnlyList<DetectedChapter> knownChapters,
+        List<DetectedChapter> found, HashSet<int>? remaining, IReadOnlyList<DetectedChapter> knownChapters,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
         WorkTracker work, string file, string? inputDecoder, LanguageProfile profile, CancellationToken ct)
     {
@@ -1689,7 +1761,7 @@ public sealed class ChapterDetector
             file, inputDecoder, profile, allSilences, speechSegments, matchSegments);
         time = await _marks!.PlaceAsync(match.Number, time, phraseAbs, statSilence, statRegion, markCtx, ct);
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
-        remaining.Remove(match.Number);
+        remaining?.Remove(match.Number);
         var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), _options.ExpectedStartChapter);
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
@@ -1727,7 +1799,9 @@ public sealed class ChapterDetector
     /// <param name="profile">Language profile for phrase/number matching.</param>
     /// <param name="found">Chapters found in this gap so far; appended to via <see
     /// cref="RecordGapChapterMatch"/>.</param>
-    /// <param name="remaining">Still-missing chapter numbers for this gap.</param>
+    /// <param name="remaining">Still-missing chapter numbers for this gap, or null for an
+    /// open-ended region - which cannot filter by expected number, and so re-scans every candidate
+    /// stretch and accepts anything numbered above every chapter already known.</param>
     /// <param name="knownChapters">Chapters already detected outside this gap.</param>
     /// <param name="allSilences">Every silence Pass 1 stored - both for anchor resolution and as
     /// retry candidates.</param>
@@ -1738,7 +1812,7 @@ public sealed class ChapterDetector
     private async Task ScanGapRetriesAsync(
         string file, MediaInfo info, double chunkStart, double chunkEnd,
         List<TranscriptSegment> freshAbs, LanguageProfile profile,
-        List<DetectedChapter> found, HashSet<int> remaining, IReadOnlyList<DetectedChapter> knownChapters,
+        List<DetectedChapter> found, HashSet<int>? remaining, IReadOnlyList<DetectedChapter> knownChapters,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
         WorkTracker work, CancellationToken ct)
     {
@@ -1754,7 +1828,7 @@ public sealed class ChapterDetector
 
         foreach (var (silStart, silEnd) in candidates.OrderBy(c => c.Start))
         {
-            if (remaining.Count == 0)
+            if (remaining is { Count: 0 })
                 break;
             // An ordinary sentence that merely straddles a real pause still has its own segment
             // covering the pause and needs no second look - only a stretch with nothing
@@ -1765,7 +1839,9 @@ public sealed class ChapterDetector
             var sliceStart = Math.Max(chunkStart, silStart - GapRetryPaddingSeconds);
             var sliceEnd = Math.Min(chunkEnd, silEnd + GapRetryPaddingSeconds);
             var subStep = GapRetryChunkSeconds - GapRetryChunkOverlapSeconds;
-            for (var subStart = sliceStart; subStart < sliceEnd && remaining.Count > 0; subStart += subStep)
+            for (var subStart = sliceStart;
+                 subStart < sliceEnd && remaining is null or { Count: > 0 };
+                 subStart += subStep)
             {
                 var len = Math.Min(
                     Math.Min(GapRetryChunkSeconds, sliceEnd - subStart), info.DurationSeconds - subStart);
@@ -1780,11 +1856,14 @@ public sealed class ChapterDetector
 
                 foreach (var match in FindCappedPhraseMatches(subAbs, profile))
                 {
-                    if (!remaining.Contains(match.Number) || knownChapters.Any(k => k.Number == match.Number))
+                    var wanted = remaining is null
+                        ? IsAboveEveryKnownChapter(match.Number, knownChapters, found)
+                        : remaining.Contains(match.Number);
+                    if (!wanted || knownChapters.Any(k => k.Number == match.Number))
                         continue;
                     await RecordGapChapterMatch(match, subAbs, found, remaining, knownChapters,
                         allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile, ct);
-                    if (remaining.Count == 0)
+                    if (remaining is { Count: 0 })
                         break;
                 }
             }

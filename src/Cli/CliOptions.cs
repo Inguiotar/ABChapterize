@@ -114,6 +114,35 @@ public sealed class CliOptions
     public int? MaxChapterNumber { get; private set; }
 
     /// <summary>
+    /// Transcribes everything after the last chapter found, all the way to the end of the file,
+    /// looking for further chapters (--trailing-scan / -L; off by default).
+    /// <para>
+    /// This closes the one hole the ordinary Pass 3 tail structurally cannot:
+    /// <see cref="ABChapterize.Detection.GapPlanning.FindGaps"/> spots a missing chapter by
+    /// finding a hole in the number sequence, which needs a known chapter on each side of it. A
+    /// chapter missing <em>after</em> the last one found has nothing above it to compare against,
+    /// so nothing notices it is gone and the file is written out looking complete.
+    /// </para>
+    /// <para>
+    /// Off by default because the cost is paid on every file, every run, whether or not anything
+    /// is wrong: the region is a whole chapter long in a healthy book, and unlike a gap scan there
+    /// is no set of expected numbers to satisfy, so nothing can stop it early - it always runs to
+    /// the end of the file. Measured on this project's own hardware, the default turbo model
+    /// transcribes at roughly 5.7x real time, making a 30-minute final chapter about five minutes
+    /// of extra work per file; heavier models are slower still. Worth it when a book's last
+    /// chapter genuinely matters, wasteful as a blanket default - the same reasoning that keeps
+    /// pass 2.5 opt-in.
+    /// </para>
+    /// <para>
+    /// Does nothing when no chapter was found at all (there is no "last chapter" to scan from, and
+    /// transcribing an entire book on spec is not what this flag is for), nor after an
+    /// --early-abort or --expected-start-chapter abort, which mean the file is being given up on
+    /// rather than gap-filled.
+    /// </para>
+    /// </summary>
+    public bool TrailingScan { get; private set; }
+
+    /// <summary>
     /// Minutes of a file's play time Pass 2 may probe without finding a single chapter before
     /// giving up on it outright (--early-abort / -a, default 60; 0 disables the feature
     /// entirely). Always active by default - guards against burning a full, expensive
@@ -418,7 +447,8 @@ public sealed class CliOptions
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
         ['x'] = "--max-chapters", ['N'] = "--max-chapter-number",
-        ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['F'] = "--filter", ['X'] = "--max-jingle-length",
+        ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['L'] = "--trailing-scan",
+        ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
@@ -545,7 +575,7 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.DryRun || o._langSet || o._phraseSet || o._modelSet
+        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                          || o._pass3ModelSet || o._maxSet || o._maxChapterNumberSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                          || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--revert can only be combined with --recurse and --filter.");
@@ -553,7 +583,7 @@ public sealed class CliOptions
         if (o.NoOp && o.FilterRegex == null && o.FilterExtensions == null)
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
-        if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.DryRun || o._langSet || o._phraseSet || o._modelSet
+        if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.DryRun || o._langSet || o._phraseSet || o._modelSet
                        || o._pass3ModelSet || o._maxSet || o._maxChapterNumberSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
                        || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
@@ -561,12 +591,12 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --max-jingle-length, --min-silence-length, --early-abort, " +
-                "--expected-start-chapter, --max-chapter-number and --verify have no effect and cannot be " +
-                "combined with it.");
+                "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify " +
+                "have no effect and cannot be combined with it.");
 
         if (o.MaxChapterNumber is { } cap && o.ExpectedStartChapter is { } start && cap < start)
             throw new CliError(
@@ -655,6 +685,7 @@ public sealed class CliOptions
             case "--force": Force = true; return true;
             case "--mark-before-jingle": MarkBeforeJingle = true; return true;
             case "--quick-marks": QuickMarks = true; return true;
+            case "--trailing-scan": TrailingScan = true; return true;
             case "--quiet": Quiet = true; return true;
             case "--verbose": Verbose = true; return true;
             case "--verbose-transcripts": VerboseTranscripts = Verbose = true; return true;
@@ -1026,6 +1057,19 @@ public sealed class CliOptions
                                     and the file is tagged with a ".missing-marks-..." suffix if
                                     any are still unresolved afterward. Only applies to a fresh,
                                     from-scratch detection run, same restriction as --early-abort.
+          -L, --trailing-scan       Transcribe everything after the last chapter found, through to
+                                    the end of the file, looking for further chapters (default:
+                                    off). Pass 3 spots a missing chapter as a hole in the number
+                                    sequence, which needs a known chapter on either side of it - so
+                                    a chapter missing after the last one found is the one case
+                                    nothing can notice, and the file is written out looking
+                                    complete. This closes that hole, at the price of transcribing a
+                                    whole final chapter's worth of audio on every file, whether or
+                                    not anything is wrong: there are no expected numbers to satisfy
+                                    here, so the scan can never stop early. Reach for it when a
+                                    book's last chapter matters more than the run time. Does
+                                    nothing when no chapter was found at all, or after an
+                                    --early-abort or --expected-start-chapter abort.
           -N, --max-chapter-number <n>
                                     Highest chapter number this book plausibly has (default: none).
                                     A detected chapter numbered above <n> is discarded on the spot

@@ -193,6 +193,7 @@ when chapters are written. The most useful knobs:
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 | `-a`, `--early-abort <minutes>` | Always on (default: 60; `0` disables it). Give up on a file, unchanged, once this many minutes of play time have been probed with no chapter found — avoids transcribing a whole book that plainly isn't going to yield any. Only applies to a fresh detection run. |
 | `-e`, `--expected-start-chapter <n>` | For a split-book part that doesn't start at chapter 1: the number this file is expected to start at. Without it (the default), whatever number pass 2 finds first is trusted outright and nothing below it is ever searched for. With it, a first chapter found *below* `<n>` aborts the file outright, unchanged; a first chapter found *above* `<n>` has pass 3 search for the missing numbers down to `<n>`, tagging the file `.missing-marks-…` if it still can't find them all. Only applies to a fresh detection run. |
+| `-L`, `--trailing-scan` | Transcribe everything after the last chapter found, through to the end of the file, looking for further chapters (default: off). A missing chapter is normally spotted as a hole in the number sequence, which needs a known chapter on either side of it — so one missing *after* the last chapter found is the one case nothing notices, and the file comes out looking complete. This closes that hole, but there are no expected numbers to satisfy here, so the scan can never stop early: every file pays a full final chapter's worth of transcription, whether or not anything was wrong. |
 | `-N`, `--max-chapter-number <n>` | Highest chapter number this book plausibly has (default: no limit). A detected chapter numbered above `<n>` is discarded as a mishearing — without it, one misheard "chapter 510" in a twelve-chapter book turns everything in between into a gap to hunt for. Not to be confused with `--max-chapters` above, which counts *pre-existing* marks. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
 | `-h`, `--verify-threshold <n>` | Requires `--verify`. If more than `<n>` marks fail verification, the ones that passed are no longer trusted as gap-recovery anchors either — the whole file falls back to full detection, same as when nothing at all is confirmed. |
@@ -282,7 +283,9 @@ use `.`, whatever the machine's locale says.
    hiding are transcribed completely, in chunks whose borders snap to
    silences too (with the transcripts bridged across each seam, so not even
    a phrase interrupted by a pause right at a border can slip through). Pass 3
-   can use a different model than pass 2 (`--pass3-model`). If a gap still
+   can use a different model than pass 2 (`--pass3-model`). A chapter missing
+   after the *last* one found leaves no such gap — nothing above it to notice
+   its absence — which is what `--trailing-scan` is for. If a gap still
    remains, the chapters that *were* found are written and the file is renamed
    with a `.missing-marks-…` tag listing the still-missing numbers, rather than
    discarded. Running the tool again over such a file resumes it

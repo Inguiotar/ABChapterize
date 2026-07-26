@@ -247,6 +247,14 @@ specific expected number rather than a blind guess — see
 period: a first chapter found within 10 seconds of the file start is still
 taken as-is, not searched past.
 
+A chapter missing *after* the last one found is the one case none of this can
+notice: a gap is a hole in the number sequence, which needs a known chapter on
+either side of it, and there is nothing above the last one to compare against.
+`--trailing-scan` transcribes that stretch anyway — from the last chapter found
+through to the end of the file — at the price of doing so on every file, every
+run, whether or not anything is wrong. See
+[Detection behaviour](#detection-behaviour).
+
 If a gap *between* detected chapters (or, with `--expected-start-chapter`,
 before the first one) still remains after pass 3, the chapters that *were*
 found are still written, but a warning is printed and the file is
@@ -659,6 +667,20 @@ skipped (reported as "skipped").
   an unresolved gap between two detected chapters already is. Only applies
   to a fresh, from-scratch run, the same restriction as `--early-abort`.
 
+`-L`, `--trailing-scan`
+: Transcribe everything after the last chapter found, through to the end of the
+  file, looking for further chapters (default: off). Pass 3 spots a missing
+  chapter as a hole in the number sequence, which needs a known chapter on
+  either side of it — so a chapter missing *after* the last one found is the
+  one case nothing can notice, and the file is written out looking complete.
+  This closes that hole. The catch is that it is not a safety net that only
+  costs something when it fires: with no expected numbers to satisfy, the scan
+  can never stop early, so every file pays a full final chapter's worth of
+  transcription time whether or not anything was wrong. Reach for it when a
+  book's last chapter matters more than the run time. Does nothing when no
+  chapter was found at all — there is no "last chapter" to scan from — nor
+  after an `--early-abort` or `--expected-start-chapter` abort.
+
 `-N`, `--max-chapter-number <n>`
 : The highest chapter number this book plausibly has (default: no limit). A
   detected chapter numbered above `<n>` is discarded on the spot as a
@@ -830,7 +852,7 @@ touching Whisper at all.
   `--chapter-phrase`, `--model`, `--pass3-model`, `--mark-before-jingle`,
   `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
   `--expected-start-chapter`, `--max-chapter-number`, `--quick-marks`,
-  `--verify` — nor with `--revert`. Pre-existing chapter
+  `--trailing-scan`, `--verify` — nor with `--revert`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters
   have no Whisper confidence, so they never trigger low-confidence

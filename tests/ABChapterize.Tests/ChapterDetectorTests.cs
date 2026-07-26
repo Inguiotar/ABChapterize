@@ -706,6 +706,93 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task TrailingScan_FindsAChapterAfterTheLastOneDetected()
+    {
+        // Chapter 3 is announced at 1799.95, past the last chapter pass 2 found and with nothing
+        // above it - the one hole FindGaps structurally cannot see, since a sequence gap needs a
+        // known chapter on either side. --trailing-scan transcribes from chapter 2's mark to the
+        // end of the file and picks it up. (The scan's second chunk carries it: its first, starting
+        // at chapter 2's own mark, is too close to that chapter's probe window for the scripted
+        // transcriber to tell the two decodes apart.)
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--trailing-scan"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1789.95, Seg(10, " Chapter three.")); // trailing chunk 2, phrase at 1799.95
+            });
+
+        Assert.Equal([new(1, 0.25), new(2, 1199.95), new(3, 1799.7)], result.Chapters);
+        // Scanned from the last chapter's own mark, and - having no expected numbers to satisfy -
+        // carried on to the end of the file rather than stopping at the find.
+        Assert.Contains(1199.95, audio.DecodeStarts);
+        Assert.Contains(audio.DecodeWindows, w => w.Start > 2900);
+    }
+
+    [Fact]
+    public async Task TrailingRegion_IsLeftAlone_WithoutTheOption()
+    {
+        // Same audio as above, minus the flag: chapters 1 and 2 form an unbroken sequence, so
+        // nothing raises a gap and chapter 3 is never looked for. This is the default, and the
+        // reason --trailing-scan exists.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1789.95, Seg(10, " Chapter three."));
+            });
+
+        Assert.Equal([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        Assert.DoesNotContain(1789.95, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task TrailingScan_DoesNothing_WhenNoChapterWasFoundAtAll()
+    {
+        // With nothing found there is no "last chapter" to scan from - the trailing region would be
+        // the entire book, which is pass 2's job. This also covers the --early-abort and
+        // --expected-start-chapter aborts, both of which leave the chapter list empty.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--trailing-scan"),
+            [new(595, 600)],
+            s => { });
+
+        Assert.Empty(result.Chapters);
+        // Nothing but probe-sized decodes: no 600 s pass-3 chunk was ever transcribed.
+        Assert.All(audio.DecodeWindows, w => Assert.True(w.Duration is null or <= 60));
+    }
+
+    [Fact]
+    public async Task TrailingScan_IgnoresANumberNotAboveEveryChapterAlreadyFound()
+    {
+        // An open-ended scan has no expected-number list to test a match against, so the only thing
+        // that makes one new is topping every chapter already known. Here pass 2 finds 1 and 3 and
+        // pass 3 fails to fill the gap, so chapter 2 is genuinely still missing - but hearing it
+        // announced *after* chapter 3 is an in-text mention, not a chapter start. Accepting it would
+        // report a find that Normalize then quietly drops again.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--trailing-scan"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter three."));
+                s.Add(1789.95, Seg(10, " Chapter two."));
+            });
+
+        Assert.Equal([new(1, 0.25), new(3, 1199.95)], result.Chapters);
+        Assert.True(result.GapRemains);
+        Assert.Contains(log, l => l.Contains("skipped chapter 2") &&
+                                  l.Contains("not above every chapter already found"));
+        Assert.DoesNotContain(log, l => l.Contains("chapter 2 found in gap"));
+    }
+
+    [Fact]
     public async Task Pass3_UsesTheSeparatePass3Transcriber_WhenOneIsGiven()
     {
         // Pass 2 finds only chapters 1 and 3 (its transcriber never hears chapter 2), leaving a
