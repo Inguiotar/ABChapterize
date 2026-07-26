@@ -176,9 +176,10 @@ public sealed class FileProcessor
                 : ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount / 4, 1, 4));
 
             // A different --pass3-model gets one shared, lazily-loaded instance for the whole run
-            // (see SharedPass3Transcriber); pass 3 is the exception, so serializing it there costs
-            // little and avoids loading a second model per concurrent file. The same model as
-            // --model means no separate instance at all - pass 3 reuses each file's own transcriber.
+            // (see SharedPass3Transcriber); only gap work (pass 2.5 and pass 3) uses it, which is
+            // the exception rather than the rule, so serializing it there costs little and avoids
+            // loading a second model per concurrent file. The same model as --model means no
+            // separate instance at all - gap work reuses each file's own transcriber.
             var pass3Differs = _options.Pass3Model != _options.Model;
             var pass3Shared = pass3Differs
                 ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly)

@@ -71,6 +71,18 @@ public sealed class CliOptions
     public string Pass3Model { get; private set; } = "turbo";
 
     /// <summary>
+    /// True when <see cref="Pass3Model"/> is strictly more capable than <see cref="Model"/> - the
+    /// "one last, best-effort attempt" direction of --pass3-model rather than the "get the
+    /// stragglers over with quickly" one. Gates pass 2.5 (see <c>ChapterDetector</c>'s
+    /// <c>RunPass25Async</c>), which is only ever worth its extra probes when the model doing them
+    /// can actually hear something the pass-2 model could not; with an equal or lighter pass-3
+    /// model it would just re-probe the same audio to the same conclusion, more slowly.
+    /// Ranking comes from <see cref="ModelNames"/>'s own order.
+    /// </summary>
+    public bool Pass3ModelIsUpgrade
+        => Array.IndexOf(ModelNames, Pass3Model) > Array.IndexOf(ModelNames, Model);
+
+    /// <summary>
     /// Forces the CPU backend for Whisper instead of the fastest available hardware
     /// acceleration (--cpu-only / -C; see <see cref="WhisperTranscriber"/>). The Silero VAD
     /// pre-pass already always runs on CPU regardless of this option - the ONNX Runtime
@@ -171,10 +183,11 @@ public sealed class CliOptions
     /// top of default-mode placement rather than replacing it outright is what makes this
     /// compatible with <see cref="PreciseMark"/>, unlike this tool's original "--jingle" mode this
     /// option is descended from. Because <see cref="PreciseMark"/> is on unless <see
-    /// cref="QuickMarks"/> asks otherwise, the walked result is normally verified afterward too -
-    /// see <see cref="PreciseMarkRefiner"/>'s <c>VerifyMarkBeforeJingleAsync</c> - rather than
-    /// being trusted purely on the VAD/silence heuristics above; under <see cref="QuickMarks"/>
-    /// neither the starting mark nor the walked result gets that check. Without this option, see
+    /// cref="QuickMarks"/> asks otherwise, the mark the walk starts from is normally a confirmed
+    /// announcement onset, which is what makes the walked result trustworthy on the VAD/silence
+    /// heuristics above alone; only when that confirmation did not happen is the walked result
+    /// itself re-checked - see <see cref="PreciseMarkRefiner"/>'s
+    /// <c>VerifyMarkBeforeJingleAsync</c>. Without this option, see
     /// <see cref="ChapterDetector"/>'s <c>DefaultMarkLeadSeconds</c> for the placement used
     /// instead.
     /// </summary>
@@ -388,6 +401,13 @@ public sealed class CliOptions
     /// </summary>
     public LanguageProfile DefaultProfile { get; private set; } = null!;
 
+    /// <summary>
+    /// The accepted --model/--pass3-model selectors, in ascending order of transcription quality -
+    /// an order <see cref="Pass3ModelIsUpgrade"/> reads directly, so keep any new entry in its
+    /// rightful place rather than appending it. "turbo" (large-v3-turbo) sits just below "large":
+    /// a distilled large that trades a little accuracy for a lot of speed, still clearly ahead of
+    /// "medium".
+    /// </summary>
     private static readonly string[] ModelNames = ["tiny", "base", "small", "medium", "turbo", "large"];
 
     /// <summary>Maps every short option letter to its long option name.</summary>
@@ -573,7 +593,8 @@ public sealed class CliOptions
         o.Model = o.Model.ToLowerInvariant();
 
         // The pass-3 model defaults to the main model, so leaving --pass3-model off means pass 3
-        // uses the same model as pass 2 - the previous, single-model behavior.
+        // uses the same model as pass 2 - the previous, single-model behavior - and leaves
+        // Pass3ModelIsUpgrade false, so pass 2.5 stays off too.
         if (!o._pass3ModelSet)
             o.Pass3Model = o.Model;
         else if (!ModelNames.Contains(o.Pass3Model.ToLowerInvariant()))
@@ -729,7 +750,7 @@ public sealed class CliOptions
     {
         if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
             return (45, true);
-        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) ||
+        if (!NumberCulture.TryParseDecimal(value, out var s) ||
             (s != 0 && (s < 1 || s > 600)))
             throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected 0, seconds between 1 and 600, or \"auto\".");
         return (s, false);
@@ -744,7 +765,7 @@ public sealed class CliOptions
     {
         if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
             return (1.5, true);
-        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var s) || s < 0.1 || s > 60)
+        if (!NumberCulture.TryParseDecimal(value, out var s) || s < 0.1 || s > 60)
             throw new CliError($"Invalid --min-silence-length value \"{value}\": expected seconds between 0.1 and 60, or \"auto\".");
         return (s, false);
     }
@@ -774,7 +795,7 @@ public sealed class CliOptions
     /// minutes between 0 and 1440 (24 hours).</summary>
     private static double ParseEarlyAbort(string value)
     {
-        if (!double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var n) || n < 0 || n > 1440)
+        if (!NumberCulture.TryParseDecimal(value, out var n) || n < 0 || n > 1440)
             throw new CliError($"Invalid --early-abort value \"{value}\": expected 0 (disabled) or minutes between 0 and 1440.");
         return n;
     }
@@ -909,8 +930,11 @@ public sealed class CliOptions
           -M, --pass3-model <name>  Whisper model for pass 3 (gap filling) only; same choices as
                                     --model (default: whatever --model is). Use a lighter model to
                                     speed pass 3 up, or "large" for one last best-effort attempt at
-                                    the chapters the main model missed. Loaded and downloaded lazily,
-                                    only when a file actually reaches pass 3.
+                                    the chapters the main model missed. A model better than --model
+                                    also enables pass 2.5, a quick re-probe of the gap with it
+                                    before pass 3 transcribes the region in full. Loaded and
+                                    downloaded lazily, only when a file actually reaches pass 2.5
+                                    or pass 3.
           -C, --cpu-only            Force Whisper onto the CPU backend instead of the fastest
                                     available hardware acceleration. The Silero VAD pre-pass
                                     already always runs on CPU regardless of this option, so it

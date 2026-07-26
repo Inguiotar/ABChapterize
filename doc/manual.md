@@ -176,12 +176,11 @@ sting followed by this chapter's own, with an audible break between them —
 the walk stops at that break, so the mark lands at the start of the second
 jingle rather than in front of the first. When a jingle opens the file with
 nothing spoken before it at all, the mark instead backs off by a small fixed
-margin. Unless `--quick-marks` turned the refinement off, the walked result is
-itself double-checked the same way afterward —
-re-transcribed right at its own position, and corrected further back if the
-announcement is still audible there — rather than being trusted purely on the
-VAD/silence heuristics above. The result is then nudged earlier to a nearby,
-clearly quieter point in the same way (see above) (the
+margin. In the rare case that the refinement above could not confirm the
+announcement — so the walk started from an unverified position — the walked
+result is itself re-transcribed afterward and corrected further back if the
+announcement is still audible there. The result is then nudged earlier to a
+nearby, clearly quieter point in the same way (see above) (the
 machinery for all of this is documented in the source).
 In-text mentions ("…as we learned in chapter three…") are rejected by requiring the
 announcement to follow a real pause; out-of-order detections and duplicates of
@@ -208,6 +207,23 @@ real jingle length is known, and widening again if a longer one turns up.
 Giving `--max-jingle-length` an explicit numeric value (including `0`)
 disables this and keeps the window fixed at that value throughout. See the
 [`-X` reference](#detection-behaviour) for the knob itself.
+
+### Pass 2.5 — cheap gap re-probe (only with a heavier `--pass3-model`)
+
+A gap is often not a chapter the probing missed, but a number the pass-2 model
+misheard while probing the right spot. So when — and only when —
+`--pass3-model` names a *better* model than pass 2's, the gap's regions are
+first re-probed exactly as pass 2 probes, but with that better model. When it
+finds the missing chapters, pass 3 never has to run for them at all; anything it
+does not find falls through to pass 3 immediately afterward.
+
+Whether that pays off depends on the gap: the re-probe's cost grows with the
+number of candidate silences inside it, not with its length, so a region dense
+in candidates can spend about as long probing as pass 3 would have spent
+transcribing it outright — and then pass 3 still follows. Expect it to help most
+where a gap is long but quiet. With an equal or lighter `--pass3-model` (the
+default is equal), this step does not run at all. Marks are placed exactly as in
+pass 2.
 
 ### Pass 3 — gap filling (only when needed)
 
@@ -355,6 +371,11 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-M`, `-x`, `-N`, `-a`,
 `-e`, `-h`, `-F`, `-X`, `-n`, `-t`, `-i`, `-J`) cannot be collapsed with
 others.
 
+Options taking a decimal number accept either separator — `-n 2.5` and
+`-n 2,5` are the same thing — so you can type whatever your keyboard and
+habits produce. Numbers the tool *prints* always use `.`, on every machine,
+so that logs and reports stay comparable regardless of regional settings.
+
 ### Target selection
 
 `<file-or-directory>` (required, last argument)
@@ -418,9 +439,13 @@ others.
   (gap filling) only; same choices as `--model`, defaulting to whatever
   `--model` is. Use a lighter model to make pass 3 faster (when you expect to
   fix any stragglers by hand anyway), or `large` for one last, best-effort
-  attempt at the chapters the main model missed. The pass-3 model is downloaded
-  and loaded lazily — only if and when a file actually reaches pass 3 — so
-  naming a model here costs nothing on files that never need it.
+  attempt at the chapters the main model missed. Naming a *better* model here
+  than `--model` also enables
+  [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
+  which often closes the gap far quicker than pass 3 would. The pass-3 model is
+  downloaded and loaded lazily — only if and when a file actually reaches
+  pass 2.5 or pass 3 — so naming a model here costs nothing on files that never
+  need it.
 
 `-C`, `--cpu-only`
 : Forces Whisper onto the CPU backend instead of the fastest available
@@ -1186,10 +1211,14 @@ name, everything the pipeline does:
 - probe result (duration, codec/profile, existing chapter marks),
 - the silence count of pass 1,
 - each probe window and pass-3 chunk as a `<length>@<time>` header line,
-- every accepted chapter detection with the exact mark position and
-  confidence, flagged `LOW CONFIDENCE` below 0.5, plus a `still missing:`
-  list of any earlier chapter numbers not detected yet,
-- the regions transcribed in pass 3, and when each pass finishes,
+- every accepted chapter detection with the exact mark position, confidence
+  and the loudness of the audio right at that position (e.g. `-58.3 dBFS`;
+  `-inf dBFS` for pure digital silence) — a figure close to silence means the
+  mark landed in a real pause, a loud one that it landed mid-word or inside
+  music and is worth a listen. Flagged `LOW CONFIDENCE` below 0.5, plus a
+  `still missing:` list of any earlier chapter numbers not detected yet,
+- the gap re-probes of pass 2.5 and the regions transcribed in pass 3, and
+  when each pass finishes,
 - once the file is done, a `stats -` line: the shortest silence and (when
   the VAD pre-pass ran, which it does by default) longest jingle found
   before a chapter — each also given as

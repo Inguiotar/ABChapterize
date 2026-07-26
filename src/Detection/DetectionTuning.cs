@@ -251,6 +251,28 @@ internal static class DetectionTuning
     internal const double PreciseMarkLeadInSeconds = 0.1;
 
     /// <summary>
+    /// How far behind the pre-walk mark --mark-before-jingle's backward walk must have landed
+    /// before <see cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/> will probe the result at
+    /// all. The probe decodes <see cref="PreciseMarkCheckWindowSeconds"/> forward from the walked
+    /// mark, while the announcement it retreated from starts <see cref="DefaultMarkLeadSeconds"/>
+    /// after the pre-walk mark; any smaller gap than the difference puts that announcement inside
+    /// the probe's own window, where "the announcement is still audible" is a foregone conclusion
+    /// that says nothing about whether the walk succeeded - it reads a short jingle, and the
+    /// deliberate "no jingle here, mark left where it was" outcome, exactly like a walk that
+    /// failed. Below this gap the walk is therefore trusted unprobed.
+    /// </summary>
+    internal const double MarkBeforeJingleVerifyMinGapSeconds =
+        PreciseMarkCheckWindowSeconds - DefaultMarkLeadSeconds;
+
+    /// <summary>
+    /// How much audio <see cref="MarkLoudness.MeasureDbfsAsync"/> averages when reporting a
+    /// finished mark's level under --verbose. Long enough that a single near-zero-crossing sample
+    /// cannot pass a loud passage off as silence, short enough that the figure still describes the
+    /// mark itself rather than the sentence after it.
+    /// </summary>
+    internal const double MarkLoudnessWindowSeconds = 0.25;
+
+    /// <summary>
     /// Step size precise marking's round 2 (<see cref="RefinePreciseMarkAsync"/>) advances by when
     /// blindly sweeping for the chapter phrase after round 1's VAD-speech-segment candidates never
     /// confirmed it in either direction. Matches <see cref="PreciseMarkLeadInSeconds"/>'s own

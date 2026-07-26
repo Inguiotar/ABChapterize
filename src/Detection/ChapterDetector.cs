@@ -399,7 +399,7 @@ public sealed class ChapterDetector
         var pass2Ctx = new Pass2Context(
             file, info, work, bytesPerSecond, jingleCeilingSeconds,
             allSilences, silences, nonSpeechRegions, speechSegments,
-            earlyAbortSeconds, expectedStartChapter);
+            earlyAbortSeconds, expectedStartChapter, _transcriber);
 
         foreach (var region in regions)
         {
@@ -413,6 +413,10 @@ public sealed class ChapterDetector
         var chapters = Normalize(found);
         _log?.Invoke("Pass 2 finished");
 
+        if (!earlyAborted && belowExpectedStartNumber == null)
+            chapters = await RunPass25Async(file, info, work, chapters, jingleCeilingSeconds,
+                allSilences, silences, nonSpeechRegions, speechSegments, bytesPerSecond, profile!, ct);
+
         chapters = await RunPass3Async(file, info, work, chapters, allSilences, nonSpeechRegions,
             speechSegments, bytesPerSecond, profile!, trailingFallback, ct);
 
@@ -425,10 +429,15 @@ public sealed class ChapterDetector
     /// Region-loop-invariant Pass 2 inputs, gathered here instead of threading each field through
     /// <see cref="ProcessRegionAsync"/>'s parameter list on its own.
     /// </summary>
+    /// <param name="Transcriber">The recognizer this region's probes decode with - <see
+    /// cref="_transcriber"/> for Pass 2 proper, <see cref="_pass3Transcriber"/> for a pass 2.5
+    /// re-probe (see <see cref="RunPass25Async"/>). Only the probe transcriptions follow it; mark
+    /// placement keeps refining on the pass-2 model either way, exactly as Pass 3 already does.</param>
     private readonly record struct Pass2Context(
         string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond, double JingleCeilingSeconds,
         List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
-        List<SpeechSegment> SpeechSegments, double EarlyAbortSeconds, int? ExpectedStartChapter);
+        List<SpeechSegment> SpeechSegments, double EarlyAbortSeconds, int? ExpectedStartChapter,
+        ITranscriber Transcriber);
 
     /// <summary>
     /// Runs Pass 2 candidate probing for a single detection region, appending every accepted
@@ -607,7 +616,7 @@ public sealed class ChapterDetector
                         allowBeyondBorder: false);
                     var samples = await _audio.DecodePcmAsync(ctx.File, splitPoint,
                         windowEnd - splitPoint, ctx.Info.InputDecoder, ct);
-                    var fresh = await TranscribeCountingAsync(samples, ct);
+                    var fresh = await TranscribeCountingAsync(samples, ct, ctx.Transcriber);
                     var reused = cacheSegmentsAbs
                         .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint).ToList();
                     windowSegmentsAbs = reused.Concat(ShiftSegments(fresh, splitPoint)).ToList();
@@ -633,7 +642,7 @@ public sealed class ChapterDetector
                     _transcriber.ChangeLanguage(profile.Language);
                 }
 
-                var fresh = await TranscribeCountingAsync(samples, ct);
+                var fresh = await TranscribeCountingAsync(samples, ct, ctx.Transcriber);
                 windowSegmentsAbs = ShiftSegments(fresh, start);
                 cacheSegmentsAbs = windowSegmentsAbs;
                 cacheFrom = start;
@@ -734,10 +743,11 @@ public sealed class ChapterDetector
                     markSilence = a;
                 }
 
+                var phraseHeard = false;
                 if (_options.PreciseMark)
-                    time = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, ctx.File, ctx.Info.InputDecoder, profile!, ctx.SpeechSegments, ct);
+                    (time, phraseHeard) = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, ctx.File, ctx.Info.InputDecoder, profile!, ctx.SpeechSegments, ct);
                 if (_options.MarkBeforeJingle)
-                    time = await ApplyMarkBeforeJingleAsync(time, ctx.AllSilences, ctx.SpeechSegments, trimmedAbs, ctx.File, ctx.Info.InputDecoder, profile!, ct);
+                    time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx.AllSilences, ctx.SpeechSegments, trimmedAbs, ctx.File, ctx.Info.InputDecoder, profile!, ct);
 
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
@@ -751,7 +761,9 @@ public sealed class ChapterDetector
                 ctx.Work.HighestChapter = highest;
                 ctx.Work.MissingChapters = missingNumbers.Count;
                 _log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)} " +
-                             $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
+                             $"(confidence {match.Confidence:0.00}" +
+                             await MarkLoudnessNoteAsync(time, ctx.File, ctx.Info.InputDecoder, ct) +
+                             $"){LowConfidenceNote(match.Confidence)}" +
                              MissingNote(missingNumbers));
 
                 if (_vad != null && _options.AutoMaxJingle && found.Count > 1)
@@ -1075,6 +1087,108 @@ public sealed class ChapterDetector
                 _log?.Invoke("Pass 3 finished (trailing)");
             }
         }
+        return chapters;
+    }
+
+    /// <summary>
+    /// Pass 2.5: before Pass 3 resorts to transcribing a whole gap region end to end, re-probes
+    /// that region with Pass 2's own cheap candidate logic - the same silence/jingle-anchored
+    /// windows, adaptive resizing and transcript reuse - but running on the <c>--pass3-model</c>
+    /// recognizer instead of the pass-2 one.
+    /// <para>
+    /// The premise is that most gaps are not "the announcement is unprobeable" but simply "the
+    /// pass-2 model misheard it": the candidate window was probed, the audio was right there, and a
+    /// better model would have read the number correctly. Retrying just those windows can then
+    /// close the gap without transcribing the region at all.
+    /// </para>
+    /// <para>
+    /// The cost is <em>not</em> guaranteed to be small, and scales with how many candidates the gap
+    /// holds rather than with its length: a region dense in qualifying silences can add up to a
+    /// comparable amount of decoded audio as the single full transcription it is trying to avoid,
+    /// and when it then finds nothing, Pass 3 still has to run afterward. Measured on real audio
+    /// (2026-07-26, --model tiny --pass3-model large): a 56-minute gap took ~40 minutes of
+    /// re-probing and recovered nothing. It is a favourable bet only where candidates are sparse
+    /// relative to the region - which is why it stays opt-in behind a deliberately chosen heavier
+    /// --pass3-model rather than being on by default.
+    /// </para>
+    /// <para>
+    /// Runs only when <see cref="CliOptions.Pass3ModelIsUpgrade"/> holds - a lighter or equal
+    /// pass-3 model would only re-probe the same audio to the same conclusion - and only when a
+    /// distinct pass-3 recognizer actually exists to probe with. Never runs after an --early-abort
+    /// or an --expected-start-chapter abort: both mean the file is being given up on, not gap-filled.
+    /// </para>
+    /// <para>
+    /// Each gap becomes a <see cref="DetectionRegion"/> bounded by the chapter numbers around it,
+    /// exactly as a --verify gap recovery builds its regions, so a re-probe can never accept a
+    /// number outside the gap or displace a chapter already found. Mark placement for anything
+    /// recovered here is unchanged - it refines on the pass-2 model like every other mark,
+    /// including Pass 3's own (see <see cref="Pass2Context.Transcriber"/>).
+    /// </para>
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="work">Progress tracker; begins its own "Pass 2.5" phase when there is work.</param>
+    /// <param name="chapters">The chapters Pass 2 found, in chronological order.</param>
+    /// <param name="jingleCeilingSeconds">The probe window ceiling Pass 2 was run with.</param>
+    /// <param name="allSilences">Every silence from <see cref="RunPass1Async"/>.</param>
+    /// <param name="silences">The --min-silence-length subset - Pass 2's own candidates.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions from <see cref="RunPass1Async"/>.</param>
+    /// <param name="speechSegments">VAD speech segments from <see cref="RunPass1Async"/>.</param>
+    /// <param name="bytesPerSecond">The file's average byte rate, for progress reporting.</param>
+    /// <param name="profile">The language profile resolved for this file.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns><paramref name="chapters"/> plus anything the re-probe recovered.</returns>
+    private async Task<List<DetectedChapter>> RunPass25Async(
+        string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
+        double jingleCeilingSeconds, List<Silence> allSilences, List<Silence> silences,
+        List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
+        double bytesPerSecond, LanguageProfile profile, CancellationToken ct)
+    {
+        if (!_options.Pass3ModelIsUpgrade || ReferenceEquals(_pass3Transcriber, _transcriber))
+            return chapters;
+
+        var gaps = FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter);
+        if (gaps.Count == 0)
+            return chapters;
+
+        work.BeginPhase("Pass 2.5", (long)(gaps.Sum(g => g.ToSeconds - g.FromSeconds) * bytesPerSecond));
+        _pass3Transcriber.ChangeLanguage(profile.Language);
+
+        // --early-abort and --expected-start-chapter are both disabled for these regions (infinity
+        // and null): they exist to give up on a file that is yielding nothing at all, which is not
+        // a question a bounded gap re-probe of an already-productive file gets to reopen.
+        var ctx = new Pass2Context(
+            file, info, work, bytesPerSecond, jingleCeilingSeconds,
+            allSilences, silences, nonSpeechRegions, speechSegments,
+            double.PositiveInfinity, null, _pass3Transcriber);
+
+        // Seeded with what is already known, exactly as DetectCoreAsync seeds Pass 2 proper with
+        // its confirmed chapters: ProcessRegionAsync reports per-mark progress and "still missing"
+        // notes off this list, and gates the --max-jingle-length auto observation on it not being
+        // the file's very first mark - all of which would read nonsense off a list holding only
+        // this pass's own finds.
+        var found = new List<DetectedChapter>(chapters);
+        var knownCount = found.Count;
+        foreach (var gap in gaps)
+        {
+            var missing = MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter);
+            if (missing.Count == 0)
+                continue;
+            _log?.Invoke(
+                $"pass 2.5: re-probing {FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)} " +
+                $"for chapter{(missing.Count > 1 ? "s" : "")} {string.Join(", ", missing)} with the pass 3 model");
+            var region = new DetectionRegion(gap.FromSeconds, gap.ToSeconds, missing[0] - 1, missing[^1] + 1);
+            await ProcessRegionAsync(ctx, region, found, profile, null, 0, ct);
+        }
+
+        var recovered = found.Count - knownCount;
+        chapters = Normalize(found);
+        var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
+        work.HighestChapter = highest;
+        work.MissingChapters = missingNumbers.Count;
+        _log?.Invoke(recovered > 0
+            ? $"Pass 2.5 finished - recovered {recovered} chapter(s) without a full transcription"
+            : "Pass 2.5 finished - nothing recovered, falling through to pass 3");
         return chapters;
     }
 
@@ -1451,16 +1565,24 @@ public sealed class ChapterDetector
     /// Applies --mark-before-jingle on top of a mark default-mode placement (normally already
     /// corrected by precise marking) already computed: <see
     /// cref="JingleGeometry.ComputeMarkBeforeJingle"/> walks it backward to the jingle's true
-    /// leading edge (or leaves it unchanged when VAD finds no jingle there at all). Unless
-    /// --quick-marks turned precise marking off, <see
-    /// cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>
-    /// then double-checks the walked result against direct re-transcription and corrects it
-    /// further if the walk still stopped too late - a cost --quick-marks skips along with the
-    /// rest, per precise marking's own "ask Whisper directly" philosophy. Either way, the same backward-only quiet-point
-    /// snap precise marking's own final step applies runs on the result, so a player seeking to a
-    /// --mark-before-jingle mark starts in near-silence just as it would for any other mark.
+    /// leading edge (or leaves it unchanged when VAD finds no jingle there at all).
+    /// <para>
+    /// Only when the mark the walk started from is of unknown accuracy - precise marking ran but
+    /// never actually heard the phrase, or was turned off entirely by --quick-marks - is the
+    /// walked result then double-checked against direct re-transcription by <see
+    /// cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>. Against a confirmed mark that check
+    /// cannot tell a failed walk from a correct one and is skipped; see its own remarks for why.
+    /// </para>
+    /// <para>
+    /// Either way, the same backward-only quiet-point snap precise marking's own final step applies
+    /// runs on the result, so a player seeking to a --mark-before-jingle mark starts in
+    /// near-silence just as it would for any other mark.
+    /// </para>
     /// </summary>
     /// <param name="mark">The mark to walk backward from.</param>
+    /// <param name="markConfirmed">Whether <paramref name="mark"/> is a precise-marking-confirmed
+    /// announcement onset (<see cref="PreciseMarkResult.PhraseHeard"/>); false both when precise
+    /// marking could not confirm the phrase and when --quick-marks skipped it altogether.</param>
     /// <param name="allSilences">Every silence Pass 1 stored, for the backward walk.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, for the backward
     /// walk and (under precise marking) its verification search.</param>
@@ -1473,7 +1595,7 @@ public sealed class ChapterDetector
     /// precise marking verification step.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<double> ApplyMarkBeforeJingleAsync(
-        double mark, List<Silence> allSilences, List<SpeechSegment> speechSegments,
+        double mark, bool markConfirmed, List<Silence> allSilences, List<SpeechSegment> speechSegments,
         List<TranscriptSegment> transcriptAbs, string file, string? inputDecoder,
         LanguageProfile profile, CancellationToken ct)
     {
@@ -1482,10 +1604,10 @@ public sealed class ChapterDetector
             _log?.Invoke($"--mark-before-jingle: walked mark back from {FormatTimestamp(mark)} to {FormatTimestamp(walked)}");
 
         var verified = walked;
-        if (_options.PreciseMark)
+        if (_options.PreciseMark && !markConfirmed)
         {
             verified = await _preciseMarkRefiner!.VerifyMarkBeforeJingleAsync(
-                walked, file, inputDecoder, profile, speechSegments, ct);
+                walked, mark, file, inputDecoder, profile, speechSegments, ct);
         }
 
         var quietest = await _preciseMarkRefiner!.SnapToQuietestPointAsync(verified, file, inputDecoder, ct);
@@ -1525,6 +1647,26 @@ public sealed class ChapterDetector
             var jingleStart = precedingSilence?.EndSeconds ?? r.StartSeconds;
             _chapterJingleSeconds[number] = Math.Max(0, Math.Min(r.EndSeconds, phraseAbs) - jingleStart);
         }
+    }
+
+    /// <summary>
+    /// The ", -42.7 dBFS" clause both mark log lines append to their confidence figure: how loud
+    /// the audio actually is where the finished mark landed (see <see cref="MarkLoudness"/>), which
+    /// tells a real pause apart from a mark sitting mid-word or inside music without having to
+    /// listen to the file. Empty - and, importantly, not measured at all - when --verbose is off,
+    /// so the small extra decode per mark is only ever paid for when something will read it.
+    /// </summary>
+    /// <param name="mark">The finished mark position.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<string> MarkLoudnessNoteAsync(
+        double mark, string file, string? inputDecoder, CancellationToken ct)
+    {
+        if (_log == null)
+            return "";
+        var dbfs = await MarkLoudness.MeasureDbfsAsync(_audio, file, mark, inputDecoder, ct);
+        return $", {MarkLoudness.Format(dbfs)}";
     }
 
     /// <summary>
@@ -1742,10 +1884,11 @@ public sealed class ChapterDetector
             time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
             statSilence = anchor;
         }
+        var phraseHeard = false;
         if (_options.PreciseMark)
-            time = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, file, inputDecoder, profile, speechSegments, ct);
+            (time, phraseHeard) = await _preciseMarkRefiner!.RefinePreciseMarkAsync(time, file, inputDecoder, profile, speechSegments, ct);
         if (_options.MarkBeforeJingle)
-            time = await ApplyMarkBeforeJingleAsync(time, allSilences, speechSegments, matchSegments, file, inputDecoder, profile, ct);
+            time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, allSilences, speechSegments, matchSegments, file, inputDecoder, profile, ct);
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
         RecordChapterStats(match.Number, statSilence, statRegion, phraseAbs);
         remaining.Remove(match.Number);
@@ -1753,7 +1896,9 @@ public sealed class ChapterDetector
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)} " +
-                     $"(confidence {match.Confidence:0.00}){LowConfidenceNote(match.Confidence)}" +
+                     $"(confidence {match.Confidence:0.00}" +
+                     await MarkLoudnessNoteAsync(time, file, inputDecoder, ct) +
+                     $"){LowConfidenceNote(match.Confidence)}" +
                      MissingNote(missingNumbers));
     }
 

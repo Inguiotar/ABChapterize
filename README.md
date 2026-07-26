@@ -212,7 +212,9 @@ when chapters are written. The most useful knobs:
 | `-S`, `--simple-metadata` | Use a plain `H:MM:SS.fff  Title` sidecar format instead of FFMETADATA for `--export`/`--import`. |
 | `-J`, `--jobs <n\|auto>` | Number of files processed concurrently (default: `auto` — adjusted between 1 and a hardware-derived ceiling based on live CPU load). `-J 1` forces strictly sequential processing. |
 
-Short options without parameters can be collapsed (`-rb` = `-r -b`).
+Short options without parameters can be collapsed (`-rb` = `-r -b`). Decimal
+values accept either separator (`-n 2.5` = `-n 2,5`); printed numbers always
+use `.`, whatever the machine's locale says.
 
 ## How it works
 
@@ -264,6 +266,17 @@ Short options without parameters can be collapsed (`-rb` = `-r -b`).
    falling back to a wider sweep of the same area on the rare chapter where
    even that doesn't confirm anything. Costs one or more extra transcriptions
    per chapter, which is what `--quick-marks` trades away for speed.
+2c. **Pass 2.5 — a cheap second opinion (only with a heavier `--pass3-model`):**
+   most gaps aren't unprobeable audio, just a number the pass-2 model misread
+   with the announcement sitting right there in the window. So before pass 3
+   commits to transcribing whole regions, the same quick probes are simply run
+   again over the gap with the bigger model, which can close it without
+   transcribing the region at all. Not a free bet, though: the probing cost
+   grows with how many candidate silences the gap holds, so on a dense region it
+   can approach the cost of the full transcription it's trying to avoid — and if
+   it finds nothing, pass 3 still runs afterward. Only ever happens when
+   `--pass3-model` names a *better* model than pass 2's, so it stays something
+   you opt into.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in chunks whose borders snap to

@@ -213,6 +213,31 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseFile("--pass3-model", "gigantic"));
     }
 
+    [Theory]
+    // Strictly better than the pass-2 model: pass 2.5's gap re-probe is worth its transcriptions.
+    [InlineData("tiny", "large", true)]
+    [InlineData("base", "small", true)]
+    [InlineData("medium", "turbo", true)]
+    [InlineData("turbo", "large", true)]
+    // Equal or lighter: a re-probe would only reach the same conclusion, more slowly.
+    [InlineData("large", "large", false)]
+    [InlineData("large", "turbo", false)]
+    [InlineData("turbo", "medium", false)]
+    [InlineData("small", "tiny", false)]
+    public void Pass3ModelIsUpgrade_RanksTheModelsByQuality(string model, string pass3Model, bool expected)
+    {
+        var o = ParseFile("--model", model, "--pass3-model", pass3Model)!;
+        Assert.Equal(expected, o.Pass3ModelIsUpgrade);
+    }
+
+    [Fact]
+    public void Pass3ModelIsUpgrade_IsFalse_WhenNoPass3ModelWasGivenAtAll()
+    {
+        // The default mirrors --model, so there is nothing to upgrade to and pass 2.5 stays off.
+        Assert.False(ParseFile("--model", "tiny")!.Pass3ModelIsUpgrade);
+        Assert.False(ParseFile()!.Pass3ModelIsUpgrade);
+    }
+
     [Fact]
     public void Verify_IsParsed_LongAndShort()
     {
@@ -689,6 +714,29 @@ public sealed class CliOptionsTests : IDisposable
         var o = ParseFile("--min-silence-length", "2.5")!;
         Assert.False(o.AutoMinSilence);
         Assert.Equal(2.5, o.MinSilenceSeconds);
+    }
+
+    [Fact]
+    public void DecimalOptions_AcceptACommaAsWellAsAPointAsTheDecimalSeparator()
+    {
+        // Typed by a person on whatever keyboard/locale they have, so both notations mean the
+        // same thing here - see NumberCulture. (Output, by contrast, is always "." regardless.)
+        Assert.Equal(2.5, ParseFile("--min-silence-length", "2,5")!.MinSilenceSeconds);
+        Assert.Equal(2.5, ParseFile("--min-silence-length", "2.5")!.MinSilenceSeconds);
+        Assert.Equal(12.5, ParseFile("--max-jingle-length", "12,5")!.MaxJingleSeconds);
+        Assert.Equal(12.5, ParseFile("--max-jingle-length", "12.5")!.MaxJingleSeconds);
+        Assert.Equal(1.5, ParseFile("--early-abort", "1,5")!.EarlyAbortMinutes);
+        Assert.Equal(1.5, ParseFile("--early-abort", "1.5")!.EarlyAbortMinutes);
+    }
+
+    [Fact]
+    public void DecimalOptions_StillRejectGarbage_WithEitherSeparator()
+    {
+        // The comma is read strictly as a decimal point, so nothing that was invalid before
+        // becomes valid by writing it with one.
+        Assert.Throws<CliError>(() => ParseFile("--min-silence-length", "zwei,fünf"));
+        Assert.Throws<CliError>(() => ParseFile("--min-silence-length", "2,5,3"));
+        Assert.Throws<CliError>(() => ParseFile("--min-silence-length", "0,05")); // below the 0.1 floor
     }
 
     [Fact]

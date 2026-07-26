@@ -286,6 +286,40 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task MarkLog_ReportsTheLoudnessAtTheFinalPosition_AlongsideTheConfidence()
+    {
+        // A real (loud) quarter second of audio scripted at chapter 2's finished mark: half-scale
+        // samples are -6 dBFS, which is what the log must report next to the confidence figure.
+        // Chapter 1's mark has no PCM scripted, so its all-zero window is digital silence.
+        var audio = new FakeAudioSource { Silences = [new(595, 600)] };
+        audio.AddPcm(600, Enumerable.Repeat(0.5f, 4000).ToArray()); // chapter 2's finished mark
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(0, Seg(0.5, " Chapter one."));
+        transcriber.Add(600, Seg(0.25, " Chapter two."));
+        var log = new List<string>();
+        var detector = new ChapterDetector(Options("--max-jingle-length", "0"), audio, transcriber);
+
+        await detector.DetectAsync(_file, Info, new WorkTracker(), log.Add, CancellationToken.None);
+
+        // "." regardless of the machine's locale - see NumberCulture.
+        Assert.Contains(log, l => l.Contains("chapter 2 detected") && l.Contains("-6.0 dBFS"));
+        Assert.Contains(log, l => l.Contains("chapter 1 detected") && l.Contains("-inf dBFS"));
+    }
+
+    [Fact]
+    public async Task MarkLoudness_IsNotEvenMeasured_WhenVerboseIsOff()
+    {
+        // The measurement costs a decode per mark, so a non-verbose run must not perform it at
+        // all. Proven by the decode count: with logging off, no decode ever starts at the finished
+        // mark position (0.25), only at the probe window start (0).
+        var (_, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0"), [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Chapter one.")));
+
+        Assert.DoesNotContain(0.25, audio.DecodeStarts);
+    }
+
+    [Fact]
     public async Task ChapterNumberAboveTheCap_IsDiscarded()
     {
         // "Chapter five hundred and ten" in a three-chapter book is a mishearing, not a chapter:
@@ -645,6 +679,96 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
         // The pass-3 transcriber had its language set before it was used (auto-detected "en").
         Assert.Contains("en", pass3.LanguageChanges);
+    }
+
+    [Fact]
+    public async Task Pass25_ClosesTheGapWithACheapReProbe_BeforePass3EverTranscribesTheRegion()
+    {
+        // The whole point of pass 2.5: pass 2's own candidate probe at the gap's silence was right
+        // on top of chapter 2's announcement, it just misheard it. Scripting chapter 2 into the
+        // pass-3 transcriber at the *probe* position (600, the silence end) rather than at a
+        // gap-chunk seam means only a pass-2-style re-probe can find it - a full pass-3
+        // transcription decodes from the gap's start (0) instead and would come up empty.
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(600, Seg(0.5, " Chapter two.")));
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 600.25), new(3, 1199.95)], result.Chapters);
+        Assert.Contains(600, pass3.Audio.DecodeStarts);
+        // Pass 3 proper never ran: every decode stayed probe-sized (12 s plain probe window), so
+        // nothing was ever transcribed in pass 3's 600 s gap chunks. This is the saving pass 2.5
+        // exists for - asserting on decode *lengths* rather than positions, since a gap region
+        // starts at the bounding chapter's own mark and pass 2.5 legitimately probes there too.
+        Assert.All(pass3.Audio.DecodeWindows, w => Assert.True(w.Duration is null or <= 60));
+    }
+
+    [Fact]
+    public async Task Pass25_IsSkipped_WhenThePass3ModelIsNotAnUpgrade()
+    {
+        // A lighter (or equal) --pass3-model means a re-probe would only reach the same conclusion
+        // more slowly, so pass 2.5 must not run at all - the gap goes straight to pass 3, which
+        // here decodes the region from its start and finds chapter 2 there instead.
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "large", "--pass3-model", "base", "--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(597.5, Seg(2.5, " Chapter two."))); // snapped gap-chunk seam
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
+        // The gap-chunk decode from the gap's own start, i.e. pass 3 - not a pass 2.5 probe.
+        Assert.Contains(0.25, pass3.Audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task Pass25_FallsThroughToPass3_WhenTheReProbeFindsNothing()
+    {
+        // Pass 2.5 runs (large beats base) but its probe hears nothing, so pass 3 must still get
+        // its turn on the very same gap and close it from the full transcription.
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(597.5, Seg(2.5, " Chapter two."))); // only findable by pass 3's chunking
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
+        Assert.Contains(0.25, pass3.Audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task Pass25_NeverAcceptsAChapterNumberOutsideTheGapItIsRecovering()
+    {
+        // The gap between chapters 1 and 3 expects only chapter 2. A re-probe that mishears its
+        // way to "chapter 7" must not be able to plant it here - the region's own bounds reject
+        // anything at or above the chapter that closes the gap, so the gap simply stays open.
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(600, Seg(0.5, " Chapter seven.")));
+
+        Assert.True(result.GapRemains);
+        Assert.Equal([new(1, 0.25), new(3, 1199.95)], result.Chapters);
     }
 
     [Fact]
@@ -3329,7 +3453,8 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            646.2, _file, null, profile, [new(0, 640), new(645, 646.2), new(660, 3600)], CancellationToken.None);
+            646.2, 659.75, _file, null, profile,
+            [new(0, 640), new(645, 646.2), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(645, result);
     }
@@ -3344,7 +3469,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            640, _file, null, profile, [new(0, 640), new(660, 3600)], CancellationToken.None);
+            640, 659.75, _file, null, profile, [new(0, 640), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(640, result);
         Assert.Single(transcriber.Audio.DecodeStarts);
@@ -3362,8 +3487,61 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            0.05, _file, null, profile, [], CancellationToken.None);
+            0.05, 20, _file, null, profile, [], CancellationToken.None);
 
         Assert.Equal(0.05, result);
+    }
+
+    [Fact]
+    public async Task VerifyMarkBeforeJingleAsync_SkipsTheCheckEntirely_WhenTheWalkStoppedInsideTheProbeWindow()
+    {
+        // The guard: the walk landed only 1.5 s behind the pre-walk mark, so the announcement the
+        // walk retreated from (0.25 s past that mark) sits well inside the 4 s the probe would
+        // decode forward from the walked position. "Still audible" there would be structurally
+        // guaranteed - true of a short jingle and of the deliberate "no jingle here" outcome just
+        // as much as of a failed walk - so nothing is probed at all and the walk stands. Asserting
+        // on the decode count is the point: a probe here would drag a good mark backward.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(658.15, Seg(0, " Chapter two.")); // would fire the correction, if ever asked
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.VerifyMarkBeforeJingleAsync(
+            658.25, 659.75, _file, null, profile,
+            [new(0, 650), new(655, 658.25), new(660, 3600)], CancellationToken.None);
+
+        Assert.Equal(658.25, result);
+        Assert.Empty(transcriber.Audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task RefinePreciseMarkAsync_ReportsThePhraseAsHeard_WhenTheMarkItselfChecksOut()
+    {
+        // The flag --mark-before-jingle's verification is gated on: a mark whose own check passes
+        // is a known announcement onset, which is what makes the walk's result trustworthy without
+        // any further probing.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(659.65, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            659.75, _file, null, profile, [new(660, 3600)], CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        Assert.Equal(659.75, result.Mark);
+    }
+
+    [Fact]
+    public async Task RefinePreciseMarkAsync_ReportsThePhraseAsNotHeard_WhenNothingCouldBeConfirmed()
+    {
+        // The one case that still leaves a mark of unknown accuracy behind, and therefore the one
+        // case --mark-before-jingle's verification is still worth paying for.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource()); // nothing scripted: no check ever hears the phrase
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            659.75, _file, null, profile, [new(660, 3600)], CancellationToken.None);
+
+        Assert.False(result.PhraseHeard);
+        Assert.Equal(659.75, result.Mark);
     }
 }
