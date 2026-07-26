@@ -536,6 +536,21 @@ internal static class JingleGeometry
     /// book has a completely silence-free jingle and is therefore untouched by stopping here.
     /// </para>
     /// <para>
+    /// <b>Known limitation, accepted deliberately (2026-07-26).</b> Stopping unconditionally costs
+    /// the one case the removed corroboration gate did handle: when default-mode placement
+    /// overshoots the announcement (<see cref="RefineDefaultMark"/> advancing the mark past it),
+    /// the retreat starts on the far side of the announcement and stops at the pause that follows
+    /// it, leaving the mark after the announcement rather than before the jingle. Chapter 1 of the
+    /// same test book does exactly this: the walk gets 192.004 where it should get 143.368.
+    /// Nothing in VAD or silencedetect separates that post-announcement pause from a genuine
+    /// inter-jingle separator - in both, the silence has no genuine speech before it - so telling
+    /// them apart needs the announcement's own position, which this method is not given. With
+    /// <see cref="CliOptions.PreciseMark"/> the starting mark is corrected onto the announcement
+    /// before the walk runs and the case cannot arise, which is why it is tolerated here; fixing
+    /// it for plain --mark-before-jingle means threading the phrase onset through and refusing to
+    /// stop at silences beyond it.
+    /// </para>
+    /// <para>
     /// The same duration/corroboration gate applies when the current position already sits inside
     /// a speech blip (walked back into it by a preceding step, or - rarer - <paramref name="from"/>
     /// itself starting there): a blip clearing the bar is trusted immediately, since real narration

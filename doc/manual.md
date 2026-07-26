@@ -450,7 +450,15 @@ Short options that take a parameter (`-l`, `-c`, `-m`, `-x`, `-a`, `-e`, `-h`,
   before it at all, the mark instead backs off by a small fixed margin from
   the earliest point reached.
   The same backward-only quietest-point nudge described under
-  `--precise-mark` below is then applied to the result. The probe-window
+  `--precise-mark` below is then applied to the result.
+  **Best combined with `--precise-mark`.** The walk can only be as good as the
+  mark it starts from, and on its own it starts from default placement — which
+  occasionally lands *past* the announcement rather than before it. When that
+  happens the walk stops at the pause following the announcement, leaving the
+  mark after it instead of before the jingle (seconds to tens of seconds late,
+  on the odd chapter). `--precise-mark` corrects the starting point first, so
+  the two options together avoid this; `-j` alone is a reasonable approximation
+  but not a precise one. The probe-window
   widening and VAD pre-pass this placement relies on (see
   [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) already run by default
   regardless of this option. Without `--mark-before-jingle`, a mark is
