@@ -1,4 +1,4 @@
-// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
+﻿// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
@@ -337,6 +337,52 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([new(1, 0.25), new(2, 1199.95)], result.Chapters);
         Assert.False(result.GapRemains);
         Assert.Contains(log, l => l.Contains("discarded chapter 510"));
+    }
+
+    [Fact]
+    public async Task ChapterNumberBelowTheLastAccepted_IsLoggedAsSkipped()
+    {
+        // Pass 2 drops a number that does not top the last accepted one and keeps scanning, which
+        // is right - but the number *was* heard, so a --verbose run has to say why it did not
+        // become a mark. Without the line, this is indistinguishable from the phrase matcher
+        // having missed it entirely.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.4, " Chapter two."));
+                s.Add(1200, Seg(0.3, " Chapter one."));
+            });
+
+        Assert.Equal([new(1, 0.25), new(2, 600.15)], result.Chapters);
+        Assert.Contains(log, l =>
+            l.Contains("skipped chapter 1 at 0:20:00.30") &&
+            l.Contains("not above the last accepted chapter 2") &&
+            l.Contains("(in-text mention?)"));
+    }
+
+    [Fact]
+    public async Task ChapterNumberEqualToTheLastAccepted_IsLoggedWithoutTheInTextHint()
+    {
+        // A re-detection of the chapter just marked is a different story from a regression: it is
+        // the same announcement seen again, not a mention buried in the narration, so the hint
+        // that would send someone looking for one is left off.
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.4, " Chapter two."));
+                s.Add(1200, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Contains(log, l =>
+            l.Contains("skipped chapter 2 at 0:20:00.30") &&
+            l.Contains("not above the last accepted chapter 2"));
+        Assert.DoesNotContain(log, l => l.Contains("in-text mention?"));
     }
 
     [Fact]
@@ -2178,6 +2224,61 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Equal([new DetectedChapter(1, 0.25)], result.Chapters);
         Assert.False(result.GapRemains);
+    }
+
+    [Fact]
+    public async Task DeepPhrase_WithNoSilenceBeforeIt_LogsWhyItWasSkipped()
+    {
+        // Nothing at all separates the phrase at 609 from the window start, so there is no anchor
+        // to pinpoint a mark at. The number was heard, though, so the log has to say so - "never
+        // heard" and "heard but unanchorable" call for completely different fixes.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(595, 600)],
+            s => s.Add(600, Seg(9, " Chapter one.")));
+
+        Assert.Empty(result.Chapters);
+        Assert.Contains(log, l =>
+            l.Contains("skipped chapter 1 at 0:10:09.00") &&
+            l.Contains("no silence precedes it inside the probe window"));
+    }
+
+    [Fact]
+    public async Task DeepPhrase_WithTooDistantASilenceBeforeIt_LogsTheMeasuredDistance()
+    {
+        // The [601, 603] silence qualifies on length but ends 6 s before the phrase at 609, past
+        // the 5 s the timing rule grants. The log names the measured distance, so the rule can be
+        // checked against the audio rather than guessed at.
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(595, 600), new(601, 603)],
+            s => s.Add(600, Seg(9, " Chapter one.")));
+
+        Assert.Contains(log, l =>
+            l.Contains("skipped chapter 1 at 0:10:09.00") &&
+            l.Contains("the nearest silence ends 6.0 s before it") &&
+            l.Contains("more than the 5 s allowed"));
+    }
+
+    [Fact]
+    public async Task DeepPhrase_WithOnlyASubThresholdPauseBeforeIt_LogsTheSilenceAgainstTheOption()
+    {
+        // The 0.6 s breath pause before the phrase is a real silence, just too short to anchor on.
+        // The log puts its length next to --min-silence-length, since that is the knob to reach
+        // for when the book's own chapter breaks turn out to be shorter than the default.
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(595, 600), new(605, 605.6)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(9, " Chapter two."));
+            });
+
+        Assert.Contains(log, l =>
+            l.Contains("skipped chapter 2 at 0:10:09.00") &&
+            l.Contains("the silence before it is only 0.60 s long") &&
+            l.Contains("below --min-silence-length 1.5 s"));
     }
 
     [Fact]

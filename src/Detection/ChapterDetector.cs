@@ -517,21 +517,33 @@ public sealed class ChapterDetector
             // empty then), so it is non-null by the time any transcript-reuse branch above runs.
             foreach (var match in FindCappedPhraseMatches(segments, profile!, mergeBoundarySegIndex))
             {
+                var phraseAbs = start + match.PhraseStartSeconds;
+
                 // A duplicate or regression (an in-text mention like "as seen in chapter
                 // three", or a re-detection of an already-marked chapter) does not end the
                 // window - skip it and keep scanning, so a real announcement later in the
-                // same window is still found.
+                // same window is still found. Logged because the number was plainly heard:
+                // without this line a --verbose run gives no hint why it did not become a
+                // mark, which is indistinguishable from the phrase matcher having missed it.
                 if (match.Number <= windowLast)
+                {
+                    _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
+                                 $"not above the last accepted chapter {windowLast}" +
+                                 (match.Number < windowLast ? " (in-text mention?)" : ""));
                     continue;
+                }
                 // A snapped window can, near a gap region's own upper boundary, reach right up
                 // against the next already-confirmed chapter's own announcement - reject a
                 // match at or above it outright so gap recovery can never displace a chapter
                 // --verify already trusts. Never set for the whole-file region (its
                 // UpperNumber is always null), so this never fires for a fresh DetectAsync run.
                 if (region.UpperNumber is { } upperBound && match.Number >= upperBound)
+                {
+                    _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
+                                 $"at or above chapter {upperBound}, which bounds this gap region");
                     continue;
+                }
 
-                var phraseAbs = start + match.PhraseStartSeconds;
                 if (ResolveProbeMark(match, candidate, start, trimmedAbs, ctx) is not { } placement)
                     continue;
                 var (time, markSilence, markRegion) = placement;
@@ -865,7 +877,7 @@ public sealed class ChapterDetector
     /// adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
     /// <param name="ctx">Region-loop-invariant Pass 2 inputs.</param>
     /// <returns>The default-mode mark and its anchors, or null when the match has no qualifying
-    /// anchor at all and must be rejected.</returns>
+    /// anchor at all and must be rejected - see <see cref="RejectProbeMark"/>, which logs why.</returns>
     private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion)? ResolveProbeMark(
         PhraseMatch match, (double Start, Silence? Silence, NonSpeechRegion? VadRegion) candidate,
         double start, List<TranscriptSegment> trimmedAbs, Pass2Context ctx)
@@ -891,11 +903,34 @@ public sealed class ChapterDetector
         if (match.PhraseStartSeconds <= PhraseLatestStart)
             return (Math.Max(0, phraseAbs - DefaultMarkLeadSeconds), candidate.Silence, null);
 
-        if (FindRealAnchorSilence(start, phraseAbs, ctx.AllSilences) is not { } anchor
-            || phraseAbs - anchor.EndSeconds > PhraseLatestStart
-            || anchor.EndSeconds - anchor.StartSeconds < _options.MinSilenceSeconds)
-            return null;
+        // Each of the three ways this can fail is named separately rather than folded into one
+        // rejection: two of them point straight at a --min-silence-length that is too strict for
+        // this book, which is exactly what someone chasing a missing chapter needs to be told.
+        if (FindRealAnchorSilence(start, phraseAbs, ctx.AllSilences) is not { } anchor)
+            return RejectProbeMark(match, phraseAbs, "no silence precedes it inside the probe window");
+        if (phraseAbs - anchor.EndSeconds > PhraseLatestStart)
+            return RejectProbeMark(match, phraseAbs,
+                $"the nearest silence ends {phraseAbs - anchor.EndSeconds:0.0} s before it, " +
+                $"more than the {PhraseLatestStart:0.#} s allowed");
+        if (anchor.EndSeconds - anchor.StartSeconds < _options.MinSilenceSeconds)
+            return RejectProbeMark(match, phraseAbs,
+                $"the silence before it is only {anchor.EndSeconds - anchor.StartSeconds:0.00} s long, " +
+                $"below --min-silence-length {_options.MinSilenceSeconds:0.##} s");
         return (Math.Max(0, phraseAbs - DefaultMarkLeadSeconds), anchor, null);
+    }
+
+    /// <summary>Logs why <see cref="ResolveProbeMark"/> is dropping a chapter number the recognizer
+    /// did hear, and returns the null that stands for "no mark". A missing chapter is far easier to
+    /// chase when the log distinguishes "never heard" from "heard, but unanchorable, because
+    /// &lt;reason&gt;".</summary>
+    /// <param name="match">The rejected phrase match.</param>
+    /// <param name="phraseAbs">Absolute phrase start time, for the log line's timestamp.</param>
+    /// <param name="reason">Why no mark could be placed, phrased to follow "skipped chapter N at T - ".</param>
+    private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion)? RejectProbeMark(
+        PhraseMatch match, double phraseAbs, string reason)
+    {
+        _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - {reason}");
+        return null;
     }
 
     /// <summary>

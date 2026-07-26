@@ -1217,6 +1217,16 @@ name, everything the pipeline does:
   mark landed in a real pause, a loud one that it landed mid-word or inside
   music and is worth a listen. Flagged `LOW CONFIDENCE` below 0.5, plus a
   `still missing:` list of any earlier chapter numbers not detected yet,
+- every chapter number that was heard but *not* turned into a mark, with the
+  reason: one that does not top the last number accepted (`skipped chapter 3 at
+  1:12:04.20 - not above the last accepted chapter 7 (in-text mention?)`), one
+  above the `--max-chapter-number` cap, or one with no usable silence in front
+  of it to anchor a mark to — in which case the line names the silence it did
+  find and how it fell short. Usually this is the tool correctly ignoring a
+  passing reference in the narration, but if a chapter really is missing, the
+  line tells you the recognizer *did* hear it, which is a very different
+  problem from it never being heard at all. The anchor reasons in particular
+  tend to point straight at `--min-silence-length`,
 - the gap re-probes of pass 2.5 and the regions transcribed in pass 3, and
   when each pass finishes,
 - once the file is done, a `stats -` line: the shortest silence and (when
