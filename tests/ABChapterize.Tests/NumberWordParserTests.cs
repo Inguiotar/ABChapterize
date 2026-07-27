@@ -137,7 +137,20 @@ public class NumberWordParserTests
     {
         Assert.Equal(
             ["da", "de", "en", "es", "fr", "it", "nl", "pl", "pt", "sv", "tr"],
-            NumberWordParser.SupportedLanguages);
+            LanguageRegistry.SupportedCodes);
+    }
+
+    /// <summary>
+    /// The registry is the single source of truth for a language, so a class that declares
+    /// itself "de" must not be reachable under any other code - a copy-paste slip in
+    /// <see cref="LanguageRegistry"/> would otherwise silently give one language another's
+    /// number grammar.
+    /// </summary>
+    [Fact]
+    public void EveryRegisteredLanguage_CarriesItsOwnNumberParser()
+    {
+        foreach (var language in LanguageRegistry.Languages)
+            Assert.Equal(language.Code, language.NumberParser.LanguageCode);
     }
 
     [Theory]

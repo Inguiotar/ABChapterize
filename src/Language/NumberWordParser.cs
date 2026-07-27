@@ -17,30 +17,6 @@ namespace ABChapterize.Language;
 /// </summary>
 public static class NumberWordParser
 {
-    /// <summary>All available language parsers, keyed by their ISO 639-1 code.</summary>
-    private static readonly Dictionary<string, INumberWordParser> Parsers =
-        new INumberWordParser[]
-        {
-            new EnglishNumberParser(),
-            new GermanNumberParser(),
-            new FrenchNumberParser(),
-            new SpanishNumberParser(),
-            new DutchNumberParser(),
-            new ItalianNumberParser(),
-            new TurkishNumberParser(),
-            new PortugueseNumberParser(),
-            new PolishNumberParser(),
-            new SwedishNumberParser(),
-            new DanishNumberParser(),
-        }
-        .ToDictionary(p => p.LanguageCode, StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>Fallback parser for language codes without a dedicated implementation.</summary>
-    private static readonly INumberWordParser Fallback = Parsers["en"];
-
-    /// <summary>Language codes with a dedicated number-word parser, for help/docs output.</summary>
-    public static IEnumerable<string> SupportedLanguages => Parsers.Keys.Order();
-
     /// <summary>
     /// Matches a digit ordinal: 1-3 digits plus the ordinal suffix of any registered
     /// language's parser ("2nd", "1er", "2e", "2ème", "2de", "2ste", "5'inci", "3º",
@@ -54,8 +30,8 @@ public static class NumberWordParser
     /// <summary>Builds <see cref="DigitOrdinalRegex"/> from every registered parser's suffix fragment.</summary>
     private static Regex BuildDigitOrdinalRegex()
     {
-        var fragments = Parsers.Values
-            .Select(p => p.DigitOrdinalSuffixPattern)
+        var fragments = LanguageRegistry.Languages
+            .Select(l => l.NumberParser.DigitOrdinalSuffixPattern)
             .Where(p => p.Length > 0)
             .Distinct();
         var pattern = $@"^(\d{{1,3}})(?:{string.Join('|', fragments)})$";
@@ -81,7 +57,7 @@ public static class NumberWordParser
         if (TryParseDigits(tokens[0], out number))
             return true;
 
-        var parser = Parsers.GetValueOrDefault(language, Fallback);
+        var parser = LanguageRegistry.For(language).NumberParser;
         return parser.TryParse(tokens, out number, out _);
     }
 
@@ -108,7 +84,7 @@ public static class NumberWordParser
 
         // Try every suffix of the token window; accept only a parse that consumes
         // everything up to the phrase ("sagte drei. Kapitel" must not yield 3).
-        var parser = Parsers.GetValueOrDefault(language, Fallback);
+        var parser = LanguageRegistry.For(language).NumberParser;
         for (var start = 0; start < tokens.Count; start++)
         {
             var slice = tokens.GetRange(start, tokens.Count - start);

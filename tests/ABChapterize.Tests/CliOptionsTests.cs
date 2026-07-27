@@ -47,7 +47,7 @@ public sealed class CliOptionsTests : IDisposable
         // The parse-time DefaultProfile/ChapterPhrase/Title/IntroTitle are the English
         // fallback used when a file's own auto-detection is inconclusive or skipped;
         // ChapterDetector resolves a fresh profile per file when actually detecting.
-        Assert.Equal("chapter", o.ChapterPhrase);
+        Assert.Equal("/chapter/", o.ChapterPhrase);
         Assert.Equal("Chapter", o.Title);
         Assert.Equal("Intro", o.IntroTitle);
         Assert.Equal("turbo", o.Model);
@@ -94,7 +94,7 @@ public sealed class CliOptionsTests : IDisposable
         var o = ParseFile()!; // auto, no overrides
         var profile = o.ResolveProfile("de");
         Assert.Equal("de", profile.Language);
-        Assert.Equal("Kapitel", profile.ChapterPhrase);
+        Assert.Equal("/kapitel/", profile.ChapterPhrase);
         Assert.Equal("Kapitel", profile.Title);
         Assert.Equal("Intro", profile.IntroTitle);
     }
@@ -541,9 +541,58 @@ public sealed class CliOptionsTests : IDisposable
     public void Lang_LocalizesPhraseTitleAndIntro()
     {
         var o = ParseFile("--lang", "tr")!;
-        Assert.Equal("bölüm", o.ChapterPhrase);
+        Assert.Equal("/b[öo]l[üu]m/", o.ChapterPhrase);
         Assert.Equal("Bölüm", o.Title);
         Assert.Equal("Giriş", o.IntroTitle);
+        // The point of the regexp default: a transcript that lost the dotted vowels still matches.
+        Assert.Matches(o.PhraseRegex, "bolum 3");
+        Assert.Matches(o.PhraseRegex, "Bölüm 3");
+    }
+
+    /// <summary>
+    /// Guards the two rules <see cref="ABChapterize.Language.ILanguage"/> states about the
+    /// built-in phrases: no capturing group (which would be read as "the user is capturing the
+    /// chapter number here"), and no empty phrase (which is the prologue/epilogue opt-out
+    /// spelling and must never be a language's default).
+    /// </summary>
+    [Fact]
+    public void EveryRegisteredLanguage_HasUsableDefaultPhrases()
+    {
+        var o = ParseFile()!;
+        foreach (var language in LanguageRegistry.Languages)
+        {
+            var profile = o.ResolveProfile(language.Code);
+            Assert.False(profile.PhraseHasNumberGroup, language.Code);
+            Assert.NotEmpty(profile.Title);
+            Assert.NotEmpty(profile.IntroTitle);
+            Assert.Equal(2, profile.NamedPhrases.Count);
+            Assert.All(profile.NamedPhrases, p => Assert.NotEmpty(p.Title));
+        }
+    }
+
+    /// <summary>
+    /// Each language's own chapter/prologue/epilogue phrase must actually match the words a
+    /// narrator says in that language - including the spelling variants the regexps exist for.
+    /// </summary>
+    [Theory]
+    [InlineData("en", "chapter one", "prologue", "epilog")]
+    [InlineData("de", "Kapitel eins", "Prolog", "Epilog")]
+    [InlineData("fr", "chapitre un", "prologue", "epilogue")]
+    [InlineData("es", "capitulo uno", "prólogo", "epilogo")]
+    [InlineData("it", "capitolo uno", "prologo", "epilogo")]
+    [InlineData("nl", "hoofdstuk een", "proloog", "epiloog")]
+    [InlineData("tr", "Birinci Bölüm", "prolog", "epilog")]
+    [InlineData("pt", "capítulo um", "prologo", "epílogo")]
+    [InlineData("pl", "rozdziału pierwszego", "prolog", "epilog")]
+    [InlineData("sv", "Första kapitlet", "prolog", "epilog")]
+    [InlineData("da", "kapitel et", "prolog", "epilog")]
+    public void DefaultPhrases_MatchTheirLanguagesAnnouncements(
+        string code, string chapter, string prologue, string epilogue)
+    {
+        var profile = ParseFile()!.ResolveProfile(code);
+        Assert.Matches(profile.PhraseRegex, chapter);
+        Assert.Matches(profile.NamedPhrases[0].Regex, prologue);
+        Assert.Matches(profile.NamedPhrases[1].Regex, epilogue);
     }
 
     [Theory]

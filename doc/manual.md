@@ -286,7 +286,7 @@ every existing marking including the partial ones.
 ### Prologue and epilogue
 
 Alongside the numbered chapters, every run also listens for a prologue and an
-epilogue announcement (default phrases `prologue` / `epilogue`, localized by
+epilogue announcement (default phrases `/prolog/` / `/epilog/`, localized by
 `--lang`) and gives each its own mark, titled `--prologue-title` /
 `--epilogue-title` rather than "Chapter *n*".
 
@@ -508,8 +508,10 @@ so that logs and reports stay comparable regardless of regional settings.
   via auto-detection.
 
 `-c`, `--chapter-phrase <p>`
-: The word or phrase that announces a chapter (default: `chapter`, localized
-  by `--lang`). Matching is always case-insensitive. Two forms:
+: The word or phrase that announces a chapter (default: `/chapter/`,
+  localized by `--lang` — see [section 7](#7-languages-and-number-recognition)
+  for every language's default). Matching is always case-insensitive. Two
+  forms:
 
   - A literal word/phrase: `--chapter-phrase Teil`. The chapter number is
     expected directly after it ("Teil sieben") or, failing that, directly
@@ -520,7 +522,7 @@ so that logs and reports stay comparable regardless of regional settings.
     surrounding words as with a literal phrase.
 
 `-p`, `--prologue-phrase <p>`
-: The word or phrase that announces a prologue (default: `prologue`,
+: The word or phrase that announces a prologue (default: `/prolog/`,
   localized by `--lang`). Takes the same literal and `/regexp/` forms as
   `--chapter-phrase`, but no number is parsed or expected. Only accepted
   before the first chapter has been found; see
@@ -528,7 +530,7 @@ so that logs and reports stay comparable regardless of regional settings.
   prologue detection off.
 
 `-g`, `--epilogue-phrase <p>`
-: The same for the epilogue (default: `epilogue`, localized by `--lang`),
+: The same for the epilogue (default: `/epilog/`, localized by `--lang`),
   only accepted once at least one chapter has been found. An empty string
   switches epilogue detection off.
 
@@ -1164,36 +1166,46 @@ For these languages, `--lang` also localizes the defaults of
 
 | `--lang` | Default phrase | Default title word | Default intro title |
 | --- | --- | --- | --- |
-| `en` | chapter | Chapter | Intro |
-| `de` | Kapitel | Kapitel | Intro |
-| `fr` | chapitre | Chapitre | Introduction |
-| `es` | capítulo | Capítulo | Introducción |
-| `it` | capitolo | Capitolo | Introduzione |
-| `nl` | hoofdstuk | Hoofdstuk | Intro |
-| `tr` | bölüm | Bölüm | Giriş |
-| `pt` | capítulo | Capítulo | Introdução |
-| `pl` | rozdział | Rozdział | Wstęp |
-| `sv` | kapitel | Kapitel | Introduktion |
-| `da` | kapitel | Kapitel | Introduktion |
+| `en` | `/chapter/` | Chapter | Intro |
+| `de` | `/kapitel/` | Kapitel | Intro |
+| `fr` | `/chapitre/` | Chapitre | Introduction |
+| `es` | `/cap[íi]tulo/` | Capítulo | Introducción |
+| `it` | `/capitolo/` | Capitolo | Introduzione |
+| `nl` | `/hoofdstuk/` | Hoofdstuk | Intro |
+| `tr` | `/b[öo]l[üu]m/` | Bölüm | Giriş |
+| `pt` | `/cap[íi]tulo/` | Capítulo | Introdução |
+| `pl` | `/rozdzia[łl]/` | Rozdział | Wstęp |
+| `sv` | `/kapit(?:el\|let)/` | Kapitel | Introduktion |
+| `da` | `/kapit(?:el\|let)/` | Kapitel | Introduktion |
 
-… and, the same way, the defaults of `--prologue-phrase`/`--prologue-title`
+The default phrases are regular expressions so that one language's spellings
+are covered at once: an accent Whisper dropped (`capitulo` for `capítulo`), a
+letter it wrote without its diacritic (`bolum` for `bölüm`), or a stem the
+language itself changes (Swedish and Danish say "kapitlet" as readily as
+"kapitel"). Nothing else changes — they are matched case-insensitively and as
+a substring exactly as a plain word would be, so an inflected ending needs no
+pattern of its own ("rozdziału" is found by `rozdzia[łl]`).
+
+The same applies to the defaults of `--prologue-phrase`/`--prologue-title`
 and `--epilogue-phrase`/`--epilogue-title` (see
-[Prologue and epilogue](#prologue-and-epilogue)). The phrase and the title
-only differ in capitalization here, so one column each:
+[Prologue and epilogue](#prologue-and-epilogue)):
 
-| `--lang` | Prologue | Epilogue |
-| --- | --- | --- |
-| `en` | Prologue | Epilogue |
-| `de` | Prolog | Epilog |
-| `fr` | Prologue | Épilogue |
-| `es` | Prólogo | Epílogo |
-| `it` | Prologo | Epilogo |
-| `nl` | Proloog | Epiloog |
-| `tr` | Prolog | Epilog |
-| `pt` | Prólogo | Epílogo |
-| `pl` | Prolog | Epilog |
-| `sv` | Prolog | Epilog |
-| `da` | Prolog | Epilog |
+| `--lang` | Prologue phrase | Prologue title | Epilogue phrase | Epilogue title |
+| --- | --- | --- | --- | --- |
+| `en` | `/prolog/` | Prologue | `/epilog/` | Epilogue |
+| `de` | `/prolog/` | Prolog | `/epilog/` | Epilog |
+| `fr` | `/prologue/` | Prologue | `/[ée]pilogue/` | Épilogue |
+| `es` | `/pr[óo]logo/` | Prólogo | `/ep[íi]logo/` | Epílogo |
+| `it` | `/prologo/` | Prologo | `/epilogo/` | Epilogo |
+| `nl` | `/proloog/` | Proloog | `/epiloog/` | Epiloog |
+| `tr` | `/prolog/` | Prolog | `/epilog/` | Epilog |
+| `pt` | `/pr[óo]logo/` | Prólogo | `/ep[íi]logo/` | Epílogo |
+| `pl` | `/prolog/` | Prolog | `/epilog/` | Epilog |
+| `sv` | `/prolog/` | Prolog | `/epilog/` | Epilog |
+| `da` | `/prolog/` | Prolog | `/epilog/` | Epilog |
+
+The English phrases cover the American "prolog"/"epilog" spellings simply by
+stopping short of the ending.
 
 Each language uses its Latin-derived form rather than a native near-synonym
 (German "Vorwort", Turkish "Önsöz", …): those name a foreword, which is
@@ -1203,7 +1215,10 @@ what a narrator actually announces. Where a particular book disagrees,
 
 Other languages work too: give `--lang` for transcription and a
 `--chapter-phrase` (plain or regexp); announcements with digit numbers are
-then fully supported, e.g. `--lang cs --chapter-phrase kapitola`.
+then fully supported, e.g. `--lang cs --chapter-phrase kapitola`. If you would
+rather have your language supported properly — its spoken numbers included —
+[doc/adding-a-language.md](adding-a-language.md) walks through adding one; it
+is a self-contained job that needs no knowledge of the rest of the codebase.
 
 ## 8. Whisper models
 

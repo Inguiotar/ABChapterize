@@ -581,40 +581,6 @@ public sealed class CliOptions
     /// <summary>Human-readable list of the supported extensions, e.g. ".m4a/.m4b/.mp3/.opus/.mka".</summary>
     public static string SupportedExtensionsText => string.Join("/", SupportedExtensions);
 
-    /// <summary>The fallback every language without its own entry in
-    /// <see cref="LanguageDefaultsByCode"/> resolves to. Declared before that dictionary because
-    /// static field initializers run in textual order and it is one of its entries.</summary>
-    private static readonly LanguageDefaults EnglishDefaults =
-        new("chapter", "Chapter", "Intro", "prologue", "Prologue", "epilogue", "Epilogue");
-
-    /// <summary>
-    /// Per-language defaults for the chapter/prologue/epilogue phrases and the title words,
-    /// applied when --lang is given but the corresponding option is not. "abchapterize -l de
-    /// buch.m4b" thus looks for "Kapitel", "Prolog" and "Epilog" and writes "Intro", "Kapitel 1",
-    /// "Kapitel 2", ... without further options. Languages without an entry fall back to
-    /// <see cref="EnglishDefaults"/>.
-    /// <para>
-    /// The prologue/epilogue entries deliberately use each language's Latin-derived form
-    /// ("Prolog"/"Epilog", "Prólogo"/"Epílogo", ...) rather than a native near-synonym such as
-    /// German "Vorwort" or Turkish "Önsöz": those name a foreword, which is front matter about the
-    /// book, while a prologue is part of the story and is what a narrator actually announces.
-    /// </para>
-    /// </summary>
-    private static readonly Dictionary<string, LanguageDefaults> LanguageDefaultsByCode = new()
-    {
-        ["en"] = EnglishDefaults,
-        ["de"] = new("Kapitel", "Kapitel", "Intro", "Prolog", "Prolog", "Epilog", "Epilog"),
-        ["fr"] = new("chapitre", "Chapitre", "Introduction", "prologue", "Prologue", "épilogue", "Épilogue"),
-        ["es"] = new("capítulo", "Capítulo", "Introducción", "prólogo", "Prólogo", "epílogo", "Epílogo"),
-        ["it"] = new("capitolo", "Capitolo", "Introduzione", "prologo", "Prologo", "epilogo", "Epilogo"),
-        ["nl"] = new("hoofdstuk", "Hoofdstuk", "Intro", "proloog", "Proloog", "epiloog", "Epiloog"),
-        ["tr"] = new("bölüm", "Bölüm", "Giriş", "prolog", "Prolog", "epilog", "Epilog"),
-        ["pt"] = new("capítulo", "Capítulo", "Introdução", "prólogo", "Prólogo", "epílogo", "Epílogo"),
-        ["pl"] = new("rozdział", "Rozdział", "Wstęp", "prolog", "Prolog", "epilog", "Epilog"),
-        ["sv"] = new("kapitel", "Kapitel", "Introduktion", "prolog", "Prolog", "epilog", "Epilog"),
-        ["da"] = new("kapitel", "Kapitel", "Introduktion", "prolog", "Prolog", "epilog", "Epilog"),
-    };
-
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
     public static string ExeName => OperatingSystem.IsWindows() ? "abchapterize.exe" : "abchapterize";
 
@@ -795,15 +761,15 @@ public sealed class CliOptions
         o.PhraseHasNumberGroup = o.DefaultProfile.PhraseHasNumberGroup;
         // The named phrases keep only their compiled form in the profile, so the raw strings the
         // fingerprint and any user-facing echo read are localized here rather than copied back.
-        var defaults = LanguageDefaultsByCode.GetValueOrDefault(fallbackLanguage, EnglishDefaults);
+        var language = LanguageRegistry.For(fallbackLanguage);
         if (!o._prologuePhraseSet)
-            o.ProloguePhrase = defaults.Prologue;
+            o.ProloguePhrase = language.ProloguePhrase;
         if (!o._prologueTitleSet)
-            o.PrologueTitle = defaults.PrologueTitle;
+            o.PrologueTitle = language.PrologueTitle;
         if (!o._epiloguePhraseSet)
-            o.EpiloguePhrase = defaults.Epilogue;
+            o.EpiloguePhrase = language.EpiloguePhrase;
         if (!o._epilogueTitleSet)
-            o.EpilogueTitle = defaults.EpilogueTitle;
+            o.EpilogueTitle = language.EpilogueTitle;
 
         // Checked against the resolved profile rather than the raw options, so it accounts for the
         // localized defaults filling in whatever was not given: with numbered chapters switched off
@@ -1061,18 +1027,18 @@ public sealed class CliOptions
     /// <summary>
     /// Resolves the chapter phrase, title word and intro title for the given language: an
     /// explicit --chapter-phrase/--title/--intro-title always wins; otherwise the localized
-    /// default for <paramref name="language"/> is used (English-ish defaults for languages
-    /// without a dedicated entry in <see cref="LanguageDefaults"/>). Called once at parse time
-    /// for an explicit --lang (building <see cref="DefaultProfile"/>), and once per file by
+    /// default for <paramref name="language"/> is used (English defaults for languages without
+    /// an entry in <see cref="LanguageRegistry"/>). Called once at parse time for an explicit
+    /// --lang (building <see cref="DefaultProfile"/>), and once per file by
     /// <see cref="ChapterDetector"/> when <see cref="AutoLanguage"/> is active.
     /// </summary>
     /// <param name="language">Two-letter language code (not "auto") to resolve defaults for.</param>
     public LanguageProfile ResolveProfile(string language)
     {
-        var defaults = LanguageDefaultsByCode.GetValueOrDefault(language, EnglishDefaults);
-        var phrase = _phraseSet ? ChapterPhrase : defaults.Phrase;
-        var title = _titleSet ? Title : defaults.Title;
-        var intro = _introSet ? IntroTitle : defaults.Intro;
+        var defaults = LanguageRegistry.For(language);
+        var phrase = _phraseSet ? ChapterPhrase : defaults.ChapterPhrase;
+        var title = _titleSet ? Title : defaults.ChapterTitle;
+        var intro = _introSet ? IntroTitle : defaults.IntroTitle;
         var (regex, hasGroup) = CompilePhraseRegex(phrase);
         return new LanguageProfile(
             language, phrase, regex, hasGroup, title, intro, ResolveNamedPhrases(defaults));
@@ -1087,12 +1053,12 @@ public sealed class CliOptions
     /// language the user meant them in.
     /// </summary>
     /// <param name="defaults">The language's own defaults, for whichever option was not given.</param>
-    private IReadOnlyList<NamedPhrase> ResolveNamedPhrases(LanguageDefaults defaults)
+    private IReadOnlyList<NamedPhrase> ResolveNamedPhrases(ILanguage defaults)
     {
         var named = new List<NamedPhrase>();
-        Add("prologue", _prologuePhraseSet ? ProloguePhrase : defaults.Prologue,
+        Add("prologue", _prologuePhraseSet ? ProloguePhrase : defaults.ProloguePhrase,
             _prologueTitleSet ? PrologueTitle : defaults.PrologueTitle, NamedPhraseScope.BeforeFirstChapter);
-        Add("epilogue", _epiloguePhraseSet ? EpiloguePhrase : defaults.Epilogue,
+        Add("epilogue", _epiloguePhraseSet ? EpiloguePhrase : defaults.EpiloguePhrase,
             _epilogueTitleSet ? EpilogueTitle : defaults.EpilogueTitle, NamedPhraseScope.AfterFirstChapter);
         for (var i = 0; i < _customMappings.Count; i++)
             Add($"custom {i + 1}", _customMappings[i].Phrase, _customMappings[i].Title,
@@ -1228,19 +1194,19 @@ public sealed class CliOptions
                                     transcribed as words - cardinals and ordinals, before or
                                     after the phrase ("chapter two", "Erstes Kapitel") - are
                                     understood in
-                                    {string.Join(", ", NumberWordParser.SupportedLanguages)}; digits
+                                    {string.Join(", ", LanguageRegistry.SupportedCodes)}; digits
                                     ("2.", "2nd", "2e") work in every language. For these
                                     languages, --lang also localizes the defaults of
                                     --chapter-phrase, --prologue-phrase, --epilogue-phrase,
                                     --title, --intro-title, --prologue-title and
                                     --epilogue-title (per-file with "auto").
           -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
-                                    chapter, localized by --lang).
+                                    /chapter/, localized by --lang).
                                     Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
                                     The regexp may contain one capturing group "(\d+)" in place of
                                     the chapter number; otherwise the number is expected to follow
                                     the phrase. Matching is always case-insensitive.
-          -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: prologue,
+          -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: /prolog/,
                                     localized by --lang). Accepts a "/regexp/" like
                                     --chapter-phrase, but parses no number: a match becomes one
                                     untitled-by-number mark carrying --prologue-title. Only
@@ -1250,7 +1216,7 @@ public sealed class CliOptions
                                     occurrence wins (front matter often lists what is coming
                                     before the narrator announces it). Pass an empty string to
                                     switch prologue detection off.
-          -g, --epilogue-phrase <p> Same for the epilogue (default: epilogue, localized by
+          -g, --epilogue-phrase <p> Same for the epilogue (default: /epilog/, localized by
                                     --lang), mirrored: only accepted once at least one chapter
                                     has been found. Pass an empty string to switch it off.
           -u, --custom <mappings>   Extra phrase-to-title mappings, "phrase:title" pairs separated

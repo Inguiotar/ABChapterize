@@ -64,7 +64,9 @@ Prebuilt binaries for Windows and Linux are available on the
   Kapitel", "2. Kapitel", "chapitre premier", "Birinci Bölüm" — and `--lang`
   localizes the chapter phrase and title defaults (per-file when
   auto-detecting), so a German audiobook alone finds and writes "Kapitel"
-  with no options at all.
+  with no options at all. Missing your language? Adding one is a contained,
+  well-signposted job — see
+  [doc/adding-a-language.md](doc/adding-a-language.md).
 - **All chapter-capable audio formats** — MP4 audiobooks (`.m4a`/`.m4b`), MP3,
   Opus and Matroska audio (`.mka`). (`.ogg` and `.flac` are out, through no
   fault of their own: ffmpeg cannot write chapter marks into those containers.)
@@ -193,9 +195,9 @@ when chapters are written. The most useful knobs:
 | `-R`, `--revert` | Restore all `*.bak` backups (undo). |
 | `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter`; combinable only with `--recurse` and the output options. |
 | `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
-| `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
-| `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `prologue`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
-| `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `epilogue`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
+| `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `/chapter/`, localized by `--lang`). |
+| `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `/prolog/`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
+| `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
 | `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched anywhere in the file as often as it occurs (up to 100 marks per file). Titles may reference the phrase's capturing groups as `$1`, `$2` or by name. Repeatable; never localized. |
 | `-U`, `--custom-file <path>` | Read `--custom` mappings from a text file, one per line (blank and `#` lines ignored). |
 | `--no-numbered-chapters` | Detect no numbered chapters at all — only the prologue, epilogue and `--custom` marks. Passes 2.5 and 3 never run and nothing is ever tagged `.missing-marks`. Cannot combine with `--chapter-phrase`, `--title`, `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` or `--verify`. |

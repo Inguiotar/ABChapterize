@@ -65,6 +65,20 @@ for you, not how it was built. The format follows
   `--ignore-progress` ignores (and rewrites) it on demand, and `--dry-run`,
   `--no-op` and `--revert` never write one at all.
 
+### Changed
+
+- **The built-in chapter, prologue and epilogue phrases now cover each
+  language's spelling variants.** They are regular expressions rather than
+  single words, so a transcript that dropped an accent still matches
+  ("capitulo" for "capítulo", "bolum" for "bölüm"), and a form the language
+  itself changes is found too — Swedish and Danish "kapitlet" alongside
+  "kapitel", English "prolog" alongside "prologue". Nothing about using them
+  changes: they are still matched case-insensitively anywhere in the line, and
+  `--chapter-phrase`/`--prologue-phrase`/`--epilogue-phrase` still override
+  them. `--help` and the manual list each language's exact default.
+- **A guide for adding a language**, [doc/adding-a-language.md](doc/adding-a-language.md),
+  aimed at contributors who have never seen the rest of the codebase.
+
 ## [0.9.0] — 2026-07-27
 
 First public release.
