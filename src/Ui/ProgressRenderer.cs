@@ -38,6 +38,12 @@ public sealed class WorkTracker
     /// undetected (gaps that Pass 3 will chase); rendered as "(-N)" after the chapter number.</summary>
     public int MissingChapters { get; set; }
 
+    /// <summary>How many non-numbered marks (prologue, epilogue, <c>--custom</c>) have been found
+    /// so far. Shown only in place of the chapter number, i.e. while none has been found - which is
+    /// the whole run with <c>--no-numbered-chapters</c>, where the slot would otherwise sit at
+    /// "----" from start to finish however much the file is yielding.</summary>
+    public int NamedMarks { get; set; }
+
     /// <summary>Starts a new phase: resets the bar to 0 % and sets its label and total work.</summary>
     /// <param name="label">Phase name shown after the bar.</param>
     /// <param name="totalBytes">Total number of bytes this phase will process.</param>
@@ -241,7 +247,9 @@ public sealed class ProgressRenderer : IDisposable
         // chapters - the ones Pass 3 would have to chase - as e.g. "ch 6(-2)".
         var chapters = slot.Tracker.HighestChapter is var highest and > 0
             ? $"ch {highest}" + (slot.Tracker.MissingChapters is var missing and > 0 ? $"(-{missing})" : "")
-            : "----";
+            : slot.Tracker.NamedMarks is var named and > 0
+                ? $"mk {named}"
+                : "----";
         return $"[{bar}]{phase} {percent,3}% | {chapters} | {timer} | {slot.Label}";
     }
 

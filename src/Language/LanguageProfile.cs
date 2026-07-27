@@ -21,8 +21,9 @@ namespace ABChapterize.Language;
 /// <param name="Title">Word used to build chapter titles ("Chapter 1", "Kapitel 1", ...).</param>
 /// <param name="IntroTitle">Title of the synthetic intro chapter.</param>
 /// <param name="NamedPhrases">The non-numbered announcements to look for alongside the chapter
-/// phrase - the prologue and epilogue - each with the title its mark is written under. Empty when
-/// both were switched off with an empty <c>--prologue-phrase</c>/<c>--epilogue-phrase</c>.</param>
+/// phrase - the prologue, the epilogue and every <c>--custom</c> mapping - each with the title its
+/// mark is written under. Empty when the prologue and epilogue were both switched off with an empty
+/// <c>--prologue-phrase</c>/<c>--epilogue-phrase</c> and no <c>--custom</c> mapping was given.</param>
 public sealed record LanguageProfile(
     string Language, string ChapterPhrase, Regex PhraseRegex, bool PhraseHasNumberGroup,
     string Title, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases);

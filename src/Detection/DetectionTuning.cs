@@ -336,6 +336,31 @@ internal static class DetectionTuning
     internal const double LowConfidenceThreshold = 0.5;
 
     /// <summary>
+    /// The most <c>--custom</c> marks one file may produce before the rest are dropped. A guard
+    /// against a mapping that matches ordinary prose rather than a structural announcement - the
+    /// obvious accident being something like <c>--custom "the:the"</c>, which would otherwise place
+    /// a mark every few seconds for the length of a book and cost a mark-refinement transcription
+    /// for each of them. Set well above any real book's structure (a novel with an interlude
+    /// between every one of forty chapters stays far below it) and well below the point where the
+    /// marks become a burden to the player and the refinement cost becomes noticeable.
+    /// <para>
+    /// Deliberately not applied to the prologue and epilogue: those replace rather than accumulate,
+    /// so they are capped at one each by construction.
+    /// </para>
+    /// </summary>
+    internal const int MaxCustomMarksPerFile = 100;
+
+    /// <summary>
+    /// How close two matches of the same repeatable phrase must be to count as the same
+    /// announcement heard twice rather than two announcements. Overlapping probe windows routinely
+    /// re-decode the same stretch of audio, and the second decode can time the phrase's segment a
+    /// second or two differently than the first, so exact equality would not catch it. Chosen far
+    /// above that jitter and far below any plausible spacing of two genuine structural
+    /// announcements, which are minutes apart in a real book.
+    /// </summary>
+    internal const double NamedMarkDedupeSeconds = 10;
+
+    /// <summary>
     /// Whisper language-detection probability below which the result counts as inconclusive and
     /// the file falls back to English, with <c>--lang auto</c>. Reuses
     /// <see cref="LowConfidenceThreshold"/>'s cutoff for the same reason.

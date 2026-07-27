@@ -30,8 +30,13 @@ internal static class PhraseMatching
         int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
         bool SpansMerge = false);
 
-    /// <summary>A non-numbered announcement (prologue/epilogue) found inside a transcribed window.</summary>
-    /// <param name="Phrase">The phrase that matched, carrying the title its mark is written under.</param>
+    /// <summary>A non-numbered announcement (prologue, epilogue or a <c>--custom</c> mapping) found
+    /// inside a transcribed window.</summary>
+    /// <param name="Phrase">The phrase that matched.</param>
+    /// <param name="Title">The title this particular match writes: the phrase's own template with
+    /// its capturing-group references expanded (see <see cref="NamedPhrase.ResolveTitle"/>).
+    /// Resolved here, while the <see cref="Match"/> is still around, rather than carried along as a
+    /// match object nothing downstream has any other use for.</param>
     /// <param name="PhraseStartSeconds">Phrase start, in the time base <paramref name="Phrase"/> was
     /// matched in (window-relative for a Pass 2 probe).</param>
     /// <param name="PhraseEndSeconds">End of the transcript segment the phrase was found in, in the
@@ -39,7 +44,8 @@ internal static class PhraseMatching
     /// needs, exactly as for <see cref="PhraseMatch.PhraseEndSeconds"/>.</param>
     /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
     internal readonly record struct NamedMatch(
-        NamedPhrase Phrase, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence);
+        NamedPhrase Phrase, string Title,
+        double PhraseStartSeconds, double PhraseEndSeconds, double Confidence);
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -110,7 +116,7 @@ internal static class PhraseMatching
 
     /// <summary>
     /// Searches the transcribed segments for every non-numbered announcement the profile knows
-    /// (prologue, epilogue). No number is parsed and none is required, so - unlike
+    /// (prologue, epilogue, <c>--custom</c>). No number is parsed and none is required, so - unlike
     /// <see cref="FindPhraseMatches"/> - a phrase that matches is always a match; whether it may
     /// become a mark is decided by its <see cref="NamedPhrase.Scope"/> at the call site, which is
     /// the only place that knows how many chapters have been found so far.
@@ -131,7 +137,8 @@ internal static class PhraseMatching
             {
                 var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
                 yield return new NamedMatch(
-                    phrase, segment.StartSeconds, segment.EndSeconds, segment.Probability);
+                    phrase, phrase.ResolveTitle(m),
+                    segment.StartSeconds, segment.EndSeconds, segment.Probability);
             }
         }
     }

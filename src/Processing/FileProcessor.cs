@@ -473,7 +473,7 @@ public sealed class FileProcessor
 
     /// <summary>
     /// Turns a detection result's chapters into titled <see cref="Chapter"/>s - merging in the
-    /// prologue/epilogue marks, which are detected separately precisely because they carry no
+    /// named marks (prologue, epilogue, --custom), which are detected separately precisely because they carry no
     /// chapter number (see <see cref="DetectedMark"/>) and meet the numbered ones only here - and,
     /// when the first one starts past the very beginning and something was actually spoken there,
     /// prepends the intro chapter: audiobooks open with a prelude, and the mp4 muxer would
@@ -659,7 +659,9 @@ public sealed class FileProcessor
         // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed markings
         // are trusted as-is. --force means "redo the whole file from scratch" and takes priority,
         // falling through to the normal policy below.
-        if (!_options.Force && HasMissingMarksTag(file))
+        // The resume path is entirely about chapter numbers the tag names, so a run that detects
+        // none re-detects the file from scratch instead - the tag is simply not this run's business.
+        if (!_options.Force && _options.NumberedChapters && HasMissingMarksTag(file))
             return await ProcessResumeAsync(ctx, detector, watch, ct);
 
         if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
@@ -672,7 +674,7 @@ public sealed class FileProcessor
 
         if (result.GapRemains)
             return await ReportUnresolvedGapAsync(ctx, result, ct);
-        if (result.Chapters.Count == 0)
+        if (result.Chapters.Count == 0 && result.NamedMarks.Count == 0)
             ReportNoChaptersFound(ctx, result);
         else
             await WriteDetectedChaptersAsync(ctx, result, discardNote, ct);
@@ -930,7 +932,9 @@ public sealed class FileProcessor
             : result.BelowExpectedStartNumber is { } foundNumber
                 ? $"{ctx.Name}: first chapter found ({foundNumber}) is below --expected-start-chapter " +
                   $"{_options.ExpectedStartChapter}; file unchanged{langHint}"
-                : $"{ctx.Name}: no chapter phrases found; file unchanged{langHint}";
+                : _options.NumberedChapters
+                    ? $"{ctx.Name}: no chapter phrases found; file unchanged{langHint}"
+                    : $"{ctx.Name}: none of the configured phrases found; file unchanged{langHint}";
         _progress.FinishWithSummary(ctx.Work, summary);
     }
 
@@ -945,22 +949,47 @@ public sealed class FileProcessor
     {
         _runStats.AccumulateConfidence(result.Chapters);
         var (chapters, introNote) = BuildChapters(result);
-        var notes = introNote + discardNote + FormatLowConfidenceNote(result) + FormatLanguageNote(result) +
-                    await ExportSidecarAsync(ctx, chapters, ct);
-        var range = $"{result.Chapters[0].Number}-{result.Chapters[^1].Number}";
+        var notes = introNote + discardNote + FormatNamedMarksNote(result) + FormatLowConfidenceNote(result) +
+                    FormatLanguageNote(result) + await ExportSidecarAsync(ctx, chapters, ct);
+        var what = FormatWrittenCount(result);
         // A low-confidence mark is the one thing here worth surfacing above the progress bar.
         var important = result.LowConfidenceNumbers.Count > 0;
 
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
-                $"{ctx.Name}: DRY RUN - would write {result.Chapters.Count} chapter(s) ({range})" +
+                $"{ctx.Name}: DRY RUN - would write {what}" +
                 $"{notes}:{Environment.NewLine}{FormatChapterListing(chapters)}", important);
             return;
         }
         var backupNote = await CommitChaptersAsync(ctx, chapters, null, ct);
         _progress.FinishWithSummary(ctx.Work,
-            $"{ctx.Name}: {result.Chapters.Count} chapter(s) written ({range}){notes}{backupNote}", important);
+            $"{ctx.Name}: {what} written{notes}{backupNote}", important);
+    }
+
+    /// <summary>What the summary line calls the marks this file yielded: the numbered chapters with
+    /// their range, or - when the run detected none, either because the book had none or because
+    /// --no-numbered-chapters switched them off - the named marks on their own.</summary>
+    /// <param name="result">The file's detection result.</param>
+    private static string FormatWrittenCount(DetectionResult result)
+        => result.Chapters.Count > 0
+            ? $"{result.Chapters.Count} chapter(s) " +
+              $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})"
+            : $"{result.NamedMarks.Count} mark(s)";
+
+    /// <summary>Note counting the prologue/epilogue/--custom marks written alongside the numbered
+    /// chapters, and flagging a file that hit the per-file --custom cap: marks the user asked for
+    /// were dropped there, which would otherwise look exactly like a mapping that stopped matching
+    /// halfway through the book. Empty when neither applies.</summary>
+    /// <param name="result">The file's detection result.</param>
+    private static string FormatNamedMarksNote(DetectionResult result)
+    {
+        var limitNote = result.CustomMarkLimitHit
+            ? $", custom-mark limit of {DetectionTuning.MaxCustomMarksPerFile} reached - further matches dropped"
+            : "";
+        return result.Chapters.Count > 0 && result.NamedMarks.Count > 0
+            ? $", {result.NamedMarks.Count} named mark(s){limitNote}"
+            : limitNote;
     }
 
     /// <summary>Note naming the marks Whisper was unsure about, so they can be spot-checked;

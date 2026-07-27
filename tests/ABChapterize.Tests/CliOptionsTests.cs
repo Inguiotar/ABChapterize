@@ -169,6 +169,114 @@ public sealed class CliOptionsTests : IDisposable
     public void NamedPhrase_IsRejected_WithImport(string opt, string value)
         => Assert.Throws<CliError>(() => ParseFile("--import", opt, value));
 
+    [Fact]
+    public void Custom_BecomesRepeatableNamedPhrases_AfterPrologueAndEpilogue()
+    {
+        var profile = ParseFile("--custom", "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel")!
+            .ResolveProfile("en");
+
+        Assert.Equal(
+            ["prologue", "epilogue", "custom 1", "custom 2"],
+            profile.NamedPhrases.Select(p => p.Kind));
+        var custom = profile.NamedPhrases.Where(p => p.Repeatable).ToList();
+        Assert.All(custom, p => Assert.Equal(NamedPhraseScope.Anywhere, p.Scope));
+        Assert.Equal(["Zwischenspiel", "Zeittafel"], custom.Select(p => p.Title));
+        Assert.Matches(custom[1].Regex, "die Zeit-Tafel");
+    }
+
+    [Fact]
+    public void Custom_IsNotLocalized_ByLang()
+    {
+        // A phrase the user wrote out means exactly what it says, whatever --lang is set to.
+        var profile = ParseFile("--lang", "de", "-u", "interlude:Interlude")!.ResolveProfile("de");
+
+        Assert.Equal("Interlude", profile.NamedPhrases.Single(p => p.Repeatable).Title);
+    }
+
+    [Fact]
+    public void Custom_AccumulatesAcrossRepeatedOptions()
+    {
+        var options = ParseFile("--custom", "a:A", "--custom", "b:B;c:C")!;
+
+        Assert.Equal(["A", "B", "C"], options.CustomMappings.Select(m => m.Title));
+    }
+
+    [Fact]
+    public void Custom_ReadsMappingsFromAFile()
+    {
+        var path = Path.Combine(_dir, "mappings.txt");
+        File.WriteAllLines(path, ["# comment", "zwischenspiel:Zwischenspiel"]);
+
+        Assert.Equal(
+            [new CustomMapping("zwischenspiel", "Zwischenspiel")],
+            ParseFile("--custom-file", path)!.CustomMappings);
+    }
+
+    [Fact]
+    public void Custom_TitleMayReferenceACapturingGroup()
+    {
+        var phrase = ParseFile("--custom", "/(interlude|intermezzo)/:The $1")!
+            .ResolveProfile("en").NamedPhrases.Single(p => p.Repeatable);
+
+        Assert.Equal("The intermezzo", phrase.ResolveTitle(phrase.Regex.Match("an intermezzo now")));
+    }
+
+    [Fact]
+    public void Custom_TitleReferencingAMissingGroup_IsRejected()
+        => Assert.Throws<CliError>(() => ParseFile("--custom", "/(interlude)/:Part $2"));
+
+    [Fact]
+    public void Custom_TitleKeepsAnOrdinaryDollarSign()
+    {
+        // No capturing group in the phrase, so "$5" is a price, not a substitution.
+        var phrase = ParseFile("--custom", "bargain:Only $5")!
+            .ResolveProfile("en").NamedPhrases.Single(p => p.Repeatable);
+
+        Assert.Equal("Only $5", phrase.ResolveTitle(phrase.Regex.Match("a bargain")));
+    }
+
+    [Fact]
+    public void NoNumberedChapters_SwitchesNumberedDetectionOff()
+        => Assert.False(ParseFile("--no-numbered-chapters")!.NumberedChapters);
+
+    [Theory]
+    [InlineData("--chapter-phrase", "part")]
+    [InlineData("--title", "Part")]
+    [InlineData("--pass3-model", "large")]
+    [InlineData("--expected-start-chapter", "3")]
+    [InlineData("--max-chapter-number", "40")]
+    public void NoNumberedChapters_RejectsANumberBasedOption(string opt, string value)
+        => Assert.Throws<CliError>(() => ParseFile("--no-numbered-chapters", opt, value));
+
+    [Theory]
+    [InlineData("--trailing-scan")]
+    [InlineData("--verify")]
+    [InlineData("--import")]
+    public void NoNumberedChapters_RejectsANumberBasedFlag(string flag)
+        => Assert.Throws<CliError>(() => ParseFile("--no-numbered-chapters", flag));
+
+    [Fact]
+    public void NoNumberedChapters_IsRejected_WhenNoNamedPhraseIsLeft()
+        => Assert.Throws<CliError>(() => ParseFile(
+            "--no-numbered-chapters", "--prologue-phrase", "", "--epilogue-phrase", ""));
+
+    [Fact]
+    public void NoNumberedChapters_IsAccepted_WithACustomMappingAlone()
+    {
+        var options = ParseFile(
+            "--no-numbered-chapters", "--prologue-phrase", "", "--epilogue-phrase", "",
+            "--custom", "interlude:Interlude")!;
+
+        Assert.False(options.NumberedChapters);
+        Assert.Equal("Interlude", options.DefaultProfile.NamedPhrases.Single().Title);
+    }
+
+    [Fact]
+    public void RunFingerprint_ChangesWithTheCustomMappings()
+        => Assert.NotEqual(
+            ParseFile("--custom", "a:A")!.RunFingerprint,
+            ParseFile("--custom", "b:B")!.RunFingerprint);
+
     [Theory]
     [InlineData("--jobs", "1")]
     [InlineData("-J", "4")]

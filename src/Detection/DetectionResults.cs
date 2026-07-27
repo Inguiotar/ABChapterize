@@ -17,8 +17,8 @@ namespace ABChapterize.Detection;
 public readonly record struct DetectedChapter(int Number, double TimeSeconds, double Confidence = 1.0);
 
 /// <summary>
-/// A detected non-numbered mark - a prologue or epilogue announcement (see
-/// <see cref="ABChapterize.Language.NamedPhrase"/>). Kept in its own list rather than mixed into
+/// A detected non-numbered mark - a prologue or epilogue announcement, or a <c>--custom</c> match
+/// (see <see cref="ABChapterize.Language.NamedPhrase"/>). Kept in its own list rather than mixed into
 /// <see cref="DetectionResult.Chapters"/> precisely because it carries no chapter number: the whole
 /// gap machinery (<see cref="GapPlanning.FindGaps"/>, <see cref="GapPlanning.Normalize"/>,
 /// <see cref="GapPlanning.ChapterProgress"/>) reasons in consecutive numbers, and a numberless entry
@@ -27,13 +27,23 @@ public readonly record struct DetectedChapter(int Number, double TimeSeconds, do
 /// <see cref="FileProcessor.BuildChapters"/>, which merges them by time into the chapter list
 /// actually written.
 /// </summary>
-/// <param name="Kind">The phrase kind that produced it ("prologue", "epilogue"), for log lines.</param>
-/// <param name="Title">The title to write, straight from <see cref="ABChapterize.Language.NamedPhrase.Title"/>.</param>
+/// <param name="Kind">The phrase kind that produced it ("prologue", "epilogue", "custom 1", ...),
+/// for log lines and as the key a mark is replaced or deduplicated under.</param>
+/// <param name="Title">The title to write - <see cref="ABChapterize.Language.NamedPhrase.Title"/>
+/// with any capturing-group references already expanded against the match this mark came from.</param>
 /// <param name="TimeSeconds">Position of the mark in seconds.</param>
 /// <param name="Confidence">Whisper's probability for the segment the phrase was found in (0-1);
 /// 1.0 when unknown, e.g. for a mark carried over from a file's existing markings.</param>
+/// <param name="PhraseTimeSeconds">Where the announcement itself was heard, as opposed to where the
+/// mark ended up after placement. Kept only so a repeatable phrase can tell one announcement heard
+/// twice by two overlapping probe windows from two genuine ones (see
+/// <see cref="DetectionTuning.NamedMarkDedupeSeconds"/>) - the placed time is unusable for that,
+/// since two detections of one announcement can be walked to quite different marks.</param>
+/// <param name="Repeatable">Copied from the phrase that produced this mark, so the per-file
+/// <c>--custom</c> cap can count what it caps without looking the phrase up again.</param>
 public readonly record struct DetectedMark(
-    string Kind, string Title, double TimeSeconds, double Confidence = 1.0);
+    string Kind, string Title, double TimeSeconds, double Confidence = 1.0,
+    double PhraseTimeSeconds = 0, bool Repeatable = false);
 
 /// <summary>Per-file diagnostic statistics gathered during detection, surfaced per file under
 /// --verbose (or --verbose-transcripts) and aggregated run-wide under --summary. The silence and
@@ -62,9 +72,9 @@ public readonly record struct DetectionStats(
 
 /// <summary>Outcome of chapter detection for one file.</summary>
 /// <param name="Chapters">Detected chapters in chronological order; empty when none were found.</param>
-/// <param name="NamedMarks">Detected prologue/epilogue marks in chronological order; empty when
-/// none were found or both phrases were switched off. Never part of <paramref name="Chapters"/> -
-/// see <see cref="DetectedMark"/>.</param>
+/// <param name="NamedMarks">Detected prologue/epilogue and <c>--custom</c> marks in chronological
+/// order; empty when none were found or every named phrase was switched off. Never part of
+/// <paramref name="Chapters"/> - see <see cref="DetectedMark"/>.</param>
 /// <param name="GapRemains">True when a chapter sequence gap could not be resolved; the file must
 /// be left unchanged.</param>
 /// <param name="MissingNumbers">The chapter numbers that could not be located (only when
@@ -95,12 +105,16 @@ public readonly record struct DetectionStats(
 /// start-snapping fold that lead-in into chapter 1 instead of giving it its own titled entry.
 /// Always true when the VAD pre-pass did not run (nothing to check) or
 /// <paramref name="Chapters"/> is empty.</param>
+/// <param name="CustomMarkLimitHit">True when <see cref="DetectionTuning.MaxCustomMarksPerFile"/>
+/// was reached and further <c>--custom</c> matches were therefore dropped. Surfaced in the file's
+/// summary line rather than kept to the --verbose log: silently discarding marks the user asked for
+/// would look exactly like a mapping that stopped matching halfway through the book.</param>
 public readonly record struct DetectionResult(
     IReadOnlyList<DetectedChapter> Chapters, IReadOnlyList<DetectedMark> NamedMarks,
     bool GapRemains, IReadOnlyList<int> MissingNumbers,
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability, DetectionStats Stats, bool EarlyAborted = false,
-    int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true);
+    int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true, bool CustomMarkLimitHit = false);
 
 /// <summary>Outcome of checking one pre-existing chapter marking against the audio, in file order -
 /// the raw material <see cref="GapPlanning.BuildGapRegions"/> groups into gap-scoped recovery

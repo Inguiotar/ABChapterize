@@ -133,9 +133,10 @@ internal sealed class RegionProber
     /// of which region contributed what.</summary>
     private readonly List<DetectedChapter> _found;
 
-    /// <summary>Accumulator of the file's prologue/epilogue marks, shared across regions exactly as
-    /// <see cref="_found"/> is. Holds at most one mark per <see cref="NamedPhrase.Kind"/> - see
-    /// <see cref="AcceptNamedMatchAsync"/> for why a later match replaces an earlier one.</summary>
+    /// <summary>Accumulator of the file's non-numbered marks, shared across regions exactly as
+    /// <see cref="_found"/> is. Holds at most one mark per non-repeatable
+    /// <see cref="NamedPhrase.Kind"/> (prologue, epilogue) and any number of repeatable ones
+    /// (<c>--custom</c>) - see <see cref="AcceptNamedMatchAsync"/> for both rules.</summary>
     private readonly List<DetectedMark> _namedFound;
 
     /// <summary>
@@ -237,6 +238,10 @@ internal sealed class RegionProber
     /// <summary>The first chapter number found, when it sat below --expected-start-chapter and
     /// detection was therefore abandoned for this file; null otherwise.</summary>
     internal int? BelowExpectedStartNumber { get; private set; }
+
+    /// <summary>Whether <see cref="DetectionTuning.MaxCustomMarksPerFile"/> was reached in this
+    /// region and further --custom matches were therefore dropped.</summary>
+    internal bool CustomLimitHit { get; private set; }
 
     /// <summary>Creates a prober for one region.</summary>
     /// <param name="env">The detector-owned tools and callbacks to probe with.</param>
@@ -367,7 +372,13 @@ internal sealed class RegionProber
     /// <param name="candidate">The candidate about to be probed.</param>
     private bool ShouldEarlyAbort(ProbeCandidate candidate)
     {
-        if (candidate.Start < _ctx.EarlyAbortSeconds || _found.Count > 0)
+        // "Nothing found" means no numbered chapter - a lone prologue is not enough to call the
+        // file productive, and BuildDetectionResult would discard it anyway. With
+        // --no-numbered-chapters there are no numbers to wait for, so the named marks are what
+        // counts instead; otherwise every such run would abort at the threshold regardless.
+        var foundSomething = _found.Count > 0 ||
+                             (!_env.Options.NumberedChapters && _namedFound.Count > 0);
+        if (candidate.Start < _ctx.EarlyAbortSeconds || foundSomething)
             return false;
         EarlyAborted = true;
         _env.Log?.Invoke($"early-abort: no chapter found within the first " +
@@ -583,6 +594,9 @@ internal sealed class RegionProber
         // (a short front matter, or a wide jingle window) must still yield the prologue.
         await ScanWindowForNamedMarksAsync(candidate, start, segments, trimmedAbs, ct);
 
+        if (!_env.Options.NumberedChapters)
+            return marks;
+
         // Language.Profile is resolved on the first probe, which is always a full decode (the cache
         // is empty then), so it is non-null by the time any transcript-reuse branch can run.
         foreach (var match in _env.FindCappedPhraseMatches(segments, Language.Profile!, mergeBoundarySegIndex))
@@ -625,23 +639,34 @@ internal sealed class RegionProber
     /// <summary>
     /// Whether a named phrase may become a mark at this point of the file, judged purely by how
     /// many numbered chapters are known so far - see <see cref="NamedPhraseScope"/> for why that is
-    /// the only usable landmark. Rejections are silent: unlike a numbered match, which was plainly
-    /// heard and whose disappearance is worth explaining, "epilogue" turning up in the middle of a
-    /// book is an ordinary word in ordinary prose and logging every occurrence would drown the log.
+    /// the only usable landmark. With --no-numbered-chapters there is no such landmark at all, and
+    /// both positional scopes stand open for the whole file; which occurrence then wins is settled
+    /// in <see cref="AcceptNamedMatchAsync"/> instead. Rejections are silent: unlike a numbered
+    /// match, which was plainly heard and whose disappearance is worth explaining, "epilogue"
+    /// turning up in the middle of a book is an ordinary word in ordinary prose and logging every
+    /// occurrence would drown the log.
     /// </summary>
     /// <param name="phrase">The phrase that matched.</param>
-    private bool IsInScope(NamedPhrase phrase)
-        => phrase.Scope == NamedPhraseScope.BeforeFirstChapter ? _found.Count == 0 : _found.Count > 0;
+    private bool IsInScope(NamedPhrase phrase) => phrase.Scope switch
+    {
+        NamedPhraseScope.Anywhere => true,
+        NamedPhraseScope.BeforeFirstChapter => !_env.Options.NumberedChapters || _found.Count == 0,
+        _ => !_env.Options.NumberedChapters || _found.Count > 0,
+    };
 
     /// <summary>
-    /// Places, logs and records one in-scope named match, replacing any earlier mark of the same
-    /// kind. Last match within the scope wins rather than first: front matter routinely mentions
-    /// what is coming ("...gelesen von...; Prolog") before the narrator actually announces it, and
-    /// the real announcement is by construction the later of the two - whereas nothing follows the
-    /// genuine one inside its own scope, which the prologue's closes at chapter 1 and the
-    /// epilogue's at the end of the file. The replaced mark's own placement work is simply
-    /// discarded; at one prologue and one epilogue per book that costs at most a couple of extra
-    /// refinement transcriptions.
+    /// Places, logs and records one in-scope named match - unless <see cref="ShouldDropNamedMatch"/>
+    /// says this one adds nothing, which is checked first so a dropped match costs no mark placement
+    /// at all (that is where the refinement transcriptions are spent).
+    /// <para>
+    /// A non-repeatable phrase replaces any earlier mark of its own kind, so the last match within
+    /// the scope wins rather than the first: front matter routinely mentions what is coming
+    /// ("...gelesen von...; Prolog") before the narrator actually announces it, and the real
+    /// announcement is by construction the later of the two - whereas nothing follows the genuine
+    /// one inside its own scope, which the prologue's closes at chapter 1 and the epilogue's at the
+    /// end of the file. The replaced mark's own placement work is simply discarded; at one prologue
+    /// and one epilogue per book that costs at most a couple of extra refinement transcriptions.
+    /// </para>
     /// </summary>
     /// <param name="match">The named match, in window-relative time.</param>
     /// <param name="candidate">The candidate whose window this probe decoded.</param>
@@ -653,20 +678,68 @@ internal sealed class RegionProber
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
         var phraseAbs = start + match.PhraseStartSeconds;
-        var (time, markSilence, markRegion) = ResolveNamedMark(match, candidate, start, trimmedAbs);
+        if (ShouldDropNamedMatch(match.Phrase, phraseAbs))
+            return;
 
+        var (time, markSilence, markRegion) = ResolveNamedMark(match, candidate, start, trimmedAbs);
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
             _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs);
         time = await _env.Marks.PlaceAsync(
             null, time, phraseAbs, markSilence, markRegion, markCtx, ct);
 
-        _namedFound.RemoveAll(m => m.Kind == match.Phrase.Kind);
+        if (!match.Phrase.Repeatable)
+            _namedFound.RemoveAll(m => m.Kind == match.Phrase.Kind);
         _namedFound.Add(new DetectedMark(
-            match.Phrase.Kind, match.Phrase.Title, time, match.Confidence));
-        _env.Log?.Invoke($"{match.Phrase.Kind} detected, mark placed at {FormatTimestamp(time)} " +
-                         $"(confidence {match.Confidence:0.00}" +
+            match.Phrase.Kind, match.Title, time, match.Confidence, phraseAbs, match.Phrase.Repeatable));
+        _ctx.Work.NamedMarks = _namedFound.Count;
+        _env.Log?.Invoke($"{match.Phrase.Kind} detected (\"{match.Title}\"), mark placed at " +
+                         $"{FormatTimestamp(time)} (confidence {match.Confidence:0.00}" +
                          await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
                          $"){LowConfidenceNote(match.Confidence)}");
+    }
+
+    /// <summary>
+    /// Whether an in-scope named match is to be passed over without becoming a mark. Three reasons,
+    /// all of them specific to a phrase that carries no number and therefore has no sequence to be
+    /// judged against:
+    /// <list type="bullet">
+    /// <item><description>the same announcement was already marked - overlapping probe windows
+    /// re-decode the same audio routinely, and without this every such overlap would yield a
+    /// duplicate mark a second or two from the first (see
+    /// <see cref="DetectionTuning.NamedMarkDedupeSeconds"/>);</description></item>
+    /// <item><description>the file has reached its --custom mark cap (see
+    /// <see cref="DetectionTuning.MaxCustomMarksPerFile"/>), which is reported all the way out to
+    /// the file's summary line rather than only logged;</description></item>
+    /// <item><description>a prologue already has its mark and there is no chapter sequence to close
+    /// its scope (--no-numbered-chapters). "Last match wins" relies on that closing boundary; with
+    /// the scope open to the end of the file it would walk the mark to whichever late mention came
+    /// last, so the first match is kept instead. The epilogue keeps the last one either way - it is
+    /// bounded by the file end in both modes.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="phrase">The phrase that matched.</param>
+    /// <param name="phraseAbs">Absolute time the announcement was heard at.</param>
+    private bool ShouldDropNamedMatch(NamedPhrase phrase, double phraseAbs)
+    {
+        if (_namedFound.Any(m => m.Kind == phrase.Kind &&
+                                 Math.Abs(m.PhraseTimeSeconds - phraseAbs) < NamedMarkDedupeSeconds))
+            return true;
+
+        if (phrase.Repeatable)
+        {
+            if (_namedFound.Count(m => m.Repeatable) < MaxCustomMarksPerFile)
+                return false;
+            if (!CustomLimitHit)
+                _env.Log?.Invoke($"custom mark limit of {MaxCustomMarksPerFile} reached at " +
+                                 $"{FormatTimestamp(phraseAbs)} - further --custom matches are ignored " +
+                                 "for this file (a mapping matching ordinary prose?)");
+            CustomLimitHit = true;
+            return true;
+        }
+
+        return phrase.Scope == NamedPhraseScope.BeforeFirstChapter &&
+               !_env.Options.NumberedChapters &&
+               _namedFound.Any(m => m.Kind == phrase.Kind);
     }
 
     /// <summary>

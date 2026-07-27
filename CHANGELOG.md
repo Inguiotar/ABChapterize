@@ -9,6 +9,36 @@ for you, not how it was built. The format follows
 
 ### Added
 
+- **Marks for anything else the narrator announces.** `--custom` takes
+  `phrase:title` mappings, several of them separated by semicolons:
+
+  ```
+  abchapterize --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel" book.m4b
+  ```
+
+  A phrase is a plain word or a `/regexp/`, exactly as for `--chapter-phrase`,
+  and no chapter number is parsed or expected. Unlike the prologue and epilogue,
+  a custom phrase is matched anywhere in the file and as often as it occurs, so
+  a book with an interlude between every chapter gets a mark for each of them.
+  Titles can pull text out of the phrase's own capturing groups with `$1`, `$2`
+  or a group name. Only the first colon separates phrase from title, so a title
+  may contain further ones; a `/regexp/` phrase ends at its closing slash
+  instead, so a colon inside it is just a colon; and `\;` writes a semicolon
+  inside a regexp. `--custom` may be repeated, and `--custom-file` reads the
+  same mappings from a text file, one per line. At most 100 such marks are
+  written per file — beyond that the rest are dropped and the file's summary
+  line says so, so a phrase that matches ordinary prose cannot pepper a whole
+  book with marks.
+- **`--no-numbered-chapters`** switches numbered chapter detection off
+  altogether, for books whose structure is not "Chapter 1, Chapter 2, …" at all.
+  Only the prologue, the epilogue and the `--custom` marks are then detected;
+  nothing looks for gaps in a chapter sequence, so no file is ever tagged
+  `.missing-marks` and a run finishes right after the probing pass. The options
+  that only mean something for numbered chapters (`--chapter-phrase`, `--title`,
+  `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
+  `--trailing-scan`, `--verify`) are rejected alongside it rather than silently
+  ignored. With no chapter to place them against, the prologue keeps its first
+  match in the file and the epilogue its last.
 - **Prologues and epilogues get their own marks.** A narrator announcing a
   "prologue" or an "epilogue" now produces a mark titled accordingly, alongside
   the numbered chapters. Both are on by default and localized by `--lang`, in

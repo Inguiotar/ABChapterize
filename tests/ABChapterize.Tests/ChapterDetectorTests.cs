@@ -10,6 +10,7 @@ using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;
 using ABChapterize.Vad;
+using static ABChapterize.Detection.DetectionTuning;
 
 namespace ABChapterize.Tests;
 
@@ -185,6 +186,13 @@ public sealed class ChapterDetectorTests : IDisposable
     private CliOptions Options(params string[] args)
         => CliOptions.Parse([.. args, _file])!;
 
+    /// <summary>The named marks reduced to what these tests are actually about - which phrase
+    /// produced what title, where - so that a bookkeeping field like
+    /// <see cref="DetectedMark.PhraseTimeSeconds"/> can change without rewriting every
+    /// expectation.</summary>
+    private static List<(string Kind, string Title, double TimeSeconds)> Named(DetectionResult result)
+        => result.NamedMarks.Select(m => (m.Kind, m.Title, m.TimeSeconds)).ToList();
+
     /// <summary>Runs the detector against the given silences and script.</summary>
     private async Task<DetectionResult> DetectAsync(
         CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script, FakeVad? vad = null)
@@ -281,8 +289,8 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
         Assert.Equal(
-            [new("prologue", "Prologue", 0.25), new("epilogue", "Epilogue", 1800.15)],
-            result.NamedMarks);
+            [("prologue", "Prologue", 0.25), ("epilogue", "Epilogue", 1800.15)],
+            Named(result));
     }
 
     [Fact]
@@ -316,7 +324,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.Equal([new(1, 600.05)], result.Chapters);
-        Assert.Equal([new("prologue", "Prologue", 0.25)], result.NamedMarks);
+        Assert.Equal([("prologue", "Prologue", 0.25)], Named(result));
     }
 
     [Fact]
@@ -334,7 +342,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.2, " Chapter one."));
             });
 
-        Assert.Equal([new("prologue", "Prologue", 300.05)], result.NamedMarks);
+        Assert.Equal([("prologue", "Prologue", 300.05)], Named(result));
     }
 
     [Fact]
@@ -379,7 +387,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Kapitel eins."));
             });
 
-        Assert.Equal([new("prologue", "Prolog", 0.25)], result.NamedMarks);
+        Assert.Equal([("prologue", "Prolog", 0.25)], Named(result));
     }
 
     [Fact]
@@ -399,6 +407,156 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
         Assert.Empty(result.MissingNumbers);
         Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task CustomPhrase_MarksEveryOccurrence()
+    {
+        // Unlike the prologue, a --custom phrase is repeatable: each announcement gets its own mark
+        // instead of the last one replacing all the others.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--custom", "zwischenspiel:Zwischenspiel"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Zwischenspiel."));
+                s.Add(1800, Seg(0.4, " Zwischenspiel."));
+            });
+
+        Assert.Equal([new(1, 600.05)], result.Chapters);
+        Assert.Equal(
+            [("custom 1", "Zwischenspiel", 1199.95), ("custom 1", "Zwischenspiel", 1800.15)],
+            Named(result));
+    }
+
+    [Fact]
+    public async Task CustomPhrase_IsNotBoundByTheChapterSequence()
+    {
+        // Both before the first chapter and after the last: neither scope rule applies to it.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--custom", "/zeit[- ]?tafel/:Zeittafel"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Zeittafel."));
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Zeit-Tafel."));
+            });
+
+        Assert.Equal(
+            [("custom 1", "Zeittafel", 0.25), ("custom 1", "Zeittafel", 1199.95)],
+            Named(result));
+    }
+
+    [Fact]
+    public async Task CustomTitle_ExpandsACapturingGroup()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--custom", "/(interlude|intermezzo)/:The $1"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Intermezzo."));
+            });
+
+        Assert.Equal([("custom 1", "The Intermezzo", 1199.95)], Named(result));
+    }
+
+    [Fact]
+    public async Task CustomMarks_AreCapped_PerFile()
+    {
+        // The "--custom the:the" accident: a phrase matching ordinary prose must not place a mark
+        // every few seconds for the length of a book.
+        // 20 more candidates than the cap allows, spaced wider than both the probe window and the
+        // duplicate-match tolerance so each one is a decode of its own and a mark of its own.
+        var silences = Enumerable.Range(1, MaxCustomMarksPerFile + 20)
+            .Select(i => new Silence(i * 25 - 3, i * 25))
+            .ToList();
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--min-silence-length", "1",
+                    "--custom", "interlude:Interlude"),
+            silences,
+            s =>
+            {
+                foreach (var silence in silences)
+                    s.Add(silence.EndSeconds, Seg(0.2, " Interlude."));
+                s.Add(0, Seg(0.5, " Chapter one."));
+            });
+
+        Assert.True(result.CustomMarkLimitHit);
+        Assert.Equal(MaxCustomMarksPerFile, result.NamedMarks.Count);
+    }
+
+    [Fact]
+    public async Task NoNumberedChapters_DetectsOnlyTheNamedMarks()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--no-numbered-chapters",
+                    "--custom", "zwischenspiel:Zwischenspiel"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Zwischenspiel."));
+            });
+
+        Assert.Empty(result.Chapters);
+        Assert.False(result.GapRemains);
+        Assert.Equal([("custom 1", "Zwischenspiel", 1199.95)], Named(result));
+    }
+
+    [Fact]
+    public async Task NoNumberedChapters_KeepsTheNamedMarks_WithoutASingleChapter()
+    {
+        // With numbers on, a lone prologue is a failed detection and gets dropped; with them off it
+        // is exactly what the run was asked for.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--no-numbered-chapters", "--early-abort", "0"),
+            [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Prologue.")));
+
+        Assert.Equal([("prologue", "Prologue", 0.25)], Named(result));
+    }
+
+    [Fact]
+    public async Task NoNumberedChapters_KeepsTheFirstPrologueMatch()
+    {
+        // "Last match wins" needs a chapter to close the scope. Without one the scope runs to the
+        // end of the file, so the first match is the announcement and every later one is prose.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--no-numbered-chapters"),
+            [new(295, 300), new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Prologue."));
+                s.Add(300, Seg(0.3, " As the prologue explained."));
+                s.Add(600, Seg(0.2, " Nothing here."));
+            });
+
+        Assert.Equal([("prologue", "Prologue", 0.25)], Named(result));
+    }
+
+    [Fact]
+    public async Task NoNumberedChapters_DoesNotEarlyAbort_WhileNamedMarksAreFound()
+    {
+        // --early-abort counts "no chapter found"; with no chapters to find, the named marks are
+        // what proves the file is yielding something.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--no-numbered-chapters", "--early-abort", "1",
+                    "--custom", "interlude:Interlude"),
+            [new(27, 30), new(597, 600)],
+            s =>
+            {
+                // The first one lands inside the one-minute window, so by the time the second
+                // candidate is judged the file has already proven itself.
+                s.Add(30, Seg(0.3, " Interlude."));
+                s.Add(600, Seg(0.2, " Interlude."));
+            });
+
+        Assert.False(result.EarlyAborted);
+        Assert.Equal(2, result.NamedMarks.Count);
     }
 
     [Fact]

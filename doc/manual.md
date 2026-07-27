@@ -305,6 +305,59 @@ contains a prologue") before the narrator actually announces it.
 Both are switched off by passing an empty phrase, e.g.
 `--prologue-phrase "" --epilogue-phrase ""`.
 
+### Custom marks
+
+`--custom` adds phrases of your own, each with the title its mark is written
+under:
+
+```
+abchapterize --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel" book.m4b
+```
+
+A phrase is a plain word or a `/regexp/`, exactly as for `--chapter-phrase`,
+and no number is parsed or expected. Unlike the prologue and epilogue, a
+custom phrase is accepted **anywhere** in the file and **as often as it
+occurs** — a book with an interlude between every chapter gets a mark for each
+of them. Titles may pull text out of the phrase's own capturing groups with
+`$1`, `$2` or a group name; write `$$` for a literal dollar sign.
+
+Syntax notes:
+
+- Mappings are separated by `;`, phrase and title by `:`.
+- Only the *first* `:` separates, so a title may contain further ones
+  ("`time:Time: an interlude`"). A `/regexp/` phrase instead ends at its
+  closing slash, so a colon inside it is just a colon.
+- Write `\;` for a semicolon inside a regexp.
+- `--custom` may be repeated; every use adds to the list.
+- `--custom-file <path>` reads mappings from a text file, one per line, with
+  blank lines and `#` comment lines ignored. Semicolons need no escaping
+  there, since line breaks separate the mappings.
+- Custom phrases are never localized by `--lang` — they are taken exactly as
+  written.
+
+At most 100 custom marks are written per file. Beyond that the rest are
+dropped and the file's summary line says so: a phrase that matches ordinary
+prose (`--custom "the:the"`) would otherwise pepper a whole book with marks.
+
+### Detecting nothing but named marks
+
+`--no-numbered-chapters` switches numbered chapter detection off entirely,
+leaving only the prologue, the epilogue and the `--custom` marks. Nothing then
+reasons about chapter numbers: no sequence gap is ever found or filled, so
+[Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model) and
+[Pass 3](#pass-3--gap-filling-only-when-needed) never run and no file is ever
+tagged ".missing-marks". A run finishes after Pass 2.
+
+Because they can no longer be placed relative to chapter 1, the prologue and
+epilogue lose their usual positional rule: the prologue keeps its *first*
+match in the file and the epilogue its *last*.
+
+The options that reason in chapter numbers are rejected rather than silently
+ignored: `--chapter-phrase`, `--title`, `--pass3-model`,
+`--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` and
+`--verify`. At least one named phrase must remain, so switching the prologue
+and epilogue off as well requires at least one `--custom` mapping.
+
 ### The intro chapter
 
 Audiobooks usually do not start with chapter one — there is a title
@@ -478,6 +531,27 @@ so that logs and reports stay comparable regardless of regional settings.
 : The same for the epilogue (default: `epilogue`, localized by `--lang`),
   only accepted once at least one chapter has been found. An empty string
   switches epilogue detection off.
+
+`-u`, `--custom <mappings>`
+: Extra `phrase:title` mappings, separated by `;`, e.g.
+  `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A
+  phrase is a word or a `/regexp/` and parses no number; a match anywhere in
+  the file becomes a mark titled after the colon, as often as the phrase
+  occurs. Titles may reference the phrase's capturing groups as `$1`, `$2` or
+  by name. Repeat the option to add further mappings. Never localized. See
+  [Custom marks](#custom-marks) for the full syntax and the per-file limit.
+
+`-U`, `--custom-file <path>`
+: Read `--custom` mappings from a text file, one per line; blank lines and
+  lines starting with `#` are ignored.
+
+`--no-numbered-chapters`
+: Do not look for numbered chapter announcements at all, leaving only the
+  prologue, epilogue and `--custom` marks. Cannot be combined with
+  `--chapter-phrase`, `--title`, `--pass3-model`, `--expected-start-chapter`,
+  `--max-chapter-number`, `--trailing-scan` or `--verify`, and at least one
+  named phrase must remain. See
+  [Detecting nothing but named marks](#detecting-nothing-but-named-marks).
 
 `-m`, `--model <name>`
 : Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default) or
@@ -858,6 +932,9 @@ The details worth knowing:
 `-G`, `--epilogue-title <word>`
 : Title written for a detected epilogue (default: `Epilogue`, localized by
   `--lang`).
+
+A `--custom` mark's title comes from its own mapping instead of from an option
+of its own; see [Custom marks](#custom-marks).
 
 ### Output
 

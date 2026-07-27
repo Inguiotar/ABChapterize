@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -89,6 +90,27 @@ public sealed class CliOptions
     /// <summary>Title written for a detected epilogue (--epilogue-title / -G, default "Epilogue",
     /// localized by --lang).</summary>
     public string EpilogueTitle { get; private set; } = "Epilogue";
+
+    /// <summary>
+    /// The <c>--custom</c> / <c>--custom-file</c> phrase-to-title mappings, in the order given.
+    /// Each becomes a <see cref="NamedPhrase"/> that may match anywhere in a file and as often as it
+    /// occurs, so unlike the prologue and epilogue these are capped per file - see
+    /// <see cref="DetectionTuning.MaxCustomMarksPerFile"/>. Never localized: a phrase the user
+    /// wrote out is meant exactly as written, in whatever language they wrote it.
+    /// </summary>
+    public IReadOnlyList<CustomMapping> CustomMappings => _customMappings;
+
+    private readonly List<CustomMapping> _customMappings = [];
+
+    /// <summary>
+    /// Whether numbered chapter announcements are detected at all (false with
+    /// <c>--no-numbered-chapters</c>). Switching them off leaves only the named phrases - the
+    /// prologue, the epilogue and the <c>--custom</c> mappings - and with them the whole
+    /// chapter-number sequence: no gap is ever found or filled, so passes 2.5 and 3 never run, no
+    /// file is ever tagged ".missing-marks", and every option that reasons in chapter numbers is
+    /// rejected outright rather than silently ignored.
+    /// </summary>
+    public bool NumberedChapters { get; private set; } = true;
 
     /// <summary>Whisper model selector (--model / -m): tiny, base, small, medium, turbo or large.</summary>
     public string Model { get; private set; } = "turbo";
@@ -484,6 +506,7 @@ public sealed class CliOptions
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
         ['p'] = "--prologue-phrase", ['P'] = "--prologue-title",
         ['g'] = "--epilogue-phrase", ['G'] = "--epilogue-title",
+        ['u'] = "--custom", ['U'] = "--custom-file",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
         ['J'] = "--jobs", ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
@@ -508,7 +531,8 @@ public sealed class CliOptions
            || _langSet || _phraseSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _titleSet || _introSet || _jingleLenSet || _minSilenceSet || _earlyAbortSet
            || _expectedStartSet || _prologuePhraseSet || _prologueTitleSet
-           || _epiloguePhraseSet || _epilogueTitleSet;
+           || _epiloguePhraseSet || _epilogueTitleSet
+           || _customMappings.Count > 0 || !NumberedChapters;
 
     /// <summary>
     /// Short hash of every option that changes what a run does to a file - the language and
@@ -532,6 +556,8 @@ public sealed class CliOptions
                 $"recurse={Recurse}", $"backup={Backup}", $"force={Force}",
                 $"lang={Language}", $"phrase={ChapterPhrase}", $"title={Title}", $"intro={IntroTitle}",
                 $"prologue={ProloguePhrase}/{PrologueTitle}", $"epilogue={EpiloguePhrase}/{EpilogueTitle}",
+                $"numbered={NumberedChapters}",
+                $"custom={string.Join('|', _customMappings.Select(m => $"{m.Phrase}=>{m.Title}"))}",
                 $"model={Model}", $"pass3={Pass3Model}",
                 $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
                 $"earlyabort={EarlyAbortMinutes}", $"expectedstart={ExpectedStartChapter}",
@@ -555,6 +581,12 @@ public sealed class CliOptions
     /// <summary>Human-readable list of the supported extensions, e.g. ".m4a/.m4b/.mp3/.opus/.mka".</summary>
     public static string SupportedExtensionsText => string.Join("/", SupportedExtensions);
 
+    /// <summary>The fallback every language without its own entry in
+    /// <see cref="LanguageDefaultsByCode"/> resolves to. Declared before that dictionary because
+    /// static field initializers run in textual order and it is one of its entries.</summary>
+    private static readonly LanguageDefaults EnglishDefaults =
+        new("chapter", "Chapter", "Intro", "prologue", "Prologue", "epilogue", "Epilogue");
+
     /// <summary>
     /// Per-language defaults for the chapter/prologue/epilogue phrases and the title words,
     /// applied when --lang is given but the corresponding option is not. "abchapterize -l de
@@ -568,12 +600,6 @@ public sealed class CliOptions
     /// book, while a prologue is part of the story and is what a narrator actually announces.
     /// </para>
     /// </summary>
-    /// <summary>The fallback every language without its own entry in
-    /// <see cref="LanguageDefaultsByCode"/> resolves to. Declared before that dictionary because
-    /// static field initializers run in textual order and it is one of its entries.</summary>
-    private static readonly LanguageDefaults EnglishDefaults =
-        new("chapter", "Chapter", "Intro", "prologue", "Prologue", "epilogue", "Epilogue");
-
     private static readonly Dictionary<string, LanguageDefaults> LanguageDefaultsByCode = new()
     {
         ["en"] = EnglishDefaults,
@@ -694,13 +720,24 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || !o.NumberedChapters || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
-                "--epilogue-phrase, --model, --pass3-model, " +
+                "--epilogue-phrase, --custom, --custom-file, --no-numbered-chapters, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --max-jingle-length, --min-silence-length, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify " +
                 "have no effect and cannot be combined with it.");
+
+        // --no-numbered-chapters removes the chapter-number sequence detection is otherwise built
+        // around, and with it every option that reasons in those numbers. Rejecting them outright
+        // beats silently ignoring them: each one names an expectation about numbers this run will
+        // never form an opinion about, so accepting it would promise something that cannot happen.
+        if (!o.NumberedChapters && (o._phraseSet || o._titleSet || o._pass3ModelSet ||
+                                    o._expectedStartSet || o._maxChapterNumberSet || o.TrailingScan || o.Verify))
+            throw new CliError(
+                "--no-numbered-chapters detects no numbered chapters at all, so --chapter-phrase, " +
+                "--title, --pass3-model, --expected-start-chapter, --max-chapter-number, " +
+                "--trailing-scan and --verify have nothing to act on and cannot be combined with it.");
 
         if (o.MaxChapterNumber is { } cap && o.ExpectedStartChapter is { } start && cap < start)
             throw new CliError(
@@ -767,6 +804,15 @@ public sealed class CliOptions
             o.EpiloguePhrase = defaults.Epilogue;
         if (!o._epilogueTitleSet)
             o.EpilogueTitle = defaults.EpilogueTitle;
+
+        // Checked against the resolved profile rather than the raw options, so it accounts for the
+        // localized defaults filling in whatever was not given: with numbered chapters switched off
+        // the named phrases are all that is left, and switching those off too leaves a run that
+        // could not produce a single mark no matter how long it listened.
+        if (!o.NumberedChapters && o.DefaultProfile.NamedPhrases.Count == 0)
+            throw new CliError(
+                "--no-numbered-chapters leaves nothing to detect: the prologue and epilogue phrases " +
+                "are both switched off and no --custom mapping was given.");
         return o;
     }
 
@@ -852,6 +898,7 @@ public sealed class CliOptions
             case "--simple-metadata": SimpleMetadata = true; return true;
             case "--verify": Verify = true; return true;
             case "--ignore-progress": IgnoreProgress = true; return true;
+            case "--no-numbered-chapters": NumberedChapters = false; return true;
             default: return false;
         }
     }
@@ -882,6 +929,8 @@ public sealed class CliOptions
             case "--prologue-title": PrologueTitle = nextParam(); _prologueTitleSet = true; return true;
             case "--epilogue-phrase": EpiloguePhrase = nextParam(); _epiloguePhraseSet = true; return true;
             case "--epilogue-title": EpilogueTitle = nextParam(); _epilogueTitleSet = true; return true;
+            case "--custom": _customMappings.AddRange(CustomMappingParser.ParseSpec(nextParam())); return true;
+            case "--custom-file": _customMappings.AddRange(CustomMappingParser.ParseFile(nextParam())); return true;
             case "--filter": ParseFilter(nextParam()); return true;
             case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
@@ -1030,9 +1079,12 @@ public sealed class CliOptions
     }
 
     /// <summary>
-    /// Builds the prologue/epilogue phrases for one language, each dropped entirely when its
-    /// phrase resolves to the empty string - the opt-out spelling, since neither has a flag of
-    /// its own and a mark nobody wants is better never detected than detected and discarded.
+    /// Builds every non-numbered phrase for one language: the prologue and epilogue - each dropped
+    /// entirely when its phrase resolves to the empty string, the opt-out spelling, since neither
+    /// has a flag of its own and a mark nobody wants is better never detected than detected and
+    /// discarded - followed by the <c>--custom</c> mappings in the order they were given. The custom
+    /// ones are never localized and never dropped: they were written out by hand, in whatever
+    /// language the user meant them in.
     /// </summary>
     /// <param name="defaults">The language's own defaults, for whichever option was not given.</param>
     private IReadOnlyList<NamedPhrase> ResolveNamedPhrases(LanguageDefaults defaults)
@@ -1042,13 +1094,51 @@ public sealed class CliOptions
             _prologueTitleSet ? PrologueTitle : defaults.PrologueTitle, NamedPhraseScope.BeforeFirstChapter);
         Add("epilogue", _epiloguePhraseSet ? EpiloguePhrase : defaults.Epilogue,
             _epilogueTitleSet ? EpilogueTitle : defaults.EpilogueTitle, NamedPhraseScope.AfterFirstChapter);
+        for (var i = 0; i < _customMappings.Count; i++)
+            Add($"custom {i + 1}", _customMappings[i].Phrase, _customMappings[i].Title,
+                NamedPhraseScope.Anywhere, repeatable: true);
         return named;
 
-        void Add(string kind, string phrase, string markTitle, NamedPhraseScope scope)
+        void Add(string kind, string phrase, string markTitle, NamedPhraseScope scope,
+            bool repeatable = false)
         {
             if (phrase.Length == 0)
                 return;
-            named.Add(new NamedPhrase(kind, CompilePhraseRegex(phrase, kind).Regex, markTitle, scope));
+            var regex = CompilePhraseRegex(phrase, kind).Regex;
+            ValidateTitleGroupRefs(kind, phrase, markTitle, regex);
+            named.Add(new NamedPhrase(kind, regex, markTitle, scope, repeatable));
+        }
+    }
+
+    /// <summary>
+    /// Rejects a title that references a capturing group its phrase does not have. Caught here, at
+    /// parse time, rather than left to <see cref="Match.Result"/>: that would throw mid-book, after
+    /// possibly hours of transcription, with an exception message naming neither the option nor the
+    /// mapping at fault.
+    /// </summary>
+    /// <param name="kind">The phrase kind, for the error message.</param>
+    /// <param name="phrase">The raw phrase, quoted in the error message so a long
+    /// <c>--custom</c> list points at the mapping that is wrong.</param>
+    /// <param name="title">The raw title template to check.</param>
+    /// <param name="regex">The phrase's compiled expression, supplying the groups that do exist.</param>
+    /// <exception cref="CliError">Thrown for a reference to a group that does not exist.</exception>
+    private static void ValidateTitleGroupRefs(string kind, string phrase, string title, Regex regex)
+    {
+        // A phrase without capturing groups substitutes nothing at all, so "$5" in its title is a
+        // price rather than a reference - the same rule NamedPhrase.ResolveTitle applies.
+        if (regex.GetGroupNumbers().Length <= 1)
+            return;
+
+        foreach (var group in NamedPhrase.ReferencedGroups(title))
+        {
+            var exists = int.TryParse(group, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+                ? regex.GetGroupNumbers().Contains(number)
+                : regex.GetGroupNames().Contains(group);
+            if (!exists)
+                throw new CliError(
+                    $"The {kind} title \"{title}\" references the capturing group \"{group}\", " +
+                    $"which the phrase \"{phrase}\" does not have. " +
+                    "Write \"$$\" for a literal dollar sign.");
         }
     }
 
@@ -1163,6 +1253,33 @@ public sealed class CliOptions
           -g, --epilogue-phrase <p> Same for the epilogue (default: epilogue, localized by
                                     --lang), mirrored: only accepted once at least one chapter
                                     has been found. Pass an empty string to switch it off.
+          -u, --custom <mappings>   Extra phrase-to-title mappings, "phrase:title" pairs separated
+                                    by semicolons, e.g.
+                                      --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"
+                                    A phrase is a word or a "/regexp/" and parses no number; a
+                                    match anywhere in the file becomes a mark titled after the
+                                    colon, as often as the phrase occurs (up to
+                                    {DetectionTuning.MaxCustomMarksPerFile} marks per file, after
+                                    which the rest are dropped with a note). Only the first colon
+                                    delimits, so a title may contain more of them; a "/regexp/"
+                                    phrase ends at its closing slash instead, so a colon inside it
+                                    is just a colon. Write "\;" for a semicolon inside a regexp.
+                                    A title may reference the phrase's capturing groups by number
+                                    ($1, $2) or by name, in .NET's own substitution syntax ("$$"
+                                    writes a literal dollar sign). Repeat the option to add further
+                                    mappings. Never localized - taken exactly as written.
+          -U, --custom-file <path>  Read --custom mappings from a text file, one per line. Blank
+                                    lines and lines starting with "#" are ignored, and semicolons
+                                    need no escaping here since line breaks separate the mappings.
+              --no-numbered-chapters
+                                    Do not look for numbered chapter announcements at all, leaving
+                                    only the prologue, epilogue and --custom marks. Nothing then
+                                    reasons about chapter numbers: no sequence gap is ever found or
+                                    filled, so passes 2.5 and 3 never run and no file is tagged
+                                    ".missing-marks". Cannot be combined with --chapter-phrase,
+                                    --title, --pass3-model, --expected-start-chapter,
+                                    --max-chapter-number, --trailing-scan or --verify, and at least
+                                    one named phrase must remain for the run to detect anything.
           -m, --model <name>        Whisper model: tiny, base, small, medium, turbo or large
                                     (default: turbo).
           -M, --pass3-model <name>  Whisper model for pass 3 (gap filling) only; same choices as
@@ -1315,6 +1432,7 @@ public sealed class CliOptions
           -G, --epilogue-title <word>
                                     Title written for a detected epilogue (default: Epilogue,
                                     localized by --lang).
+                                    A --custom mark's title comes from its own mapping instead.
 
         Output & review:
           -d, --dry-run             Run detection but write nothing; print the chapters that

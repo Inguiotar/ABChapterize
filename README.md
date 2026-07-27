@@ -196,6 +196,9 @@ when chapters are written. The most useful knobs:
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
 | `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `prologue`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
 | `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `epilogue`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
+| `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched anywhere in the file as often as it occurs (up to 100 marks per file). Titles may reference the phrase's capturing groups as `$1`, `$2` or by name. Repeatable; never localized. |
+| `-U`, `--custom-file <path>` | Read `--custom` mappings from a text file, one per line (blank and `#` lines ignored). |
+| `--no-numbered-chapters` | Detect no numbered chapters at all — only the prologue, epilogue and `--custom` marks. Passes 2.5 and 3 never run and nothing is ever tagged `.missing-marks`. Cannot combine with `--chapter-phrase`, `--title`, `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` or `--verify`. |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
 | `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model` (default: same as `--model`). Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. Loaded lazily, only if pass 3 runs. |
 | `-C`, `--cpu-only` | Force Whisper onto the CPU backend instead of the fastest available hardware acceleration. The Silero VAD pre-pass already always runs on CPU regardless of this option, so it only affects Whisper. |
@@ -312,6 +315,12 @@ use `.`, whatever the machine's locale says.
    `.missing-marks`), and such a file is not resumed automatically — a gap that
    wide wants a look by hand first, usually starting with
    `--max-chapter-number`.
+
+`--custom "phrase:Title;..."` adds marks for anything else a book announces —
+an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` (with
+`$1`-style group references in the title), matches anywhere in the file and as
+often as it occurs, and `--no-numbered-chapters` narrows a run down to those
+marks alone.
 
 Alongside the numbered chapters, a "Prologue" and an "Epilogue" mark are
 detected the same way (localized by `--lang`, renamed with `--prologue-title`

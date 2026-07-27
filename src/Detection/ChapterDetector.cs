@@ -62,6 +62,12 @@ public sealed class ChapterDetector
     /// <see cref="_whisperAudioSeconds"/> over this is the transcription speed vs. real time.</summary>
     private double _whisperTranscribeSeconds;
 
+    /// <summary>Whether the current file hit <see cref="DetectionTuning.MaxCustomMarksPerFile"/>.
+    /// A field rather than a return value because every <see cref="RegionProber"/> of the file can
+    /// set it, across passes 2 and 2.5 alike, and the answer belongs to the file rather than to any
+    /// one of them. Reset per file, alongside the Whisper counters above.</summary>
+    private bool _customLimitHit;
+
     /// <summary>Creates a detector bound to the given tools and options.</summary>
     /// <param name="options">Validated command line options.</param>
     /// <param name="audio">Audio source used for silence detection and PCM decoding.</param>
@@ -192,15 +198,21 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Recovers the prologue/epilogue marks from a file's existing markings by matching their
-    /// titles against the ones this run would write. Both resume paths need it for the same reason:
-    /// they rewrite the file's whole marking set from what detection hands back, and a named mark
-    /// carries no chapter number - so unlike a chapter it would leave no hole behind, and nothing
-    /// would ever notice it had been dropped. Matching on the title is what there is to match on:
-    /// the marking's text is all a written chapter entry preserves, and this run's own
-    /// --prologue-title/--epilogue-title is exactly what a previous run of the same command wrote
-    /// there. A file marked by a different tool (or under different titles) simply yields nothing
-    /// here, and its prologue is re-detected or lost exactly as before this existed.
+    /// Recovers the non-numbered marks from a file's existing markings by matching their titles
+    /// against the ones this run would write. Both resume paths need it for the same reason: they
+    /// rewrite the file's whole marking set from what detection hands back, and a named mark carries
+    /// no chapter number - so unlike a chapter it would leave no hole behind, and nothing would ever
+    /// notice it had been dropped. Matching on the title is what there is to match on: the marking's
+    /// text is all a written chapter entry preserves, and this run's own titles are exactly what a
+    /// previous run of the same command wrote there. A file marked by a different tool (or under
+    /// different titles) simply yields nothing here, and its prologue is re-detected or lost exactly
+    /// as before this existed.
+    /// <para>
+    /// A numbered marking and the intro entry are ruled out before any title is matched at all,
+    /// because a --custom title made entirely of a capturing-group reference matches every string
+    /// there is (see <see cref="NamedPhrase.TitleMatcher"/>) - without the exclusion, such a mapping
+    /// would swallow the file's chapters into the named list and lose their numbers.
+    /// </para>
     /// </summary>
     /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
     /// <param name="profile">The language profile resolved for this file, supplying the titles.</param>
@@ -209,10 +221,14 @@ public sealed class ChapterDetector
         var carried = new List<DetectedMark>();
         foreach (var marking in info.ExistingChapters)
         {
-            var phrase = profile.NamedPhrases.FirstOrDefault(
-                p => string.Equals(p.Title, marking.Title.Trim(), StringComparison.OrdinalIgnoreCase));
-            if (phrase != null)
-                carried.Add(new DetectedMark(phrase.Kind, phrase.Title, marking.StartSeconds));
+            var title = marking.Title.Trim();
+            if (TryParseExpectedNumber(title, profile.Language, out _) ||
+                string.Equals(title, profile.IntroTitle, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (profile.NamedPhrases.FirstOrDefault(p => p.TitleMatcher.IsMatch(title)) is { } phrase)
+                carried.Add(new DetectedMark(
+                    phrase.Kind, title, marking.StartSeconds,
+                    PhraseTimeSeconds: marking.StartSeconds, Repeatable: phrase.Repeatable));
         }
         return carried;
     }
@@ -260,6 +276,7 @@ public sealed class ChapterDetector
         SetLog(log);
         _whisperAudioSeconds = 0;
         _whisperTranscribeSeconds = 0;
+        _customLimitHit = false;
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
 
@@ -320,6 +337,7 @@ public sealed class ChapterDetector
             language = prober.Language;
             earlyAborted = prober.EarlyAborted;
             belowExpectedStartNumber = prober.BelowExpectedStartNumber;
+            _customLimitHit |= prober.CustomLimitHit;
 
             if (earlyAborted || belowExpectedStartNumber != null)
                 break;
@@ -328,13 +346,20 @@ public sealed class ChapterDetector
         var chapters = Normalize(found);
         _log?.Invoke("Pass 2 finished");
 
+        // Passes 2.5 and 3 exist only to close holes in the chapter-number sequence, so with
+        // --no-numbered-chapters there is nothing for either of them to chase: Pass 2 already
+        // probed every candidate the file has, and no gap can be defined without numbers to be
+        // missing from.
         var pass2Completed = !earlyAborted && belowExpectedStartNumber == null;
-        if (pass2Completed)
-            chapters = await RunPass25Async(file, info, work, chapters, namedFound, jingleCeilingSeconds,
-                allSilences, silences, nonSpeechRegions, speechSegments, bytesPerSecond, language.Profile!, ct);
+        if (_options.NumberedChapters)
+        {
+            if (pass2Completed)
+                chapters = await RunPass25Async(file, info, work, chapters, namedFound, jingleCeilingSeconds,
+                    allSilences, silences, nonSpeechRegions, speechSegments, bytesPerSecond, language.Profile!, ct);
 
-        chapters = await RunPass3Async(file, info, work, chapters, allSilences, nonSpeechRegions,
-            speechSegments, bytesPerSecond, language.Profile!, trailingFallback, pass2Completed, ct);
+            chapters = await RunPass3Async(file, info, work, chapters, allSilences, nonSpeechRegions,
+                speechSegments, bytesPerSecond, language.Profile!, trailingFallback, pass2Completed, ct);
+        }
 
         return BuildDetectionResult(
             chapters, namedFound, speechSegments, language.Profile!, language.DetectedLanguage,
@@ -567,10 +592,12 @@ public sealed class ChapterDetector
                 $"pass 2.5: re-probing {FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)} " +
                 $"for chapter{(missing.Count > 1 ? "s" : "")} {string.Join(", ", missing)} with the pass 3 model");
             var region = new DetectionRegion(gap.FromSeconds, gap.ToSeconds, missing[0] - 1, missing[^1] + 1);
-            await new RegionProber(
+            var prober = new RegionProber(
                 BuildProbeEnvironment(), ctx, region, found, namedFound,
                 new LanguageState(profile, null, 0),
-                gapSecondsDone - gap.FromSeconds).RunAsync(ct);
+                gapSecondsDone - gap.FromSeconds);
+            await prober.RunAsync(ct);
+            _customLimitHit |= prober.CustomLimitHit;
             gapSecondsDone += gap.ToSeconds - gap.FromSeconds;
             work.SetPhaseProgress((long)(gapSecondsDone * bytesPerSecond));
         }
@@ -624,8 +651,12 @@ public sealed class ChapterDetector
 
         // A file that yielded no chapter at all is left unchanged by FileProcessor, and a lone
         // prologue or epilogue must not be what makes it worth rewriting: a book whose chapter
-        // announcements were never heard is a failed detection, not a two-mark book.
-        var named = chapters.Count > 0 ? namedMarks.OrderBy(m => m.TimeSeconds).ToList() : [];
+        // announcements were never heard is a failed detection, not a two-mark book. With
+        // --no-numbered-chapters that reasoning inverts - the named marks are the entire point of
+        // the run, and there is no chapter whose absence could condemn them.
+        var named = chapters.Count > 0 || !_options.NumberedChapters
+            ? namedMarks.OrderBy(m => m.TimeSeconds).ToList()
+            : [];
 
         // Whether the very first mark is preceded by any VAD speech at all - lets FileProcessor's
         // intro-chapter insertion tell a real spoken prelude ("insert an Intro entry") apart from
@@ -633,9 +664,11 @@ public sealed class ChapterDetector
         // start-snap absorb the lead-in instead"). Measured against the earliest mark of either
         // kind, since a prologue ahead of chapter 1 is what the intro would have to precede. True
         // by default: unknowable without the VAD pre-pass, and irrelevant with no mark to check.
-        var firstMark = chapters.Count == 0
+        var firstMark = chapters.Count == 0 && named.Count == 0
             ? (double?)null
-            : Math.Min(chapters[0].TimeSeconds, named.Count > 0 ? named[0].TimeSeconds : double.MaxValue);
+            : Math.Min(
+                chapters.Count > 0 ? chapters[0].TimeSeconds : double.MaxValue,
+                named.Count > 0 ? named[0].TimeSeconds : double.MaxValue);
         var leadInHasSpeech = firstMark is not { } first || _vad == null ||
             speechSegments.Any(s => s.StartSeconds < first);
 
@@ -652,7 +685,7 @@ public sealed class ChapterDetector
         return new DetectionResult(
             chapters, named, missing.Count > 0, missing, lowConfidence,
             profile, detectedLanguage, detectedProbability, stats, earlyAborted, belowExpectedStartNumber,
-            leadInHasSpeech);
+            leadInHasSpeech, _customLimitHit);
     }
 
     /// <summary>Result of <see cref="RunPass1Async"/>: every silence/VAD signal Pass 2 and Pass 3
