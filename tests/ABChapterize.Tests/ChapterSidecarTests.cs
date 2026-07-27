@@ -48,6 +48,18 @@ public class ChapterSidecarTests
     }
 
     [Fact]
+    public void ParseSimple_RoundTripsAMarkPastTwentyFourHours()
+    {
+        // The writer used to render hours as the component of a day, so a mark at 25:01:01.500
+        // went out as "1:01:01.500" and came back a day early - silent corruption on an omnibus
+        // long enough to need it. The reader always accepted unbounded hours.
+        var chapters = new List<Chapter> { new(90061.5, "Chapter 40") };
+        var text = ChapterSidecar.BuildSimple(chapters);
+        Assert.Equal("25:01:01.500  Chapter 40\n", text.ReplaceLineEndings("\n"));
+        Assert.Equal(90061.5, ChapterSidecar.ParseSimple(text, "test.txt")[0].StartSeconds, 3);
+    }
+
+    [Fact]
     public void ParseSimple_SkipsBlankAndCommentLines()
     {
         var text = "; comment\n\n# also a comment\n0:00:00.000  Intro\n";

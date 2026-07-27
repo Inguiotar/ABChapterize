@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Text;
 using ABChapterize.Audio;
+using ABChapterize.Formatting;
 
 namespace ABChapterize.Detection;
 
@@ -151,7 +152,8 @@ public static partial class ChapterSidecar
     }
 
     /// <summary>Formats a chapter mark position as h:mm:ss.fff for the plain-text sidecar
-    /// (millisecond precision, matching FFMETADATA's own timebase, for lossless round-trips).</summary>
-    private static string FormatTimestamp(double seconds)
-        => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.fff");
+    /// (millisecond precision, matching FFMETADATA's own timebase, for lossless round-trips).
+    /// Hours are cumulative - see <see cref="TimeFormat"/> - which is what keeps the round trip
+    /// lossless past the 24-hour mark; <see cref="ParseSimple"/> has always read them that way.</summary>
+    private static string FormatTimestamp(double seconds) => TimeFormat.Hms(seconds, 3);
 }

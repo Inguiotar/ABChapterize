@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Formatting;
 using static ABChapterize.Detection.DetectionTuning;
 
 namespace ABChapterize.Detection;
@@ -22,6 +23,5 @@ internal static class DetectionFormatting
 
     /// <summary>Formats a position in the file as h:mm:ss.ff for log messages.</summary>
     /// <param name="seconds">Position in seconds.</param>
-    internal static string FormatTimestamp(double seconds)
-        => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff");
+    internal static string FormatTimestamp(double seconds) => TimeFormat.Hms(seconds, 2);
 }

@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Detection;
+using ABChapterize.Formatting;
 
 namespace ABChapterize.Processing;
 
@@ -49,8 +50,7 @@ internal sealed class RunStatistics
 
     /// <summary>Formats a duration as h:mm:ss (or m:ss below one hour) for the summary.</summary>
     /// <param name="t">The duration to format.</param>
-    internal static string FormatTime(TimeSpan t)
-        => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+    internal static string FormatTime(TimeSpan t) => TimeFormat.Duration(t);
 
     /// <summary>
     /// Builds the ", backup kept" (or "...replaced pre-existing backup") clause appended to a
@@ -65,8 +65,7 @@ internal sealed class RunStatistics
 
     /// <summary>Formats a chapter mark position as h:mm:ss.ff for the --dry-run listing.</summary>
     /// <param name="seconds">Position in seconds.</param>
-    internal static string FormatTimestamp(double seconds)
-        => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(@"h\:mm\:ss\.ff");
+    internal static string FormatTimestamp(double seconds) => TimeFormat.Hms(seconds, 2);
 
     /// <summary>Formats a "(NN.N% of run length)" share, or empty when the run length is unknown.</summary>
     /// <param name="part">The measured quantity (seconds).</param>
