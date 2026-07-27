@@ -130,7 +130,13 @@ public sealed class FileProcessor
         }
     }
 
-    /// <summary>Runs chapter detection and writing for all selected files.</summary>
+    /// <summary>
+    /// Runs chapter detection and writing for all selected files: enumerate, hand the list to
+    /// whichever of the two per-file pipelines the options select (--import's sidecar write or
+    /// the full Whisper detection run), then report. Both pipelines feed the same counters and
+    /// the same <see cref="_runStats"/>, so the summary below does not care which one ran.
+    /// </summary>
+    /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     private async Task RunABChapterizeAsync(CancellationToken ct)
     {
         var files = EnumerateTargets(_options.EffectiveExtensions);
@@ -147,136 +153,169 @@ public sealed class FileProcessor
         var watch = Stopwatch.StartNew();
 
         if (_options.Import)
-        {
-            // --import skips Whisper entirely: chapters come from a sidecar file, so
-            // there is nothing to detect and no model to load. It is just ffprobe + a
-            // direct write per file, so concurrency can scale further than detection does.
-            var hardCap = ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount, 1, 8));
-            if (!_options.Quiet && hardCap > 1)
-                Console.WriteLine($"Importing chapters for {files.Count} file(s), up to {hardCap} at a time.");
-            await RunConcurrentlyAsync(files, hardCap, ct,
-                (file, token) => ProcessOneImportAsync(file, ffmpeg, token));
-        }
+            await RunImportAsync(files, ffmpeg, ct);
         else
-        {
-            var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
-            // The initial language is a placeholder: ChapterDetector always calls
-            // ChangeLanguage before the first real transcription of every file, resolving
-            // the actual language to use (the fixed --lang, or a fresh auto-detection).
-            var initialLanguage = _options.AutoLanguage ? "en" : _options.Language;
-            var first = new WhisperTranscriber(modelPath, initialLanguage, forceCpu: _options.CpuOnly);
-
-            // GPU backends are capped at one file at a time: a GPU context is not proven safe
-            // for concurrent inference, and loading the model into VRAM again per concurrent
-            // instance risks exhausting it. CPU backends scale with core count instead, since
-            // each pooled instance can be given a correspondingly smaller thread budget.
-            var gpuBound = first.RuntimeName is "Cuda" or "Vulkan";
-            var hardCap = gpuBound
-                ? ResolveConcurrency(files.Count, 1)
-                : ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount / 4, 1, 4));
-
-            // A different --pass3-model gets one shared, lazily-loaded instance for the whole run
-            // (see SharedPass3Transcriber); only gap work (pass 2.5 and pass 3) uses it, which is
-            // the exception rather than the rule, so serializing it there costs little and avoids
-            // loading a second model per concurrent file. The same model as --model means no
-            // separate instance at all - gap work reuses each file's own transcriber.
-            var pass3Differs = _options.Pass3Model != _options.Model;
-            var pass3Shared = pass3Differs
-                ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly)
-                : null;
-
-            if (!_options.Quiet)
-                Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({first.RuntimeName} backend" +
-                                  (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
-                                  (pass3Differs ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +
-                                  $"{files.Count} file(s) to process" +
-                                  (hardCap > 1 ? $", up to {hardCap} at a time." : "."));
-
-            List<WhisperTranscriber> pool;
-            if (hardCap == 1)
-            {
-                pool = [first];
-            }
-            else
-            {
-                await first.DisposeAsync();
-                var threadsPerInstance = Math.Max(2, Environment.ProcessorCount / hardCap);
-                pool = [.. Enumerable.Range(0, hardCap)
-                    .Select(_ => new WhisperTranscriber(modelPath, initialLanguage, threadsPerInstance, _options.CpuOnly))];
-            }
-
-            // Shared like ffmpeg above (one instance for the whole run, safe for concurrent
-            // use - see SileroVadDetector's threading remarks); only needed when
-            // ChapterDetector runs its full-file VAD pre-pass (see RunVadPrePass).
-            using var vad = _options.RunVadPrePass ? new SileroVadDetector() : null;
-
-            try
-            {
-                var channel = Channel.CreateUnbounded<ChapterDetector>();
-                foreach (var w in pool)
-                {
-                    // Each detector gets its own proxy onto the one shared pass-3 model, so every
-                    // concurrent file's pass 3 applies its own language against it (see the proxy).
-                    var pass3 = pass3Shared != null ? new Pass3TranscriberProxy(pass3Shared, initialLanguage) : null;
-                    channel.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w, vad, pass3));
-                }
-
-                await RunConcurrentlyAsync(files, hardCap, ct, async (file, token) =>
-                {
-                    var detector = await channel.Reader.ReadAsync(token);
-                    try
-                    {
-                        await ProcessOneAsync(file, ffmpeg, detector, token);
-                    }
-                    finally
-                    {
-                        await channel.Writer.WriteAsync(detector, CancellationToken.None);
-                    }
-                });
-            }
-            finally
-            {
-                foreach (var w in pool)
-                    await w.DisposeAsync();
-                if (pass3Shared != null)
-                    await pass3Shared.DisposeAsync();
-            }
-        }
+            await RunDetectionAsync(files, ffmpeg, ct);
 
         if (_options.Summary)
+            PrintRunSummary(files.Count, watch.Elapsed);
+    }
+
+    /// <summary>
+    /// The --import pipeline: chapters come from a sidecar file, so Whisper is skipped entirely -
+    /// there is nothing to detect and no model to load. Each file is just an ffprobe plus a direct
+    /// write, so concurrency can scale further than detection's own hardware cap allows.
+    /// </summary>
+    /// <param name="files">The files to import chapters for.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
+    private async Task RunImportAsync(List<string> files, FfmpegClient ffmpeg, CancellationToken ct)
+    {
+        var hardCap = ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount, 1, 8));
+        if (!_options.Quiet && hardCap > 1)
+            Console.WriteLine($"Importing chapters for {files.Count} file(s), up to {hardCap} at a time.");
+        await RunConcurrentlyAsync(files, hardCap, ct,
+            (file, token) => ProcessOneImportAsync(file, ffmpeg, token));
+    }
+
+    /// <summary>
+    /// The normal pipeline: load the Whisper model(s), size the transcriber pool to the resolved
+    /// concurrency, and run <see cref="ProcessOneAsync"/> for every file. Everything created here
+    /// is disposed before returning, including after a failure or a Ctrl+C.
+    /// </summary>
+    /// <param name="files">The files to detect chapters in.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
+    private async Task RunDetectionAsync(List<string> files, FfmpegClient ffmpeg, CancellationToken ct)
+    {
+        var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
+        // The initial language is a placeholder: ChapterDetector always calls
+        // ChangeLanguage before the first real transcription of every file, resolving
+        // the actual language to use (the fixed --lang, or a fresh auto-detection).
+        var initialLanguage = _options.AutoLanguage ? "en" : _options.Language;
+        var first = new WhisperTranscriber(modelPath, initialLanguage, forceCpu: _options.CpuOnly);
+        var hardCap = ResolveDetectionConcurrency(first, files.Count);
+
+        // A different --pass3-model gets one shared, lazily-loaded instance for the whole run
+        // (see SharedPass3Transcriber); only gap work (pass 2.5 and pass 3) uses it, which is
+        // the exception rather than the rule, so serializing it there costs little and avoids
+        // loading a second model per concurrent file. The same model as --model means no
+        // separate instance at all - gap work reuses each file's own transcriber.
+        var pass3Shared = _options.Pass3Model != _options.Model
+            ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly)
+            : null;
+
+        if (!_options.Quiet)
+            PrintModelBanner(first.RuntimeName, files.Count, hardCap, pass3Shared != null);
+
+        var pool = await BuildTranscriberPoolAsync(first, hardCap, modelPath, initialLanguage);
+
+        // Shared like ffmpeg above (one instance for the whole run, safe for concurrent
+        // use - see SileroVadDetector's threading remarks); only needed when
+        // ChapterDetector runs its full-file VAD pre-pass (see RunVadPrePass).
+        using var vad = _options.RunVadPrePass ? new SileroVadDetector() : null;
+
+        try
         {
-            var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
-            var noChaptersNote = _noChaptersFound > 0 ? $", {_noChaptersFound} with no chapters found" : "";
-            Console.WriteLine(
-                $"Summary: {files.Count} file(s) encountered, {_processed} processed, " +
-                $"{_skipped} skipped{warningNote}{noChaptersNote}");
-            var average = _processed > 0
-                ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
-                : "";
-            Console.WriteLine($"Total time: {FormatTime(watch.Elapsed)}{average}");
-            if (_runStats.ConfidenceCount > 0)
-                Console.WriteLine(
-                    $"Confidence of written chapter marks: min {_runStats.ConfidenceMin:0.00}, " +
-                    $"max {_runStats.ConfidenceMax:0.00}, avg {_runStats.ConfidenceSum / _runStats.ConfidenceCount:0.00}");
-            if (_runStats.RunLengthSecondsTotal > 0)
+            var detectors = Channel.CreateUnbounded<ChapterDetector>();
+            foreach (var w in pool)
             {
-                var extremes = new List<string>();
-                if (!double.IsPositiveInfinity(_runStats.MinPrecedingSilence))
-                    extremes.Add($"shortest silence before a chapter {_runStats.MinPrecedingSilence:0.00} s" +
-                                 FormatInterChapter(double.IsPositiveInfinity(_runStats.MinInterChapterSilence) ? null : _runStats.MinInterChapterSilence));
-                if (!double.IsNegativeInfinity(_runStats.MaxJingle))
-                    extremes.Add($"longest jingle before a chapter {_runStats.MaxJingle:0.00} s" +
-                                 FormatInterChapter(double.IsNegativeInfinity(_runStats.MaxInterChapterJingle) ? null : _runStats.MaxInterChapterJingle));
-                if (extremes.Count > 0)
-                    Console.WriteLine(string.Join(", ", extremes));
-                var speed = FormatSpeed(_runStats.WhisperAudioSecondsTotal, _runStats.WhisperTranscribeSecondsTotal);
-                Console.WriteLine(
-                    $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_runStats.WhisperAudioSecondsTotal))} " +
-                    $"of {FormatTime(TimeSpan.FromSeconds(_runStats.RunLengthSecondsTotal))} run length " +
-                    $"({100 * _runStats.WhisperAudioSecondsTotal / _runStats.RunLengthSecondsTotal:0.0}%)" +
-                    (speed.Length > 0 ? $", {speed}" : ""));
+                // Each detector gets its own proxy onto the one shared pass-3 model, so every
+                // concurrent file's pass 3 applies its own language against it (see the proxy).
+                var pass3 = pass3Shared != null ? new Pass3TranscriberProxy(pass3Shared, initialLanguage) : null;
+                detectors.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w, vad, pass3));
             }
+
+            await RunConcurrentlyAsync(files, hardCap, ct, async (file, token) =>
+            {
+                var detector = await detectors.Reader.ReadAsync(token);
+                try
+                {
+                    await ProcessOneAsync(file, ffmpeg, detector, token);
+                }
+                finally
+                {
+                    await detectors.Writer.WriteAsync(detector, CancellationToken.None);
+                }
+            });
         }
+        finally
+        {
+            foreach (var w in pool)
+                await w.DisposeAsync();
+            if (pass3Shared != null)
+                await pass3Shared.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Resolves how many files detection may process at once. GPU backends are capped at one: a
+    /// GPU context is not proven safe for concurrent inference, and loading the model into VRAM
+    /// again per concurrent instance risks exhausting it. CPU backends scale with core count
+    /// instead, since each pooled instance can be given a correspondingly smaller thread budget.
+    /// Either way --jobs, when given, overrides the hardware-derived ceiling entirely.
+    /// </summary>
+    /// <param name="probe">The first loaded transcriber, consulted only for which native backend
+    /// actually got loaded.</param>
+    /// <param name="fileCount">Number of files in the run.</param>
+    private int ResolveDetectionConcurrency(WhisperTranscriber probe, int fileCount)
+        => probe.RuntimeName is "Cuda" or "Vulkan"
+            ? ResolveConcurrency(fileCount, 1)
+            : ResolveConcurrency(fileCount, Math.Clamp(Environment.ProcessorCount / 4, 1, 4));
+
+    /// <summary>
+    /// Builds the run's transcriber pool. At a concurrency of one the already-loaded
+    /// <paramref name="probe"/> is the pool, so the model is never loaded twice; above that it is
+    /// disposed and replaced by <paramref name="hardCap"/> instances that each get a fraction of
+    /// the cores, so their combined thread budget still roughly matches the machine.
+    /// </summary>
+    /// <param name="probe">The transcriber loaded to determine the backend.</param>
+    /// <param name="hardCap">Resolved concurrency, i.e. the pool size.</param>
+    /// <param name="modelPath">Path of the GGML model to load.</param>
+    /// <param name="initialLanguage">Placeholder language every instance starts with.</param>
+    private async Task<List<WhisperTranscriber>> BuildTranscriberPoolAsync(
+        WhisperTranscriber probe, int hardCap, string modelPath, string initialLanguage)
+    {
+        if (hardCap == 1)
+            return [probe];
+        await probe.DisposeAsync();
+        var threadsPerInstance = Math.Max(2, Environment.ProcessorCount / hardCap);
+        return [.. Enumerable.Range(0, hardCap)
+            .Select(_ => new WhisperTranscriber(modelPath, initialLanguage, threadsPerInstance, _options.CpuOnly))];
+    }
+
+    /// <summary>Prints the one-off "model loaded" line that opens a detection run.</summary>
+    /// <param name="runtimeName">Native backend Whisper.net actually loaded.</param>
+    /// <param name="fileCount">Number of files in the run.</param>
+    /// <param name="hardCap">Resolved concurrency.</param>
+    /// <param name="separatePass3Model">Whether --pass3-model asked for a second model.</param>
+    private void PrintModelBanner(string runtimeName, int fileCount, int hardCap, bool separatePass3Model)
+        => Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({runtimeName} backend" +
+                             (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
+                             (separatePass3Model
+                                 ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +
+                             $"{fileCount} file(s) to process" +
+                             (hardCap > 1 ? $", up to {hardCap} at a time." : "."));
+
+    /// <summary>
+    /// Prints the --summary report closing a run: the file counts and elapsed time this class
+    /// tracks, followed by whatever run-wide statistics <see cref="RunStatistics"/> collected.
+    /// </summary>
+    /// <param name="fileCount">Number of files the run encountered.</param>
+    /// <param name="elapsed">Wall-clock time the run took.</param>
+    private void PrintRunSummary(int fileCount, TimeSpan elapsed)
+    {
+        var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
+        var noChaptersNote = _noChaptersFound > 0 ? $", {_noChaptersFound} with no chapters found" : "";
+        Console.WriteLine(
+            $"Summary: {fileCount} file(s) encountered, {_processed} processed, " +
+            $"{_skipped} skipped{warningNote}{noChaptersNote}");
+        var average = _processed > 0
+            ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
+            : "";
+        Console.WriteLine($"Total time: {FormatTime(elapsed)}{average}");
+        foreach (var line in _runStats.FormatRunSummaryLines())
+            Console.WriteLine(line);
     }
 
     /// <summary>
@@ -483,7 +522,31 @@ public sealed class FileProcessor
                $" and {missingNumbers.Count - MaxNamedMissingNumbers} more";
     }
 
-    /// <summary>Processes a single audiobook file and prints its summary line.</summary>
+    /// <summary>
+    /// The per-file plumbing every stage of <see cref="ProcessOneAsync"/> needs, bundled so each
+    /// stage takes one parameter instead of five. <see cref="Ffmpeg"/> is the run's shared client
+    /// rather than anything file-specific; it rides along purely so the write paths need not be
+    /// handed it separately.
+    /// </summary>
+    /// <param name="File">Full path of the file being processed.</param>
+    /// <param name="Name">Its bare file name, which every console line for it is prefixed with.</param>
+    /// <param name="Work">Its progress tracker.</param>
+    /// <param name="Log">Its --verbose log sink, or null when not verbose.</param>
+    /// <param name="Info">Its probe result, with the input decoder already resolved (see
+    /// <see cref="ResolveXheAacDecoderAsync"/>).</param>
+    /// <param name="Ffmpeg">The run's shared ffmpeg client.</param>
+    private readonly record struct FileContext(
+        string File, string Name, WorkTracker Work, Action<string>? Log, MediaInfo Info, FfmpegClient Ffmpeg);
+
+    /// <summary>
+    /// Processes a single audiobook file and prints its summary line: probe, decoder resolution,
+    /// then whichever of the three outcomes applies - a resume of a previously tagged file, a
+    /// skip, or a detection run whose result one of the report/write stages below commits.
+    /// </summary>
+    /// <param name="file">Path of the file to process.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="detector">A detector borrowed from the run's pool for the duration of this file.</param>
+    /// <param name="ct">Cancellation token.</param>
     private async Task ProcessOneAsync(
         string file, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
     {
@@ -495,30 +558,10 @@ public sealed class FileProcessor
         var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
         try
         {
-            var info = await ffmpeg.ProbeAsync(file, ct);
-            log?.Invoke($"probed: duration {FormatTime(TimeSpan.FromSeconds(info.DurationSeconds))}, " +
-                        $"codec {info.AudioCodec}" +
-                        (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
-                        $", {info.ChapterCount} existing chapter marking(s)");
-
-            // xHE-AAC (USAC) audio: ffmpeg's native AAC decoder cannot handle it reliably,
-            // so decode such files with libfdk_aac - or skip them when it is unavailable.
-            if (info.IsXheAac)
-            {
-                // A probe that could not even determine the duration means this ffmpeg
-                // build cannot handle the file regardless of the decoder list.
-                if (info.DurationSeconds > 0 && await ffmpeg.SupportsLibFdkAacAsync(ct))
-                {
-                    info = info with { InputDecoder = "libfdk_aac" };
-                    log?.Invoke("xHE-AAC audio: decoding with libfdk_aac");
-                }
-                else
-                {
-                    lock (_statsLock) _warnings++;
-                    _progress.FinishWithSummary(work, $"{name}: WARNING - {XheAacHint}", important: true);
-                    return;
-                }
-            }
+            var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
+            if (await ResolveXheAacDecoderAsync(new FileContext(file, name, work, log, info, ffmpeg), ct)
+                is not { } ctx)
+                return;
 
             // Auto-resume a ".missing-marks-<n>-<n>-..." file left behind by a previous run's
             // unresolved chapter-sequence gap: only the still-missing gap(s) are re-probed, the
@@ -527,230 +570,24 @@ public sealed class FileProcessor
             // discards every existing marking (including these) and runs a fresh full detection.
             if (!_options.Force && HasMissingMarksTag(file))
             {
-                var resumed = await detector.ResumeMissingMarksAsync(file, info, work, log, ct);
-                lock (_statsLock)
-                {
-                    _processed++;
-                    _processingTime += watch.Elapsed;
-                }
-                _runStats.AccumulateStats(resumed.Stats, info.DurationSeconds);
-                log?.Invoke(FormatFileStats(resumed.Stats, info.DurationSeconds));
-                _runStats.AccumulateConfidence(resumed.Chapters);
-                var (resumedChapters, resumedIntroNote) = BuildChapters(resumed);
-
-                if (resumed.GapRemains)
-                {
-                    lock (_statsLock) _warnings++;
-                    var retarget = MissingMarksPath(file, resumed.MissingNumbers);
-                    var stillMissing = FormatMissingList(resumed.MissingNumbers);
-                    if (_options.DryRun)
-                    {
-                        var partialListing = string.Join(Environment.NewLine,
-                            resumedChapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
-                        _progress.FinishWithSummary(work,
-                            $"{name}: DRY RUN - resume incomplete, still missing: {stillMissing}; would write " +
-                            $"{resumed.Chapters.Count} partial mark(s){resumedIntroNote} and re-tag as " +
-                            $"{Path.GetFileName(retarget)}:{Environment.NewLine}{partialListing}", important: true);
-                        return;
-                    }
-                    var resumedPartialBakReplaced = await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
-                        BeginMuxingPhase(work, info), ct);
-                    File.Move(file, retarget, overwrite: true);
-                    var resumedPartialBackup = FormatBackupNote(_options.Backup, resumedPartialBakReplaced);
-                    _progress.FinishWithSummary(work,
-                        $"{name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
-                        $"{resumed.Chapters.Count} partial mark(s){resumedIntroNote}, re-tagged as " +
-                        $"{Path.GetFileName(retarget)}{resumedPartialBackup}", important: true);
-                    return;
-                }
-
-                var restored = StripMissingMarksPath(file);
-                if (_options.DryRun)
-                {
-                    var listing = string.Join(Environment.NewLine,
-                        resumedChapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
-                    _progress.FinishWithSummary(work,
-                        $"{name}: DRY RUN - resume complete, all chapters found; would write " +
-                        $"{resumed.Chapters.Count} chapter(s) ({resumed.Chapters[0].Number}-{resumed.Chapters[^1].Number})" +
-                        $"{resumedIntroNote} and rename to {Path.GetFileName(restored)}:{Environment.NewLine}{listing}");
-                    return;
-                }
-                var restoredBakReplaced = await ffmpeg.WriteChaptersAsync(file, resumedChapters, info.DurationSeconds, _options.Backup,
-                    BeginMuxingPhase(work, info), ct);
-                File.Move(file, restored, overwrite: true);
-                var restoredBackup = FormatBackupNote(_options.Backup, restoredBakReplaced);
-                _progress.FinishWithSummary(work,
-                    $"{name}: resume complete - {resumed.Chapters.Count} chapter(s) written " +
-                    $"({resumed.Chapters[0].Number}-{resumed.Chapters[^1].Number}){resumedIntroNote}, renamed to " +
-                    $"{Path.GetFileName(restored)}{restoredBackup}");
+                await ProcessResumeAsync(ctx, detector, watch, ct);
                 return;
             }
 
-            // Policy for pre-existing chapter markings.
-            var (skip, discardNote) = EvaluateExistingChapters(info);
-            DetectionResult result;
-            if (skip && _options.Verify)
-            {
-                var verify = await detector.VerifyExistingChaptersAsync(file, info, work, log, ct);
-                if (verify.Checked == 0 || verify.Passed)
-                {
-                    lock (_statsLock) _skipped++;
-                    var verifyNote = verify.Checked > 0
-                        ? $"{verify.Checked} pre-existing chapter marking(s) verified correct"
-                        : $"has {info.ChapterCount} chapter marking(s) (none had a checkable number)";
-                    _progress.FinishWithSummary(work, $"{name}: skipped - {verifyNote} (use --force to redo)");
-                    return;
-                }
-                // --verify-threshold: too many unconfirmed markings means even the survivors are
-                // no longer trusted as gap-recovery anchors - the whole set is treated exactly
-                // like the "nothing confirmed" case below.
-                var thresholdExceeded = _options.VerifyFailThreshold is { } threshold && verify.Failed > threshold;
-                if (verify.ConfirmedChapters.Count > 0 && !thresholdExceeded)
-                {
-                    // At least one marking is trusted - only the gap(s) around the unconfirmed
-                    // one(s) get their own Pass 2 (and, for a still-missing trailing chapter,
-                    // Pass 3); everything else in the file is left exactly as --verify found it.
-                    discardNote = $", {verify.ConfirmedChapters.Count} of {info.ChapterCount} existing " +
-                                  $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
-                    result = await detector.DetectGapsAsync(file, info, work, log, verify, ct);
-                }
-                else
-                {
-                    // Nothing survived verification, or too many markings failed for the
-                    // --verify-threshold to keep trusting the rest - no anchor(s) trustworthy
-                    // enough to scope a gap recovery around, so fall back to a full whole-file
-                    // redetect.
-                    var thresholdNote = thresholdExceeded
-                        ? $", exceeding --verify-threshold {_options.VerifyFailThreshold}"
-                        : "";
-                    discardNote = $", {info.ChapterCount} existing marking(s) discarded " +
-                                  $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed{thresholdNote})";
-                    result = await detector.DetectAsync(file, info, work, log, ct);
-                }
-            }
-            else if (skip)
-            {
-                lock (_statsLock) _skipped++;
-                _progress.FinishWithSummary(work,
-                    $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
+            if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
                 return;
-            }
-            else
-            {
-                result = await detector.DetectAsync(file, info, work, log, ct);
-            }
+            var (result, discardNote) = outcome;
 
-            lock (_statsLock)
-            {
-                _processed++;
-                _processingTime += watch.Elapsed;
-            }
-            _runStats.AccumulateStats(result.Stats, info.DurationSeconds);
-            log?.Invoke(FormatFileStats(result.Stats, info.DurationSeconds));
+            RecordProcessed(watch);
+            _runStats.AccumulateStats(result.Stats, ctx.Info.DurationSeconds);
+            log?.Invoke(FormatFileStats(result.Stats, ctx.Info.DurationSeconds));
 
             if (result.GapRemains)
-            {
-                lock (_statsLock) _warnings++;
-                // Rather than discard the work, commit the marks found so far and flag the file by
-                // name (".missing-marks-<n>-<n>-...") so the still-missing chapters are visible and
-                // a future run can pick them up. (Re-processing such files is a separate TODO item.)
-                _runStats.AccumulateConfidence(result.Chapters);
-                var (partial, partialIntro) = BuildChapters(result);
-                var target = MissingMarksPath(file, result.MissingNumbers);
-                var missingList = FormatMissingList(result.MissingNumbers);
-                if (_options.DryRun)
-                {
-                    var partialListing = string.Join(Environment.NewLine,
-                        partial.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
-                    _progress.FinishWithSummary(work,
-                        $"{name}: DRY RUN - unresolved chapter sequence gap (missing: {missingList}); " +
-                        $"would write {result.Chapters.Count} partial mark(s){partialIntro} and rename to " +
-                        $"{Path.GetFileName(target)}:{Environment.NewLine}{partialListing}", important: true);
-                    return;
-                }
-                var partialBakReplaced = await ffmpeg.WriteChaptersAsync(file, partial, info.DurationSeconds, _options.Backup,
-                    BeginMuxingPhase(work, info), ct);
-                File.Move(file, target, overwrite: true);
-                var partialBackup = FormatBackupNote(_options.Backup, partialBakReplaced);
-                _progress.FinishWithSummary(work,
-                    $"{name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
-                    $"wrote {result.Chapters.Count} partial mark(s){partialIntro}, renamed to " +
-                    $"{Path.GetFileName(target)}{partialBackup}", important: true);
-                return;
-            }
-            if (result.Chapters.Count == 0)
-            {
-                lock (_statsLock) _noChaptersFound++;
-                var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
-                var summary = result.EarlyAborted
-                    ? $"{name}: early-abort - no chapter found within the first " +
-                      $"{_options.EarlyAbortMinutes:0.#} minute(s) of play time; file unchanged{langHint}"
-                    : result.BelowExpectedStartNumber is { } foundNumber
-                        ? $"{name}: first chapter found ({foundNumber}) is below --expected-start-chapter " +
-                          $"{_options.ExpectedStartChapter}; file unchanged{langHint}"
-                        : $"{name}: no chapter phrases found; file unchanged{langHint}";
-                _progress.FinishWithSummary(work, summary);
-                return;
-            }
-
-            _runStats.AccumulateConfidence(result.Chapters);
-
-            var (chapters, introNote) = BuildChapters(result);
-
-            var lowConfidenceNote = result.LowConfidenceNumbers.Count > 0
-                ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
-                  $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
-                : "";
-
-            // With --lang auto, note which language was actually used for this file - the
-            // detected one, or "en" when detection was inconclusive or skipped.
-            var languageNote = "";
-            if (_options.AutoLanguage)
-            {
-                languageNote = result.DetectedLanguage switch
-                {
-                    { } lang when lang.Equals(result.Profile.Language, StringComparison.OrdinalIgnoreCase) =>
-                        $", language: {result.Profile.Language} (p={result.DetectedProbability:0.00})",
-                    { } lang =>
-                        $", language: {result.Profile.Language} (auto-detected {lang} p={result.DetectedProbability:0.00}, below threshold)",
-                    null => $", language: {result.Profile.Language} (auto-detection unavailable)",
-                };
-            }
-
-            // --export writes the sidecar regardless of --dry-run, so a run can be
-            // previewed and saved for hand-editing in one pass.
-            var exportNote = "";
-            if (_options.Export)
-            {
-                var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
-                var sidecarText = _options.SimpleMetadata
-                    ? ChapterSidecar.BuildSimple(chapters)
-                    : FfmpegClient.BuildFfMetadata(chapters, info.DurationSeconds);
-                await File.WriteAllTextAsync(sidecarPath, sidecarText, new UTF8Encoding(false), ct);
-                exportNote = $", sidecar exported to {Path.GetFileName(sidecarPath)}";
-            }
-
-            if (_options.DryRun)
-            {
-                var listing = string.Join(Environment.NewLine,
-                    chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
-                _progress.FinishWithSummary(work,
-                    $"{name}: DRY RUN - would write {result.Chapters.Count} chapter(s) " +
-                    $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
-                    $"{introNote}{discardNote}{lowConfidenceNote}{languageNote}{exportNote}:{Environment.NewLine}{listing}",
-                    important: lowConfidenceNote.Length > 0);
-                return;
-            }
-
-            var bakReplaced = await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
-                BeginMuxingPhase(work, info), ct);
-
-            var backupNote = FormatBackupNote(_options.Backup, bakReplaced);
-            _progress.FinishWithSummary(work,
-                $"{name}: {result.Chapters.Count} chapter(s) written " +
-                $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})" +
-                $"{introNote}{discardNote}{lowConfidenceNote}{languageNote}{exportNote}{backupNote}",
-                important: lowConfidenceNote.Length > 0);
+                await ReportUnresolvedGapAsync(ctx, result, ct);
+            else if (result.Chapters.Count == 0)
+                ReportNoChaptersFound(ctx, result);
+            else
+                await WriteDetectedChaptersAsync(ctx, result, discardNote, ct);
         }
         catch (OperationCanceledException)
         {
@@ -761,6 +598,368 @@ public sealed class FileProcessor
         {
             _progress.FinishWithSummary(work, $"{name}: ERROR - {ex.Message}", important: true);
             throw;
+        }
+    }
+
+    /// <summary>Probes a file and emits the one-line --verbose note describing what came back.
+    /// Shared by the detection and --import paths, which open identically.</summary>
+    /// <param name="file">Path of the file to probe.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="log">The file's --verbose log sink, or null when not verbose.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private static async Task<MediaInfo> ProbeAndLogAsync(
+        string file, FfmpegClient ffmpeg, Action<string>? log, CancellationToken ct)
+    {
+        var info = await ffmpeg.ProbeAsync(file, ct);
+        log?.Invoke($"probed: duration {FormatTime(TimeSpan.FromSeconds(info.DurationSeconds))}, " +
+                    $"codec {info.AudioCodec}" +
+                    (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
+                    $", {info.ChapterCount} existing chapter marking(s)");
+        return info;
+    }
+
+    /// <summary>
+    /// Picks the decoder the rest of the pipeline decodes this file with. Only xHE-AAC (USAC)
+    /// audio needs one named explicitly: ffmpeg's native AAC decoder cannot handle it reliably,
+    /// so such files go through libfdk_aac - or are skipped with <see cref="XheAacHint"/> when
+    /// the installed ffmpeg has no such decoder.
+    /// </summary>
+    /// <param name="ctx">The file's context, carrying the probe result to refine.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The context with the decoder applied, or null when the file was skipped - in
+    /// which case it has already been counted and reported.</returns>
+    private async Task<FileContext?> ResolveXheAacDecoderAsync(FileContext ctx, CancellationToken ct)
+    {
+        if (!ctx.Info.IsXheAac)
+            return ctx;
+        // A probe that could not even determine the duration means this ffmpeg build cannot
+        // handle the file regardless of the decoder list.
+        if (ctx.Info.DurationSeconds > 0 && await ctx.Ffmpeg.SupportsLibFdkAacAsync(ct))
+        {
+            ctx.Log?.Invoke("xHE-AAC audio: decoding with libfdk_aac");
+            return ctx with { Info = ctx.Info with { InputDecoder = "libfdk_aac" } };
+        }
+        lock (_statsLock) _warnings++;
+        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: WARNING - {XheAacHint}", important: true);
+        return null;
+    }
+
+    /// <summary>
+    /// The auto-resume path for a file still carrying a numbered ".missing-marks" tag (see
+    /// <see cref="HasMissingMarksTag"/>): the detector re-probes only the gap(s) the tag names,
+    /// and the outcome is committed either as a re-tagged partial write or - when every missing
+    /// chapter turned up - as a full write under the file's original name.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="detector">The detector borrowed for this file.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ProcessResumeAsync(
+        FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
+    {
+        var resumed = await detector.ResumeMissingMarksAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct);
+        RecordProcessed(watch);
+        _runStats.AccumulateStats(resumed.Stats, ctx.Info.DurationSeconds);
+        ctx.Log?.Invoke(FormatFileStats(resumed.Stats, ctx.Info.DurationSeconds));
+        _runStats.AccumulateConfidence(resumed.Chapters);
+        var (chapters, introNote) = BuildChapters(resumed);
+
+        if (resumed.GapRemains)
+            await ReportIncompleteResumeAsync(ctx, resumed, chapters, introNote, ct);
+        else
+            await ReportCompleteResumeAsync(ctx, resumed, chapters, introNote, ct);
+    }
+
+    /// <summary>Commits a resume that did not find everything: the marks so far are written and
+    /// the file re-tagged with the chapter numbers still missing, so a later run can pick it up
+    /// again.</summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="resumed">The resume's detection result.</param>
+    /// <param name="chapters">The titled chapters to write.</param>
+    /// <param name="introNote">Note from <see cref="BuildChapters"/> about a prepended intro.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ReportIncompleteResumeAsync(
+        FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
+    {
+        lock (_statsLock) _warnings++;
+        var retarget = MissingMarksPath(ctx.File, resumed.MissingNumbers);
+        var stillMissing = FormatMissingList(resumed.MissingNumbers);
+        if (_options.DryRun)
+        {
+            _progress.FinishWithSummary(ctx.Work,
+                $"{ctx.Name}: DRY RUN - resume incomplete, still missing: {stillMissing}; would write " +
+                $"{resumed.Chapters.Count} partial mark(s){introNote} and re-tag as " +
+                $"{Path.GetFileName(retarget)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
+                important: true);
+            return;
+        }
+        var backupNote = await CommitChaptersAsync(ctx, chapters, retarget, ct);
+        _progress.FinishWithSummary(ctx.Work,
+            $"{ctx.Name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
+            $"{resumed.Chapters.Count} partial mark(s){introNote}, re-tagged as " +
+            $"{Path.GetFileName(retarget)}{backupNote}", important: true);
+    }
+
+    /// <summary>Commits a resume that closed every gap: the full chapter set is written and the
+    /// ".missing-marks" tag dropped from the file name again.</summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="resumed">The resume's detection result.</param>
+    /// <param name="chapters">The titled chapters to write.</param>
+    /// <param name="introNote">Note from <see cref="BuildChapters"/> about a prepended intro.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ReportCompleteResumeAsync(
+        FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
+    {
+        var restored = StripMissingMarksPath(ctx.File);
+        var range = $"{resumed.Chapters[0].Number}-{resumed.Chapters[^1].Number}";
+        if (_options.DryRun)
+        {
+            _progress.FinishWithSummary(ctx.Work,
+                $"{ctx.Name}: DRY RUN - resume complete, all chapters found; would write " +
+                $"{resumed.Chapters.Count} chapter(s) ({range})" +
+                $"{introNote} and rename to {Path.GetFileName(restored)}:" +
+                $"{Environment.NewLine}{FormatChapterListing(chapters)}");
+            return;
+        }
+        var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
+        _progress.FinishWithSummary(ctx.Work,
+            $"{ctx.Name}: resume complete - {resumed.Chapters.Count} chapter(s) written " +
+            $"({range}){introNote}, renamed to {Path.GetFileName(restored)}{backupNote}");
+    }
+
+    /// <summary>
+    /// Applies the pre-existing-marking policy and runs the detection it calls for: a plain
+    /// whole-file detection when nothing stands in the way, the --verify decision tree when
+    /// markings exist and are to be checked, or no detection at all when the file is simply
+    /// skipped.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="detector">The detector borrowed for this file.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The detection result and the note describing what happened to any existing
+    /// markings, or null when the file was skipped - in which case it has already been counted
+    /// and reported.</returns>
+    private async Task<(DetectionResult Result, string DiscardNote)?> DetectChaptersAsync(
+        FileContext ctx, ChapterDetector detector, CancellationToken ct)
+    {
+        var (skip, discardNote) = EvaluateExistingChapters(ctx.Info);
+        if (!skip)
+            return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct), discardNote);
+        if (_options.Verify)
+            return await VerifyThenDetectAsync(ctx, detector, ct);
+
+        lock (_statsLock) _skipped++;
+        _progress.FinishWithSummary(ctx.Work,
+            $"{ctx.Name}: skipped - has {ctx.Info.ChapterCount} chapter marking(s) (use --force to redo)");
+        return null;
+    }
+
+    /// <summary>
+    /// The --verify decision tree for a file that would otherwise be skipped: markings that all
+    /// check out leave the file alone; a partial failure keeps the trusted markings and gap-recovers
+    /// only around the unconfirmed ones; nothing trustworthy left - or more failures than
+    /// --verify-threshold allows, which discredits even the survivors as gap-recovery anchors -
+    /// falls back to a full whole-file redetect.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="detector">The detector borrowed for this file.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The detection result and its discard note, or null when the file was left
+    /// unchanged - in which case it has already been counted and reported.</returns>
+    private async Task<(DetectionResult Result, string DiscardNote)?> VerifyThenDetectAsync(
+        FileContext ctx, ChapterDetector detector, CancellationToken ct)
+    {
+        var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct);
+        if (verify.Checked == 0 || verify.Passed)
+        {
+            lock (_statsLock) _skipped++;
+            var verifyNote = verify.Checked > 0
+                ? $"{verify.Checked} pre-existing chapter marking(s) verified correct"
+                : $"has {ctx.Info.ChapterCount} chapter marking(s) (none had a checkable number)";
+            _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: skipped - {verifyNote} (use --force to redo)");
+            return null;
+        }
+
+        var thresholdExceeded = _options.VerifyFailThreshold is { } threshold && verify.Failed > threshold;
+        if (verify.ConfirmedChapters.Count > 0 && !thresholdExceeded)
+        {
+            // At least one marking is trusted - only the gap(s) around the unconfirmed one(s) get
+            // their own Pass 2 (and, for a still-missing trailing chapter, Pass 3); everything
+            // else in the file is left exactly as --verify found it.
+            var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
+                              $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
+            return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, verify, ct), trustedNote);
+        }
+
+        var thresholdNote = thresholdExceeded
+            ? $", exceeding --verify-threshold {_options.VerifyFailThreshold}"
+            : "";
+        var discardNote = $", {ctx.Info.ChapterCount} existing marking(s) discarded " +
+                          $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed{thresholdNote})";
+        return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct), discardNote);
+    }
+
+    /// <summary>
+    /// Commits a detection that left a chapter-sequence gap. Rather than discard the work, the
+    /// marks found so far are written and the file flagged by name (".missing-marks-&lt;n&gt;-...")
+    /// so the still-missing chapters are visible and a later run - or
+    /// <see cref="ProcessResumeAsync"/> - can pick them up.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="result">The file's detection result.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ReportUnresolvedGapAsync(FileContext ctx, DetectionResult result, CancellationToken ct)
+    {
+        lock (_statsLock) _warnings++;
+        _runStats.AccumulateConfidence(result.Chapters);
+        var (chapters, introNote) = BuildChapters(result);
+        var target = MissingMarksPath(ctx.File, result.MissingNumbers);
+        var missingList = FormatMissingList(result.MissingNumbers);
+        if (_options.DryRun)
+        {
+            _progress.FinishWithSummary(ctx.Work,
+                $"{ctx.Name}: DRY RUN - unresolved chapter sequence gap (missing: {missingList}); " +
+                $"would write {result.Chapters.Count} partial mark(s){introNote} and rename to " +
+                $"{Path.GetFileName(target)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
+                important: true);
+            return;
+        }
+        var backupNote = await CommitChaptersAsync(ctx, chapters, target, ct);
+        _progress.FinishWithSummary(ctx.Work,
+            $"{ctx.Name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
+            $"wrote {result.Chapters.Count} partial mark(s){introNote}, renamed to " +
+            $"{Path.GetFileName(target)}{backupNote}", important: true);
+    }
+
+    /// <summary>Reports a detection that produced no chapters at all - the file is left
+    /// untouched - naming whichever of the three reasons applies.</summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="result">The file's detection result.</param>
+    private void ReportNoChaptersFound(FileContext ctx, DetectionResult result)
+    {
+        lock (_statsLock) _noChaptersFound++;
+        var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
+        var summary = result.EarlyAborted
+            ? $"{ctx.Name}: early-abort - no chapter found within the first " +
+              $"{_options.EarlyAbortMinutes:0.#} minute(s) of play time; file unchanged{langHint}"
+            : result.BelowExpectedStartNumber is { } foundNumber
+                ? $"{ctx.Name}: first chapter found ({foundNumber}) is below --expected-start-chapter " +
+                  $"{_options.ExpectedStartChapter}; file unchanged{langHint}"
+                : $"{ctx.Name}: no chapter phrases found; file unchanged{langHint}";
+        _progress.FinishWithSummary(ctx.Work, summary);
+    }
+
+    /// <summary>The normal, successful outcome: writes the detected chapters into the file (or,
+    /// under --dry-run, lists what would be written) and prints the file's summary line.</summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="result">The file's detection result.</param>
+    /// <param name="discardNote">Note about any pre-existing markings that were discarded.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task WriteDetectedChaptersAsync(
+        FileContext ctx, DetectionResult result, string discardNote, CancellationToken ct)
+    {
+        _runStats.AccumulateConfidence(result.Chapters);
+        var (chapters, introNote) = BuildChapters(result);
+        var notes = introNote + discardNote + FormatLowConfidenceNote(result) + FormatLanguageNote(result) +
+                    await ExportSidecarAsync(ctx, chapters, ct);
+        var range = $"{result.Chapters[0].Number}-{result.Chapters[^1].Number}";
+        // A low-confidence mark is the one thing here worth surfacing above the progress bar.
+        var important = result.LowConfidenceNumbers.Count > 0;
+
+        if (_options.DryRun)
+        {
+            _progress.FinishWithSummary(ctx.Work,
+                $"{ctx.Name}: DRY RUN - would write {result.Chapters.Count} chapter(s) ({range})" +
+                $"{notes}:{Environment.NewLine}{FormatChapterListing(chapters)}", important);
+            return;
+        }
+        var backupNote = await CommitChaptersAsync(ctx, chapters, null, ct);
+        _progress.FinishWithSummary(ctx.Work,
+            $"{ctx.Name}: {result.Chapters.Count} chapter(s) written ({range}){notes}{backupNote}", important);
+    }
+
+    /// <summary>Note naming the marks Whisper was unsure about, so they can be spot-checked;
+    /// empty when every mark was confident.</summary>
+    /// <param name="result">The file's detection result.</param>
+    private static string FormatLowConfidenceNote(DetectionResult result)
+        => result.LowConfidenceNumbers.Count > 0
+            ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
+              $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
+            : "";
+
+    /// <summary>With --lang auto, the note stating which language this file was actually
+    /// processed in - the detected one, or "en" when detection was inconclusive or skipped.
+    /// Empty for an explicit --lang, where there is nothing to report.</summary>
+    /// <param name="result">The file's detection result.</param>
+    private string FormatLanguageNote(DetectionResult result)
+    {
+        if (!_options.AutoLanguage)
+            return "";
+        return result.DetectedLanguage switch
+        {
+            { } lang when lang.Equals(result.Profile.Language, StringComparison.OrdinalIgnoreCase) =>
+                $", language: {result.Profile.Language} (p={result.DetectedProbability:0.00})",
+            { } lang =>
+                $", language: {result.Profile.Language} (auto-detected {lang} p={result.DetectedProbability:0.00}, below threshold)",
+            null => $", language: {result.Profile.Language} (auto-detection unavailable)",
+        };
+    }
+
+    /// <summary>Writes the --export sidecar, if asked for, and returns the note announcing it.
+    /// Runs regardless of --dry-run, so a run can be previewed and saved for hand-editing in one
+    /// pass.</summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="chapters">The chapters to export.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<string> ExportSidecarAsync(FileContext ctx, List<Chapter> chapters, CancellationToken ct)
+    {
+        if (!_options.Export)
+            return "";
+        var sidecarPath = ChapterSidecar.PathFor(ctx.File, _options.SimpleMetadata);
+        var sidecarText = _options.SimpleMetadata
+            ? ChapterSidecar.BuildSimple(chapters)
+            : FfmpegClient.BuildFfMetadata(chapters, ctx.Info.DurationSeconds);
+        await File.WriteAllTextAsync(sidecarPath, sidecarText, new UTF8Encoding(false), ct);
+        return $", sidecar exported to {Path.GetFileName(sidecarPath)}";
+    }
+
+    /// <summary>
+    /// Muxes the given chapters into the file and, when the outcome calls for it, renames the
+    /// result - the "write, then re-tag or un-tag the file name" step the gap and resume paths
+    /// share with the plain write.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="chapters">The chapters to write.</param>
+    /// <param name="renameTo">Path to move the written file to, or null to leave its name alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The backup note for the file's summary line.</returns>
+    private async Task<string> CommitChaptersAsync(
+        FileContext ctx, List<Chapter> chapters, string? renameTo, CancellationToken ct)
+    {
+        var bakReplaced = await ctx.Ffmpeg.WriteChaptersAsync(
+            ctx.File, chapters, ctx.Info.DurationSeconds, _options.Backup,
+            BeginMuxingPhase(ctx.Work, ctx.Info), ct);
+        if (renameTo != null)
+            File.Move(ctx.File, renameTo, overwrite: true);
+        return FormatBackupNote(_options.Backup, bakReplaced);
+    }
+
+    /// <summary>Formats the indented "&lt;timestamp&gt;  &lt;title&gt;" block every --dry-run
+    /// summary line ends with.</summary>
+    /// <param name="chapters">The chapters that would be written.</param>
+    private static string FormatChapterListing(IEnumerable<Chapter> chapters)
+        => string.Join(Environment.NewLine,
+            chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
+
+    /// <summary>Counts one more file as processed and folds its elapsed time into the run's
+    /// per-file average. Thread-safe.</summary>
+    /// <param name="watch">The file's running stopwatch.</param>
+    private void RecordProcessed(Stopwatch watch)
+    {
+        lock (_statsLock)
+        {
+            _processed++;
+            _processingTime += watch.Elapsed;
         }
     }
 
@@ -807,11 +1006,7 @@ public sealed class FileProcessor
                 return;
             }
 
-            var info = await ffmpeg.ProbeAsync(file, ct);
-            log?.Invoke($"probed: duration {FormatTime(TimeSpan.FromSeconds(info.DurationSeconds))}, " +
-                        $"codec {info.AudioCodec}" +
-                        (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
-                        $", {info.ChapterCount} existing chapter marking(s)");
+            var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
 
             var (skip, discardNote) = EvaluateExistingChapters(info);
             if (skip)
@@ -826,26 +1021,19 @@ public sealed class FileProcessor
             var chapters = _options.SimpleMetadata
                 ? ChapterSidecar.ParseSimple(text, sidecarPath)
                 : ChapterSidecar.ParseFfMetadata(text, sidecarPath);
-            lock (_statsLock)
-            {
-                _processed++;
-                _processingTime += watch.Elapsed;
-            }
+            RecordProcessed(watch);
 
             if (_options.DryRun)
             {
-                var listing = string.Join(Environment.NewLine,
-                    chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
                 _progress.FinishWithSummary(work,
                     $"{name}: DRY RUN - would import {chapters.Count} chapter(s) from " +
-                    $"{Path.GetFileName(sidecarPath)}{discardNote}:{Environment.NewLine}{listing}");
+                    $"{Path.GetFileName(sidecarPath)}{discardNote}:" +
+                    $"{Environment.NewLine}{FormatChapterListing(chapters)}");
                 return;
             }
 
-            var bakReplaced = await ffmpeg.WriteChaptersAsync(file, chapters, info.DurationSeconds, _options.Backup,
-                BeginMuxingPhase(work, info), ct);
-
-            var backupNote = FormatBackupNote(_options.Backup, bakReplaced);
+            var backupNote = await CommitChaptersAsync(
+                new FileContext(file, name, work, log, info, ffmpeg), chapters, null, ct);
             _progress.FinishWithSummary(work,
                 $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
                 $"{discardNote}{backupNote}");

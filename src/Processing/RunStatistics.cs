@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Audio;
 using ABChapterize.Detection;
 using ABChapterize.Formatting;
 
@@ -35,18 +36,6 @@ internal sealed class RunStatistics
     private double _whisperAudioSecondsTotal;
     private double _whisperTranscribeSecondsTotal;
     private double _runLengthSecondsTotal;
-
-    internal double ConfidenceMin => _confidenceMin;
-    internal double ConfidenceMax => _confidenceMax;
-    internal double ConfidenceSum => _confidenceSum;
-    internal int ConfidenceCount => _confidenceCount;
-    internal double MinPrecedingSilence => _minPrecedingSilence;
-    internal double MinInterChapterSilence => _minInterChapterSilence;
-    internal double MaxJingle => _maxJingle;
-    internal double MaxInterChapterJingle => _maxInterChapterJingle;
-    internal double WhisperAudioSecondsTotal => _whisperAudioSecondsTotal;
-    internal double WhisperTranscribeSecondsTotal => _whisperTranscribeSecondsTotal;
-    internal double RunLengthSecondsTotal => _runLengthSecondsTotal;
 
     /// <summary>Formats a duration as h:mm:ss (or m:ss below one hour) for the summary.</summary>
     /// <param name="t">The duration to format.</param>
@@ -130,6 +119,55 @@ internal sealed class RunStatistics
             _whisperTranscribeSecondsTotal += stats.WhisperTranscribeSeconds;
             _runLengthSecondsTotal += runLengthSeconds;
         }
+    }
+
+    /// <summary>
+    /// Builds the run-wide statistics lines of the --summary report, in print order: the
+    /// confidence spread across every chapter mark written during the run, the silence/jingle
+    /// extremes seen before any chapter, and the Whisper audio total against the run length
+    /// processed. Each of the three is omitted when nothing contributed to it, so a run that
+    /// only skipped files reports none of them. The file counts and the total elapsed time are
+    /// <see cref="FileProcessor"/>'s own to print - they are not this class's statistics.
+    /// Takes <see cref="_lock"/>, so the whole report is one consistent snapshot.
+    /// </summary>
+    internal List<string> FormatRunSummaryLines()
+    {
+        lock (_lock)
+        {
+            var lines = new List<string>();
+            if (_confidenceCount > 0)
+                lines.Add($"Confidence of written chapter marks: min {_confidenceMin:0.00}, " +
+                          $"max {_confidenceMax:0.00}, avg {_confidenceSum / _confidenceCount:0.00}");
+            if (_runLengthSecondsTotal <= 0)
+                return lines;
+
+            if (FormatExtremes() is { Length: > 0 } extremes)
+                lines.Add(extremes);
+            var speed = FormatSpeed(_whisperAudioSecondsTotal, _whisperTranscribeSecondsTotal);
+            lines.Add(
+                $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_whisperAudioSecondsTotal))} " +
+                $"of {FormatTime(TimeSpan.FromSeconds(_runLengthSecondsTotal))} run length " +
+                $"({100 * _whisperAudioSecondsTotal / _runLengthSecondsTotal:0.0}%)" +
+                (speed.Length > 0 ? $", {speed}" : ""));
+            return lines;
+        }
+    }
+
+    /// <summary>Formats the run-wide silence/jingle extremes as one comma-separated line, or an
+    /// empty string when no processed file contributed either of them (the extremes then still
+    /// sit at their infinities). Caller holds <see cref="_lock"/>.</summary>
+    private string FormatExtremes()
+    {
+        var extremes = new List<string>();
+        if (!double.IsPositiveInfinity(_minPrecedingSilence))
+            extremes.Add($"shortest silence before a chapter {_minPrecedingSilence:0.00} s" +
+                         FormatInterChapter(double.IsPositiveInfinity(_minInterChapterSilence)
+                             ? null : _minInterChapterSilence));
+        if (!double.IsNegativeInfinity(_maxJingle))
+            extremes.Add($"longest jingle before a chapter {_maxJingle:0.00} s" +
+                         FormatInterChapter(double.IsNegativeInfinity(_maxInterChapterJingle)
+                             ? null : _maxInterChapterJingle));
+        return string.Join(", ", extremes);
     }
 
     /// <summary>Folds a set of written chapter marks into the run-wide confidence stats
