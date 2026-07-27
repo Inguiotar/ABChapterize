@@ -505,11 +505,17 @@ public sealed class ChapterDetector
         if (!_options.Pass3ModelIsUpgrade || ReferenceEquals(_pass3Transcriber, _transcriber))
             return chapters;
 
-        var gaps = FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter);
-        if (gaps.Count == 0)
+        // Only the gaps that actually name a missing chapter are worth re-probing, and only those
+        // are budgeted for below - a gap whose numbers are all accounted for would otherwise inflate
+        // the phase total and stop the bar from ever reaching 100 %.
+        var work25 = FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter)
+            .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter)))
+            .Where(g => g.Missing.Count > 0)
+            .ToList();
+        if (work25.Count == 0)
             return chapters;
 
-        work.BeginPhase("Pass 2.5", (long)(gaps.Sum(g => g.ToSeconds - g.FromSeconds) * bytesPerSecond));
+        work.BeginPhase("Pass 2.5", (long)(work25.Sum(g => g.Gap.ToSeconds - g.Gap.FromSeconds) * bytesPerSecond));
         _pass3Transcriber.ChangeLanguage(profile.Language);
 
         // --early-abort and --expected-start-chapter are both disabled for these regions (infinity
@@ -527,17 +533,22 @@ public sealed class ChapterDetector
         // this pass's own finds.
         var found = new List<DetectedChapter>(chapters);
         var knownCount = found.Count;
-        foreach (var gap in gaps)
+        // Seconds of gap already behind us. Each gap's own probing is reported relative to it, so
+        // the bar runs monotonically from 0 to 100 % across the whole pass - the same accounting
+        // Pass 3 does with its per-chunk Advance calls, rather than a whole-file position measured
+        // against a gap-sized budget.
+        var gapSecondsDone = 0.0;
+        foreach (var (gap, missing) in work25)
         {
-            var missing = MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter);
-            if (missing.Count == 0)
-                continue;
             _log?.Invoke(
                 $"pass 2.5: re-probing {FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)} " +
                 $"for chapter{(missing.Count > 1 ? "s" : "")} {string.Join(", ", missing)} with the pass 3 model");
             var region = new DetectionRegion(gap.FromSeconds, gap.ToSeconds, missing[0] - 1, missing[^1] + 1);
             await new RegionProber(
-                BuildProbeEnvironment(), ctx, region, found, new LanguageState(profile, null, 0)).RunAsync(ct);
+                BuildProbeEnvironment(), ctx, region, found, new LanguageState(profile, null, 0),
+                gapSecondsDone - gap.FromSeconds).RunAsync(ct);
+            gapSecondsDone += gap.ToSeconds - gap.FromSeconds;
+            work.SetPhaseProgress((long)(gapSecondsDone * bytesPerSecond));
         }
 
         var recovered = found.Count - knownCount;

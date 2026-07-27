@@ -133,6 +133,20 @@ internal sealed class RegionProber
     /// of which region contributed what.</summary>
     private readonly List<DetectedChapter> _found;
 
+    /// <summary>
+    /// Seconds added to a candidate's absolute position before it is reported as progress, i.e. the
+    /// offset between this region's own time base and the one the enclosing phase counts in.
+    /// <para>
+    /// Zero for a phase whose total is the whole file (Pass 2 proper, and the gap-scoped Pass 2 a
+    /// --verify recovery runs): there the absolute position <em>is</em> the progress. A phase whose
+    /// total covers only its regions - pass 2.5, whose budget is the summed gap length, exactly like
+    /// Pass 3's - passes the offset that maps this region onto that shorter timeline, so the bar
+    /// advances monotonically from 0 to 100 % across the whole pass instead of reporting a
+    /// whole-file position against a gap-sized total.
+    /// </para>
+    /// </summary>
+    private readonly double _progressOffsetSeconds;
+
     /// <summary>Current probe window length. Starts at the ceiling with --max-jingle-length, at
     /// <see cref="ProbeSecondsPlain"/> without it, and follows <see cref="_adaptedWindowSeconds"/>
     /// from the first qualifying jingle observation on.</summary>
@@ -225,14 +239,17 @@ internal sealed class RegionProber
     /// <param name="region">The region to probe.</param>
     /// <param name="found">Accumulator of confirmed chapters across all regions.</param>
     /// <param name="language">The language resolution so far.</param>
+    /// <param name="progressOffsetSeconds">Offset onto the enclosing phase's time base; see
+    /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
     internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
-        List<DetectedChapter> found, LanguageState language)
+        List<DetectedChapter> found, LanguageState language, double progressOffsetSeconds = 0)
     {
         _env = env;
         _ctx = ctx;
         _region = region;
         _found = found;
         Language = language;
+        _progressOffsetSeconds = progressOffsetSeconds;
         _probeSeconds = env.Options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
@@ -253,7 +270,7 @@ internal sealed class RegionProber
         for (var ci = 0; ci < candidates.Count; ci++)
         {
             var candidate = candidates[ci];
-            _ctx.Work.SetPhaseProgress((long)(candidate.Start * _ctx.BytesPerSecond));
+            ReportProgress(candidate.Start);
 
             if (ShouldEarlyAbort(candidate))
                 break;
@@ -271,6 +288,16 @@ internal sealed class RegionProber
             ci = SkipSettledWindows(candidates, ci, windowEnd, probeMarks);
         }
     }
+
+    /// <summary>Reports how far probing has got as the byte-based progress the bar counts in,
+    /// translated onto the enclosing phase's time base (see <see cref="_progressOffsetSeconds"/>).
+    /// Probe costs vary wildly - full window decode vs. reused overlap vs. skipped candidate - so a
+    /// fixed per-probe budget would drift far off; position is honest about <em>where</em> the pass
+    /// is, at the price of nonlinear (and, during gap re-probes, briefly backwards) movement.</summary>
+    /// <param name="positionSeconds">Absolute position in the file that probing has reached.</param>
+    private void ReportProgress(double positionSeconds)
+        => _ctx.Work.SetPhaseProgress(
+            (long)((positionSeconds + _progressOffsetSeconds) * _ctx.BytesPerSecond));
 
     /// <summary>
     /// The probe candidates for this region: its own start (mirroring the whole-file case's
@@ -403,7 +430,7 @@ internal sealed class RegionProber
         ct.ThrowIfCancellationRequested();
         // Position-based Pass 2 progress (see DetectCoreAsync's BeginPhase); reported here rather
         // than only in the candidate loop so gap re-probes show their (backwards) position too.
-        _ctx.Work.SetPhaseProgress((long)(start * _ctx.BytesPerSecond));
+        ReportProgress(start);
 
         var (windowSegmentsAbs, mergeBoundarySegIndex) =
             await AssembleWindowTranscriptAsync(start, windowEnd, ct);

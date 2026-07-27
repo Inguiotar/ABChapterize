@@ -143,9 +143,15 @@ public sealed class ChapterDetectorTests : IDisposable
         public void Add(double start, params TranscriptSegment[] segments)
             => _script.Add((start, [.. segments]));
 
+        /// <summary>Called at the start of every <see cref="TranscribeAsync"/>, so a test can
+        /// sample detector-external state (progress, say) at the exact moments this transcriber
+        /// is being used.</summary>
+        public Action? OnTranscribe { get; set; }
+
         /// <inheritdoc/>
         public Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct)
         {
+            OnTranscribe?.Invoke();
             var start = _audio.DecodeStarts[^1];
             var hit = _script.FirstOrDefault(e => Math.Abs(e.Start - start) < 0.25);
             return Task.FromResult(hit.Segments ?? []);
@@ -902,6 +908,46 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.GapRemains);
         Assert.Equal([new(1, 0.25), new(3, 1199.95)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task Pass25_ReportsProgressRelativeToTheGapsItBudgetedFor_NotAbsoluteFilePosition()
+    {
+        // Pass 2.5's phase total is the summed length of the gaps it will re-probe, so its progress
+        // has to be measured in the same currency. Reporting the probe's absolute file position
+        // instead pegged the bar at 100 % for the whole pass whenever the gap sat late in the file -
+        // here a 999.7 s gap starting at 2400.25 s, where an absolute 3100 s would read as 310 %.
+        var audio = new FakeAudioSource { Silences = [new(2395, 2400), new(3095, 3100), new(3395, 3400)] };
+        var pass2 = new ScriptedTranscriber(audio);
+        var pass3 = new ScriptedTranscriber(audio);
+        pass2.Add(0, Seg(0.5, " Chapter one."));
+        pass2.Add(2400, Seg(0.25, " Chapter two."));
+        pass2.Add(3400, Seg(0.05, " Chapter four."));
+        pass3.Add(3100, Seg(0.5, " Chapter three."));
+
+        var tracker = new WorkTracker();
+        var during = new List<double>();
+        pass3.OnTranscribe = () =>
+        {
+            if (tracker.PhaseLabel == "Pass 2.5")
+                during.Add(tracker.Fraction);
+        };
+
+        var detector = new ChapterDetector(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0", "--quick-marks"),
+            audio, pass2, vad: null, pass3Transcriber: pass3);
+        var result = await detector.DetectAsync(_file, Info, tracker, null, CancellationToken.None);
+
+        // Pass 2.5 really ran and closed the gap (so the samples below are not an empty list).
+        Assert.False(result.GapRemains);
+        Assert.Contains(result.Chapters, c => c.Number == 3);
+        Assert.NotEmpty(during);
+        // The probe at 3100 s sits 699.75 s into a 999.7 s budget - nowhere near the clamp.
+        Assert.All(during, f => Assert.InRange(f, 0.0, 0.8));
+        // And the pass still lands exactly on 100 % when its last gap is done; nothing else began
+        // a phase afterwards, since pass 3 found no gap left to fill.
+        Assert.Equal("Pass 2.5", tracker.PhaseLabel);
+        Assert.Equal(1.0, tracker.Fraction, 6);
     }
 
     [Fact]
