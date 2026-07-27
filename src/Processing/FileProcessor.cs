@@ -104,9 +104,13 @@ public sealed class FileProcessor
     {
         var bakSuffixes = _options.EffectiveExtensions.Select(e => e + ".bak").ToArray();
         var backups = EnumerateTargets(bakSuffixes);
-        // Convenience: when a single audio file is given, revert its backup.
-        if (backups.Count == 0 && !_options.TargetIsDirectory && File.Exists(_options.TargetPath + ".bak"))
-            backups = [_options.TargetPath + ".bak"];
+        // Convenience: an audio file named directly is reverted from its own backup, so the
+        // ".bak" suffix need not be typed out.
+        var known = new HashSet<string>(backups.Select(CliOptions.NormalizePath), CliOptions.PathComparer);
+        backups.AddRange(_options.Targets
+            .Where(t => !t.IsDirectory && File.Exists(t.Path + ".bak"))
+            .Select(t => t.Path + ".bak")
+            .Where(bak => known.Add(CliOptions.NormalizePath(bak))));
         if (backups.Count == 0)
         {
             Console.WriteLine("No .bak backups of supported audio files found; nothing to revert.");
@@ -139,12 +143,20 @@ public sealed class FileProcessor
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     private async Task RunABChapterizeAsync(CancellationToken ct)
     {
-        var files = EnumerateTargets(_options.EffectiveExtensions);
-        if (files.Count == 0)
+        var groups = EnumerateTargetGroups(_options.EffectiveExtensions);
+        if (groups.Sum(g => g.Files.Count) == 0)
         {
             Console.WriteLine(_options.FilterRegex != null || _options.FilterExtensions != null
                 ? "No audio files matching --filter found."
                 : $"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
+            return;
+        }
+
+        var files = ApplyBatchProgress(groups);
+        if (files.Count == 0)
+        {
+            Console.WriteLine("Every selected file was already processed by an earlier, " +
+                              "interrupted run; nothing left to do (--ignore-progress redoes them).");
             return;
         }
 
@@ -162,6 +174,47 @@ public sealed class FileProcessor
     }
 
     /// <summary>
+    /// One file waiting to be processed, together with the checkpoint to report it to when it is
+    /// finished (null for a file named directly on the command line, or when checkpointing is off
+    /// - see <see cref="ApplyBatchProgress"/>).
+    /// </summary>
+    /// <param name="Path">Full path of the file.</param>
+    /// <param name="Progress">Batch checkpoint of the directory the file came from, if any.</param>
+    private readonly record struct PendingFile(string Path, BatchProgress? Progress);
+
+    /// <summary>
+    /// Opens each directory target's <see cref="BatchProgress"/>, drops the files a previous,
+    /// interrupted run already finished, and flattens what is left into the run's work list.
+    /// Files named directly on the command line and runs that write nothing (--dry-run) are passed
+    /// through unchecked - there is no directory to keep a record in, respectively nothing done
+    /// that would be worth not doing twice.
+    /// </summary>
+    /// <param name="groups">The enumerated command line targets and their files.</param>
+    /// <returns>The files to process, in target order.</returns>
+    private List<PendingFile> ApplyBatchProgress(List<TargetGroup> groups)
+    {
+        var pending = new List<PendingFile>();
+        var resumed = 0;
+        foreach (var group in groups)
+        {
+            if (!group.Target.IsDirectory || _options.DryRun)
+            {
+                pending.AddRange(group.Files.Select(f => new PendingFile(f, null)));
+                continue;
+            }
+            var progress = BatchProgress.Open(
+                group.Target.Path, _options.RunFingerprint, _options.IgnoreProgress);
+            var todo = group.Files.Where(f => !progress.IsDone(f)).ToList();
+            resumed += group.Files.Count - todo.Count;
+            progress.Begin(todo.Count);
+            pending.AddRange(todo.Select(f => new PendingFile(f, progress)));
+        }
+        if (resumed > 0 && !_options.Quiet)
+            Console.WriteLine($"Resuming an interrupted run: {resumed} file(s) already processed, skipped.");
+        return pending;
+    }
+
+    /// <summary>
     /// The --import pipeline: chapters come from a sidecar file, so Whisper is skipped entirely -
     /// there is nothing to detect and no model to load. Each file is just an ffprobe plus a direct
     /// write, so concurrency can scale further than detection's own hardware cap allows.
@@ -169,7 +222,7 @@ public sealed class FileProcessor
     /// <param name="files">The files to import chapters for.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
-    private async Task RunImportAsync(List<string> files, FfmpegClient ffmpeg, CancellationToken ct)
+    private async Task RunImportAsync(List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
     {
         var hardCap = ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount, 1, 8));
         if (!_options.Quiet && hardCap > 1)
@@ -186,7 +239,7 @@ public sealed class FileProcessor
     /// <param name="files">The files to detect chapters in.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
-    private async Task RunDetectionAsync(List<string> files, FfmpegClient ffmpeg, CancellationToken ct)
+    private async Task RunDetectionAsync(List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
     {
         var modelPath = await ModelCatalog.EnsureModelAsync(_options.Model, ct);
         // The initial language is a placeholder: ChapterDetector always calls
@@ -196,11 +249,10 @@ public sealed class FileProcessor
         var first = new WhisperTranscriber(modelPath, initialLanguage, forceCpu: _options.CpuOnly);
         var hardCap = ResolveDetectionConcurrency(first, files.Count);
 
-        // A different --pass3-model gets one shared, lazily-loaded instance for the whole run
-        // (see SharedPass3Transcriber); only gap work (pass 2.5 and pass 3) uses it, which is
-        // the exception rather than the rule, so serializing it there costs little and avoids
-        // loading a second model per concurrent file. The same model as --model means no
-        // separate instance at all - gap work reuses each file's own transcriber.
+        // A different --pass3-model gets one shared, lazily-loaded instance for the whole run (see
+        // SharedPass3Transcriber). Only gap work (pass 2.5 and 3) uses it, so serializing it there
+        // costs little and beats loading a second model per concurrent file. The same model as
+        // --model means no separate instance at all - gap work reuses each file's transcriber.
         var pass3Shared = _options.Pass3Model != _options.Model
             ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly)
             : null;
@@ -210,9 +262,8 @@ public sealed class FileProcessor
 
         var pool = await BuildTranscriberPoolAsync(first, hardCap, modelPath, initialLanguage);
 
-        // Shared like ffmpeg above (one instance for the whole run, safe for concurrent
-        // use - see SileroVadDetector's threading remarks); only needed when
-        // ChapterDetector runs its full-file VAD pre-pass (see RunVadPrePass).
+        // Shared like ffmpeg above - one instance for the whole run, safe for concurrent use (see
+        // SileroVadDetector's threading remarks) - and only needed for the VAD pre-pass.
         using var vad = _options.RunVadPrePass ? new SileroVadDetector() : null;
 
         try
@@ -345,7 +396,8 @@ public sealed class FileProcessor
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     /// <param name="processOne">Processes one file.</param>
     private async Task RunConcurrentlyAsync(
-        List<string> files, int hardCap, CancellationToken ct, Func<string, CancellationToken, Task> processOne)
+        List<PendingFile> files, int hardCap, CancellationToken ct,
+        Func<PendingFile, CancellationToken, Task> processOne)
     {
         var gate = new AdaptiveConcurrencyGate(hardCap, initialSoftLimit: 1);
         using var monitor = new ConcurrencyMonitor(gate, TimeSpan.FromSeconds(2),
@@ -384,9 +436,9 @@ public sealed class FileProcessor
         }
         catch (Exception) when (firstError != null)
         {
-            // Task.WhenAll surfaces whichever faulted task it happens to observe first,
-            // which need not be the one that failed first chronologically; re-throw the
-            // one we tracked so callers see the same failure a sequential run would report.
+            // Task.WhenAll surfaces whichever faulted task it observes first, not necessarily the
+            // one that failed first; re-throw the tracked one so callers see the same failure a
+            // sequential run would report.
             throw firstError;
         }
     }
@@ -539,55 +591,24 @@ public sealed class FileProcessor
         string File, string Name, WorkTracker Work, Action<string>? Log, MediaInfo Info, FfmpegClient Ffmpeg);
 
     /// <summary>
-    /// Processes a single audiobook file and prints its summary line: probe, decoder resolution,
-    /// then whichever of the three outcomes applies - a resume of a previously tagged file, a
-    /// skip, or a detection run whose result one of the report/write stages below commits.
+    /// Processes a single audiobook file, prints its summary line and - once it is finished for
+    /// good, whatever the outcome - reports it to its directory's batch checkpoint. An error or a
+    /// Ctrl+C deliberately reports nothing, so the file is attempted again by the next run.
     /// </summary>
-    /// <param name="file">Path of the file to process.</param>
+    /// <param name="pending">The file to process and the checkpoint it belongs to.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="detector">A detector borrowed from the run's pool for the duration of this file.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ProcessOneAsync(
-        string file, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
+        PendingFile pending, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
     {
-        var name = Path.GetFileName(file);
+        var name = Path.GetFileName(pending.Path);
         var work = new WorkTracker();
-        var watch = Stopwatch.StartNew();
         _progress.Start(name, work);
-        // --verbose log sink; every message is prefixed with the file name.
-        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
         try
         {
-            var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
-            if (await ResolveXheAacDecoderAsync(new FileContext(file, name, work, log, info, ffmpeg), ct)
-                is not { } ctx)
-                return;
-
-            // Auto-resume a ".missing-marks-<n>-<n>-..." file left behind by a previous run's
-            // unresolved chapter-sequence gap: only the still-missing gap(s) are re-probed, the
-            // committed markings are trusted as-is. --force means "redo the whole file from
-            // scratch" and takes priority - it falls through to the normal policy below, which
-            // discards every existing marking (including these) and runs a fresh full detection.
-            if (!_options.Force && HasMissingMarksTag(file))
-            {
-                await ProcessResumeAsync(ctx, detector, watch, ct);
-                return;
-            }
-
-            if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
-                return;
-            var (result, discardNote) = outcome;
-
-            RecordProcessed(watch);
-            _runStats.AccumulateStats(result.Stats, ctx.Info.DurationSeconds);
-            log?.Invoke(FormatFileStats(result.Stats, ctx.Info.DurationSeconds));
-
-            if (result.GapRemains)
-                await ReportUnresolvedGapAsync(ctx, result, ct);
-            else if (result.Chapters.Count == 0)
-                ReportNoChaptersFound(ctx, result);
-            else
-                await WriteDetectedChaptersAsync(ctx, result, discardNote, ct);
+            var renamedTo = await ProcessOneCoreAsync(pending.Path, name, work, ffmpeg, detector, ct);
+            pending.Progress?.MarkDone(pending.Path, renamedTo);
         }
         catch (OperationCanceledException)
         {
@@ -599,6 +620,55 @@ public sealed class FileProcessor
             _progress.FinishWithSummary(work, $"{name}: ERROR - {ex.Message}", important: true);
             throw;
         }
+    }
+
+    /// <summary>
+    /// The per-file pipeline itself: probe, decoder resolution, then whichever of the three
+    /// outcomes applies - a resume of a previously tagged file, a skip, or a detection run whose
+    /// result one of the report/write stages below commits.
+    /// </summary>
+    /// <param name="file">Path of the file to process.</param>
+    /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
+    /// <param name="work">Its progress tracker, already started.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="detector">A detector borrowed from the run's pool for the duration of this file.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The name the file was renamed to (a ".missing-marks" tag added or dropped), or
+    /// null when it kept its own.</returns>
+    private async Task<string?> ProcessOneCoreAsync(
+        string file, string name, WorkTracker work, FfmpegClient ffmpeg, ChapterDetector detector,
+        CancellationToken ct)
+    {
+        var watch = Stopwatch.StartNew();
+        // --verbose log sink; every message is prefixed with the file name.
+        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
+        var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
+        if (await ResolveXheAacDecoderAsync(new FileContext(file, name, work, log, info, ffmpeg), ct)
+            is not { } ctx)
+            return null;
+
+        // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
+        // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed markings
+        // are trusted as-is. --force means "redo the whole file from scratch" and takes priority,
+        // falling through to the normal policy below.
+        if (!_options.Force && HasMissingMarksTag(file))
+            return await ProcessResumeAsync(ctx, detector, watch, ct);
+
+        if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
+            return null;
+        var (result, discardNote) = outcome;
+
+        RecordProcessed(watch);
+        _runStats.AccumulateStats(result.Stats, ctx.Info.DurationSeconds);
+        log?.Invoke(FormatFileStats(result.Stats, ctx.Info.DurationSeconds));
+
+        if (result.GapRemains)
+            return await ReportUnresolvedGapAsync(ctx, result, ct);
+        if (result.Chapters.Count == 0)
+            ReportNoChaptersFound(ctx, result);
+        else
+            await WriteDetectedChaptersAsync(ctx, result, discardNote, ct);
+        return null;
     }
 
     /// <summary>Probes a file and emits the one-line --verbose note describing what came back.
@@ -654,7 +724,8 @@ public sealed class FileProcessor
     /// <param name="detector">The detector borrowed for this file.</param>
     /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task ProcessResumeAsync(
+    /// <returns>The name the file was renamed to, or null under --dry-run, where it keeps its own.</returns>
+    private async Task<string?> ProcessResumeAsync(
         FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
     {
         var resumed = await detector.ResumeMissingMarksAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct);
@@ -664,10 +735,9 @@ public sealed class FileProcessor
         _runStats.AccumulateConfidence(resumed.Chapters);
         var (chapters, introNote) = BuildChapters(resumed);
 
-        if (resumed.GapRemains)
-            await ReportIncompleteResumeAsync(ctx, resumed, chapters, introNote, ct);
-        else
-            await ReportCompleteResumeAsync(ctx, resumed, chapters, introNote, ct);
+        return resumed.GapRemains
+            ? await ReportIncompleteResumeAsync(ctx, resumed, chapters, introNote, ct)
+            : await ReportCompleteResumeAsync(ctx, resumed, chapters, introNote, ct);
     }
 
     /// <summary>Commits a resume that did not find everything: the marks so far are written and
@@ -678,7 +748,8 @@ public sealed class FileProcessor
     /// <param name="chapters">The titled chapters to write.</param>
     /// <param name="introNote">Note from <see cref="BuildChapters"/> about a prepended intro.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task ReportIncompleteResumeAsync(
+    /// <returns>The name the file was re-tagged with, or null under --dry-run.</returns>
+    private async Task<string?> ReportIncompleteResumeAsync(
         FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
     {
         lock (_statsLock) _warnings++;
@@ -691,13 +762,14 @@ public sealed class FileProcessor
                 $"{resumed.Chapters.Count} partial mark(s){introNote} and re-tag as " +
                 $"{Path.GetFileName(retarget)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
-            return;
+            return null;
         }
         var backupNote = await CommitChaptersAsync(ctx, chapters, retarget, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
             $"{resumed.Chapters.Count} partial mark(s){introNote}, re-tagged as " +
             $"{Path.GetFileName(retarget)}{backupNote}", important: true);
+        return retarget;
     }
 
     /// <summary>Commits a resume that closed every gap: the full chapter set is written and the
@@ -707,7 +779,8 @@ public sealed class FileProcessor
     /// <param name="chapters">The titled chapters to write.</param>
     /// <param name="introNote">Note from <see cref="BuildChapters"/> about a prepended intro.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task ReportCompleteResumeAsync(
+    /// <returns>The original name the file was restored to, or null under --dry-run.</returns>
+    private async Task<string?> ReportCompleteResumeAsync(
         FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
     {
         var restored = StripMissingMarksPath(ctx.File);
@@ -719,12 +792,13 @@ public sealed class FileProcessor
                 $"{resumed.Chapters.Count} chapter(s) ({range})" +
                 $"{introNote} and rename to {Path.GetFileName(restored)}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
-            return;
+            return null;
         }
         var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: resume complete - {resumed.Chapters.Count} chapter(s) written " +
             $"({range}){introNote}, renamed to {Path.GetFileName(restored)}{backupNote}");
+        return restored;
     }
 
     /// <summary>
@@ -808,7 +882,9 @@ public sealed class FileProcessor
     /// <param name="ctx">The file's context.</param>
     /// <param name="result">The file's detection result.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task ReportUnresolvedGapAsync(FileContext ctx, DetectionResult result, CancellationToken ct)
+    /// <returns>The name the file was tagged with, or null under --dry-run.</returns>
+    private async Task<string?> ReportUnresolvedGapAsync(
+        FileContext ctx, DetectionResult result, CancellationToken ct)
     {
         lock (_statsLock) _warnings++;
         _runStats.AccumulateConfidence(result.Chapters);
@@ -822,13 +898,14 @@ public sealed class FileProcessor
                 $"would write {result.Chapters.Count} partial mark(s){introNote} and rename to " +
                 $"{Path.GetFileName(target)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
-            return;
+            return null;
         }
         var backupNote = await CommitChaptersAsync(ctx, chapters, target, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
             $"wrote {result.Chapters.Count} partial mark(s){introNote}, renamed to " +
             $"{Path.GetFileName(target)}{backupNote}", important: true);
+        return target;
     }
 
     /// <summary>Reports a detection that produced no chapters at all - the file is left
@@ -986,57 +1063,23 @@ public sealed class FileProcessor
 
     /// <summary>
     /// Processes a single audiobook file in --import mode: reads its sidecar file and
-    /// writes the chapters it contains, without running Whisper detection at all.
+    /// writes the chapters it contains, without running Whisper detection at all. Reports the
+    /// file to its directory's batch checkpoint on the way out, exactly as the detection path
+    /// does.
     /// </summary>
-    private async Task ProcessOneImportAsync(string file, FfmpegClient ffmpeg, CancellationToken ct)
+    /// <param name="pending">The file to import and the checkpoint it belongs to.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ProcessOneImportAsync(PendingFile pending, FfmpegClient ffmpeg, CancellationToken ct)
     {
+        var file = pending.Path;
         var name = Path.GetFileName(file);
         var work = new WorkTracker();
-        var watch = Stopwatch.StartNew();
         _progress.Start(name, work);
-        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
         try
         {
-            var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
-            if (!File.Exists(sidecarPath))
-            {
-                _progress.FinishWithSummary(work,
-                    $"{name}: skipped - no sidecar file found ({Path.GetFileName(sidecarPath)}); use --export to create one",
-                    important: true);
-                return;
-            }
-
-            var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
-
-            var (skip, discardNote) = EvaluateExistingChapters(info);
-            if (skip)
-            {
-                lock (_statsLock) _skipped++;
-                _progress.FinishWithSummary(work,
-                    $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
-                return;
-            }
-
-            var text = await File.ReadAllTextAsync(sidecarPath, ct);
-            var chapters = _options.SimpleMetadata
-                ? ChapterSidecar.ParseSimple(text, sidecarPath)
-                : ChapterSidecar.ParseFfMetadata(text, sidecarPath);
-            RecordProcessed(watch);
-
-            if (_options.DryRun)
-            {
-                _progress.FinishWithSummary(work,
-                    $"{name}: DRY RUN - would import {chapters.Count} chapter(s) from " +
-                    $"{Path.GetFileName(sidecarPath)}{discardNote}:" +
-                    $"{Environment.NewLine}{FormatChapterListing(chapters)}");
-                return;
-            }
-
-            var backupNote = await CommitChaptersAsync(
-                new FileContext(file, name, work, log, info, ffmpeg), chapters, null, ct);
-            _progress.FinishWithSummary(work,
-                $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
-                $"{discardNote}{backupNote}");
+            await ImportOneCoreAsync(file, name, work, ffmpeg, ct);
+            pending.Progress?.MarkDone(file, null);
         }
         catch (OperationCanceledException)
         {
@@ -1050,30 +1093,109 @@ public sealed class FileProcessor
         }
     }
 
+    /// <summary>The --import pipeline for one file: read its sidecar, apply the same
+    /// pre-existing-marking policy detection uses, and write what it contains.</summary>
+    /// <param name="file">Path of the file to import chapters for.</param>
+    /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
+    /// <param name="work">Its progress tracker, already started.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ImportOneCoreAsync(
+        string file, string name, WorkTracker work, FfmpegClient ffmpeg, CancellationToken ct)
+    {
+        var watch = Stopwatch.StartNew();
+        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
+        var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
+        if (!File.Exists(sidecarPath))
+        {
+            _progress.FinishWithSummary(work,
+                $"{name}: skipped - no sidecar file found ({Path.GetFileName(sidecarPath)}); use --export to create one",
+                important: true);
+            return;
+        }
+
+        var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
+
+        var (skip, discardNote) = EvaluateExistingChapters(info);
+        if (skip)
+        {
+            lock (_statsLock) _skipped++;
+            _progress.FinishWithSummary(work,
+                $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
+            return;
+        }
+
+        var text = await File.ReadAllTextAsync(sidecarPath, ct);
+        var chapters = _options.SimpleMetadata
+            ? ChapterSidecar.ParseSimple(text, sidecarPath)
+            : ChapterSidecar.ParseFfMetadata(text, sidecarPath);
+        RecordProcessed(watch);
+
+        if (_options.DryRun)
+        {
+            _progress.FinishWithSummary(work,
+                $"{name}: DRY RUN - would import {chapters.Count} chapter(s) from " +
+                $"{Path.GetFileName(sidecarPath)}{discardNote}:" +
+                $"{Environment.NewLine}{FormatChapterListing(chapters)}");
+            return;
+        }
+
+        var backupNote = await CommitChaptersAsync(
+            new FileContext(file, name, work, log, info, ffmpeg), chapters, null, ct);
+        _progress.FinishWithSummary(work,
+            $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
+            $"{discardNote}{backupNote}");
+    }
+
     /// <summary>
-    /// Builds the ordered list of files to work on, honoring --recurse. Temporary files
-    /// created by this tool are always excluded. Internal for unit testing.
+    /// The files selected under one file or directory named on the command line, kept together
+    /// rather than merged into one flat list because a directory's own batch progress is tracked
+    /// per directory (see <see cref="BatchProgress"/>).
+    /// </summary>
+    /// <param name="Target">The file or directory as given on the command line.</param>
+    /// <param name="Files">The files selected under it, in processing order.</param>
+    internal readonly record struct TargetGroup(CliOptions.Target Target, List<string> Files);
+
+    /// <summary>
+    /// Builds the ordered list of files to work on across every command line target, honoring
+    /// --recurse. Temporary files created by this tool are always excluded. Internal for unit
+    /// testing.
     /// </summary>
     /// <param name="suffixes">Case-insensitive file name suffixes to accept.</param>
     internal List<string> EnumerateTargets(string[] suffixes)
+        => [.. EnumerateTargetGroups(suffixes).SelectMany(g => g.Files)];
+
+    /// <summary>
+    /// Enumerates every command line target, in the order given, keeping each one's files
+    /// separate. A file reachable from more than one target - the same path named twice, or one
+    /// listed directory nested inside another - is only ever returned once, under the target that
+    /// reached it first.
+    /// </summary>
+    /// <param name="suffixes">Case-insensitive file name suffixes to accept.</param>
+    internal List<TargetGroup> EnumerateTargetGroups(string[] suffixes)
     {
-        IEnumerable<string> candidates;
-        if (_options.TargetIsDirectory)
-        {
-            var searchOption = _options.Recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-            candidates = Directory.EnumerateFiles(_options.TargetPath, "*", searchOption);
-        }
-        else
-        {
-            candidates = [_options.TargetPath];
-        }
+        var seen = new HashSet<string>(CliOptions.PathComparer);
+        return [.. _options.Targets.Select(target => new TargetGroup(
+            target,
+            [.. SelectFiles(target, suffixes).Where(f => seen.Add(CliOptions.NormalizePath(f)))]))];
+    }
+
+    /// <summary>Applies the extension, temporary-file, backup and --filter rules to one target's
+    /// candidates and sorts what survives.</summary>
+    /// <param name="target">The file or directory to look at.</param>
+    /// <param name="suffixes">Case-insensitive file name suffixes to accept.</param>
+    private IEnumerable<string> SelectFiles(CliOptions.Target target, string[] suffixes)
+    {
+        var candidates = target.IsDirectory
+            ? Directory.EnumerateFiles(target.Path, "*",
+                _options.Recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
+            : [target.Path];
 
         return candidates
             .Where(f => suffixes.Any(s => f.EndsWith(s, StringComparison.OrdinalIgnoreCase)))
             .Where(f => !f.Contains(".abchapterize.", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.Revert || !f.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.FilterRegex == null || _options.FilterRegex.IsMatch(f))
-            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
     }
 }

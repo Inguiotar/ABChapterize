@@ -43,6 +43,11 @@ Prebuilt binaries for Windows and Linux are available on the
 - **Processes batches in parallel** — multiple files at once, auto-throttled to
   live CPU load (and capped at 1 concurrent file on GPU backends by default,
   for VRAM/context safety); override with `--jobs`.
+- **Batches survive being interrupted** — name as many files and folders as you
+  like in one command; each folder quietly keeps track of what is already done
+  while it is being worked on, so a run stopped by Ctrl+C, a crash or a power
+  loss picks up where it left off when you run it again. A run that finishes
+  normally cleans up after itself.
 - **Detects the language automatically** — by default, each file's language
   is detected from a short clip before transcription and used just for that
   file (falling back to English when the detection is inconclusive), so a
@@ -112,6 +117,10 @@ don't like the result.
 ```sh
 # A whole audiobook collection, subfolders included, keeping backups:
 abchapterize --recurse --backup "D:\Audiobooks"
+
+# Several folders and single files in one go, in the order given. If this run
+# is interrupted, repeating the command resumes it instead of starting over:
+abchapterize --recurse "D:\Audiobooks" "E:\New arrivals" "F:\one-off.m4b"
 
 # A mixed-language collection: no --lang needed, each file's language is
 # detected automatically and localizes "Kapitel"/"Chapter"/etc. per file:
@@ -211,6 +220,7 @@ when chapters are written. The most useful knobs:
 | `-E`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. |
 | `-I`, `--import` | Skip Whisper entirely and write chapters from a previously exported sidecar file instead — for reapplying a hand-corrected result. |
 | `-S`, `--simple-metadata` | Use a plain `H:MM:SS.fff  Title` sidecar format instead of FFMETADATA for `--export`/`--import`. |
+| `--ignore-progress` | Start every listed folder over instead of resuming it. While a folder is being processed, the files finished so far are recorded in an `.abchapterize-progress` file inside it, which is deleted again as soon as that folder is done — so an interrupted run resumes by itself when the same command is run again. Progress recorded under different options is discarded automatically, so this is only needed to redo files the very same command already finished. |
 | `-J`, `--jobs <n\|auto>` | Number of files processed concurrently (default: `auto` — adjusted between 1 and a hardware-derived ceiling based on live CPU load). `-J 1` forces strictly sequential processing. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`). Decimal

@@ -99,7 +99,6 @@ internal static class PhraseMatching
                 }
             }
 
-            // Map the match position back to the segment that contains it.
             var segIndex = 0;
             for (var i = 0; i < segments.Count; i++)
             {

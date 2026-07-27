@@ -3,6 +3,8 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using ABChapterize.Concurrency;
 using ABChapterize.Detection;
@@ -45,6 +47,15 @@ public sealed class CliOptions
     /// --filter and the output options, the same restriction <see cref="Revert"/> has.
     /// </summary>
     public bool NoOp { get; private set; }
+
+    /// <summary>
+    /// Ignore (and overwrite) the batch progress file a previous, interrupted run may have left
+    /// in a directory given on the command line (--ignore-progress), processing every selected
+    /// file again instead of resuming where that run stopped. See
+    /// <see cref="ABChapterize.Processing.BatchProgress"/> for the checkpointing itself. Unrelated
+    /// to the ".missing-marks" auto-resume of an individual file, which is governed by --force.
+    /// </summary>
+    public bool IgnoreProgress { get; private set; }
 
     /// <summary>
     /// Two-letter ISO 639-1 language hint for Whisper, or "auto" (--lang / -l, default "auto").
@@ -127,14 +138,13 @@ public sealed class CliOptions
     /// so nothing notices it is gone and the file is written out looking complete.
     /// </para>
     /// <para>
-    /// Off by default because the cost is paid on every file, every run, whether or not anything
-    /// is wrong: the region is a whole chapter long in a healthy book, and unlike a gap scan there
-    /// is no set of expected numbers to satisfy, so nothing can stop it early - it always runs to
-    /// the end of the file. Measured on this project's own hardware, the default turbo model
-    /// transcribes at roughly 5.7x real time, making a 30-minute final chapter about five minutes
-    /// of extra work per file; heavier models are slower still. Worth it when a book's last
-    /// chapter genuinely matters, wasteful as a blanket default - the same reasoning that keeps
-    /// pass 2.5 opt-in.
+    /// Off by default because the cost is paid on every file, every run, whether or not anything is
+    /// wrong: the region is a whole chapter long in a healthy book, and with no expected numbers to
+    /// satisfy nothing can stop it early - it always runs to the end of the file. Measured on this
+    /// project's own hardware, the default turbo model transcribes at roughly 5.7x real time, so a
+    /// 30-minute final chapter costs about five minutes per file; heavier models are slower still.
+    /// Worth it when a book's last chapter genuinely matters, wasteful as a blanket default - the
+    /// same reasoning that keeps pass 2.5 opt-in.
     /// </para>
     /// <para>
     /// Does nothing when no chapter was found at all (there is no "last chapter" to scan from, and
@@ -148,13 +158,12 @@ public sealed class CliOptions
     /// <summary>
     /// Minutes of a file's play time Pass 2 may probe without finding a single chapter before
     /// giving up on it outright (--early-abort / -a, default 60; 0 disables the feature
-    /// entirely). Always active by default - guards against burning a full, expensive
-    /// whole-book transcription on a file that plainly is not going to yield any chapters
-    /// (wrong --chapter-phrase, wrong --lang, or a book that just announces chapters
-    /// differently). Only ever applies to a fresh, from-scratch detection run: a --verify gap
-    /// recovery or a ".missing-marks" resume always seeds at least one already-confirmed
-    /// chapter, so <see cref="ChapterDetector"/> never aborts those early. An aborted file is
-    /// left unchanged, exactly as if no chapter phrases had been found after a full scan.
+    /// entirely). Active by default - it guards against burning a whole-book transcription on a
+    /// file that plainly will not yield any chapters (wrong --chapter-phrase, wrong --lang, or a
+    /// book that announces chapters differently). Only applies to a fresh, from-scratch run: a
+    /// --verify gap recovery or a ".missing-marks" resume always seeds at least one confirmed
+    /// chapter, so <see cref="ChapterDetector"/> never aborts those early. An aborted file is left
+    /// unchanged, exactly as if a full scan had found no chapter phrases.
     /// </summary>
     public double EarlyAbortMinutes { get; private set; } = 60;
 
@@ -162,20 +171,16 @@ public sealed class CliOptions
     /// The chapter number this book is expected to start at (--expected-start-chapter / -e), for
     /// a split-book part that does not begin at chapter 1. Null (the default) means no
     /// expectation: Pass 2's first find, whatever its number, is accepted outright and <see
-    /// cref="ABChapterize.Detection.GapPlanning.FindGaps"/> never hunts for anything below it -
-    /// today's behavior, unchanged. When set,
-    /// <see cref="ABChapterize.Detection.GapPlanning.FindGaps"/> hunts the leading gap - down
-    /// to this number, instead of never - for any missing chapters below the first one currently
-    /// known, via Pass 3, exactly like an interior gap; this applies regardless of which
-    /// <see cref="ChapterDetector"/> entry point is running, so a ".missing-marks" resume of a
-    /// leading gap keeps re-deriving the same gap it was tagged with. If Pass 3 cannot find them
-    /// either, the file is tagged with a ".missing-marks-..." suffix, exactly as an unresolved
-    /// interior gap already is. Separately, and only for a fresh, from-scratch detection run (the
-    /// same restriction as <see cref="EarlyAbortMinutes"/> - a --verify gap recovery or a
-    /// ".missing-marks" resume always seeds at least one already-confirmed chapter, so this check
-    /// never fires for those), the file is aborted outright, left unchanged, if the very first
-    /// chapter Pass 2 finds is numbered below this value - almost certainly the wrong file,
-    /// phrase or language, not a gap worth hunting for.
+    /// cref="ABChapterize.Detection.GapPlanning.FindGaps"/> never hunts below it. When set,
+    /// <see cref="ABChapterize.Detection.GapPlanning.FindGaps"/> hunts the leading gap down to this
+    /// number via Pass 3, exactly like an interior gap, regardless of which
+    /// <see cref="ChapterDetector"/> entry point is running - so a ".missing-marks" resume of a
+    /// leading gap keeps re-deriving the gap it was tagged with. If Pass 3 cannot find them either,
+    /// the file is tagged ".missing-marks-...", as an unresolved interior gap is. Separately, and
+    /// only for a fresh run (the same restriction as <see cref="EarlyAbortMinutes"/>, for the same
+    /// reason), the file is aborted and left unchanged if the very first chapter Pass 2 finds is
+    /// numbered below this value - almost certainly the wrong file, phrase or language rather than
+    /// a gap worth hunting for.
     /// </summary>
     public int? ExpectedStartChapter { get; private set; }
 
@@ -211,14 +216,13 @@ public sealed class CliOptions
     /// previous chapter's actual trailing narration - or, where two jingles play back to back
     /// with an audible break between them, to the second one's start rather than in front of the
     /// first - and marks right there; see
-    /// <see cref="JingleGeometry.ComputeMarkBeforeJingle"/> for the mechanics. Being built on
-    /// top of default-mode placement rather than replacing it outright is what makes this
-    /// compatible with <see cref="PreciseMark"/>, unlike this tool's original "--jingle" mode this
-    /// option is descended from. Because <see cref="PreciseMark"/> is on unless <see
-    /// cref="QuickMarks"/> asks otherwise, the mark the walk starts from is normally a confirmed
-    /// announcement onset, which is what makes the walked result trustworthy on the VAD/silence
-    /// heuristics above alone; only when that confirmation did not happen is the walked result
-    /// itself re-checked - see <see cref="PreciseMarkRefiner"/>'s
+    /// <see cref="JingleGeometry.ComputeMarkBeforeJingle"/> for the mechanics. Building on top of
+    /// default-mode placement instead of replacing it is what makes this compatible with
+    /// <see cref="PreciseMark"/>, unlike the original "--jingle" mode it descends from. Since
+    /// <see cref="PreciseMark"/> is on unless <see cref="QuickMarks"/> asks otherwise, the walk
+    /// normally starts from a confirmed announcement onset, which is what makes its result
+    /// trustworthy on the VAD/silence heuristics alone; only without that confirmation is the
+    /// walked result itself re-checked - see <see cref="PreciseMarkRefiner"/>'s
     /// <c>VerifyMarkBeforeJingleAsync</c>. Without this option, see
     /// <see cref="DetectionTuning.DefaultMarkLeadSeconds"/> for the placement used instead.
     /// </summary>
@@ -243,25 +247,22 @@ public sealed class CliOptions
     /// opt-out while the detection engine reads it as a capability, so that the two never have to
     /// reason about a double negative.
     /// <para>
-    /// If the chapter phrase is the first thing heard at the mark, it is left alone (the common
-    /// case, and the only cost paid for a chapter that was already right). If not - typically
-    /// because the mark landed on a jingle's own spurious VAD "speech" blip rather than the real
-    /// announcement - each subsequent VAD speech-segment start after the mark is checked the same
-    /// way in turn until one succeeds and the next one after it fails again; only that
-    /// success-then-fail pattern confirms the phrase truly begins at the earlier candidate,
-    /// rather than at some other unrelated false positive further inside the jingle. If that
-    /// forward search finds nothing, the same check runs backward through VAD speech-segment
-    /// starts before the mark instead, for the rarer opposite failure - the mark landing
-    /// generously past the true announcement rather than short of it. A chapter whose phrase can
-    /// never be confirmed either way keeps its original mark rather than guessing.
+    /// If the chapter phrase is the first thing heard at the mark, it is left alone - the common
+    /// case, and the only cost paid for a chapter that was already right. If not (typically because
+    /// the mark landed on a jingle's spurious VAD "speech" blip rather than the announcement), each
+    /// subsequent VAD speech-segment start after the mark is checked in turn until one succeeds and
+    /// the next fails again; only that success-then-fail pattern confirms the phrase truly begins at
+    /// the earlier candidate rather than at another false positive deeper inside the jingle. If the
+    /// forward search finds nothing, the same check runs backward through the speech-segment starts
+    /// before the mark, for the rarer opposite failure of a mark landing generously past the true
+    /// announcement. A chapter whose phrase is never confirmed keeps its original mark.
     /// </para>
     /// <para>
-    /// Costs one or more extra Whisper transcriptions per chapter - most of all for chapters
-    /// preceded by a jingle with several spurious VAD blips, since each one needs its own - which
-    /// is what <see cref="QuickMarks"/> exists to skip; see <see cref="ChapterDetector"/> for the
-    /// mechanics. Combines with <see cref="MarkBeforeJingle"/>, which takes the mark this
-    /// refinement settled on one step further, walking it back to the jingle's own start - and
-    /// whose own walked result is then verified in turn, the same way a default-mode mark is.
+    /// Costs one or more extra Whisper transcriptions per chapter - most of all where a jingle
+    /// produces several spurious VAD blips, since each needs its own - which is what
+    /// <see cref="QuickMarks"/> exists to skip; see <see cref="ChapterDetector"/> for the mechanics.
+    /// Combines with <see cref="MarkBeforeJingle"/>, which walks the refined mark one step further
+    /// back to the jingle's start - and whose walked result is then verified in turn.
     /// </para>
     /// </summary>
     public bool PreciseMark => !QuickMarks;
@@ -284,12 +285,11 @@ public sealed class CliOptions
     /// <see cref="RunVadPrePass"/>): <see cref="ChapterDetector"/> starts probing with the
     /// <see cref="MaxJingleSeconds"/> ceiling, then - from the second jingle mark found (the
     /// same reasoning as <see cref="AutoMinSilence"/>: the gap before the first mark is not
-    /// necessarily representative) - resizes the probe window to 1.25x the longest jingle
-    /// actually observed so far plus margin (both up and down as the observed maximum changes),
-    /// capped at the original ceiling. Chapters with no jingle (or an ultra-short one) are
-    /// excluded from that, since some audiobooks only play the jingle for some chapters and
-    /// such a chapter says nothing about how long the window needs to be for one that does have
-    /// a full jingle. "auto" can also be given explicitly for clarity.
+    /// necessarily representative) - resizes the probe window to 1.25x the longest jingle observed
+    /// so far plus margin, both up and down as that maximum changes, capped at the original
+    /// ceiling. Chapters with no jingle (or an ultra-short one) are excluded: some audiobooks play
+    /// the jingle only for some chapters, and such a chapter says nothing about the window a full
+    /// jingle needs. "auto" can also be given explicitly for clarity.
     /// </summary>
     public bool AutoMaxJingle { get; private set; } = true;
 
@@ -406,11 +406,22 @@ public sealed class CliOptions
     /// <summary>The file extensions to process: --filter's list, or all supported ones.</summary>
     public string[] EffectiveExtensions => FilterExtensions ?? SupportedExtensions;
 
-    /// <summary>The file or directory to process (last command line argument).</summary>
-    public string TargetPath { get; private set; } = "";
+    /// <summary>
+    /// One file or directory named at the end of the command line.
+    /// </summary>
+    /// <param name="Path">The path exactly as given, so console output echoes what was typed.</param>
+    /// <param name="IsDirectory">True for a directory, false for a single file.</param>
+    public readonly record struct Target(string Path, bool IsDirectory);
 
-    /// <summary>True when the target path refers to a directory, false when it refers to a file.</summary>
-    public bool TargetIsDirectory { get; private set; }
+    /// <summary>
+    /// The files and directories to process, in command line order and with duplicates
+    /// removed. Files and directories may be mixed freely; a path covered by an earlier
+    /// directory is still only processed once (see the file enumeration in
+    /// <see cref="ABChapterize.Processing.FileProcessor"/>).
+    /// </summary>
+    public IReadOnlyList<Target> Targets => _targets;
+
+    private readonly List<Target> _targets = [];
 
     /// <summary>
     /// Compiled case-insensitive regular expression used to find the chapter phrase in transcribed text.
@@ -471,10 +482,44 @@ public sealed class CliOptions
     /// </summary>
     private bool AnyProcessingOptionGiven
         => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || TrailingScan || DryRun
-           || Export || Import || SimpleMetadata || Verify || Jobs != null
+           || Export || Import || SimpleMetadata || Verify || IgnoreProgress || Jobs != null
            || _langSet || _phraseSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _titleSet || _introSet || _jingleLenSet || _minSilenceSet || _earlyAbortSet
            || _expectedStartSet;
+
+    /// <summary>
+    /// Short hash of every option that changes what a run does to a file - the language and
+    /// phrase, the models, the detection tuning and safety nets, the file selection, the output
+    /// mode. Options that only change what the run <i>looks like</i> (--quiet, --verbose,
+    /// --no-bar, --summary, --jobs, --cpu-only) are deliberately left out, so adding one of those
+    /// to an interrupted run's command line still resumes it.
+    /// <para>
+    /// <see cref="ABChapterize.Processing.BatchProgress"/> stores this alongside the files a run
+    /// finished and refuses to resume progress recorded under a different fingerprint: those files
+    /// were processed by a different command, so counting them as done would silently leave the
+    /// new one's work undone. Derived from the resolved values rather than the raw arguments, so
+    /// "-rb" and "--recurse --backup" agree.
+    /// </para>
+    /// </summary>
+    public string RunFingerprint
+    {
+        get
+        {
+            var relevant = string.Join('\n', [
+                $"recurse={Recurse}", $"backup={Backup}", $"force={Force}",
+                $"lang={Language}", $"phrase={ChapterPhrase}", $"title={Title}", $"intro={IntroTitle}",
+                $"model={Model}", $"pass3={Pass3Model}",
+                $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
+                $"earlyabort={EarlyAbortMinutes}", $"expectedstart={ExpectedStartChapter}",
+                $"trailingscan={TrailingScan}", $"verify={Verify}", $"verifythreshold={VerifyFailThreshold}",
+                $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}",
+                $"maxjingle={MaxJingleSeconds}/{AutoMaxJingle}", $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
+                $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
+                $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
+            ]);
+            return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(relevant)))[..16];
+        }
+    }
 
     /// <summary>
     /// File extensions of the container formats that ffmpeg can both read and write chapter
@@ -542,12 +587,22 @@ public sealed class CliOptions
     {
         var o = new CliOptions();
         var i = 0;
+        var targetArgs = new List<string>();
 
         string NextParam(string optName)
         {
             if (i + 1 >= args.Length)
                 throw new CliError($"Option {optName} requires a parameter.");
             return args[++i];
+        }
+
+        // Every option must precede the target paths; once the first bare argument has been
+        // seen, everything left on the command line is a target.
+        void RejectTrailingOption(string optName)
+        {
+            if (targetArgs.Count > 0)
+                throw new CliError(
+                    $"Option {optName} must precede the file/directory arguments, which end the command line.");
         }
 
         for (; i < args.Length; i++)
@@ -558,11 +613,13 @@ public sealed class CliOptions
 
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
+                RejectTrailingOption(arg);
                 if (!o.TryApplyFlag(arg) && !o.TryApplyValueOption(arg, () => NextParam(arg)))
                     throw new CliError($"Unknown option: {arg}");
             }
             else if (arg.StartsWith('-') && arg.Length > 1)
             {
+                RejectTrailingOption(arg);
                 // Short options; flags without parameters may be collapsed (e.g. -rb).
                 var letters = arg[1..];
                 for (var k = 0; k < letters.Length; k++)
@@ -581,14 +638,11 @@ public sealed class CliOptions
             }
             else
             {
-                // First non-option argument must be the last argument (the target path).
-                if (i != args.Length - 1)
-                    throw new CliError("The file/directory must be the last argument; options must precede it.");
-                o.TargetPath = arg;
+                targetArgs.Add(arg);
             }
         }
 
-        if (o.TargetPath.Length == 0)
+        if (targetArgs.Count == 0)
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
@@ -635,9 +689,8 @@ public sealed class CliOptions
             throw new CliError($"Invalid model \"{o.Model}\": expected one of {string.Join(", ", ModelNames)}.");
         o.Model = o.Model.ToLowerInvariant();
 
-        // The pass-3 model defaults to the main model, so leaving --pass3-model off means pass 3
-        // uses the same model as pass 2 - the previous, single-model behavior - and leaves
-        // Pass3ModelIsUpgrade false, so pass 2.5 stays off too.
+        // Defaulting the pass-3 model to the main one also leaves Pass3ModelIsUpgrade false, so
+        // pass 2.5 stays off unless --pass3-model actually names a heavier model.
         if (!o._pass3ModelSet)
             o.Pass3Model = o.Model;
         else if (!ModelNames.Contains(o.Pass3Model.ToLowerInvariant()))
@@ -647,31 +700,11 @@ public sealed class CliOptions
         if (o.ChapterPhrase.Length == 0)
             throw new CliError("The chapter phrase must not be empty.");
 
-        if (File.Exists(o.TargetPath))
-        {
-            o.TargetIsDirectory = false;
-            if (o.Recurse)
-                throw new CliError("--recurse can only be used with a directory, not with a single file.");
-            if (!o.Revert)
-            {
-                var ext = Path.GetExtension(o.TargetPath).ToLowerInvariant();
-                if (!SupportedExtensions.Contains(ext))
-                    throw new CliError($"Unsupported file type \"{ext}\": only {SupportedExtensionsText} are supported.");
-            }
-        }
-        else if (Directory.Exists(o.TargetPath))
-        {
-            o.TargetIsDirectory = true;
-        }
-        else
-        {
-            throw new CliError($"File or directory not found: {o.TargetPath}");
-        }
+        o.ResolveTargets(targetArgs);
 
-        // Resolve the run's default profile: for an explicit --lang this localizes the
-        // chapter phrase, title word and intro title unless given explicitly (used for
-        // every file); with auto-detection this is just the English fallback profile,
-        // and ChapterDetector resolves a fresh one per file instead - see ResolveProfile.
+        // With an explicit --lang this localizes the chapter phrase, title word and intro title
+        // (unless given explicitly) for every file; with auto-detection it is only the English
+        // fallback, and ChapterDetector resolves a fresh profile per file - see ResolveProfile.
         o.DefaultProfile = o.ResolveProfile(o.AutoLanguage ? "en" : o.Language);
         o.ChapterPhrase = o.DefaultProfile.ChapterPhrase;
         o.Title = o.DefaultProfile.Title;
@@ -680,6 +713,59 @@ public sealed class CliOptions
         o.PhraseHasNumberGroup = o.DefaultProfile.PhraseHasNumberGroup;
         return o;
     }
+
+    /// <summary>
+    /// String comparer for whole paths, matching how the file system itself compares them:
+    /// case-insensitively on Windows, case-sensitively elsewhere. Used to recognize the same
+    /// target given twice, and by the file enumeration to keep an overlapping directory from
+    /// yielding the same file more than once.
+    /// </summary>
+    public static StringComparer PathComparer
+        => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    /// <summary>
+    /// Validates the paths given at the end of the command line and fills <see cref="Targets"/>
+    /// with them, dropping repetitions of a path already listed. Each must exist; a plain file
+    /// must additionally have a supported extension (except under --revert, which is given the
+    /// original name rather than the ".bak" one).
+    /// </summary>
+    /// <param name="targetArgs">The bare arguments collected during parsing, in order.</param>
+    /// <exception cref="CliError">Thrown when a path does not exist, names an unsupported file
+    /// type, or when --recurse was given without a single directory to descend into.</exception>
+    private void ResolveTargets(List<string> targetArgs)
+    {
+        var seen = new HashSet<string>(PathComparer);
+        foreach (var path in targetArgs)
+        {
+            if (!seen.Add(NormalizePath(path)))
+                continue;
+            if (File.Exists(path))
+            {
+                var ext = Path.GetExtension(path).ToLowerInvariant();
+                if (!Revert && !SupportedExtensions.Contains(ext))
+                    throw new CliError(
+                        $"Unsupported file type \"{ext}\" ({path}): only {SupportedExtensionsText} are supported.");
+                _targets.Add(new Target(path, IsDirectory: false));
+            }
+            else if (Directory.Exists(path))
+            {
+                _targets.Add(new Target(path, IsDirectory: true));
+            }
+            else
+            {
+                throw new CliError($"File or directory not found: {path}");
+            }
+        }
+
+        if (Recurse && !_targets.Any(t => t.IsDirectory))
+            throw new CliError("--recurse can only be used with a directory, and none was given.");
+    }
+
+    /// <summary>Reduces a path to the absolute, separator-normalized form two spellings of the
+    /// same target share, so they can be recognized as one.</summary>
+    /// <param name="path">The path as given on the command line.</param>
+    public static string NormalizePath(string path)
+        => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
     /// <summary>
     /// Applies a parameterless flag option given by its long name.
@@ -709,6 +795,7 @@ public sealed class CliOptions
             case "--import": Import = true; return true;
             case "--simple-metadata": SimpleMetadata = true; return true;
             case "--verify": Verify = true; return true;
+            case "--ignore-progress": IgnoreProgress = true; return true;
             default: return false;
         }
     }
@@ -931,12 +1018,16 @@ public sealed class CliOptions
         Supported formats: {SupportedExtensionsText} (formats whose containers can hold chapter marks)
 
         Usage:
-          abchapterize [options] <file-or-directory>
-          abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
-          abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>
+          abchapterize [options] <file-or-directory>...
+          abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
+          abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
           abchapterize --help | -?
 
-        Options (must precede the file/directory argument):
+        Any number of files and directories may be given, mixed freely; they are processed in
+        the order listed, and a file named twice (or already covered by a listed directory) is
+        still only processed once.
+
+        Options (must precede the file/directory arguments):
 
         File selection:
           -r, --recurse             Recursively descend into subdirectories (directories only).
@@ -1147,6 +1238,17 @@ public sealed class CliOptions
                                     regexp or extension list actually matches the intended files
                                     before a real run. Requires --filter; combinable with
                                     --recurse and the output options, but nothing else.
+              --ignore-progress     Start every listed directory over instead of resuming it.
+                                    While a directory is being processed, the files finished so
+                                    far are recorded in an ".abchapterize-progress" file inside
+                                    it, which is deleted again as soon as that directory is
+                                    done; a run cut short by Ctrl+C, a crash or a power loss
+                                    therefore picks up where it left off when the same command
+                                    is run again. Progress recorded under different options is
+                                    discarded automatically, so this is only needed to redo
+                                    files the very same command already finished. Unrelated to
+                                    the ".missing-marks" resume of an individual file, which
+                                    --force governs.
 
         Logging & display:
           -q, --quiet               Suppress per-file output; warnings and errors are still shown.

@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>ABChapterize</RootNamespace>
     <AssemblyName>abchapterize</AssemblyName>
-    <Version>0.9.0</Version>
+    <Version>0.9.1</Version>
     <!-- Keep the informational version (shown by the version option and in the usage
          note) a plain version number instead of appending "+<git commit hash>". -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
@@ -113,12 +113,14 @@
   <!-- Ship the docs, third-party notices/license texts, and readme alongside the executable:
        LICENSE plus the licenses/ glob satisfy the "include the copyright notice" redistribution
        condition of ABChapterize's own MIT license and of every bundled MIT component, and
-       doc/+README.md keep the manual available in every release.
+       doc/+README.md+CHANGELOG.md keep the manual and the release history available in every
+       release.
        Globs so new files dropped into these folders are picked up automatically. -->
   <ItemGroup>
     <None Include="LICENSE" CopyToPublishDirectory="PreserveNewest" />
     <None Include="THIRD-PARTY-NOTICES.md" CopyToPublishDirectory="PreserveNewest" />
     <None Include="README.md" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="CHANGELOG.md" CopyToPublishDirectory="PreserveNewest" />
     <None Include="doc\**\*" CopyToPublishDirectory="PreserveNewest" Link="doc\%(RecursiveDir)%(Filename)%(Extension)" />
     <None Include="licenses\**\*" CopyToPublishDirectory="PreserveNewest" Link="licenses\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>

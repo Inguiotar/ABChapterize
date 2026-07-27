@@ -193,15 +193,13 @@ internal static class GapPlanning
 
     /// <summary>
     /// Finds the silence that truly precedes a matched phrase, independent of which candidate
-    /// silence actually triggered the probe. A probe window can span the trailing speech of the
-    /// previous chapter, an unrelated in-text pause long enough to itself have passed the
-    /// --min-silence-length threshold, the real inter-chapter silence, the jingle (when the VAD
-    /// pre-pass ran) and finally the phrase - so trusting the probe's own triggering silence,
-    /// both for the --mark-before-jingle mark position and for the --min-silence-length/
-    /// --max-jingle-length auto mechanisms, would anchor to the wrong (earlier, false) silence
-    /// whenever that
-    /// happens. Returns null when no silence between the window start and the phrase was found,
-    /// meaning the triggering silence (ending exactly at windowStart) was the real one after all.
+    /// silence triggered the probe. A probe window can span the previous chapter's trailing speech,
+    /// an unrelated in-text pause long enough to pass --min-silence-length itself, the real
+    /// inter-chapter silence, the jingle (with the VAD pre-pass) and finally the phrase - so
+    /// trusting the triggering silence would anchor the --mark-before-jingle position and the
+    /// --min-silence-length/--max-jingle-length auto mechanisms to the wrong, earlier one. Returns
+    /// null when no silence lies between the window start and the phrase, meaning the triggering
+    /// silence (ending exactly at windowStart) was the real one after all.
     /// </summary>
     /// <param name="windowStart">Absolute start of the probe window (or of the lookback range)
     /// in seconds.</param>
@@ -226,18 +224,15 @@ internal static class GapPlanning
     /// swallows it whole; strict at reuse time, so the fresh tail decode is never empty).
     /// <para>
     /// Two callers with different rules, selected via <paramref name="allowBeyondBorder"/>.
-    /// <see cref="PlanWindowEnd"/> (true) plans window 1's end before window 1 is decoded, so
-    /// it may place the seam anywhere within window 2 - window 1's decode is simply extended
-    /// (or shortened) to end exactly at it. The reuse-time call inside a probe (false) runs
-    /// after window 1 is already decoded: everything left of the seam is served from
-    /// window 1's cached transcript, which cannot be extended retroactively, so there the
-    /// target must <em>start</em> at or before the border. A target merely straddling the
-    /// border is still fine (the stretch past the border is inside the silence itself, so no
-    /// speech is lost), but one entirely beyond it would leave [border, seam) in neither
-    /// transcript. The border normally <em>is</em> window 1's planned seam already, which the
-    /// restricted search then re-finds at distance zero; it only genuinely decides for
-    /// overlaps that plan did not anticipate (a probe-window resize since window 1 was
-    /// probed).
+    /// <see cref="PlanWindowEnd"/> (true) plans window 1's end before it is decoded, so the seam may
+    /// go anywhere within window 2 - window 1's decode is extended or shortened to end exactly
+    /// there. The reuse-time call inside a probe (false) runs after window 1 is decoded: everything
+    /// left of the seam comes from its cached transcript, which cannot be extended retroactively, so
+    /// the target must <em>start</em> at or before the border. One merely straddling the border is
+    /// fine (the stretch past it is inside the silence, so no speech is lost), but one entirely
+    /// beyond it would leave [border, seam) in neither transcript. The border normally <em>is</em>
+    /// window 1's planned seam, which the restricted search re-finds at distance zero; it only
+    /// genuinely decides for overlaps that plan did not anticipate (a probe-window resize since).
     /// </para>
     /// </summary>
     /// <param name="windowStart">Start of window 2 (the later window's candidate start).</param>
@@ -317,15 +312,14 @@ internal static class GapPlanning
     /// with no pre-computed bulk plan to go stale). The window naturally spans
     /// <paramref name="probeSeconds"/> from its candidate start (clamped to the file end), but
     /// when the next candidate's window overlaps it, their shared border is snapped to the
-    /// nearest silence (or, when the VAD pre-pass ran, VAD non-speech region) mid-point anywhere within
-    /// that next window's natural span - see <see cref="FindOverlapSplitPoint"/> - and this
-    /// window's decode ends exactly there, be that before or beyond its natural end. The next
-    /// probe's fresh decode then starts at the very same seam (its cached-transcript reuse
-    /// re-finds the seam as the cache's end), so consecutive decodes stitch together
-    /// word-safely at a mid-silence cut with no dead (never-transcribed) stretch and no
-    /// re-decoded overlap between them. A raw-border joint remains only where the next window
-    /// contains no snap target at all - and no silence there means no chapter transition near
-    /// the border either, so a mid-word cut there costs nothing.
+    /// nearest silence (or, with the VAD pre-pass, VAD non-speech region) mid-point anywhere within
+    /// that next window's natural span - see <see cref="FindOverlapSplitPoint"/> - and this window's
+    /// decode ends exactly there, before or beyond its natural end. The next probe's fresh decode
+    /// starts at that same seam (its cached-transcript reuse re-finds it as the cache's end), so
+    /// consecutive decodes stitch together word-safely at a mid-silence cut, with no dead
+    /// (never-transcribed) stretch and no re-decoded overlap. A raw-border joint remains only where
+    /// the next window holds no snap target at all - and no silence there means no chapter
+    /// transition near the border either, so a mid-word cut costs nothing.
     /// <para>
     /// A window end that does <em>not</em> lie inside the next window (stand-alone windows,
     /// the last window, and a next window fully contained in this one) is snapped too, in a

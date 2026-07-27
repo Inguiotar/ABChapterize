@@ -58,7 +58,7 @@ public sealed class CliOptionsTests : IDisposable
         // Jingle-aware probing (the VAD pre-pass) runs by default now, even without
         // --mark-before-jingle - only --max-jingle-length 0 turns it off.
         Assert.True(o.RunVadPrePass);
-        Assert.False(o.TargetIsDirectory);
+        Assert.Equal([new CliOptions.Target(_file, IsDirectory: false)], o.Targets);
         // Mark refinement is on by default; --quick-marks is the opt-out, so it starts false
         // while PreciseMark itself starts true (asserted separately).
         Assert.True(o.PreciseMark);
@@ -462,7 +462,60 @@ public sealed class CliOptionsTests : IDisposable
     [Fact]
     public void TargetMustBeLastArgument()
     {
-        Assert.Throws<CliError>(() => CliOptions.Parse([_file, "--backup"]));
+        var ex = Assert.Throws<CliError>(() => CliOptions.Parse([_file, "--backup"]));
+        Assert.Contains("must precede the file/directory arguments", ex.Message);
+    }
+
+    [Fact]
+    public void SeveralTargets_AreKeptInOrder_FilesAndDirectoriesMixed()
+    {
+        var second = Path.Combine(_dir, "second.m4b");
+        File.WriteAllText(second, "x");
+        var o = CliOptions.Parse(["--backup", second, _dir, _file])!;
+        Assert.Equal(
+            [
+                new CliOptions.Target(second, IsDirectory: false),
+                new CliOptions.Target(_dir, IsDirectory: true),
+                new CliOptions.Target(_file, IsDirectory: false),
+            ],
+            o.Targets);
+    }
+
+    [Fact]
+    public void RepeatedTarget_IsListedOnce()
+    {
+        var o = CliOptions.Parse([_file, Path.Combine(_dir, ".", "book.m4b")])!;
+        Assert.Single(o.Targets);
+    }
+
+    [Fact]
+    public void Recurse_WithSeveralFilesButNoDirectory_IsAnError()
+    {
+        var second = Path.Combine(_dir, "second.m4b");
+        File.WriteAllText(second, "x");
+        var ex = Assert.Throws<CliError>(() => CliOptions.Parse(["--recurse", _file, second]));
+        Assert.Contains("--recurse", ex.Message);
+    }
+
+    [Fact]
+    public void Recurse_IsAccepted_WhenAtLeastOneTargetIsADirectory()
+    {
+        var o = CliOptions.Parse(["--recurse", _file, _dir])!;
+        Assert.True(o.Recurse);
+    }
+
+    [Fact]
+    public void RunFingerprint_IgnoresPresentationOnlyOptions()
+    {
+        Assert.Equal(ParseFile()!.RunFingerprint,
+            ParseFile("--quiet", "--verbose", "--no-bar", "--summary", "--jobs", "3", "--cpu-only")!.RunFingerprint);
+    }
+
+    [Fact]
+    public void RunFingerprint_ChangesWithAnOptionThatChangesTheResult()
+    {
+        Assert.NotEqual(ParseFile()!.RunFingerprint, ParseFile("--lang", "de")!.RunFingerprint);
+        Assert.NotEqual(ParseFile()!.RunFingerprint, ParseFile("--force")!.RunFingerprint);
     }
 
     [Fact]

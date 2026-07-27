@@ -367,14 +367,14 @@ ffmpeg afterwards.
 ## 6. Command line reference
 
 ```
-abchapterize [options] <file-or-directory>
-abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
-abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>
+abchapterize [options] <file-or-directory>...
+abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
+abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
 abchapterize --help | -?
 abchapterize --version
 ```
 
-Options must precede the file/directory argument, which must come last.
+Options must precede the file/directory arguments, which must come last.
 Short options that take no parameter may be collapsed: `-rb` = `-r -b`.
 Short options that take a parameter (`-l`, `-c`, `-m`, `-M`, `-x`, `-N`, `-a`,
 `-e`, `-h`, `-F`, `-X`, `-n`, `-t`, `-i`, `-J`) cannot be collapsed with
@@ -387,12 +387,16 @@ so that logs and reports stay comparable regardless of regional settings.
 
 ### Target selection
 
-`<file-or-directory>` (required, last argument)
-: A single audio file, or a directory whose supported audio files are
-  processed. Naming a file with an unsupported extension is an error.
+`<file-or-directory>...` (required, last arguments)
+: One or more audio files and/or directories, mixed freely — a directory
+  contributes its supported audio files, a file is processed on its own.
+  Naming a file with an unsupported extension is an error. Targets are
+  processed in the order given, and nothing is processed twice: a path listed
+  again, or a file a listed directory already covers, is silently dropped the
+  second time around.
 
 `-r`, `--recurse`
-: Descend into subdirectories. Only valid with a directory target.
+: Descend into subdirectories. Requires at least one directory target.
 
 `-F`, `--filter <filter>`
 : Only process matching files. Two forms, and one of each kind may be given
@@ -746,8 +750,8 @@ skipped (reported as "skipped").
   the backup renamed back. Combinable with `--recurse`, `--filter` and the
   output options (`--quiet` and `--summary` take effect; `--verbose` and
   `--no-bar` are accepted but change nothing here). All detection and safety
-  options are rejected. When a single audio file is given as the target, its
-  `.bak` neighbour is restored.
+  options are rejected. An audio file named directly has its own `.bak`
+  neighbour restored, so the suffix need not be typed out.
 
 `-O`, `--no-op`
 : Lists every file `--filter` (and `--recurse`) would select, then exits
@@ -757,6 +761,45 @@ skipped (reported as "skipped").
   `--filter`; combinable only with `--recurse` and the output options
   (`--quiet` suppresses the listing itself, leaving just `--summary`'s
   count), the same restriction `--revert` has.
+
+`--ignore-progress`
+: Start every listed directory over instead of resuming it, ignoring (and
+  replacing) the progress file described in
+  [Resuming an interrupted run](#resuming-an-interrupted-run) below. Nothing
+  else about the run changes. Not to be confused with the `.missing-marks`
+  resume of an individual file, which `--force` governs.
+
+### Resuming an interrupted run
+
+While a directory named on the command line is being processed, the files
+already finished in it are recorded in a hidden `.abchapterize-progress` file
+inside that directory. It is deleted again the moment that directory is
+finished, so a run that ends normally leaves nothing behind — but a run cut
+short by Ctrl+C, a crash or a power loss leaves the record, and running the
+same command again skips straight past those files instead of scanning the
+whole library from the top.
+
+The details worth knowing:
+
+- Each directory given on the command line keeps its own progress file, and
+  each is removed as soon as that particular directory is done.
+- A file named directly on the command line has no directory to keep a record
+  in, so it is never checkpointed.
+- `--dry-run`, `--no-op` and `--revert` never write one either — nothing they
+  do is worth not doing twice.
+- The record notes which options the run used. Change any option that affects
+  the outcome and the stale record is discarded rather than misapplied;
+  options that only change the output's appearance (`--quiet`, `--verbose`,
+  `--no-bar`, `--summary`, `--jobs`, `--cpu-only`) do not count, so those can
+  be added or dropped when resuming.
+- A file the run renamed (a `.missing-marks` tag added or dropped) is
+  recognized under either name.
+- Deleting the file by hand is always safe; it only ever costs the resume.
+- Only files the run actually finished are recorded. The one that was in
+  flight when the run died is attempted again — a killed run never leaves a
+  half-written audio file behind (see
+  [section 4](#4-how-chapters-are-written--file-safety)), so there is nothing
+  to clean up first.
 
 ### Titles
 

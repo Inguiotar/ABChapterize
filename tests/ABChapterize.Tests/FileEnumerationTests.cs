@@ -89,6 +89,36 @@ public sealed class FileEnumerationTests : IDisposable
     }
 
     [Fact]
+    public void SeveralTargets_AreEnumeratedInCommandLineOrder()
+    {
+        var parsed = CliOptions.Parse([Path.Combine(_dir, "sub"), Path.Combine(_dir, "alpha.m4b")])!;
+        var p = new FileProcessor(parsed, new ProgressRenderer(quiet: true));
+        Assert.Equal(["gamma.opus", "alpha.m4b"], Names(p, [".m4b", ".opus"]));
+    }
+
+    [Fact]
+    public void AFileCoveredByAListedDirectory_IsEnumeratedOnlyOnce()
+    {
+        // The directory comes first, so it is the one that claims the file.
+        var parsed = CliOptions.Parse(["--recurse", _dir, Path.Combine(_dir, "sub", "gamma.opus")])!;
+        var p = new FileProcessor(parsed, new ProgressRenderer(quiet: true));
+        Assert.Equal(["alpha.m4b", "beta.MP3", "gamma.opus"], Names(p, [".m4b", ".mp3", ".opus"]));
+    }
+
+    [Fact]
+    public void TargetGroups_KeepEachTargetsFilesSeparate()
+    {
+        var parsed = CliOptions.Parse([Path.Combine(_dir, "sub"), Path.Combine(_dir, "alpha.m4b")])!;
+        var p = new FileProcessor(parsed, new ProgressRenderer(quiet: true));
+        var groups = p.EnumerateTargetGroups([".m4b", ".opus"]);
+        Assert.Equal(2, groups.Count);
+        Assert.True(groups[0].Target.IsDirectory);
+        Assert.Equal(["gamma.opus"], groups[0].Files.Select(Path.GetFileName));
+        Assert.False(groups[1].Target.IsDirectory);
+        Assert.Equal(["alpha.m4b"], groups[1].Files.Select(Path.GetFileName));
+    }
+
+    [Fact]
     public void MissingMarksPath_TagsTheStillMissingChapters_BeforeTheExtension()
     {
         var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.m4b"), [3, 7, 8]);

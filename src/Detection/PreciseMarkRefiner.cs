@@ -115,26 +115,23 @@ internal sealed class PreciseMarkRefiner
     /// </para>
     /// <para>
     /// The two directions are trusted asymmetrically, for two distinct failure shapes. A forward
-    /// success only locks in once the <em>next</em> forward candidate afterward fails - that
+    /// success only locks in once the <em>next</em> forward candidate fails - that
     /// success-then-fail pattern confirms the phrase truly begins at the earlier candidate, immune
-    /// to a single stray false positive elsewhere in the jingle, since a real chapter
-    /// announcement's own audio ends and narration (or some unrelated cue) resumes right after it.
-    /// A backward success, by contrast, is accepted the moment it is heard, with no further
-    /// checking: <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/>'s swallowed-blip clustering can
-    /// occasionally promote a later, unrelated blip inside an over-merged jingle region over the
+    /// to a stray false positive elsewhere in the jingle, since a real announcement's audio ends and
+    /// narration (or an unrelated cue) resumes right after it. A backward success is accepted the
+    /// moment it is heard: <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/>'s swallowed-blip
+    /// clustering can promote a later, unrelated blip inside an over-merged jingle region over the
     /// announcement's own earlier one, landing <paramref name="mark"/> generously past the true
     /// onset instead of short of it (confirmed live on chapters whose true onset sat mere seconds
     /// before what the heuristic reported - Perry Rhodan "Die Dritte Macht", chapters 8 and 20,
-    /// 2026-07-24) - once the search has walked back past that later blip to the real
-    /// announcement, there is nothing earlier still worth preferring over it. Because forward
-    /// needs corroboration but backward does not, the instant any forward candidate succeeds,
-    /// backward is abandoned for the rest of this search - only that forward success still needs
-    /// confirming, by further forward candidates alone. Both spans are bounded to the same
-    /// jingle-plus-phrase distance from <paramref name="mark"/>, so neither direction can wander
-    /// into a neighbouring chapter's own territory. This deliberately does not touch <see
-    /// cref="JingleGeometry.ResolveDefaultPhraseOnset"/> itself - default-mode marking, which is all --quick-marks
-    /// leaves in place, must stay exactly as heuristically accurate as it already is, since it
-    /// alone is what makes quick marks usable for jumping to a chapter.
+    /// 2026-07-24), and once the search has walked back past that blip to the real announcement
+    /// there is nothing earlier worth preferring. Because forward needs corroboration and backward
+    /// does not, the instant a forward candidate succeeds backward is abandoned for the rest of the
+    /// search. Both spans are bounded to the same jingle-plus-phrase distance from
+    /// <paramref name="mark"/>, so neither direction can wander into a neighbouring chapter.
+    /// <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> itself is deliberately untouched:
+    /// default-mode marking is all --quick-marks leaves in place, and its heuristic accuracy alone
+    /// is what makes quick marks usable for jumping to a chapter.
     /// </para>
     /// <para>
     /// If round 1 never confirms anything in either direction - it relies entirely on
@@ -154,13 +151,12 @@ internal sealed class PreciseMarkRefiner
     /// <c>precise</c> prototype) before this was ported here.
     /// </para>
     /// <para>
-    /// Final cleanup step, applied regardless of which of the above produced the mark (even one
-    /// left exactly as given): <see cref="SnapToQuietestPointAsync"/> nudges it backward - never
-    /// later - to a quieter point within <see cref="PreciseMarkQuietSnapRadiusSeconds"/> before it,
-    /// provided one is at least <see cref="PreciseMarkQuietSnapMinImprovementDb"/> quieter than the
-    /// mark's own position, so a player seeking to it starts playback in close to true silence
-    /// rather than risking an audible "plop" from starting abruptly mid-waveform - without ever
-    /// risking eating into the announcement itself by moving later.
+    /// Final cleanup step, applied to whichever mark the above produced (even one left exactly as
+    /// given): <see cref="SnapToQuietestPointAsync"/> nudges it backward - never later, which could
+    /// eat into the announcement - to a quieter point within
+    /// <see cref="PreciseMarkQuietSnapRadiusSeconds"/> before it, provided one is at least
+    /// <see cref="PreciseMarkQuietSnapMinImprovementDb"/> quieter, so a player seeking there starts
+    /// in near-silence rather than with an audible "plop" mid-waveform.
     /// </para>
     /// </summary>
     /// <param name="mark">The mark <see cref="JingleGeometry.RefineDefaultMark"/> already computed.</param>
@@ -240,17 +236,16 @@ internal sealed class PreciseMarkRefiner
     /// announcement <em>not</em> immediately audible any more" - the condition that confirms the
     /// walk reached the far side of the jingle rather than stopping short of it.
     /// <para>
-    /// Deliberately <em>not</em> run when the phrase was heard, which is the overwhelmingly common
-    /// case. There, <paramref name="originalMark"/> is known to sit <see
-    /// cref="DefaultMarkLeadSeconds"/> before a real announcement onset, and the walk only ever
-    /// retreats from it, so the walked mark cannot physically sit on the announcement's audio -
-    /// the very failure this check was originally written (2026-07-26) to catch. Against a
-    /// confirmed mark the check degenerates into an unreliable, one-transcription-per-chapter
-    /// restatement of the arithmetic <c>originalMark - walked</c>: it fires whenever the walk
-    /// stopped within a probe window of the onset, which covers a genuinely short jingle and the
-    /// deliberate "no jingle here, mark unchanged" outcome just as readily as a walk that failed -
-    /// and its backward search then drags a perfectly good mark into the previous chapter's
-    /// narration. See the guard below for the same reasoning in its surviving case.
+    /// Deliberately <em>not</em> run when the phrase was heard, the overwhelmingly common case:
+    /// <paramref name="originalMark"/> then sits <see cref="DefaultMarkLeadSeconds"/> before a real
+    /// announcement onset and the walk only retreats from it, so the walked mark cannot physically
+    /// sit on the announcement's audio - the very failure this check was written (2026-07-26) to
+    /// catch. Against a confirmed mark it degenerates into an unreliable,
+    /// one-transcription-per-chapter restatement of <c>originalMark - walked</c>, firing whenever
+    /// the walk stopped within a probe window of the onset - which a genuinely short jingle and the
+    /// deliberate "no jingle here, mark unchanged" outcome do as readily as a failed walk - and its
+    /// backward search then drags a good mark into the previous chapter's narration. See the guard
+    /// below for the same reasoning in its surviving case.
     /// </para>
     /// <para>
     /// <see cref="PreciseMarkPhraseFoundAsync"/> answers the question for <paramref name="walked"/>
@@ -340,15 +335,13 @@ internal sealed class PreciseMarkRefiner
     /// --mark-before-jingle) can coincide with a comparatively loud sample, and abruptly starting
     /// playback there is audible as a "plop".
     /// <para>
-    /// Never moves the mark later: only positions before <paramref name="mark"/> are ever
-    /// considered, since nudging earlier only ever trims a beat of trailing silence from the
-    /// previous chapter, while nudging later risks eating into the next phrase's own lead-in - not
-    /// a trade worth making for a marginally quieter spot. Decodes a small window of raw PCM
-    /// covering that lookback and slides a short (<see cref="PreciseMarkQuietWindowSeconds"/>) RMS
-    /// window across it, tracking the quietest position found (by sum of squares) together with
-    /// <paramref name="mark"/>'s own, fixed current-position window. Ties among backward candidates
-    /// are broken by proximity to <paramref name="mark"/>, so drifting further back than necessary
-    /// for the same energy never happens.
+    /// Never moves the mark later: nudging earlier only trims a beat of trailing silence off the
+    /// previous chapter, while nudging later risks eating into the next phrase's lead-in - no trade
+    /// worth making for a marginally quieter spot. Decodes a small PCM window covering the lookback
+    /// and slides a short (<see cref="PreciseMarkQuietWindowSeconds"/>) RMS window across it,
+    /// tracking the quietest position by sum of squares alongside <paramref name="mark"/>'s own
+    /// fixed baseline window. Ties are broken by proximity to <paramref name="mark"/>, so it never
+    /// drifts further back than necessary for the same energy.
     /// </para>
     /// <para>
     /// The quietest backward candidate only ever wins if it is at least
@@ -398,8 +391,6 @@ internal sealed class PreciseMarkRefiner
                 currentSumSquares = windowSumSquares;
 
             var center = start + halfWindow;
-            // Only positions at or before the mark are ever candidates - see the "never moves the
-            // mark later" remark above.
             if (center > markSample)
                 return;
             var distance = markSample - center;

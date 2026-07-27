@@ -337,11 +337,11 @@ internal sealed class RegionProber
     /// <summary>
     /// Where the window of <paramref name="index"/> ends. Computed on the fly, right before that
     /// window's probe runs, rather than pre-planned in bulk: an overlapping neighbor gets the shared
-    /// border snapped to a silence mid-point, moving this window's decode end itself - possibly
-    /// beyond its natural end - rather than merely choosing where to stop reusing cache after the
-    /// fact, and deciding per window keeps every end consistent with the <see cref="_probeSeconds"/>
-    /// in effect at that moment, with no stale bulk plan to drift away from what earlier probes
-    /// actually decoded.
+    /// border snapped to a silence mid-point, which moves this window's decode end itself - possibly
+    /// past its natural end - rather than merely choosing where to stop reusing cache after the
+    /// fact. Deciding per window also keeps every end consistent with the
+    /// <see cref="_probeSeconds"/> in effect at that moment, with no stale bulk plan to drift from
+    /// what earlier probes actually decoded.
     /// </summary>
     /// <param name="list">The candidate sequence being walked - the region's own, or the skipped
     /// subset a sequence-gap re-probe forms.</param>
@@ -353,9 +353,8 @@ internal sealed class RegionProber
 
     /// <summary>
     /// --early-abort: once Pass 2 has probed this far into the file's play time without a single
-    /// chapter found, further probing is pointless - give up on the file rather than transcribing
-    /// the rest of a book that plainly is not going to yield any (wrong --chapter-phrase, wrong
-    /// --lang, or one that just announces chapters differently).
+    /// chapter found, give up rather than transcribe the rest of a book that plainly will not yield
+    /// any (wrong --chapter-phrase, wrong --lang, or one that announces chapters differently).
     /// </summary>
     /// <param name="candidate">The candidate about to be probed.</param>
     private bool ShouldEarlyAbort(ProbeCandidate candidate)
@@ -435,10 +434,9 @@ internal sealed class RegionProber
         var (windowSegmentsAbs, mergeBoundarySegIndex) =
             await AssembleWindowTranscriptAsync(start, windowEnd, ct);
 
-        // Correct segment starts that Whisper timestamped from a leading silence/jingle before
-        // shifting to window-relative time (the cache keeps the raw absolute timings its reuse math
-        // relies on). Phrase matching and the mark-placement math below then work in window-relative
-        // time; the absolute trimmed transcript is kept for ResolveJingleAnchor's narration-aware
+        // Correct segment starts Whisper timestamped from a leading silence/jingle before shifting
+        // to window-relative time (the cache keeps the raw absolute timings its reuse math needs).
+        // The absolute trimmed transcript stays around for ResolveJingleAnchor's narration-aware
         // jingle edge adjustment.
         var trimmedAbs = TrimLeadingNonSpeech(
             windowSegmentsAbs, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
@@ -511,15 +509,14 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Partial overlap: cuts between the reused cache and a fresh tail decode. The previous
-    /// window's end was planned as a seam snapped to a silence mid-point inside this window (see
+    /// Partial overlap: cuts between the reused cache and a fresh tail decode. The previous window's
+    /// end was planned as a seam snapped to a silence mid-point inside this window (see
     /// <see cref="GapPlanning.PlanWindowEnd"/>), so the cache normally ends exactly at that seam and
-    /// the split search simply re-finds it at distance zero - the fresh decode starts right where
-    /// the previous window's decode stopped, stitching the two transcripts together word-safely with
-    /// nothing re-decoded and nothing dropped. It genuinely decides only for overlaps that plan did
-    /// not anticipate (a probe-window resize since the previous window was probed), where it snaps
-    /// to the best seam still covered by the cache; the border fallback means no seam exists, which
-    /// also means no chapter transition sits in the overlap.
+    /// the split search re-finds it at distance zero - the fresh decode starts right where the
+    /// previous one stopped, stitching the transcripts together word-safely with nothing re-decoded
+    /// and nothing dropped. It genuinely decides only for overlaps that plan did not anticipate (a
+    /// probe-window resize in between), snapping to the best seam still covered by the cache; the
+    /// border fallback means no seam exists, and hence no chapter transition in the overlap.
     /// </summary>
     /// <param name="start">Absolute start of the window.</param>
     /// <param name="windowEnd">Absolute planned end of the window.</param>
@@ -673,13 +670,12 @@ internal sealed class RegionProber
     /// reasoning as the --min-silence-length auto tightening in <see cref="TightenThreshold"/>.
     /// <para>
     /// The length is measured from the silence or region the mark actually falls into: the raw
-    /// offset from this probe's own window start would inflate the observation whenever a false,
-    /// earlier in-text pause was what triggered the probe. When the anchor is a VAD region (no
-    /// leading silence) it runs from the region start to the phrase, clipped at the region end - the
-    /// announcement is often spoken inside the jingle (so the phrase precedes the region end), and
-    /// the region end can itself be inflated when
-    /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/>'s short-speech-gap merge swallowed that
-    /// announcement; either way the phrase bounds the jingle.
+    /// offset from this probe's window start would inflate the observation whenever a false, earlier
+    /// in-text pause triggered the probe. With a VAD region as anchor (no leading silence) it runs
+    /// from the region start to the phrase, clipped at the region end - the announcement is often
+    /// spoken inside the jingle, and the region end can itself be inflated when
+    /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/>'s short-speech-gap merge swallowed it;
+    /// either way the phrase bounds the jingle.
     /// </para>
     /// </summary>
     /// <param name="phraseAbs">Absolute phrase start time.</param>
@@ -701,10 +697,9 @@ internal sealed class RegionProber
             return;
 
         // The window this observation asks for; the adapted window is the running maximum of these
-        // (monotonically increasing after the first set - see JingleObservationSafetyFactor), capped
-        // at the original ceiling so an outlier can never make the window wider than what
-        // --max-jingle-length was given (or its 45 s default) would allow. During a gap re-probe
-        // only the running maximum is updated; _probeSeconds stays at the ceiling until it is done.
+        // (monotonically increasing - see JingleObservationSafetyFactor), capped at the ceiling so
+        // an outlier can never widen the window past what --max-jingle-length allows. During a gap
+        // re-probe only the maximum moves; _probeSeconds stays at the ceiling until it is done.
         var proposed = Math.Min(_ctx.JingleCeilingSeconds,
             JingleObservationSafetyFactor * observedLength + PhraseMarginSeconds);
         _adaptedWindowSeconds = Math.Max(_adaptedWindowSeconds ?? proposed, proposed);
@@ -733,13 +728,13 @@ internal sealed class RegionProber
     /// </para>
     /// <para>
     /// Without it, the mark always goes <see cref="DefaultMarkLeadSeconds"/> before the phrase
-    /// itself, regardless of what precedes it. A phrase that directly follows the triggering silence
-    /// (the classic shape) anchors to that silence. One sitting deeper in the window than the timing
-    /// rule allows can still be accepted right away - no need to wait for a later candidate's window
-    /// to re-find it - but only when a candidate-grade silence directly precedes it: the phrase must
-    /// follow that silence within the same <see cref="PhraseLatestStart"/> seconds the classic rule
-    /// grants, and the silence must be at least --min-silence-length long, so a shorter breath pause
-    /// in front of an in-text mention ("Chapter eight had been hard.") cannot qualify as an anchor.
+    /// itself, regardless of what precedes it. A phrase directly following the triggering silence
+    /// (the classic shape) anchors to that silence. One deeper in the window than the timing rule
+    /// allows can still be accepted right away, without waiting for a later candidate's window, but
+    /// only when a candidate-grade silence directly precedes it: within the same
+    /// <see cref="PhraseLatestStart"/> seconds the classic rule grants, and at least
+    /// --min-silence-length long, so a breath pause before an in-text mention ("Chapter eight had
+    /// been hard.") cannot qualify as an anchor.
     /// </para>
     /// </summary>
     /// <param name="match">The phrase match, in window-relative time.</param>
