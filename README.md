@@ -192,8 +192,10 @@ when chapters are written. The most useful knobs:
 | `-b`, `--backup` | Keep the original file as `*.bak`. |
 | `-R`, `--revert` | Restore all `*.bak` backups (undo). |
 | `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter`; combinable only with `--recurse` and the output options. |
-| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase`, `--title` and `--intro-title` (per-file with `auto`). |
+| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `chapter`, localized by `--lang`). |
+| `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `prologue`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
+| `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `epilogue`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`. `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
 | `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model` (default: same as `--model`). Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. Loaded lazily, only if pass 3 runs. |
 | `-C`, `--cpu-only` | Force Whisper onto the CPU backend instead of the fastest available hardware acceleration. The Silero VAD pre-pass already always runs on CPU regardless of this option, so it only affects Whisper. |
@@ -211,7 +213,9 @@ when chapters are written. The most useful knobs:
 | `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
-| `-i`, `--intro-title <word>` | Title for the intro mark before the first chapter (default: `Intro`, localized by `--lang`). |
+| `-i`, `--intro-title <word>` | Title for the intro mark before the first detected mark (default: `Intro`, localized by `--lang`). |
+| `-P`, `--prologue-title <word>` | Title for the prologue mark (default: `Prologue`, localized by `--lang`). |
+| `-G`, `--epilogue-title <word>` | Title for the epilogue mark (default: `Epilogue`, localized by `--lang`). |
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (confidence, silence/jingle, Whisper-audio and transcription-speed stats) at the end. |
 | `-v`, `--verbose` | Log processing details, each probe/chunk as a `<length>@<time>` header. |
 | `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
@@ -309,8 +313,15 @@ use `.`, whatever the machine's locale says.
    wide wants a look by hand first, usually starting with
    `--max-chapter-number`.
 
+Alongside the numbered chapters, a "Prologue" and an "Epilogue" mark are
+detected the same way (localized by `--lang`, renamed with `--prologue-title`
+and `--epilogue-title`, re-worded with `--prologue-phrase` and
+`--epilogue-phrase`, switched off with an empty phrase). A prologue only counts
+before the first numbered chapter and an epilogue only after it, at most one of
+each per file.
+
 A synthetic "Intro" mark (localized by `--lang`, customizable with
-`--intro-title`) covers everything before the first detected chapter
+`--intro-title`) covers everything before the first detected mark
 (audiobooks usually start with title/credits), so the first real chapter
 keeps its exact position.
 

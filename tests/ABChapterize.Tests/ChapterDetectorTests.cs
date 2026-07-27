@@ -266,6 +266,142 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Prologue_AndEpilogue_AreDetectedAsNamedMarks()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Prologue."));
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1800, Seg(0.4, " Epilogue."));
+            });
+
+        Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+        Assert.Equal(
+            [new("prologue", "Prologue", 0.25), new("epilogue", "Epilogue", 1800.15)],
+            result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task Prologue_IsIgnored_OnceAChapterHasBeenFound()
+    {
+        // "the prologue" said inside chapter one is prose, not an announcement - the scope is
+        // what keeps it from becoming a second, spurious mark.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " As the prologue explained, chapter two."));
+            });
+
+        Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+        Assert.Empty(result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task Epilogue_IsIgnored_BeforeAnyChapterHasBeenFound()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " With a prologue and an epilogue."));
+                s.Add(600, Seg(0.3, " Chapter one."));
+            });
+
+        Assert.Equal([new(1, 600.05)], result.Chapters);
+        Assert.Equal([new("prologue", "Prologue", 0.25)], result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task Prologue_LastMatchInScopeWins()
+    {
+        // Front matter routinely names what is coming before the narrator announces it; the real
+        // announcement is by construction the later of the two, and only one mark survives.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(295, 300), new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Read by someone. Contains a prologue."));
+                s.Add(300, Seg(0.3, " Prologue."));
+                s.Add(600, Seg(0.2, " Chapter one."));
+            });
+
+        Assert.Equal([new("prologue", "Prologue", 300.05)], result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task NamedMarks_AreDropped_WhenNoChapterWasFoundAtAll()
+    {
+        // A book whose chapter announcements were never heard is a failed detection; a lone
+        // prologue must not be what makes the file worth rewriting.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--early-abort", "0"),
+            [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Prologue.")));
+
+        Assert.Empty(result.Chapters);
+        Assert.Empty(result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task NamedMarks_AreNotDetected_WhenTheirPhraseIsSwitchedOff()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--prologue-phrase", "", "--epilogue-phrase", ""),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Prologue."));
+                s.Add(600, Seg(0.3, " Chapter one."));
+            });
+
+        Assert.Equal([new(1, 600.05)], result.Chapters);
+        Assert.Empty(result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task NamedMarks_AreLocalized_ByLang()
+    {
+        var result = await DetectAsync(
+            Options("--lang", "de", "--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Prolog."));
+                s.Add(600, Seg(0.3, " Kapitel eins."));
+            });
+
+        Assert.Equal([new("prologue", "Prolog", 0.25)], result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task NamedMarks_DoNotCountAsChaptersForGapDetection()
+    {
+        // The whole reason they travel in their own list: a numberless mark between chapter 1 and
+        // chapter 2 must leave the sequence - and therefore GapRemains - completely untouched.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two. And so the epilogue neared."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Empty(result.MissingNumbers);
+        Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+    }
+
+    [Fact]
     public async Task NumberWords_BeforeThePhrase_AreUnderstood()
     {
         var result = await DetectAsync(
@@ -3687,7 +3823,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            646.2, 659.75, _file, null, profile,
+            646.2, 659.75, _file, null, profile.PhraseRegex,
             [new(0, 640), new(645, 646.2), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(645, result);
@@ -3703,7 +3839,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            640, 659.75, _file, null, profile, [new(0, 640), new(660, 3600)], CancellationToken.None);
+            640, 659.75, _file, null, profile.PhraseRegex, [new(0, 640), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(640, result);
         Assert.Single(transcriber.Audio.DecodeStarts);
@@ -3721,7 +3857,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            0.05, 20, _file, null, profile, [], CancellationToken.None);
+            0.05, 20, _file, null, profile.PhraseRegex, [], CancellationToken.None);
 
         Assert.Equal(0.05, result);
     }
@@ -3740,7 +3876,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            658.25, 659.75, _file, null, profile,
+            658.25, 659.75, _file, null, profile.PhraseRegex,
             [new(0, 650), new(655, 658.25), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(658.25, result);
@@ -3758,7 +3894,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile, [new(660, 3600)], CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, [new(660, 3600)], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);
@@ -3773,7 +3909,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile, [new(660, 3600)], CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, [new(660, 3600)], CancellationToken.None);
 
         Assert.False(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);

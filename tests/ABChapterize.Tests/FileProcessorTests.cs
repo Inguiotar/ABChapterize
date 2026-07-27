@@ -33,10 +33,12 @@ public sealed class FileProcessorTests : IDisposable
     /// <summary>Removes the temp directory.</summary>
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
-    /// <summary>Builds a minimal <see cref="DetectionResult"/> with the given chapters and
-    /// <see cref="DetectionResult.LeadInHasSpeech"/>, everything else at its default/empty value.</summary>
-    private DetectionResult Result(List<DetectedChapter> chapters, bool leadInHasSpeech = true)
-        => new(chapters, false, [], [], _profile, null, 0,
+    /// <summary>Builds a minimal <see cref="DetectionResult"/> with the given chapters, named marks
+    /// and <see cref="DetectionResult.LeadInHasSpeech"/>, everything else at its default/empty
+    /// value.</summary>
+    private DetectionResult Result(
+        List<DetectedChapter> chapters, bool leadInHasSpeech = true, List<DetectedMark>? named = null)
+        => new(chapters, named ?? [], false, [], [], _profile, null, 0,
             new DetectionStats(null, null, null, null, 0, 0), LeadInHasSpeech: leadInHasSpeech);
 
     [Fact]
@@ -46,6 +48,43 @@ public sealed class FileProcessorTests : IDisposable
 
         Assert.Equal([new Chapter(0, "Intro"), new Chapter(30, "Chapter 1")], chapters);
         Assert.Equal(" + intro", note);
+    }
+
+    [Fact]
+    public void BuildChapters_MergesNamedMarksByTime()
+    {
+        var (chapters, note) = FileProcessor.BuildChapters(Result(
+            [new(1, 300), new(2, 900)],
+            named: [new("prologue", "Prologue", 30), new("epilogue", "Epilogue", 1500)]));
+
+        Assert.Equal(
+            [new Chapter(0, "Intro"), new Chapter(30, "Prologue"), new Chapter(300, "Chapter 1"),
+             new Chapter(900, "Chapter 2"), new Chapter(1500, "Epilogue")],
+            chapters);
+        Assert.Equal(" + intro", note);
+    }
+
+    [Fact]
+    public void BuildChapters_SortsANamedMarkAfterAChapterAtTheSameTime()
+    {
+        // Both announced in one breath: the numbered entry is the one a player scrubs by, so it
+        // must not be pushed behind the prologue that shares its timestamp.
+        var (chapters, _) = FileProcessor.BuildChapters(Result(
+            [new(1, 300)], named: [new("prologue", "Prologue", 300)]));
+
+        Assert.Equal(
+            [new Chapter(0, "Intro"), new Chapter(300, "Chapter 1"), new Chapter(300, "Prologue")],
+            chapters);
+    }
+
+    [Fact]
+    public void BuildChapters_OmitsIntro_WhenANamedMarkAlreadyStartsAtZero()
+    {
+        var (chapters, note) = FileProcessor.BuildChapters(Result(
+            [new(1, 300)], named: [new("prologue", "Prologue", 0)]));
+
+        Assert.Equal([new Chapter(0, "Prologue"), new Chapter(300, "Chapter 1")], chapters);
+        Assert.Equal("", note);
     }
 
     [Fact]

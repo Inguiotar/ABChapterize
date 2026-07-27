@@ -16,6 +16,25 @@ namespace ABChapterize.Detection;
 /// number surfaces in <see cref="DetectionResult.LowConfidenceNumbers"/>.</param>
 public readonly record struct DetectedChapter(int Number, double TimeSeconds, double Confidence = 1.0);
 
+/// <summary>
+/// A detected non-numbered mark - a prologue or epilogue announcement (see
+/// <see cref="ABChapterize.Language.NamedPhrase"/>). Kept in its own list rather than mixed into
+/// <see cref="DetectionResult.Chapters"/> precisely because it carries no chapter number: the whole
+/// gap machinery (<see cref="GapPlanning.FindGaps"/>, <see cref="GapPlanning.Normalize"/>,
+/// <see cref="GapPlanning.ChapterProgress"/>) reasons in consecutive numbers, and a numberless entry
+/// threaded through it could only ever be a special case to remember at every one of those sites.
+/// The two lists meet again exactly once, where they belong together: in
+/// <see cref="FileProcessor.BuildChapters"/>, which merges them by time into the chapter list
+/// actually written.
+/// </summary>
+/// <param name="Kind">The phrase kind that produced it ("prologue", "epilogue"), for log lines.</param>
+/// <param name="Title">The title to write, straight from <see cref="ABChapterize.Language.NamedPhrase.Title"/>.</param>
+/// <param name="TimeSeconds">Position of the mark in seconds.</param>
+/// <param name="Confidence">Whisper's probability for the segment the phrase was found in (0-1);
+/// 1.0 when unknown, e.g. for a mark carried over from a file's existing markings.</param>
+public readonly record struct DetectedMark(
+    string Kind, string Title, double TimeSeconds, double Confidence = 1.0);
+
 /// <summary>Per-file diagnostic statistics gathered during detection, surfaced per file under
 /// --verbose (or --verbose-transcripts) and aggregated run-wide under --summary. The silence and
 /// jingle extremes come in two flavours: one over every detected chapter, and an "inter-chapter"
@@ -43,6 +62,9 @@ public readonly record struct DetectionStats(
 
 /// <summary>Outcome of chapter detection for one file.</summary>
 /// <param name="Chapters">Detected chapters in chronological order; empty when none were found.</param>
+/// <param name="NamedMarks">Detected prologue/epilogue marks in chronological order; empty when
+/// none were found or both phrases were switched off. Never part of <paramref name="Chapters"/> -
+/// see <see cref="DetectedMark"/>.</param>
 /// <param name="GapRemains">True when a chapter sequence gap could not be resolved; the file must
 /// be left unchanged.</param>
 /// <param name="MissingNumbers">The chapter numbers that could not be located (only when
@@ -74,7 +96,8 @@ public readonly record struct DetectionStats(
 /// Always true when the VAD pre-pass did not run (nothing to check) or
 /// <paramref name="Chapters"/> is empty.</param>
 public readonly record struct DetectionResult(
-    IReadOnlyList<DetectedChapter> Chapters, bool GapRemains, IReadOnlyList<int> MissingNumbers,
+    IReadOnlyList<DetectedChapter> Chapters, IReadOnlyList<DetectedMark> NamedMarks,
+    bool GapRemains, IReadOnlyList<int> MissingNumbers,
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability, DetectionStats Stats, bool EarlyAborted = false,
     int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true);
@@ -107,7 +130,13 @@ public readonly record struct VerifyMarkingOutcome(double StartSeconds, int? Exp
 /// auto-detection was not active or every marking's window was empty.</param>
 /// <param name="DetectedProbability">Whisper's probability for <paramref name="DetectedLanguage"/>;
 /// 0 when that is null.</param>
+/// <param name="NamedMarks">Pre-existing markings recognized as this file's prologue/epilogue by
+/// their title, carried over verbatim so a gap recovery that rewrites the whole marking set does
+/// not silently drop them - they have no chapter number, so nothing else would ever notice they
+/// were gone. Null (rather than empty) when nothing was recognized, so the common case allocates
+/// nothing.</param>
 public readonly record struct VerifyResult(
     bool Passed, int Checked, int Failed,
     IReadOnlyList<DetectedChapter> ConfirmedChapters, IReadOnlyList<VerifyMarkingOutcome> Markings,
-    LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability);
+    LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability,
+    IReadOnlyList<DetectedMark>? NamedMarks = null);

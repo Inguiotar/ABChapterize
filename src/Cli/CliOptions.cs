@@ -71,6 +71,25 @@ public sealed class CliOptions
     /// <summary>Raw chapter phrase or "/regexp/" as given on the command line (--chapter-phrase / -c); the default is localized by --lang.</summary>
     public string ChapterPhrase { get; private set; } = "chapter";
 
+    /// <summary>
+    /// Raw prologue phrase or "/regexp/" (--prologue-phrase / -p); the default is localized by
+    /// --lang. Empty switches prologue detection off for the run - the one way to opt out, since
+    /// there is no separate flag and no number could ever be missing without it.
+    /// </summary>
+    public string ProloguePhrase { get; private set; } = "prologue";
+
+    /// <summary>Title written for a detected prologue (--prologue-title / -P, default "Prologue",
+    /// localized by --lang).</summary>
+    public string PrologueTitle { get; private set; } = "Prologue";
+
+    /// <summary>Raw epilogue phrase or "/regexp/" (--epilogue-phrase / -g); empty switches epilogue
+    /// detection off, as <see cref="ProloguePhrase"/> does for the prologue.</summary>
+    public string EpiloguePhrase { get; private set; } = "epilogue";
+
+    /// <summary>Title written for a detected epilogue (--epilogue-title / -G, default "Epilogue",
+    /// localized by --lang).</summary>
+    public string EpilogueTitle { get; private set; } = "Epilogue";
+
     /// <summary>Whisper model selector (--model / -m): tiny, base, small, medium, turbo or large.</summary>
     public string Model { get; private set; } = "turbo";
 
@@ -463,6 +482,8 @@ public sealed class CliOptions
         ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['L'] = "--trailing-scan",
         ['F'] = "--filter", ['X'] = "--max-jingle-length",
         ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
+        ['p'] = "--prologue-phrase", ['P'] = "--prologue-title",
+        ['g'] = "--epilogue-phrase", ['G'] = "--epilogue-title",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
         ['J'] = "--jobs", ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
@@ -471,6 +492,7 @@ public sealed class CliOptions
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
     private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet;
+    private bool _prologuePhraseSet, _prologueTitleSet, _epiloguePhraseSet, _epilogueTitleSet;
 
     /// <summary>
     /// True when any option was given that only means something for a run that actually detects
@@ -485,7 +507,8 @@ public sealed class CliOptions
            || Export || Import || SimpleMetadata || Verify || IgnoreProgress || Jobs != null
            || _langSet || _phraseSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _titleSet || _introSet || _jingleLenSet || _minSilenceSet || _earlyAbortSet
-           || _expectedStartSet;
+           || _expectedStartSet || _prologuePhraseSet || _prologueTitleSet
+           || _epiloguePhraseSet || _epilogueTitleSet;
 
     /// <summary>
     /// Short hash of every option that changes what a run does to a file - the language and
@@ -508,6 +531,7 @@ public sealed class CliOptions
             var relevant = string.Join('\n', [
                 $"recurse={Recurse}", $"backup={Backup}", $"force={Force}",
                 $"lang={Language}", $"phrase={ChapterPhrase}", $"title={Title}", $"intro={IntroTitle}",
+                $"prologue={ProloguePhrase}/{PrologueTitle}", $"epilogue={EpiloguePhrase}/{EpilogueTitle}",
                 $"model={Model}", $"pass3={Pass3Model}",
                 $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
                 $"earlyabort={EarlyAbortMinutes}", $"expectedstart={ExpectedStartChapter}",
@@ -532,25 +556,37 @@ public sealed class CliOptions
     public static string SupportedExtensionsText => string.Join("/", SupportedExtensions);
 
     /// <summary>
-    /// Per-language defaults for the chapter phrase, the title word and the intro chapter
-    /// title, applied when --lang is given but --chapter-phrase/--title/--intro-title are
-    /// not. "abchapterize -l de buch.m4b" thus looks for "Kapitel" and writes "Intro",
-    /// "Kapitel 1", "Kapitel 2", ... without further options. Languages without an entry
-    /// keep the English-ish defaults ("chapter", "Chapter", "Intro").
+    /// Per-language defaults for the chapter/prologue/epilogue phrases and the title words,
+    /// applied when --lang is given but the corresponding option is not. "abchapterize -l de
+    /// buch.m4b" thus looks for "Kapitel", "Prolog" and "Epilog" and writes "Intro", "Kapitel 1",
+    /// "Kapitel 2", ... without further options. Languages without an entry fall back to
+    /// <see cref="EnglishDefaults"/>.
+    /// <para>
+    /// The prologue/epilogue entries deliberately use each language's Latin-derived form
+    /// ("Prolog"/"Epilog", "Prólogo"/"Epílogo", ...) rather than a native near-synonym such as
+    /// German "Vorwort" or Turkish "Önsöz": those name a foreword, which is front matter about the
+    /// book, while a prologue is part of the story and is what a narrator actually announces.
+    /// </para>
     /// </summary>
-    private static readonly Dictionary<string, (string Phrase, string Title, string Intro)> LanguageDefaults = new()
+    /// <summary>The fallback every language without its own entry in
+    /// <see cref="LanguageDefaultsByCode"/> resolves to. Declared before that dictionary because
+    /// static field initializers run in textual order and it is one of its entries.</summary>
+    private static readonly LanguageDefaults EnglishDefaults =
+        new("chapter", "Chapter", "Intro", "prologue", "Prologue", "epilogue", "Epilogue");
+
+    private static readonly Dictionary<string, LanguageDefaults> LanguageDefaultsByCode = new()
     {
-        ["en"] = ("chapter", "Chapter", "Intro"),
-        ["de"] = ("Kapitel", "Kapitel", "Intro"),
-        ["fr"] = ("chapitre", "Chapitre", "Introduction"),
-        ["es"] = ("capítulo", "Capítulo", "Introducción"),
-        ["it"] = ("capitolo", "Capitolo", "Introduzione"),
-        ["nl"] = ("hoofdstuk", "Hoofdstuk", "Intro"),
-        ["tr"] = ("bölüm", "Bölüm", "Giriş"),
-        ["pt"] = ("capítulo", "Capítulo", "Introdução"),
-        ["pl"] = ("rozdział", "Rozdział", "Wstęp"),
-        ["sv"] = ("kapitel", "Kapitel", "Introduktion"),
-        ["da"] = ("kapitel", "Kapitel", "Introduktion"),
+        ["en"] = EnglishDefaults,
+        ["de"] = new("Kapitel", "Kapitel", "Intro", "Prolog", "Prolog", "Epilog", "Epilog"),
+        ["fr"] = new("chapitre", "Chapitre", "Introduction", "prologue", "Prologue", "épilogue", "Épilogue"),
+        ["es"] = new("capítulo", "Capítulo", "Introducción", "prólogo", "Prólogo", "epílogo", "Epílogo"),
+        ["it"] = new("capitolo", "Capitolo", "Introduzione", "prologo", "Prologo", "epilogo", "Epilogo"),
+        ["nl"] = new("hoofdstuk", "Hoofdstuk", "Intro", "proloog", "Proloog", "epiloog", "Epiloog"),
+        ["tr"] = new("bölüm", "Bölüm", "Giriş", "prolog", "Prolog", "epilog", "Epilog"),
+        ["pt"] = new("capítulo", "Capítulo", "Introdução", "prólogo", "Prólogo", "epílogo", "Epílogo"),
+        ["pl"] = new("rozdział", "Rozdział", "Wstęp", "prolog", "Prolog", "epilog", "Epilog"),
+        ["sv"] = new("kapitel", "Kapitel", "Introduktion", "prolog", "Prolog", "epilog", "Epilog"),
+        ["da"] = new("kapitel", "Kapitel", "Introduktion", "prolog", "Prolog", "epilog", "Epilog"),
     };
 
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
@@ -658,9 +694,10 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
             throw new CliError(
-                "--import skips detection entirely, so --lang, --chapter-phrase, --model, --pass3-model, " +
+                "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
+                "--epilogue-phrase, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --max-jingle-length, --min-silence-length, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify " +
                 "have no effect and cannot be combined with it.");
@@ -700,17 +737,36 @@ public sealed class CliOptions
         if (o.ChapterPhrase.Length == 0)
             throw new CliError("The chapter phrase must not be empty.");
 
+        // An empty prologue/epilogue phrase is how those are switched off, so only their titles
+        // are required to be non-empty - a mark would otherwise be written with no title at all.
+        if (o._prologueTitleSet && o.PrologueTitle.Length == 0)
+            throw new CliError("The prologue title must not be empty (use --prologue-phrase \"\" to switch prologue detection off).");
+        if (o._epilogueTitleSet && o.EpilogueTitle.Length == 0)
+            throw new CliError("The epilogue title must not be empty (use --epilogue-phrase \"\" to switch epilogue detection off).");
+
         o.ResolveTargets(targetArgs);
 
         // With an explicit --lang this localizes the chapter phrase, title word and intro title
         // (unless given explicitly) for every file; with auto-detection it is only the English
         // fallback, and ChapterDetector resolves a fresh profile per file - see ResolveProfile.
-        o.DefaultProfile = o.ResolveProfile(o.AutoLanguage ? "en" : o.Language);
+        var fallbackLanguage = o.AutoLanguage ? "en" : o.Language;
+        o.DefaultProfile = o.ResolveProfile(fallbackLanguage);
         o.ChapterPhrase = o.DefaultProfile.ChapterPhrase;
         o.Title = o.DefaultProfile.Title;
         o.IntroTitle = o.DefaultProfile.IntroTitle;
         o.PhraseRegex = o.DefaultProfile.PhraseRegex;
         o.PhraseHasNumberGroup = o.DefaultProfile.PhraseHasNumberGroup;
+        // The named phrases keep only their compiled form in the profile, so the raw strings the
+        // fingerprint and any user-facing echo read are localized here rather than copied back.
+        var defaults = LanguageDefaultsByCode.GetValueOrDefault(fallbackLanguage, EnglishDefaults);
+        if (!o._prologuePhraseSet)
+            o.ProloguePhrase = defaults.Prologue;
+        if (!o._prologueTitleSet)
+            o.PrologueTitle = defaults.PrologueTitle;
+        if (!o._epiloguePhraseSet)
+            o.EpiloguePhrase = defaults.Epilogue;
+        if (!o._epilogueTitleSet)
+            o.EpilogueTitle = defaults.EpilogueTitle;
         return o;
     }
 
@@ -822,6 +878,10 @@ public sealed class CliOptions
             case "--verify-threshold": VerifyFailThreshold = ParseNonNegativeInt("--verify-threshold", nextParam()); return true;
             case "--title": Title = nextParam(); _titleSet = true; return true;
             case "--intro-title": IntroTitle = nextParam(); _introSet = true; return true;
+            case "--prologue-phrase": ProloguePhrase = nextParam(); _prologuePhraseSet = true; return true;
+            case "--prologue-title": PrologueTitle = nextParam(); _prologueTitleSet = true; return true;
+            case "--epilogue-phrase": EpiloguePhrase = nextParam(); _epiloguePhraseSet = true; return true;
+            case "--epilogue-title": EpilogueTitle = nextParam(); _epilogueTitleSet = true; return true;
             case "--filter": ParseFilter(nextParam()); return true;
             case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
@@ -960,12 +1020,36 @@ public sealed class CliOptions
     /// <param name="language">Two-letter language code (not "auto") to resolve defaults for.</param>
     public LanguageProfile ResolveProfile(string language)
     {
-        LanguageDefaults.TryGetValue(language, out var defaults);
-        var phrase = _phraseSet ? ChapterPhrase : defaults.Phrase ?? "chapter";
-        var title = _titleSet ? Title : defaults.Title ?? "Chapter";
-        var intro = _introSet ? IntroTitle : defaults.Intro ?? "Intro";
+        var defaults = LanguageDefaultsByCode.GetValueOrDefault(language, EnglishDefaults);
+        var phrase = _phraseSet ? ChapterPhrase : defaults.Phrase;
+        var title = _titleSet ? Title : defaults.Title;
+        var intro = _introSet ? IntroTitle : defaults.Intro;
         var (regex, hasGroup) = CompilePhraseRegex(phrase);
-        return new LanguageProfile(language, phrase, regex, hasGroup, title, intro);
+        return new LanguageProfile(
+            language, phrase, regex, hasGroup, title, intro, ResolveNamedPhrases(defaults));
+    }
+
+    /// <summary>
+    /// Builds the prologue/epilogue phrases for one language, each dropped entirely when its
+    /// phrase resolves to the empty string - the opt-out spelling, since neither has a flag of
+    /// its own and a mark nobody wants is better never detected than detected and discarded.
+    /// </summary>
+    /// <param name="defaults">The language's own defaults, for whichever option was not given.</param>
+    private IReadOnlyList<NamedPhrase> ResolveNamedPhrases(LanguageDefaults defaults)
+    {
+        var named = new List<NamedPhrase>();
+        Add("prologue", _prologuePhraseSet ? ProloguePhrase : defaults.Prologue,
+            _prologueTitleSet ? PrologueTitle : defaults.PrologueTitle, NamedPhraseScope.BeforeFirstChapter);
+        Add("epilogue", _epiloguePhraseSet ? EpiloguePhrase : defaults.Epilogue,
+            _epilogueTitleSet ? EpilogueTitle : defaults.EpilogueTitle, NamedPhraseScope.AfterFirstChapter);
+        return named;
+
+        void Add(string kind, string phrase, string markTitle, NamedPhraseScope scope)
+        {
+            if (phrase.Length == 0)
+                return;
+            named.Add(new NamedPhrase(kind, CompilePhraseRegex(phrase, kind).Regex, markTitle, scope));
+        }
     }
 
     /// <summary>
@@ -973,8 +1057,13 @@ public sealed class CliOptions
     /// slashes is compiled as-is (case-insensitive); anything else is escaped literally.
     /// </summary>
     /// <param name="chapterPhrase">The raw phrase or "/regexp/".</param>
+    /// <param name="kind">What the phrase names, for the error message: "chapter" (the default),
+    /// "prologue" or "epilogue". The named phrases share this compiler so all three accept the
+    /// same "/regexp/" spelling; only <see cref="LanguageProfile.PhraseHasNumberGroup"/> is
+    /// meaningless for them, since they parse no number.</param>
     /// <exception cref="CliError">Thrown for an invalid regexp.</exception>
-    private static (Regex Regex, bool HasNumberGroup) CompilePhraseRegex(string chapterPhrase)
+    private static (Regex Regex, bool HasNumberGroup) CompilePhraseRegex(
+        string chapterPhrase, string kind = "chapter")
     {
         if (chapterPhrase.Length > 2 && chapterPhrase.StartsWith('/') && chapterPhrase.EndsWith('/'))
         {
@@ -985,7 +1074,7 @@ public sealed class CliOptions
             }
             catch (ArgumentException ex)
             {
-                throw new CliError($"Invalid chapter phrase regexp: {ex.Message}");
+                throw new CliError($"Invalid {kind} phrase regexp: {ex.Message}");
             }
             return (regex, regex.GetGroupNumbers().Length > 1);
         }
@@ -1052,14 +1141,28 @@ public sealed class CliOptions
                                     {string.Join(", ", NumberWordParser.SupportedLanguages)}; digits
                                     ("2.", "2nd", "2e") work in every language. For these
                                     languages, --lang also localizes the defaults of
-                                    --chapter-phrase, --title and --intro-title (per-file
-                                    with "auto").
+                                    --chapter-phrase, --prologue-phrase, --epilogue-phrase,
+                                    --title, --intro-title, --prologue-title and
+                                    --epilogue-title (per-file with "auto").
           -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
                                     chapter, localized by --lang).
                                     Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
                                     The regexp may contain one capturing group "(\d+)" in place of
                                     the chapter number; otherwise the number is expected to follow
                                     the phrase. Matching is always case-insensitive.
+          -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: prologue,
+                                    localized by --lang). Accepts a "/regexp/" like
+                                    --chapter-phrase, but parses no number: a match becomes one
+                                    untitled-by-number mark carrying --prologue-title. Only
+                                    accepted before the first chapter has been found, so a later
+                                    mention in the prose cannot produce a second mark; if the
+                                    phrase turns up more than once before then, the last
+                                    occurrence wins (front matter often lists what is coming
+                                    before the narrator announces it). Pass an empty string to
+                                    switch prologue detection off.
+          -g, --epilogue-phrase <p> Same for the epilogue (default: epilogue, localized by
+                                    --lang), mirrored: only accepted once at least one chapter
+                                    has been found. Pass an empty string to switch it off.
           -m, --model <name>        Whisper model: tiny, base, small, medium, turbo or large
                                     (default: turbo).
           -M, --pass3-model <name>  Whisper model for pass 3 (gap filling) only; same choices as
@@ -1204,8 +1307,14 @@ public sealed class CliOptions
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
                                     (default: Chapter, localized by --lang).
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
-                                    first detected chapter, e.g. a prelude (default: Intro,
+                                    first detected mark, e.g. a prelude (default: Intro,
                                     localized by --lang, e.g. "Giriş" with --lang tr).
+          -P, --prologue-title <word>
+                                    Title written for a detected prologue (default: Prologue,
+                                    localized by --lang, e.g. "Prolog" with --lang de).
+          -G, --epilogue-title <word>
+                                    Title written for a detected epilogue (default: Epilogue,
+                                    localized by --lang).
 
         Output & review:
           -d, --dry-run             Run detection but write nothing; print the chapters that
@@ -1217,7 +1326,8 @@ public sealed class CliOptions
           -I, --import              Skip Whisper detection; write chapters from a previously
                                     exported sidecar file instead. Since nothing is detected,
                                     the detection options have no effect and are rejected:
-                                    --lang, --chapter-phrase, --model, --pass3-model,
+                                    --lang, --chapter-phrase, --prologue-phrase,
+                                    --epilogue-phrase, --model, --pass3-model,
                                     --mark-before-jingle, --quick-marks, --max-jingle-length,
                                     --min-silence-length, --early-abort,
                                     --expected-start-chapter, --max-chapter-number,

@@ -4,6 +4,7 @@
 
 using Xunit;
 using ABChapterize.Cli;
+using ABChapterize.Language;
 
 namespace ABChapterize.Tests;
 
@@ -107,6 +108,66 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal("Teil", profile.Title);
         Assert.Equal("Anfang", profile.IntroTitle);
     }
+
+    [Fact]
+    public void NamedPhrases_DefaultToPrologueAndEpilogue()
+    {
+        var profile = ParseFile()!.DefaultProfile;
+        Assert.Equal(["prologue", "epilogue"], profile.NamedPhrases.Select(p => p.Kind));
+        Assert.Equal(["Prologue", "Epilogue"], profile.NamedPhrases.Select(p => p.Title));
+        Assert.Equal(
+            [NamedPhraseScope.BeforeFirstChapter, NamedPhraseScope.AfterFirstChapter],
+            profile.NamedPhrases.Select(p => p.Scope));
+        Assert.Matches(profile.NamedPhrases[0].Regex, "and now, the Prologue.");
+    }
+
+    [Theory]
+    [InlineData("de", "Prolog", "Epilog")]
+    [InlineData("fr", "Prologue", "Épilogue")]
+    [InlineData("es", "Prólogo", "Epílogo")]
+    [InlineData("nl", "Proloog", "Epiloog")]
+    [InlineData("pl", "Prolog", "Epilog")]
+    public void NamedPhrases_AreLocalized(string lang, string prologue, string epilogue)
+    {
+        var profile = ParseFile("--lang", lang)!.DefaultProfile;
+        Assert.Equal([prologue, epilogue], profile.NamedPhrases.Select(p => p.Title));
+    }
+
+    [Fact]
+    public void NamedPhrases_HonourExplicitOverrides_RegardlessOfLanguage()
+    {
+        var profile = ParseFile("-p", "Vorspiel", "-P", "Vorspiel", "-g", "/nach(spiel|wort)/", "-G", "Nachspiel")!
+            .ResolveProfile("de");
+        Assert.Equal(["Vorspiel", "Nachspiel"], profile.NamedPhrases.Select(p => p.Title));
+        Assert.Matches(profile.NamedPhrases[0].Regex, "Vorspiel");
+        // The "/regexp/" spelling --chapter-phrase accepts works for the named phrases too.
+        Assert.Matches(profile.NamedPhrases[1].Regex, "Nachwort");
+    }
+
+    [Theory]
+    [InlineData("--prologue-phrase", "epilogue")]
+    [InlineData("--epilogue-phrase", "prologue")]
+    public void NamedPhrases_AreDroppedEntirely_WhenTheirPhraseIsEmpty(string opt, string survivor)
+    {
+        var profile = ParseFile(opt, "")!.DefaultProfile;
+        Assert.Equal([survivor], profile.NamedPhrases.Select(p => p.Kind));
+    }
+
+    [Fact]
+    public void NamedPhrases_BothEmpty_LeavesNoNamedDetectionAtAll()
+        => Assert.Empty(ParseFile("-p", "", "-g", "")!.DefaultProfile.NamedPhrases);
+
+    [Theory]
+    [InlineData("--prologue-title")]
+    [InlineData("--epilogue-title")]
+    public void NamedMarkTitle_IsRejected_WhenEmpty(string opt)
+        => Assert.Throws<CliError>(() => ParseFile(opt, ""));
+
+    [Theory]
+    [InlineData("--prologue-phrase", "Prolog")]
+    [InlineData("--epilogue-phrase", "Epilog")]
+    public void NamedPhrase_IsRejected_WithImport(string opt, string value)
+        => Assert.Throws<CliError>(() => ParseFile("--import", opt, value));
 
     [Theory]
     [InlineData("--jobs", "1")]

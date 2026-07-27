@@ -9,6 +9,17 @@ for you, not how it was built. The format follows
 
 ### Added
 
+- **Prologues and epilogues get their own marks.** A narrator announcing a
+  "prologue" or an "epilogue" now produces a mark titled accordingly, alongside
+  the numbered chapters. Both are on by default and localized by `--lang`, in
+  all eleven supported languages. A prologue is only accepted while no numbered
+  chapter has been found yet and an epilogue only once at least one has, at most
+  one of each per file — so the "prologue" mentioned halfway through a plot
+  summary is ignored. Reword them with `--prologue-phrase`/`--epilogue-phrase`
+  (a plain word or a `/regexp/`, same as `--chapter-phrase`), rename the marks
+  with `--prologue-title`/`--epilogue-title`, and switch either off entirely by
+  passing an empty phrase, e.g. `--prologue-phrase ""`. These marks do not count
+  toward the chapter-number sequence, so they never create or fill a gap.
 - **Several files and folders in one command.** The trailing argument is now a
   list: `abchapterize -r "D:\Audiobooks" "E:\More" "one-off.m4b"` works, mixing
   files and folders freely. Duplicates (and files that a listed folder already

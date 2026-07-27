@@ -133,6 +133,11 @@ internal sealed class RegionProber
     /// of which region contributed what.</summary>
     private readonly List<DetectedChapter> _found;
 
+    /// <summary>Accumulator of the file's prologue/epilogue marks, shared across regions exactly as
+    /// <see cref="_found"/> is. Holds at most one mark per <see cref="NamedPhrase.Kind"/> - see
+    /// <see cref="AcceptNamedMatchAsync"/> for why a later match replaces an earlier one.</summary>
+    private readonly List<DetectedMark> _namedFound;
+
     /// <summary>
     /// Seconds added to a candidate's absolute position before it is reported as progress, i.e. the
     /// offset between this region's own time base and the one the enclosing phase counts in.
@@ -238,16 +243,19 @@ internal sealed class RegionProber
     /// <param name="ctx">Region-loop-invariant Pass 2 inputs.</param>
     /// <param name="region">The region to probe.</param>
     /// <param name="found">Accumulator of confirmed chapters across all regions.</param>
+    /// <param name="namedFound">Accumulator of the file's prologue/epilogue marks.</param>
     /// <param name="language">The language resolution so far.</param>
     /// <param name="progressOffsetSeconds">Offset onto the enclosing phase's time base; see
     /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
     internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
-        List<DetectedChapter> found, LanguageState language, double progressOffsetSeconds = 0)
+        List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
+        double progressOffsetSeconds = 0)
     {
         _env = env;
         _ctx = ctx;
         _region = region;
         _found = found;
+        _namedFound = namedFound;
         Language = language;
         _progressOffsetSeconds = progressOffsetSeconds;
         _probeSeconds = env.Options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
@@ -570,6 +578,11 @@ internal sealed class RegionProber
         // each top the previous one, exactly as consecutive windows' marks do.
         var windowLast = _lastNumber ?? 0;
 
+        // The prologue's own scope closes the moment the first numbered chapter is accepted, so the
+        // named scan runs first: a window holding both the prologue announcement and chapter 1
+        // (a short front matter, or a wide jingle window) must still yield the prologue.
+        await ScanWindowForNamedMarksAsync(candidate, start, segments, trimmedAbs, ct);
+
         // Language.Profile is resolved on the first probe, which is always a full decode (the cache
         // is empty then), so it is non-null by the time any transcript-reuse branch can run.
         foreach (var match in _env.FindCappedPhraseMatches(segments, Language.Profile!, mergeBoundarySegIndex))
@@ -583,6 +596,105 @@ internal sealed class RegionProber
             windowLast = mark.Number;
         }
         return marks;
+    }
+
+    /// <summary>
+    /// Finds the prologue/epilogue announcements in one decoded window and turns the in-scope ones
+    /// into named marks. Kept apart from the numbered scan because nothing these produce takes part
+    /// in the chapter sequence: no number is parsed, no threshold is tightened, no jingle length is
+    /// observed and no window sequence is settled - a named mark is a title at a position and
+    /// nothing more, so it must not steer machinery that reasons about consecutive chapters.
+    /// </summary>
+    /// <param name="candidate">The candidate whose window this is.</param>
+    /// <param name="start">Absolute start of the window.</param>
+    /// <param name="segments">The window transcript in window-relative time, for phrase matching.</param>
+    /// <param name="trimmedAbs">The same transcript in absolute file time, for the jingle anchor.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ScanWindowForNamedMarksAsync(
+        ProbeCandidate candidate, double start, List<TranscriptSegment> segments,
+        List<TranscriptSegment> trimmedAbs, CancellationToken ct)
+    {
+        foreach (var match in FindNamedMatches(segments, Language.Profile!))
+        {
+            if (!IsInScope(match.Phrase))
+                continue;
+            await AcceptNamedMatchAsync(match, candidate, start, trimmedAbs, ct);
+        }
+    }
+
+    /// <summary>
+    /// Whether a named phrase may become a mark at this point of the file, judged purely by how
+    /// many numbered chapters are known so far - see <see cref="NamedPhraseScope"/> for why that is
+    /// the only usable landmark. Rejections are silent: unlike a numbered match, which was plainly
+    /// heard and whose disappearance is worth explaining, "epilogue" turning up in the middle of a
+    /// book is an ordinary word in ordinary prose and logging every occurrence would drown the log.
+    /// </summary>
+    /// <param name="phrase">The phrase that matched.</param>
+    private bool IsInScope(NamedPhrase phrase)
+        => phrase.Scope == NamedPhraseScope.BeforeFirstChapter ? _found.Count == 0 : _found.Count > 0;
+
+    /// <summary>
+    /// Places, logs and records one in-scope named match, replacing any earlier mark of the same
+    /// kind. Last match within the scope wins rather than first: front matter routinely mentions
+    /// what is coming ("...gelesen von...; Prolog") before the narrator actually announces it, and
+    /// the real announcement is by construction the later of the two - whereas nothing follows the
+    /// genuine one inside its own scope, which the prologue's closes at chapter 1 and the
+    /// epilogue's at the end of the file. The replaced mark's own placement work is simply
+    /// discarded; at one prologue and one epilogue per book that costs at most a couple of extra
+    /// refinement transcriptions.
+    /// </summary>
+    /// <param name="match">The named match, in window-relative time.</param>
+    /// <param name="candidate">The candidate whose window this probe decoded.</param>
+    /// <param name="start">Absolute start of that window.</param>
+    /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task AcceptNamedMatchAsync(
+        NamedMatch match, ProbeCandidate candidate, double start,
+        List<TranscriptSegment> trimmedAbs, CancellationToken ct)
+    {
+        var phraseAbs = start + match.PhraseStartSeconds;
+        var (time, markSilence, markRegion) = ResolveNamedMark(match, candidate, start, trimmedAbs);
+
+        var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
+            _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs);
+        time = await _env.Marks.PlaceAsync(
+            null, time, phraseAbs, markSilence, markRegion, markCtx, ct);
+
+        _namedFound.RemoveAll(m => m.Kind == match.Phrase.Kind);
+        _namedFound.Add(new DetectedMark(
+            match.Phrase.Kind, match.Phrase.Title, time, match.Confidence));
+        _env.Log?.Invoke($"{match.Phrase.Kind} detected, mark placed at {FormatTimestamp(time)} " +
+                         $"(confidence {match.Confidence:0.00}" +
+                         await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
+                         $"){LowConfidenceNote(match.Confidence)}");
+    }
+
+    /// <summary>
+    /// The default-mode mark for a named match, resolved exactly as <see cref="ResolveProbeMark"/>
+    /// does for a numbered one - minus its rejection rules. Those exist to keep an in-text mention
+    /// of a chapter number out of the sequence, a concern a named mark does not have: it carries no
+    /// number to corrupt anything with, and its scope has already ruled out the mentions that
+    /// matter. So a named phrase deeper in the window than the timing rule allows still gets a mark
+    /// at the plain fixed offset rather than being dropped for want of a qualifying anchor.
+    /// </summary>
+    /// <param name="match">The named match, in window-relative time.</param>
+    /// <param name="candidate">The candidate whose window this probe decoded.</param>
+    /// <param name="start">Absolute start of that window.</param>
+    /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
+    private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion) ResolveNamedMark(
+        NamedMatch match, ProbeCandidate candidate, double start, List<TranscriptSegment> trimmedAbs)
+    {
+        var phraseAbs = start + match.PhraseStartSeconds;
+        if (_env.Vad == null)
+            return (Math.Max(0, phraseAbs - DefaultMarkLeadSeconds), candidate.Silence, null);
+
+        var (markSilence, markRegion) = ResolveJingleAnchor(
+            phraseAbs, start + match.PhraseEndSeconds, start, _ctx.AllSilences,
+            _ctx.NonSpeechRegions, candidateVadRegion: null, _ctx.SpeechSegments, trimmedAbs);
+        var time = RefineDefaultMark(
+            Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, _ctx.SpeechSegments) - DefaultMarkLeadSeconds),
+            _ctx.SpeechSegments);
+        return (time, markSilence ?? candidate.Silence, markRegion);
     }
 
     /// <summary>
@@ -638,7 +750,7 @@ internal sealed class RegionProber
             return null;
         var (time, markSilence, markRegion) = placement;
 
-        var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile!,
+        var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile!.PhraseRegex,
             _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs);
         time = await _env.Marks.PlaceAsync(
             match.Number, time, phraseAbs, markSilence, markRegion, markCtx, ct);

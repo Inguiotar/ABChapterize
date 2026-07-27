@@ -472,21 +472,29 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Turns a detection result's chapters into titled <see cref="Chapter"/>s and, when the first
-    /// one starts past the very beginning and something was actually spoken there, prepends the
-    /// intro chapter - audiobooks open with a prelude, and the mp4 muxer would otherwise snap the
-    /// first mark to 0:00. When nothing precedes the first chapter's phrase but silence, music or
-    /// a jingle (<see cref="DetectionResult.LeadInHasSpeech"/> false), no intro is inserted either
-    /// - there is no spoken prelude to give its own entry, so that same muxer start-snap is left
-    /// to fold the lead-in into chapter 1 instead. Shared by the normal write path and the
-    /// partial-marks path so both lay out chapters identically. Internal for unit testing.
+    /// Turns a detection result's chapters into titled <see cref="Chapter"/>s - merging in the
+    /// prologue/epilogue marks, which are detected separately precisely because they carry no
+    /// chapter number (see <see cref="DetectedMark"/>) and meet the numbered ones only here - and,
+    /// when the first one starts past the very beginning and something was actually spoken there,
+    /// prepends the intro chapter: audiobooks open with a prelude, and the mp4 muxer would
+    /// otherwise snap the first mark to 0:00. When nothing precedes the first mark's phrase but
+    /// silence, music or a jingle (<see cref="DetectionResult.LeadInHasSpeech"/> false), no intro
+    /// is inserted either - there is no spoken prelude to give its own entry, so that same muxer
+    /// start-snap is left to fold the lead-in into the first chapter instead. Shared by the normal
+    /// write path and the partial-marks path so both lay out chapters identically. Internal for
+    /// unit testing.
     /// </summary>
     /// <param name="result">The file's detection result.</param>
     /// <returns>The chapters to write and a note (" + intro" or "") for the summary line.</returns>
     internal static (List<Chapter> Chapters, string IntroNote) BuildChapters(DetectionResult result)
     {
+        // A named mark sharing a chapter's exact timestamp sorts after it, so a prologue heard in
+        // the same breath as chapter 1 cannot displace the numbered entry a player scrubs by.
         var chapters = result.Chapters
-            .Select(c => new Chapter(c.TimeSeconds, $"{result.Profile.Title} {c.Number}"))
+            .Select(c => (c.TimeSeconds, Title: $"{result.Profile.Title} {c.Number}", Named: 0))
+            .Concat(result.NamedMarks.Select(m => (m.TimeSeconds, m.Title, Named: 1)))
+            .OrderBy(c => c.TimeSeconds).ThenBy(c => c.Named)
+            .Select(c => new Chapter(c.TimeSeconds, c.Title))
             .ToList();
         if (chapters.Count > 0 && chapters[0].StartSeconds > 0 && result.LeadInHasSpeech)
         {

@@ -4,9 +4,9 @@
 
 using ABChapterize.Audio;
 using ABChapterize.Cli;
-using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Vad;
+using System.Text.RegularExpressions;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.DetectionTuning;
 
@@ -59,7 +59,7 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
-    /// Checks whether <paramref name="profile"/>'s chapter phrase is really the first thing heard
+    /// Checks whether <paramref name="phraseRegex"/>'s announcement is really the first thing heard
     /// starting at <paramref name="start"/>, by transcribing a short, isolated window there
     /// directly - the precise marking correction's basic building block (see
     /// <see cref="RefinePreciseMarkAsync"/>), used both for the mark itself and for every
@@ -73,11 +73,12 @@ internal sealed class PreciseMarkRefiner
     /// <param name="start">Absolute position to check.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
+    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>True when the first non-blank transcribed segment contains the chapter phrase.</returns>
     private async Task<bool> PreciseMarkPhraseFoundAsync(
-        double start, string file, string? inputDecoder, LanguageProfile profile, CancellationToken ct)
+        double start, string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
     {
         var decodeStart = Math.Max(0, start - PreciseMarkLeadInSeconds);
         var samples = await _audio.DecodePcmAsync(
@@ -87,7 +88,7 @@ internal sealed class PreciseMarkRefiner
         // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
         // *non-blank* segment is what actually starts at or after the checked position.
         var first = transcript.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Text));
-        return first.Text != null && profile.PhraseRegex.IsMatch(first.Text);
+        return first.Text != null && phraseRegex.IsMatch(first.Text);
     }
 
     /// <summary>
@@ -162,7 +163,8 @@ internal sealed class PreciseMarkRefiner
     /// <param name="mark">The mark <see cref="JingleGeometry.RefineDefaultMark"/> already computed.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
+    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
     /// empty when the VAD pre-pass did not run, in which case there is nothing to check beyond
     /// <paramref name="mark"/> itself and it is returned unchanged whenever its own check fails.</param>
@@ -171,12 +173,12 @@ internal sealed class PreciseMarkRefiner
     /// left as given when no candidate could be confirmed), quiet-snapped as a final step, paired
     /// with whether the phrase was ever actually heard - see <see cref="PreciseMarkResult"/>.</returns>
     internal async Task<PreciseMarkResult> RefinePreciseMarkAsync(
-        double mark, string file, string? inputDecoder, LanguageProfile profile,
+        double mark, string file, string? inputDecoder, Regex phraseRegex,
         List<SpeechSegment> speechSegments, CancellationToken ct)
     {
         double result;
         var heard = true;
-        if (await PreciseMarkPhraseFoundAsync(mark, file, inputDecoder, profile, ct))
+        if (await PreciseMarkPhraseFoundAsync(mark, file, inputDecoder, phraseRegex, ct))
         {
             _log?.Invoke($"mark confirmed at {FormatTimestamp(mark)} - unchanged");
             result = mark;
@@ -193,14 +195,14 @@ internal sealed class PreciseMarkRefiner
                 .Select(s => s.StartSeconds)
                 .OrderByDescending(s => s);
             var confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
-                forwardCandidates, backwardCandidates, file, inputDecoder, profile, ct);
+                forwardCandidates, backwardCandidates, file, inputDecoder, phraseRegex, ct);
 
             if (confirmed is null)
             {
                 var forwardSteps = FixedStepCandidates(mark, span, forward: true);
                 var backwardSteps = FixedStepCandidates(mark, span, forward: false);
                 confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
-                    forwardSteps, backwardSteps, file, inputDecoder, profile, ct);
+                    forwardSteps, backwardSteps, file, inputDecoder, phraseRegex, ct);
             }
 
             if (confirmed is { } onset)
@@ -273,7 +275,8 @@ internal sealed class PreciseMarkRefiner
     /// <see cref="MarkBeforeJingleVerifyMinGapSeconds"/> guard.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
+    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
     /// empty when the VAD pre-pass did not run, in which case there is nothing to search beyond
     /// <paramref name="walked"/> itself.</param>
@@ -283,7 +286,7 @@ internal sealed class PreciseMarkRefiner
     /// no backward candidate ever cleared the check.</returns>
     internal async Task<double> VerifyMarkBeforeJingleAsync(
         double walked, double originalMark, string file, string? inputDecoder,
-        LanguageProfile profile, List<SpeechSegment> speechSegments, CancellationToken ct)
+        Regex phraseRegex, List<SpeechSegment> speechSegments, CancellationToken ct)
     {
         // The probe window at `walked` reaches forward far enough to hear the announcement the walk
         // retreated from, so a "still audible" reading there would be structurally guaranteed
@@ -296,7 +299,7 @@ internal sealed class PreciseMarkRefiner
             return walked;
         }
 
-        if (!await PreciseMarkPhraseFoundAsync(walked, file, inputDecoder, profile, ct))
+        if (!await PreciseMarkPhraseFoundAsync(walked, file, inputDecoder, phraseRegex, ct))
             return walked;
 
         var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
@@ -309,7 +312,7 @@ internal sealed class PreciseMarkRefiner
         foreach (var candidate in candidates)
         {
             ct.ThrowIfCancellationRequested();
-            if (!await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+            if (!await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
             {
                 _log?.Invoke(
                     $"--mark-before-jingle: verification moved {FormatTimestamp(walked)} " +
@@ -489,12 +492,13 @@ internal sealed class PreciseMarkRefiner
     /// <param name="backwardCandidates">Positions earlier than the mark, in the order to try them.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="profile">Language profile supplying the phrase to look for.</param>
+    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
+    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed candidate position, or null if neither direction ever confirmed one.</returns>
     private async Task<double?> WalkPreciseMarkCandidatesInterleavedAsync(
         IEnumerable<double> forwardCandidates, IEnumerable<double> backwardCandidates,
-        string file, string? inputDecoder, LanguageProfile profile, CancellationToken ct)
+        string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
     {
         using var forwardEnumerator = forwardCandidates.GetEnumerator();
         using var backwardEnumerator = backwardCandidates.GetEnumerator();
@@ -508,7 +512,7 @@ internal sealed class PreciseMarkRefiner
             {
                 var candidate = backwardEnumerator.Current;
                 ct.ThrowIfCancellationRequested();
-                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
                     return candidate;
                 backwardHasMore = backwardEnumerator.MoveNext();
             }
@@ -517,7 +521,7 @@ internal sealed class PreciseMarkRefiner
             {
                 var candidate = forwardEnumerator.Current;
                 ct.ThrowIfCancellationRequested();
-                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
                     forwardConfirmed = candidate;
                 forwardHasMore = forwardEnumerator.MoveNext();
             }
@@ -530,7 +534,7 @@ internal sealed class PreciseMarkRefiner
         {
             var candidate = forwardEnumerator.Current;
             ct.ThrowIfCancellationRequested();
-            if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, profile, ct))
+            if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
             {
                 _log?.Invoke(
                     $"consecutive candidates confirmed ({FormatTimestamp(forwardConfirmed.Value)} " +

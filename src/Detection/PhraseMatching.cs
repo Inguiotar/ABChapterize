@@ -30,6 +30,17 @@ internal static class PhraseMatching
         int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
         bool SpansMerge = false);
 
+    /// <summary>A non-numbered announcement (prologue/epilogue) found inside a transcribed window.</summary>
+    /// <param name="Phrase">The phrase that matched, carrying the title its mark is written under.</param>
+    /// <param name="PhraseStartSeconds">Phrase start, in the time base <paramref name="Phrase"/> was
+    /// matched in (window-relative for a Pass 2 probe).</param>
+    /// <param name="PhraseEndSeconds">End of the transcript segment the phrase was found in, in the
+    /// same time base - the smeared-segment span <see cref="JingleGeometry.ResolveJingleAnchor"/>
+    /// needs, exactly as for <see cref="PhraseMatch.PhraseEndSeconds"/>.</param>
+    /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
+    internal readonly record struct NamedMatch(
+        NamedPhrase Phrase, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence);
+
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
     /// either from the regexp capturing group or from the words following the phrase
@@ -49,17 +60,7 @@ internal static class PhraseMatching
         if (segments.Count == 0)
             yield break;
 
-        // Concatenate all segment texts and remember which character belongs to which segment
-        // so a match position can be mapped back to a time.
-        var sb = new StringBuilder();
-        var segStartChar = new int[segments.Count];
-        for (var i = 0; i < segments.Count; i++)
-        {
-            segStartChar[i] = sb.Length;
-            sb.Append(segments[i].Text);
-            sb.Append(' ');
-        }
-        var text = sb.ToString();
+        var (text, segStartChar) = Flatten(segments);
         var mergeBoundaryChar = mergeBoundarySegIndex is { } idx && idx > 0 && idx < segments.Count
             ? segStartChar[idx] : (int?)null;
 
@@ -99,18 +100,76 @@ internal static class PhraseMatching
                 }
             }
 
-            var segIndex = 0;
-            for (var i = 0; i < segments.Count; i++)
-            {
-                if (segStartChar[i] <= m.Index)
-                    segIndex = i;
-                else
-                    break;
-            }
+            var segIndex = SegmentIndexAt(segStartChar, m.Index);
             var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
             yield return new PhraseMatch(
                 number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
                 segments[segIndex].Probability, spansMerge);
         }
+    }
+
+    /// <summary>
+    /// Searches the transcribed segments for every non-numbered announcement the profile knows
+    /// (prologue, epilogue). No number is parsed and none is required, so - unlike
+    /// <see cref="FindPhraseMatches"/> - a phrase that matches is always a match; whether it may
+    /// become a mark is decided by its <see cref="NamedPhrase.Scope"/> at the call site, which is
+    /// the only place that knows how many chapters have been found so far.
+    /// </summary>
+    /// <param name="segments">The window's transcript segments, in whatever time base the caller
+    /// works in (this method neither reads nor rewrites the timings).</param>
+    /// <param name="profile">Language profile supplying <see cref="LanguageProfile.NamedPhrases"/>.</param>
+    internal static IEnumerable<NamedMatch> FindNamedMatches(
+        List<TranscriptSegment> segments, LanguageProfile profile)
+    {
+        if (segments.Count == 0 || profile.NamedPhrases.Count == 0)
+            yield break;
+
+        var (text, segStartChar) = Flatten(segments);
+        foreach (var phrase in profile.NamedPhrases)
+        {
+            foreach (Match m in phrase.Regex.Matches(text))
+            {
+                var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
+                yield return new NamedMatch(
+                    phrase, segment.StartSeconds, segment.EndSeconds, segment.Probability);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Concatenates all segment texts into the single string the regexes run against, remembering
+    /// where each segment starts in it so a match position can be mapped back to a time. The
+    /// trailing space after every segment is what keeps two segments from fusing into a spurious
+    /// word across their join.
+    /// </summary>
+    /// <param name="segments">The transcript segments, in order.</param>
+    private static (string Text, int[] SegStartChar) Flatten(List<TranscriptSegment> segments)
+    {
+        var sb = new StringBuilder();
+        var segStartChar = new int[segments.Count];
+        for (var i = 0; i < segments.Count; i++)
+        {
+            segStartChar[i] = sb.Length;
+            sb.Append(segments[i].Text);
+            sb.Append(' ');
+        }
+        return (sb.ToString(), segStartChar);
+    }
+
+    /// <summary>The index of the segment a character position in <see cref="Flatten"/>'s text
+    /// belongs to: the last segment starting at or before it.</summary>
+    /// <param name="segStartChar">Per-segment start offsets from <see cref="Flatten"/>.</param>
+    /// <param name="charIndex">The character position to locate.</param>
+    private static int SegmentIndexAt(int[] segStartChar, int charIndex)
+    {
+        var segIndex = 0;
+        for (var i = 0; i < segStartChar.Length; i++)
+        {
+            if (segStartChar[i] <= charIndex)
+                segIndex = i;
+            else
+                break;
+        }
+        return segIndex;
     }
 }

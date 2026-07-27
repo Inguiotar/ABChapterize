@@ -20,6 +20,9 @@ namespace ABChapterize.Language;
 /// <param name="PhraseHasNumberGroup">True when <paramref name="PhraseRegex"/> has an explicit capturing group for the chapter number.</param>
 /// <param name="Title">Word used to build chapter titles ("Chapter 1", "Kapitel 1", ...).</param>
 /// <param name="IntroTitle">Title of the synthetic intro chapter.</param>
+/// <param name="NamedPhrases">The non-numbered announcements to look for alongside the chapter
+/// phrase - the prologue and epilogue - each with the title its mark is written under. Empty when
+/// both were switched off with an empty <c>--prologue-phrase</c>/<c>--epilogue-phrase</c>.</param>
 public sealed record LanguageProfile(
     string Language, string ChapterPhrase, Regex PhraseRegex, bool PhraseHasNumberGroup,
-    string Title, string IntroTitle);
+    string Title, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases);

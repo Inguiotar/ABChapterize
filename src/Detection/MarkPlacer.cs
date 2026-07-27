@@ -4,9 +4,9 @@
 
 using ABChapterize.Audio;
 using ABChapterize.Cli;
-using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Vad;
+using System.Text.RegularExpressions;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.JingleGeometry;
 
@@ -18,7 +18,10 @@ namespace ABChapterize.Detection;
 /// </summary>
 /// <param name="File">Path of the audio file.</param>
 /// <param name="InputDecoder">Explicit input decoder to force, or null.</param>
-/// <param name="Profile">Language profile supplying the phrase the corrections look for.</param>
+/// <param name="PhraseRegex">The announcement the corrections look for at the mark: the chapter
+/// phrase for a numbered chapter, the matching prologue/epilogue phrase for a named mark. Per mark
+/// rather than per file, since a run detects all three at once and a correction that re-transcribed
+/// a prologue while looking for "chapter" could only ever fail to confirm it.</param>
 /// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk.</param>
 /// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk, its
 /// verification search and precise marking's candidate positions.</param>
@@ -26,7 +29,7 @@ namespace ABChapterize.Detection;
 /// time, so the backward walk can tell genuine preceding narration apart from a musical or vocal
 /// transient inside the jingle - see <see cref="JingleGeometry.IsGenuineSpeech"/>.</param>
 internal readonly record struct MarkContext(
-    string File, string? InputDecoder, LanguageProfile Profile, List<Silence> AllSilences,
+    string File, string? InputDecoder, Regex PhraseRegex, List<Silence> AllSilences,
     List<SpeechSegment> SpeechSegments, List<TranscriptSegment> TranscriptAbs);
 
 /// <summary>
@@ -82,7 +85,10 @@ internal sealed class MarkPlacer
     /// recorded either way - the auto mechanisms and statistics stay meaningful even when marks are
     /// placed at the plain default offset.
     /// </summary>
-    /// <param name="number">The detected chapter number.</param>
+    /// <param name="number">The detected chapter number, or null for a named (prologue/epilogue)
+    /// mark - which is placed identically but contributes nothing to the per-chapter measurements,
+    /// since those describe the book's regular chapter breaks and a prologue or epilogue transition
+    /// is exactly the atypical one the "inter-chapter" statistics already exclude chapter 1 for.</param>
     /// <param name="defaultMark">The default-mode mark the caller's own pass computed.</param>
     /// <param name="phraseAbs">Absolute phrase start time, the clip point for the jingle length.</param>
     /// <param name="statSilence">The silence the mark anchored to, or null when none.</param>
@@ -92,17 +98,18 @@ internal sealed class MarkPlacer
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The final mark position.</returns>
     internal async Task<double> PlaceAsync(
-        int number, double defaultMark, double phraseAbs, Silence? statSilence,
+        int? number, double defaultMark, double phraseAbs, Silence? statSilence,
         NonSpeechRegion? statRegion, MarkContext ctx, CancellationToken ct)
     {
         var time = defaultMark;
         var phraseHeard = false;
         if (_options.PreciseMark)
             (time, phraseHeard) = await _refiner.RefinePreciseMarkAsync(
-                time, ctx.File, ctx.InputDecoder, ctx.Profile, ctx.SpeechSegments, ct);
+                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.SpeechSegments, ct);
         if (_options.MarkBeforeJingle)
             time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx, ct);
-        Record(number, statSilence, statRegion, phraseAbs);
+        if (number is { } chapterNumber)
+            Record(chapterNumber, statSilence, statRegion, phraseAbs);
         return time;
     }
 
@@ -185,7 +192,7 @@ internal sealed class MarkPlacer
         var verified = walked;
         if (_options.PreciseMark && !markConfirmed)
             verified = await _refiner.VerifyMarkBeforeJingleAsync(
-                walked, mark, ctx.File, ctx.InputDecoder, ctx.Profile, ctx.SpeechSegments, ct);
+                walked, mark, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.SpeechSegments, ct);
 
         var quietest = await _refiner.SnapToQuietestPointAsync(verified, ctx.File, ctx.InputDecoder, ct);
         if (quietest != verified)

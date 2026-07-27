@@ -283,6 +283,28 @@ unresolved, it is re-tagged with the (possibly shorter) remaining list.
 `--force` bypasses this and redoes the file from scratch instead, discarding
 every existing marking including the partial ones.
 
+### Prologue and epilogue
+
+Alongside the numbered chapters, every run also listens for a prologue and an
+epilogue announcement (default phrases `prologue` / `epilogue`, localized by
+`--lang`) and gives each its own mark, titled `--prologue-title` /
+`--epilogue-title` rather than "Chapter *n*".
+
+Neither takes part in the chapter number sequence: a prologue between the
+intro and chapter 1 does not make chapter 1 look like chapter 2, and no gap
+hunt, `--verify` check or ".missing-marks" tag ever concerns itself with
+them. At most one of each is written per file.
+
+Because "prologue" and "epilogue" are ordinary words that also occur in
+ordinary prose, each is only accepted where it can plausibly be an
+announcement: the prologue only *before* the first chapter has been found,
+the epilogue only *after* at least one has. Within that window the last
+occurrence wins — front matter frequently lists what is coming ("read by …,
+contains a prologue") before the narrator actually announces it.
+
+Both are switched off by passing an empty phrase, e.g.
+`--prologue-phrase "" --epilogue-phrase ""`.
+
 ### The intro chapter
 
 Audiobooks usually do not start with chapter one — there is a title
@@ -290,13 +312,13 @@ announcement, credits, a prologue. Many players (and the MP4 muxer itself)
 force the first chapter mark to 0:00, which would move "Chapter 1" to the
 very beginning and misplace it.
 
-Therefore, when the first detected chapter starts later than 0:00, a
-synthetic intro chapter (default title: "Intro", localized by `--lang`;
-customizable with `--intro-title`) is prepended at 0:00, and the first real
-chapter keeps its exact detected position — *unless* nothing precedes that
-first chapter's announcement but silence, music or a jingle: with no actual
+Therefore, when the first detected mark (chapter or prologue) starts later
+than 0:00, a synthetic intro chapter (default title: "Intro", localized by
+`--lang`; customizable with `--intro-title`) is prepended at 0:00, and the
+first real mark keeps its exact detected position — *unless* nothing precedes
+that first announcement but silence, music or a jingle: with no actual
 spoken prelude to give its own entry, no intro chapter is inserted, and the
-muxer's own start-snapping folds that lead-in into the first real chapter
+muxer's own start-snapping folds that lead-in into the first real mark
 instead, however many minutes long it runs.
 
 ## 4. How chapters are written — file safety
@@ -425,7 +447,9 @@ so that logs and reports stay comparable regardless of regional settings.
   detection entirely. Either way, for the languages listed in
   [section 7](#7-languages-and-number-recognition), the resolved language
   enables number-word parsing and localizes the defaults of
-  `--chapter-phrase`, `--title` and `--intro-title` (per file with `auto`).
+  `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`,
+  `--intro-title`, `--prologue-title` and `--epilogue-title` (per file with
+  `auto`).
   `abchapterize --lang de buch.m4b` finds "Kapitel eins" and writes
   "Kapitel 1" without further options; so does plain `abchapterize buch.m4b`,
   via auto-detection.
@@ -441,6 +465,19 @@ so that logs and reports stay comparable regardless of regional settings.
     If the regexp contains a capturing group, the group must capture the
     chapter number as digits; without a group, the number is parsed from the
     surrounding words as with a literal phrase.
+
+`-p`, `--prologue-phrase <p>`
+: The word or phrase that announces a prologue (default: `prologue`,
+  localized by `--lang`). Takes the same literal and `/regexp/` forms as
+  `--chapter-phrase`, but no number is parsed or expected. Only accepted
+  before the first chapter has been found; see
+  [Prologue and epilogue](#prologue-and-epilogue). An empty string switches
+  prologue detection off.
+
+`-g`, `--epilogue-phrase <p>`
+: The same for the epilogue (default: `epilogue`, localized by `--lang`),
+  only accepted once at least one chapter has been found. An empty string
+  switches epilogue detection off.
 
 `-m`, `--model <name>`
 : Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default) or
@@ -592,8 +629,8 @@ probe, which would be both slower and could disagree with itself partway
 through a file.
 
 - At or above a probability of 0.5, the detected language is used, and
-  `--chapter-phrase`, `--title` and `--intro-title` are localized for it
-  (see [section 7](#7-languages-and-number-recognition)) exactly as an
+  the chapter/prologue/epilogue phrases and all title words are localized
+  for it (see [section 7](#7-languages-and-number-recognition)) exactly as an
   explicit `--lang <code>` would, but resolved individually per file.
 - Below 0.5, or when the clip at the start of the file is too short to
   probe (well under half a second of audio), the detection is treated as
@@ -601,8 +638,8 @@ through a file.
   0.5 cutoff used for flagging low-confidence chapter marks (see
   [section 12](#12-output-progress-and-logging)), since Whisper itself is,
   on average, more unsure than sure below it.
-- An explicit `--chapter-phrase`, `--title` or `--intro-title` always wins
-  over the localized default, regardless of the detected language.
+- An explicitly given phrase or title option always wins over the localized
+  default, regardless of the detected language.
 
 The outcome is shown in the per-file result line, `--dry-run` listing and
 `--verbose` log:
@@ -810,9 +847,17 @@ The details worth knowing:
 
 `-i`, `--intro-title <word>`
 : Title of the synthetic intro chapter covering the audio before the first
-  detected chapter (default: `Intro`, localized by `--lang` — see the table
+  detected mark (default: `Intro`, localized by `--lang` — see the table
   in [section 7](#7-languages-and-number-recognition)). See
   [The intro chapter](#the-intro-chapter).
+
+`-P`, `--prologue-title <word>`
+: Title written for a detected prologue (default: `Prologue`, localized by
+  `--lang`). See [Prologue and epilogue](#prologue-and-epilogue).
+
+`-G`, `--epilogue-title <word>`
+: Title written for a detected epilogue (default: `Epilogue`, localized by
+  `--lang`).
 
 ### Output
 
@@ -1053,6 +1098,31 @@ For these languages, `--lang` also localizes the defaults of
 | `pl` | rozdział | Rozdział | Wstęp |
 | `sv` | kapitel | Kapitel | Introduktion |
 | `da` | kapitel | Kapitel | Introduktion |
+
+… and, the same way, the defaults of `--prologue-phrase`/`--prologue-title`
+and `--epilogue-phrase`/`--epilogue-title` (see
+[Prologue and epilogue](#prologue-and-epilogue)). The phrase and the title
+only differ in capitalization here, so one column each:
+
+| `--lang` | Prologue | Epilogue |
+| --- | --- | --- |
+| `en` | Prologue | Epilogue |
+| `de` | Prolog | Epilog |
+| `fr` | Prologue | Épilogue |
+| `es` | Prólogo | Epílogo |
+| `it` | Prologo | Epilogo |
+| `nl` | Proloog | Epiloog |
+| `tr` | Prolog | Epilog |
+| `pt` | Prólogo | Epílogo |
+| `pl` | Prolog | Epilog |
+| `sv` | Prolog | Epilog |
+| `da` | Prolog | Epilog |
+
+Each language uses its Latin-derived form rather than a native near-synonym
+(German "Vorwort", Turkish "Önsöz", …): those name a foreword, which is
+front matter *about* the book, whereas a prologue is part of the story and is
+what a narrator actually announces. Where a particular book disagrees,
+`--prologue-phrase`/`--epilogue-phrase` override it.
 
 Other languages work too: give `--lang` for transcription and a
 `--chapter-phrase` (plain or regexp); announcements with digit numbers are
