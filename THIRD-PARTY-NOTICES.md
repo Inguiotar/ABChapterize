@@ -7,8 +7,9 @@ the executable in every published build).
 ## Silero VAD
 
 `assets/silero_vad.onnx` is the Silero VAD speech/non-speech detection model,
-embedded into the executable and used (with `--jingle`) to find jingle
-transitions that have no detectable amplitude gap.
+embedded into the executable and used to find jingle transitions that have no
+detectable amplitude gap. The pre-pass runs by default, and is skipped only
+with `--max-jingle-length 0` and no `--mark-before-jingle`.
 
 - Project: https://github.com/snakers4/silero-vad
 - License: MIT — see [`licenses/silero-vad-LICENSE`](licenses/silero-vad-LICENSE)
@@ -35,7 +36,7 @@ the C/C++ inference engine that actually performs the Whisper transcription.
 
 ## Microsoft.ML.OnnxRuntime
 
-Used to run the Silero VAD ONNX model for `--jingle`'s speech/non-speech pre-pass.
+Used to run the Silero VAD ONNX model for the speech/non-speech pre-pass.
 
 - Project: https://github.com/Microsoft/onnxruntime
 - License: MIT — see [`licenses/onnxruntime-LICENSE`](licenses/onnxruntime-LICENSE)
