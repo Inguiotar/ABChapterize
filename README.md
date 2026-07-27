@@ -85,7 +85,8 @@ If you don't have it yet:
 - **Windows:** download a build from [ffmpeg.org](https://ffmpeg.org/download.html)
   (e.g. the gyan.dev "essentials" zip) and unpack it. ABChapterize finds it
   automatically in `PATH`, in an `ffmpeg` folder next to the exe or in your user
-  profile, in Program Files, or wherever `FFMPEG_DIR` points.
+  profile, in Program Files, or wherever `FFMPEG_DIR` points — at the unpacked
+  folder or at the binaries themselves, either works.
 - **Linux:** `sudo apt install ffmpeg` (or your distribution's equivalent).
 
 ### 2. Get ABChapterize

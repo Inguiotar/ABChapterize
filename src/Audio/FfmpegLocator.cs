@@ -5,8 +5,8 @@
 namespace ABChapterize.Audio;
 
 /// <summary>
-/// Locates the ffmpeg and ffprobe executables using a list of well-known, OS-specific
-/// locations with a fallback to the FFMPEG_DIR environment variable.
+/// Locates the ffmpeg and ffprobe executables in the FFMPEG_DIR environment variable, then in
+/// a list of well-known, OS-specific locations.
 /// </summary>
 public static class FfmpegLocator
 {
@@ -17,8 +17,8 @@ public static class FfmpegLocator
     private static string FfprobeName => OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe";
 
     /// <summary>
-    /// Searches for ffmpeg and ffprobe in FFMPEG_DIR (which, as the explicit user choice,
-    /// overrides everything else), PATH, an "ffmpeg" folder near the current directory,
+    /// Searches for ffmpeg and ffprobe in FFMPEG_DIR and its "bin" subfolder (which, as the
+    /// explicit user choice, override everything else), PATH, an "ffmpeg" folder near the current directory,
     /// the executable and the user profile, and common OS-specific install locations.
     /// </summary>
     /// <returns>Tuple with the full paths of the ffmpeg and ffprobe executables.</returns>
@@ -35,13 +35,15 @@ public static class FfmpegLocator
         }
 
         throw new AppError(OperatingSystem.IsWindows()
-            ? "ffmpeg/ffprobe could not be found. Searched %FFMPEG_DIR%\\bin, PATH, an " +
-              "\"ffmpeg\" folder in the current directory, next to abchapterize.exe and in " +
-              "%USERPROFILE%, and Program Files.\n" +
-              "Hint: set the environment variable FFMPEG_DIR to ffmpeg's base directory " +
-              "(the directory that contains the \"bin\" folder), e.g. set FFMPEG_DIR=C:\\Tools\\ffmpeg"
-            : "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR, PATH, ./ffmpeg, " +
-              "~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.\n" +
+            ? "ffmpeg/ffprobe could not be found. Searched %FFMPEG_DIR%\\bin and %FFMPEG_DIR% " +
+              "itself, PATH, an \"ffmpeg\" folder in the current directory, next to " +
+              "abchapterize.exe and in %USERPROFILE%, and Program Files.\n" +
+              "Hint: set the environment variable FFMPEG_DIR to ffmpeg's base directory or " +
+              "straight to the directory holding the binaries - both work, e.g. " +
+              "set FFMPEG_DIR=C:\\Tools\\ffmpeg"
+            : "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR and $FFMPEG_DIR/bin, " +
+              "PATH, ./ffmpeg, ~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg, /snap/bin, " +
+              "~/bin and ~/.local/bin.\n" +
               "Hint: install ffmpeg with your package manager (e.g. sudo apt install ffmpeg) " +
               "or set the environment variable FFMPEG_DIR to the directory containing the binaries.");
     }
@@ -49,14 +51,16 @@ public static class FfmpegLocator
     /// <summary>Enumerates all candidate directories in search order (duplicates possible, harmless).</summary>
     private static IEnumerable<string> CandidateDirectories()
     {
-        // 0. FFMPEG_DIR points to ffmpeg's base directory (not the bin directory). As the
-        //    explicit user choice it has the highest priority, e.g. to select a custom
-        //    ffmpeg build over an installed one.
+        // 0. FFMPEG_DIR may point either at ffmpeg's base directory or straight at the
+        //    directory holding the binaries; both are supported, since Windows release zips
+        //    nest them under "bin" while Linux static builds are flat, and nobody should have
+        //    to know which layout they unpacked. As the explicit user choice it has the
+        //    highest priority, e.g. to select a custom ffmpeg build over an installed one.
         var ffmpegDir = Environment.GetEnvironmentVariable("FFMPEG_DIR");
         if (!string.IsNullOrEmpty(ffmpegDir))
         {
             yield return Path.Combine(ffmpegDir, "bin");
-            yield return ffmpegDir; // tolerate FFMPEG_DIR pointing directly at bin
+            yield return ffmpegDir;
         }
 
         // 1. PATH (';'-separated on Windows, ':'-separated on Linux).

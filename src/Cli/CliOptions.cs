@@ -1142,14 +1142,14 @@ public sealed class CliOptions
     /// <summary>OS-specific note about where ffmpeg/ffprobe are searched (part of the usage info).</summary>
     private static string FfmpegNote => OperatingSystem.IsWindows()
         ? """
-          ffmpeg/ffprobe are required. They are searched in %FFMPEG_DIR%\bin (highest priority,
-          FFMPEG_DIR points to ffmpeg's base directory), PATH, an "ffmpeg" folder in the current
+          ffmpeg/ffprobe are required. They are searched in %FFMPEG_DIR%\bin and %FFMPEG_DIR%
+          itself (highest priority; point FFMPEG_DIR at either), PATH, an "ffmpeg" folder in the current
           directory, next to abchapterize.exe or in the user profile, and common Program Files
           locations.
           """
         : """
-          ffmpeg/ffprobe are required. They are searched in $FFMPEG_DIR (highest priority,
-          FFMPEG_DIR points to ffmpeg's base directory), PATH, ./ffmpeg, ~/ffmpeg, /usr/bin,
+          ffmpeg/ffprobe are required. They are searched in $FFMPEG_DIR and $FFMPEG_DIR/bin
+          (highest priority; point FFMPEG_DIR at either), PATH, ./ffmpeg, ~/ffmpeg, /usr/bin,
           /usr/local/bin, /opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.
           Install e.g. with: sudo apt install ffmpeg
           """;
