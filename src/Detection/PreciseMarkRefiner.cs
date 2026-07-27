@@ -93,7 +93,7 @@ internal sealed class PreciseMarkRefiner
     /// <summary>
     /// Verifies (and if necessary, corrects) a default-mode mark by directly asking Whisper
     /// "does the chapter phrase start right here?" instead of trusting the VAD/duration
-    /// heuristics <see cref="RefineDefaultMark"/> already applied - the precise marking option
+    /// heuristics <see cref="JingleGeometry.RefineDefaultMark"/> already applied - the precise marking option
     /// (<see cref="CliOptions.PreciseMark"/>). Those heuristics rest on a floor deliberately
     /// calibrated to err toward not skipping real speech (see
     /// <see cref="TransientSpeechFloorSeconds"/>'s remarks on cross-language uncertainty), which
@@ -107,7 +107,7 @@ internal sealed class PreciseMarkRefiner
     /// chapter that needed no correction. Otherwise, round 1 searches VAD speech-segment starts
     /// within a plausible jingle-plus-phrase span (<see cref="CliOptions.MaxJingleSeconds"/> plus
     /// <see cref="PhraseMarginSeconds"/>) of <paramref name="mark"/> - the same swallowed-blip
-    /// candidates <see cref="ResolveDefaultPhraseOnset"/> already reasons about, not a blind
+    /// candidates <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> already reasons about, not a blind
     /// fixed-step scan - via <see cref="WalkPreciseMarkCandidatesInterleavedAsync"/>, which tries
     /// the forward (later-than-mark) and backward (earlier-than-mark) candidates one at a time in
     /// alternation - backward, then forward, then backward again - rather than exhausting one
@@ -120,7 +120,7 @@ internal sealed class PreciseMarkRefiner
     /// to a single stray false positive elsewhere in the jingle, since a real chapter
     /// announcement's own audio ends and narration (or some unrelated cue) resumes right after it.
     /// A backward success, by contrast, is accepted the moment it is heard, with no further
-    /// checking: <see cref="ResolveDefaultPhraseOnset"/>'s swallowed-blip clustering can
+    /// checking: <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/>'s swallowed-blip clustering can
     /// occasionally promote a later, unrelated blip inside an over-merged jingle region over the
     /// announcement's own earlier one, landing <paramref name="mark"/> generously past the true
     /// onset instead of short of it (confirmed live on chapters whose true onset sat mere seconds
@@ -132,7 +132,7 @@ internal sealed class PreciseMarkRefiner
     /// confirming, by further forward candidates alone. Both spans are bounded to the same
     /// jingle-plus-phrase distance from <paramref name="mark"/>, so neither direction can wander
     /// into a neighbouring chapter's own territory. This deliberately does not touch <see
-    /// cref="ResolveDefaultPhraseOnset"/> itself - default-mode marking, which is all --quick-marks
+    /// cref="JingleGeometry.ResolveDefaultPhraseOnset"/> itself - default-mode marking, which is all --quick-marks
     /// leaves in place, must stay exactly as heuristically accurate as it already is, since it
     /// alone is what makes quick marks usable for jumping to a chapter.
     /// </para>
@@ -163,7 +163,7 @@ internal sealed class PreciseMarkRefiner
     /// risking eating into the announcement itself by moving later.
     /// </para>
     /// </summary>
-    /// <param name="mark">The mark <see cref="RefineDefaultMark"/> already computed.</param>
+    /// <param name="mark">The mark <see cref="JingleGeometry.RefineDefaultMark"/> already computed.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="profile">Language profile supplying the phrase to look for.</param>

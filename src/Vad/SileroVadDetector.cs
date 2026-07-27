@@ -35,8 +35,9 @@ namespace ABChapterize.Vad;
 /// Per-frame probabilities are turned into speech segments by <see cref="VadSegmenter"/>.
 /// </summary>
 /// <remarks>
-/// One instance is shared across every file in a run, mirroring how <see cref="FileProcessor"/>
-/// already shares a single <see cref="FfmpegClient"/> across concurrently processed files:
+/// One instance is shared across every file in a run, mirroring how
+/// <see cref="ABChapterize.Processing.FileProcessor"/> already shares a single
+/// <see cref="FfmpegClient"/> across concurrently processed files:
 /// <see cref="InferenceSession.Run(IReadOnlyCollection{NamedOnnxValue})"/> is safe to call
 /// concurrently from multiple threads as long as each call uses its own tensors, which is
 /// always the case here since the recurrent state and context are local variables of <see

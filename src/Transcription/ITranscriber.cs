@@ -16,7 +16,7 @@ public readonly record struct TranscriptSegment(
 /// <summary>
 /// Speech recognizer that turns PCM audio into timed text segments. Implemented by
 /// <see cref="WhisperTranscriber"/>; the abstraction exists so the detection logic in
-/// <see cref="ChapterDetector"/> can be unit-tested with scripted transcripts.
+/// <see cref="ABChapterize.Detection.ChapterDetector"/> can be unit-tested with scripted transcripts.
 /// </summary>
 public interface ITranscriber
 {

@@ -28,12 +28,12 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     /// <param name="threads">
     /// CPU threads given to this processor. Defaults to nearly all logical cores, which is
     /// right for the common case of one processor at a time; when several run concurrently
-    /// (see <see cref="ConcurrencyPolicy"/>) each instance is given a smaller share instead,
-    /// so the total across all of them still roughly matches the core count.
+    /// (see <see cref="ABChapterize.Concurrency.ConcurrencyMonitor"/>) each instance is given a
+    /// smaller share instead, so the total across all of them still roughly matches the core count.
     /// </param>
     /// <param name="forceCpu">Skips the GPU backends entirely and loads straight onto CPU
-    /// (--cpu-only, see <see cref="CliOptions.CpuOnly"/>), rather than relying on them being
-    /// unavailable or failing to load.</param>
+    /// (--cpu-only, see <see cref="ABChapterize.Cli.CliOptions.CpuOnly"/>), rather than relying
+    /// on them being unavailable or failing to load.</param>
     public WhisperTranscriber(string modelPath, string language, int? threads = null, bool forceCpu = false)
     {
         // Prefer the fastest available backend; Whisper.net probes them in this order

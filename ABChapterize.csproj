@@ -12,6 +12,14 @@
          note) a plain version number instead of appending "+<git commit hash>". -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Generate (but do not ship) the XML documentation file: the point is not the file,
+         it is that the compiler then validates every <see cref="..."/> in the doc comments
+         and warns about <param> tags that no longer match a signature. Doc comments are the
+         primary developer-facing documentation of this codebase, so letting them rot
+         silently is not an option; PublishDocumentationFile keeps the .xml out of the
+         release folders, where nothing would read it. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishDocumentationFile>false</PublishDocumentationFile>
     <!-- win-x64 by default; publish for Linux with: dotnet publish -c Release -r linux-x64 -->
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>

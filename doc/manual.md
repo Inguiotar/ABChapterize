@@ -369,6 +369,7 @@ ffmpeg afterwards.
 ```
 abchapterize [options] <file-or-directory>
 abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>
+abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>
 abchapterize --help | -?
 abchapterize --version
 ```
@@ -852,7 +853,8 @@ touching Whisper at all.
   `--chapter-phrase`, `--model`, `--pass3-model`, `--mark-before-jingle`,
   `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
   `--expected-start-chapter`, `--max-chapter-number`, `--quick-marks`,
-  `--trailing-scan`, `--verify` — nor with `--revert`. Pre-existing chapter
+  `--trailing-scan`, `--verify` — nor with `--export`, `--revert` or
+  `--no-op`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters
   have no Whisper confidence, so they never trigger low-confidence
@@ -949,7 +951,7 @@ touching Whisper at all.
 
 `--version`
 : Show the version number, plus the auto-incrementing build number and UTC
-  build timestamp (e.g. `abchapterize 0.8.1 (build 42, built 2026-07-20
+  build timestamp (e.g. `abchapterize 0.9.0 (build 42, built 2026-07-20
   14:33:12 UTC)`). Not shown anywhere else - `--help`'s banner only ever
   shows the plain version number.
 

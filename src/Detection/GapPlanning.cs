@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Audio;
+using ABChapterize.Cli;
 using static ABChapterize.Detection.DetectionTuning;
 
 namespace ABChapterize.Detection;
@@ -17,9 +18,9 @@ internal static class GapPlanning
     /// <param name="ToSeconds">Region end.</param>
     internal readonly record struct GapRegion(double FromSeconds, double ToSeconds);
 
-    /// <summary>One region <see cref="DetectCoreAsync"/> runs its own, independent Pass 2 pass
-    /// over - the whole file for a fresh <see cref="DetectAsync"/> run, or a single gap-scoped
-    /// stretch for <see cref="DetectGapsAsync"/>. Bounds every aspect of that pass: candidates
+    /// <summary>One region <see cref="ChapterDetector.DetectCoreAsync"/> runs its own, independent Pass 2 pass
+    /// over - the whole file for a fresh <see cref="ChapterDetector.DetectAsync"/> run, or a single gap-scoped
+    /// stretch for <see cref="ChapterDetector.DetectGapsAsync"/>. Bounds every aspect of that pass: candidates
     /// are built only from silences/VAD regions starting inside [<paramref name="FromSeconds"/>,
     /// <paramref name="ToSeconds"/>), window ends are clamped to <paramref name="ToSeconds"/>
     /// (see <see cref="PlanWindowEnd"/>), and the running chapter-number state seeds fresh from
@@ -31,7 +32,7 @@ internal static class GapPlanning
     /// when nothing precedes it (a from-file-start region). Seeds Pass 2's running "last accepted
     /// number" so a match must still exceed it to be accepted - but, unlike the whole-file case,
     /// never as the seed for the intro-transition exemption (see <see cref="LowerNumber"/>'s use
-    /// in <see cref="DetectCoreAsync"/>: a match count already primed by <paramref
+    /// in <see cref="ChapterDetector.DetectCoreAsync"/>: a match count already primed by <paramref
     /// name="LowerNumber"/> &gt; 0 is not the "chapter 1" case even when this is the very first
     /// match Pass 2 makes in this region).</param>
     /// <param name="UpperNumber">The chapter number already confirmed to follow this region, or
@@ -42,7 +43,7 @@ internal static class GapPlanning
         double FromSeconds, double ToSeconds, int LowerNumber, int? UpperNumber);
 
     /// <summary>The regions and, when the last checkable marking in file order is unconfirmed, the
-    /// trailing recovery target <see cref="DetectCoreAsync"/> needs - see <see
+    /// trailing recovery target <see cref="ChapterDetector.DetectCoreAsync"/> needs - see <see
     /// cref="BuildGapRegions"/>.</summary>
     /// <param name="Regions">One region per run of consecutive unconfirmed markings.</param>
     /// <param name="TrailingFrom">Start of the trailing region (the last confirmed/file-start
@@ -116,7 +117,7 @@ internal static class GapPlanning
     }
 
     /// <summary>
-    /// Groups a --verify run's marking outcomes into the regions <see cref="DetectGapsAsync"/>
+    /// Groups a --verify run's marking outcomes into the regions <see cref="ChapterDetector.DetectGapsAsync"/>
     /// re-probes: one <see cref="DetectionRegion"/> per run of consecutive unconfirmed markings
     /// (a single unconfirmed marking is its own run of one), bounded below by the nearest
     /// preceding marking and above by the nearest following one - confirmed or not, since an
@@ -273,7 +274,7 @@ internal static class GapPlanning
     /// pipeline: Pass 2's shared-border and stand-alone window-end snaps
     /// (<see cref="PlanWindowEnd"/>), the reuse-time split (both via
     /// <see cref="FindOverlapSplitPoint"/>), and Pass 3's chunk borders
-    /// (<see cref="TranscribeRegionAsync"/>).
+    /// (<see cref="ChapterDetector.TranscribeRegionAsync"/>).
     /// </summary>
     /// <param name="border">The unsnapped border the seam should stay closest to.</param>
     /// <param name="earliestExclusive">Lower bound (exclusive) for the seam.</param>

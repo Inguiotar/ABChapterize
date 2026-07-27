@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Vad;
+
 namespace ABChapterize.Audio;
 
 /// <summary>A period of silence detected in the audio stream.</summary>
@@ -11,8 +13,9 @@ public readonly record struct Silence(double StartSeconds, double EndSeconds);
 
 /// <summary>
 /// Audio analysis and decoding operations needed by chapter detection. Implemented by
-/// <see cref="FfmpegClient"/>; the abstraction exists so <see cref="ChapterDetector"/>
-/// can be unit-tested with synthetic silences and audio windows.
+/// <see cref="FfmpegClient"/>; the abstraction exists so
+/// <see cref="ABChapterize.Detection.ChapterDetector"/> can be unit-tested with synthetic
+/// silences and audio windows.
 /// </summary>
 public interface IAudioSource
 {
@@ -48,7 +51,8 @@ public interface IAudioSource
     /// Scans the whole file for silence periods and, concurrently in the same decode, streams
     /// it as 16 kHz mono 32-bit float PCM in bounded-size chunks for <paramref
     /// name="consumePcm"/> (typically <see cref="IVoiceActivityDetector.DetectSpeechAsync"/>) -
-    /// used with --jingle, where both the silence scan and the VAD pre-pass are needed, so one
+    /// used whenever the VAD pre-pass runs (see
+    /// <see cref="ABChapterize.Cli.CliOptions.RunVadPrePass"/>, which is the default), where both the silence scan and the VAD pre-pass are needed, so one
     /// full-file decode (via an `asplit` filter forking into a silencedetect branch and a
     /// resampled-PCM branch) replaces what would otherwise be two independent passes over the
     /// same audio. Plain silence detection alone still uses <see cref="DetectSilencesAsync"/>.

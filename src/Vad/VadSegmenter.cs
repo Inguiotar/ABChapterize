@@ -31,8 +31,8 @@ internal static class VadSegmenter
     /// <summary>Non-speech must persist at least this long to end a speech run (Silero's own
     /// default for <c>min_silence_duration_ms</c>). Short compared to a real jingle transition
     /// (seconds long), so it does not need to be tuned for this use case: the much longer
-    /// minimum jingle-gap length is enforced separately, by the caller in <see
-    /// cref="ChapterDetector"/>.</summary>
+    /// minimum jingle-gap length is enforced separately, by the caller in
+    /// <see cref="ABChapterize.Detection.ChapterDetector"/>.</summary>
     internal const double MinSilenceSeconds = 0.1;
 
     /// <summary>

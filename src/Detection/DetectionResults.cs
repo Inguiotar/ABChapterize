@@ -4,6 +4,7 @@
 
 using ABChapterize.Cli;
 using ABChapterize.Language;
+using ABChapterize.Processing;
 
 namespace ABChapterize.Detection;
 

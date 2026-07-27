@@ -2,6 +2,10 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Cli;
+using ABChapterize.Detection;
+using ABChapterize.Processing;
+
 namespace ABChapterize.Transcription;
 
 /// <summary>

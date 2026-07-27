@@ -2,6 +2,9 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Cli;
+using ABChapterize.Vad;
+
 namespace ABChapterize.Detection;
 
 /// <summary>
@@ -24,8 +27,8 @@ internal static class DetectionTuning
 
     /// <summary>
     /// The shortest silence Pass 1 retains in memory (see the <c>allSilences</c>/<c>silences</c>
-    /// split in <see cref="DetectAsync"/>) for use as a window-seam snap target (see
-    /// <see cref="FindNearestSeam"/> and its callers: Pass 2's window plan, the reuse-time
+    /// split in <see cref="ChapterDetector.DetectAsync"/>) for use as a window-seam snap target (see
+    /// <see cref="GapPlanning.FindNearestSeam"/> and its callers: Pass 2's window plan, the reuse-time
     /// split, and Pass 3's chunk borders) and for pinpointing a mark at the silence directly
     /// preceding its phrase, regardless of how high --min-silence-length is set.
     /// Only silences at or above --min-silence-length are ever reported as Pass 2 candidates or
@@ -37,7 +40,7 @@ internal static class DetectionTuning
     internal const double MinStoredSilenceSeconds = 0.5;
 
     /// <summary>
-    /// How far past a Pass 2 window's natural end <see cref="PlanWindowEnd"/> searches for a
+    /// How far past a Pass 2 window's natural end <see cref="GapPlanning.PlanWindowEnd"/> searches for a
     /// seam when that end does not lie inside the next window (no shared border to snap): the
     /// nearest silence - or, when the VAD pre-pass ran, VAD non-speech region - mid-point within this many
     /// seconds after the natural end becomes the window's end, so even a stand-alone window
@@ -59,7 +62,7 @@ internal static class DetectionTuning
     internal const double PhraseMarginSeconds = 5.0;
 
     /// <summary>
-    /// The fallback lead <see cref="ComputeMarkBeforeJingle"/>'s step 5 backs off by when its
+    /// The fallback lead <see cref="JingleGeometry.ComputeMarkBeforeJingle"/>'s step 5 backs off by when its
     /// backward walk runs out of VAD data before ever finding the previous chapter's real
     /// trailing narration (typically a jingle sitting at the very start of the file, before
     /// chapter 1). The same flat 0.5 s lead used elsewhere as a last resort when nothing more
@@ -88,7 +91,7 @@ internal static class DetectionTuning
     internal const double JinglePhraseMatchToleranceSeconds = 0.5;
 
     /// <summary>
-    /// How far a candidate <see cref="LeadingSilence"/> may start after its VAD non-speech
+    /// How far a candidate <see cref="JingleGeometry.LeadingSilence"/> may start after its VAD non-speech
     /// region's own start and still count as leading it, rather than being an unrelated silence
     /// deep inside a long region (see that method's remarks). A true lead-in silence and its
     /// region begin at essentially the same instant regardless of how long the hush runs, so
@@ -100,7 +103,7 @@ internal static class DetectionTuning
 
     /// <summary>
     /// How close a silencedetect silence boundary and a VAD speech segment's end must be to
-    /// count as describing the same transition, when <see cref="ComputeMarkBeforeJingle"/>'s
+    /// count as describing the same transition, when <see cref="JingleGeometry.ComputeMarkBeforeJingle"/>'s
     /// step 2 asks "does real narration end essentially where this silence begins" - the plain
     /// in-narration-pause case, with no jingle to walk back through. Reuses <see
     /// cref="LeadingSilenceStartToleranceSeconds"/>'s own value under its own name: both absorb
@@ -111,7 +114,7 @@ internal static class DetectionTuning
 
     /// <summary>
     /// Longest stretch of VAD-speech "glue" the anchor-time jingle edge adjustment (see
-    /// <see cref="AdjustJingleRegion"/>) will step across at the jingle's leading edge - both
+    /// <see cref="JingleGeometry.AdjustJingleRegion"/>) will step across at the jingle's leading edge - both
     /// when trimming trailing-narration blips off the front of a merged region and when bridging
     /// backward across an untranscribed music vocal to an earlier region the same jingle was
     /// split into. Real trailing-narration fragments and mid-jingle vocals alike run well under
@@ -122,7 +125,7 @@ internal static class DetectionTuning
 
     /// <summary>
     /// Minimum overlap between a VAD non-speech region and the matched phrase's own transcript
-    /// segment span for the smeared-phrase rescue (see <see cref="FindSmearedJingleRegion"/>) to
+    /// segment span for the smeared-phrase rescue (see <see cref="JingleGeometry.FindSmearedJingleRegion"/>) to
     /// accept that region as the jingle. Deliberately jingle-scale (matching
     /// <see cref="MinJingleObservationSeconds"/>): a correctly timed announcement's short segment
     /// barely grazes a following pause region (well under this), while a segment Whisper smeared
@@ -132,7 +135,7 @@ internal static class DetectionTuning
 
     /// <summary>
     /// Slack allowed when deciding a Whisper segment <em>starts with</em> a stored silence or VAD
-    /// non-speech region (see <see cref="TrimLeadingNonSpeech"/>). Whisper timestamps a segment
+    /// non-speech region (see <see cref="JingleGeometry.TrimLeadingNonSpeech"/>). Whisper timestamps a segment
     /// from where its decoded audio block begins, which can be a touch before silencedetect's or
     /// VAD's frame-precise onset; without this slack a silence starting a hair after the segment's
     /// timestamp would not be recognised as leading it. Kept small so it only absorbs that
@@ -143,7 +146,7 @@ internal static class DetectionTuning
     /// <summary>
     /// The shortest span this codebase ever treats as "plausibly a real jingle". Used two ways:
     /// (1) a VAD non-speech region whose longest single contiguous run is shorter than this (see
-    /// <see cref="ComputeNonSpeechRegions"/> for why the longest run, not the merged span) is
+    /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/> for why the longest run, not the merged span) is
     /// dropped outright rather than ever becoming a candidate - too short to be a jingle at any
     /// book's pacing, more likely an in-narration breath pause VAD happened to classify as
     /// non-speech; (2) with
@@ -162,13 +165,13 @@ internal static class DetectionTuning
     /// on jingle music: a vocal-like transient or a strong rhythmic passage can cross its speech
     /// threshold for a fraction of a second in the middle of an otherwise instrumental jingle,
     /// which would otherwise fragment one continuous jingle into several too-short regions (see
-    /// <see cref="ComputeNonSpeechRegions"/>). Deliberately well below any real inter-chapter
+    /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/>). Deliberately well below any real inter-chapter
     /// narration gap, so a genuine speech resume is never merged away.
     /// </summary>
     internal const double MergeShortSpeechGapSeconds = 1.0;
 
     /// <summary>
-    /// The speech-duration floor <see cref="AdvancePastNonSpeech"/> uses to tell a genuine
+    /// The speech-duration floor <see cref="JingleGeometry.AdvancePastNonSpeech"/> uses to tell a genuine
     /// spoken onset from a jingle's own musical/vocal transients (or an occasional Whisper
     /// hallucination inside one) that VAD still classifies as "speech". Calibrated empirically
     /// against a real audiobook (see <c>tools\vadprobe</c>'s sweep data): the shortest such
@@ -226,7 +229,7 @@ internal static class DetectionTuning
 
     /// <summary>
     /// Length of the decode precise marking transcribes to check whether a mark's chapter phrase
-    /// is really the first thing heard there (see <see cref="RefinePreciseMarkAsync"/>). A real
+    /// is really the first thing heard there (see <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>). A real
     /// chapter announcement is never anywhere close to this long, and a jingle - the only other
     /// thing a mark can land on - is rarely shorter than it, so a single window is normally
     /// enough to tell the two apart without needing several probes of increasing length.
@@ -273,7 +276,7 @@ internal static class DetectionTuning
     internal const double MarkLoudnessWindowSeconds = 0.25;
 
     /// <summary>
-    /// Step size precise marking's round 2 (<see cref="RefinePreciseMarkAsync"/>) advances by when
+    /// Step size precise marking's round 2 (<see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>) advances by when
     /// blindly sweeping for the chapter phrase after round 1's VAD-speech-segment candidates never
     /// confirmed it in either direction. Matches <see cref="PreciseMarkLeadInSeconds"/>'s own
     /// magnitude - both are about the finest granularity worth probing at, given
@@ -284,15 +287,15 @@ internal static class DetectionTuning
 
     /// <summary>
     /// How far <em>before</em> a confirmed/left-as-is precise marking mark
-    /// <see cref="SnapToQuietestPointAsync"/> is allowed to search for a quieter point to move it
+    /// <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> is allowed to search for a quieter point to move it
     /// to - the final cleanup step's own radius, independent of (and larger than) the candidate
-    /// search step size above it. Backward-only (see <see cref="SnapToQuietestPointAsync"/>), so
+    /// search step size above it. Backward-only (see <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/>), so
     /// this is a one-sided lookback, not a window centered on the mark.
     /// </summary>
     internal const double PreciseMarkQuietSnapRadiusSeconds = 0.15;
 
     /// <summary>
-    /// Width of the sliding RMS window <see cref="SnapToQuietestPointAsync"/> scans across
+    /// Width of the sliding RMS window <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> scans across
     /// <see cref="PreciseMarkQuietSnapRadiusSeconds"/>'s range to find the quietest point. Short
     /// enough to land inside a genuine micro-pause between words/syllables rather than averaging
     /// across most of one, long enough that a single sample near a zero-crossing inside otherwise
@@ -303,7 +306,7 @@ internal static class DetectionTuning
     /// <summary>
     /// Minimum power-ratio improvement, in dB, a backward candidate point within
     /// <see cref="PreciseMarkQuietSnapRadiusSeconds"/> must offer over the mark's own current
-    /// position before <see cref="SnapToQuietestPointAsync"/> will nudge to it. 6 dB is a 4x power
+    /// position before <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> will nudge to it. 6 dB is a 4x power
     /// ratio - comfortably audible, not a marginal difference that could just as easily be
     /// noise-floor jitter - so a nudge only ever happens for a genuine, worthwhile improvement,
     /// never as a coin-flip between two nearly-identical spots.
@@ -397,7 +400,7 @@ internal static class DetectionTuning
     /// <summary>
     /// Minimum length, both for a gap between transcribed segments (or before the first/after
     /// the last one) to be worth a focused re-transcription attempt, and - for Pass 3's version
-    /// of the same fallback (see <see cref="ScanGapRetriesAsync"/>) - for a silence or, when the
+    /// of the same fallback (see <see cref="ChapterDetector.ScanGapRetriesAsync"/>) - for a silence or, when the
     /// VAD pre-pass ran, VAD non-speech region overlapping that gap to count as "plausibly the real
     /// jingle/scene transition" rather than an ordinary in-narration pause. Whisper's single-shot
     /// decoding of a long window can silently skip a stretch of audio altogether - typically

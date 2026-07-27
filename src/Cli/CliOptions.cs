@@ -4,7 +4,10 @@
 
 using System.Reflection;
 using System.Text.RegularExpressions;
+using ABChapterize.Concurrency;
+using ABChapterize.Detection;
 using ABChapterize.Language;
+using ABChapterize.Transcription;
 
 namespace ABChapterize.Cli;
 
@@ -207,8 +210,8 @@ public sealed class CliOptions
     /// phrase, walks backward through any leading silence and then the jingle's own music to the
     /// previous chapter's actual trailing narration - or, where two jingles play back to back
     /// with an audible break between them, to the second one's start rather than in front of the
-    /// first - and marks right there; see <see
-    /// cref="ChapterDetector"/>'s <c>ComputeMarkBeforeJingle</c> for the mechanics. Being built on
+    /// first - and marks right there; see
+    /// <see cref="JingleGeometry.ComputeMarkBeforeJingle"/> for the mechanics. Being built on
     /// top of default-mode placement rather than replacing it outright is what makes this
     /// compatible with <see cref="PreciseMark"/>, unlike this tool's original "--jingle" mode this
     /// option is descended from. Because <see cref="PreciseMark"/> is on unless <see
@@ -217,8 +220,7 @@ public sealed class CliOptions
     /// heuristics above alone; only when that confirmation did not happen is the walked result
     /// itself re-checked - see <see cref="PreciseMarkRefiner"/>'s
     /// <c>VerifyMarkBeforeJingleAsync</c>. Without this option, see
-    /// <see cref="ChapterDetector"/>'s <c>DefaultMarkLeadSeconds</c> for the placement used
-    /// instead.
+    /// <see cref="DetectionTuning.DefaultMarkLeadSeconds"/> for the placement used instead.
     /// </summary>
     public bool MarkBeforeJingle { get; private set; }
 
@@ -350,7 +352,7 @@ public sealed class CliOptions
     public bool DryRun { get; private set; }
 
     /// <summary>
-    /// Write detected chapters to a sidecar file alongside the output (--export / -e), in
+    /// Write detected chapters to a sidecar file alongside the output (--export / -E), in
     /// addition to writing them into the audio file. Composes with normal detection (and
     /// with --dry-run, which still saves the sidecar even though the audio file is left
     /// untouched). Format is FFMETADATA unless --simple-metadata is given.
@@ -458,6 +460,21 @@ public sealed class CliOptions
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
     private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet;
+
+    /// <summary>
+    /// True when any option was given that only means something for a run that actually detects
+    /// or writes chapters - i.e. anything beyond file selection (--recurse/--filter) and the
+    /// output/logging options. <see cref="Revert"/> and <see cref="NoOp"/> do neither, so both
+    /// reject all of these instead of silently ignoring them; sharing one list is what keeps the
+    /// two checks, and the promise their error messages make, from drifting apart as options are
+    /// added.
+    /// </summary>
+    private bool AnyProcessingOptionGiven
+        => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || TrailingScan || DryRun
+           || Export || Import || SimpleMetadata || Verify || Jobs != null
+           || _langSet || _phraseSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
+           || _titleSet || _introSet || _jingleLenSet || _minSilenceSet || _earlyAbortSet
+           || _expectedStartSet;
 
     /// <summary>
     /// File extensions of the container formats that ffmpeg can both read and write chapter
@@ -575,17 +592,13 @@ public sealed class CliOptions
             throw new CliError("No file or directory specified.");
 
         // Semantic validation.
-        if (o.Revert && (o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                         || o._pass3ModelSet || o._maxSet || o._maxChapterNumberSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
-                         || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
-            throw new CliError("--revert can only be combined with --recurse and --filter.");
+        if (o.Revert && o.AnyProcessingOptionGiven)
+            throw new CliError("--revert can only be combined with --recurse, --filter and the output options.");
 
         if (o.NoOp && o.FilterRegex == null && o.FilterExtensions == null)
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
-        if (o.NoOp && (o.Revert || o.Backup || o.Force || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.DryRun || o._langSet || o._phraseSet || o._modelSet
-                       || o._pass3ModelSet || o._maxSet || o._maxChapterNumberSet || o._titleSet || o._introSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet
-                       || o.Export || o.Import || o.SimpleMetadata || o.Jobs != null || o.Verify))
+        if (o.NoOp && (o.Revert || o.AnyProcessingOptionGiven))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
 
         if (o.Import && o.Export)
@@ -1111,9 +1124,14 @@ public sealed class CliOptions
                                     <file>.chapters.txt with --simple-metadata), for manual
                                     review or correction. Combinable with --dry-run.
           -I, --import              Skip Whisper detection; write chapters from a previously
-                                    exported sidecar file instead. Cannot be combined with
-                                    --lang, --chapter-phrase, --model, --mark-before-jingle,
-                                    --max-jingle-length, --min-silence-length or --revert.
+                                    exported sidecar file instead. Since nothing is detected,
+                                    the detection options have no effect and are rejected:
+                                    --lang, --chapter-phrase, --model, --pass3-model,
+                                    --mark-before-jingle, --quick-marks, --max-jingle-length,
+                                    --min-silence-length, --early-abort,
+                                    --expected-start-chapter, --max-chapter-number,
+                                    --trailing-scan and --verify. Also mutually exclusive with
+                                    --export, --revert and --no-op.
           -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
                                     of FFMETADATA for --export/--import. Requires one of them.
 

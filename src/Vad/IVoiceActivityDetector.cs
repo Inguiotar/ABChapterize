@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Audio;
+
 namespace ABChapterize.Vad;
 
 /// <summary>A contiguous region of detected speech.</summary>
@@ -11,10 +13,11 @@ public readonly record struct SpeechSegment(double StartSeconds, double EndSecon
 
 /// <summary>
 /// Voice activity detection: classifies a stream of audio into speech/non-speech regions over
-/// time. Implemented by <see cref="SileroVadDetector"/>; the abstraction exists so <see
-/// cref="ChapterDetector"/> can be unit-tested with synthetic speech segments, without loading
-/// the ONNX model. Used only with --jingle, as an additional Pass 2 candidate source alongside
-/// silence detection: a jingle is non-speech to a speech/non-speech classifier just like
+/// time. Implemented by <see cref="SileroVadDetector"/>; the abstraction exists so
+/// <see cref="ABChapterize.Detection.ChapterDetector"/> can be unit-tested with synthetic
+/// speech segments, without loading the ONNX model. Runs whenever
+/// <see cref="ABChapterize.Cli.CliOptions.RunVadPrePass"/> says so - which is the default - as
+/// an additional Pass 2 candidate source alongside silence detection: a jingle is non-speech to a speech/non-speech classifier just like
 /// silence is, so it shows up as a gap between two <see cref="SpeechSegment"/>s even on
 /// audiobooks where the jingle has no detectable amplitude gap around it (silencedetect finds
 /// nothing there at all in that case).

@@ -566,6 +566,16 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--expected-start-chapter", "5"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapter-number", "50"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--cpu-only"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapters", "50"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--title", "Teil"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--intro-title", "Vorwort"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--min-silence-length", "2"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--max-jingle-length", "20"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--chapter-phrase", "Teil"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--model", "large"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--export"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--simple-metadata"));
     }
 
     [Fact]
@@ -614,12 +624,19 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--expected-start-chapter", "5"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--max-chapter-number", "50"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--cpu-only"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--backup"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--verify"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--export"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--trailing-scan"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--quick-marks"));
     }
 
     [Fact]
     public void NoOp_WithRecurseAndOutputOptions_IsAllowed()
     {
-        var o = ParseDir("--no-op", "--filter", "m4b", "--recurse", "--quiet", "--summary")!;
+        var o = ParseDir("--no-op", "--filter", "m4b", "--recurse", "--quiet", "--summary",
+            "--verbose", "--no-bar")!;
         Assert.True(o.NoOp && o.Recurse && o.Quiet && o.Summary);
     }
 

@@ -11,7 +11,7 @@ namespace ABChapterize.Language;
 /// <summary>
 /// Extracts chapter numbers from transcribed text. Understands plain digits in any language,
 /// digit ordinals ("2nd", "2e", "2ème"), and spoken number words (0-999, cardinal and
-/// ordinal) via the per-language parsers in <see cref="Lang"/>; unknown language codes fall
+/// ordinal) via the per-language parsers in <see cref="ABChapterize.Language.Parsers"/>; unknown language codes fall
 /// back to the English parser. Numbers can be extracted after the chapter phrase
 /// ("Chapter Seven") or before it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
 /// </summary>

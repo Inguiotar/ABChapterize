@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Audio;
+using ABChapterize.Cli;
 using ABChapterize.Transcription;
 using ABChapterize.Vad;
 using static ABChapterize.Detection.DetectionTuning;

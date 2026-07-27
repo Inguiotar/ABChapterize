@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Text.RegularExpressions;
+using ABChapterize.Cli;
 
 namespace ABChapterize.Language;
 

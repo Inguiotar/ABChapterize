@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 
 namespace ABChapterize.Concurrency;
@@ -136,7 +137,7 @@ internal static class SystemLoad
             proc.WaitForExit(2000);
             var firstLine = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault();
-            return firstLine != null && int.TryParse(firstLine, out var pct) ? Math.Clamp(pct, 0, 100) : null;
+            return firstLine != null && int.TryParse(firstLine, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pct) ? Math.Clamp(pct, 0, 100) : null;
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using ABChapterize.Language;
@@ -19,7 +20,7 @@ internal static class PhraseMatching
     /// <param name="PhraseEndSeconds">End of the transcript segment the phrase was found in,
     /// relative to the window start. Whisper can smear that segment across a whole jingle (its
     /// start pulled seconds before the words are spoken), so the span [start, end] - not the
-    /// start alone - is what the smeared-phrase rescue in <see cref="ResolveJingleAnchor"/>
+    /// start alone - is what the smeared-phrase rescue in <see cref="JingleGeometry.ResolveJingleAnchor"/>
     /// matches against VAD regions.</param>
     /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
     /// <param name="SpansMerge">True when the text actually used to find the phrase and parse its
@@ -73,7 +74,7 @@ internal static class PhraseMatching
             var consumedEnd = m.Index + m.Length;
             if (profile.PhraseHasNumberGroup && m.Groups.Count > 1 && m.Groups[1].Success)
             {
-                if (!int.TryParse(m.Groups[1].Value, out number))
+                if (!int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out number))
                     continue;
             }
             else

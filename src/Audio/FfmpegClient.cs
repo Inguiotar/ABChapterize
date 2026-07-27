@@ -192,7 +192,7 @@ public sealed partial class FfmpegClient : IAudioSource
                 m = ProgressTimeRegex().Match(line);
                 if (m.Success)
                 {
-                    processedSeconds = long.Parse(m.Groups[1].Value) / 1_000_000.0;
+                    processedSeconds = long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) / 1_000_000.0;
                     progress?.Invoke(processedSeconds);
                 }
             }, ct);
@@ -343,7 +343,7 @@ public sealed partial class FfmpegClient : IAudioSource
             }
             m = ProgressTimeRegex().Match(line);
             if (m.Success)
-                onProgress(long.Parse(m.Groups[1].Value) / 1_000_000.0);
+                onProgress(long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) / 1_000_000.0);
         }
     }
 
@@ -421,7 +421,7 @@ public sealed partial class FfmpegClient : IAudioSource
                 {
                     var m = ProgressTimeRegex().Match(line);
                     if (m.Success)
-                        progress?.Invoke(long.Parse(m.Groups[1].Value) / 1_000_000.0);
+                        progress?.Invoke(long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) / 1_000_000.0);
                 }, ct);
             if (exit != 0)
                 throw new AppError($"ffmpeg failed to write chapters for \"{file}\": {stderr.Trim()}");
