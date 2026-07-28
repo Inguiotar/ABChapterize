@@ -459,6 +459,54 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void LogFile_TurnsLoggingOn_WithoutTurningOnConsoleVerbosity()
+    {
+        var o = ParseFile("--log-file", Path.Combine(_dir, "run.log"))!;
+        Assert.Equal(Path.Combine(_dir, "run.log"), o.LogFilePath);
+        Assert.True(o.LoggingEnabled);
+        Assert.False(o.Verbose);
+    }
+
+    [Fact]
+    public void LogFile_HasTheShortFormO()
+    {
+        Assert.Equal(Path.Combine(_dir, "run.log"),
+            ParseFile("-o", Path.Combine(_dir, "run.log"))!.LogFilePath);
+    }
+
+    [Fact]
+    public void LoggingEnabled_IsAlsoTrueForPlainVerbose()
+    {
+        Assert.True(ParseFile("--verbose")!.LoggingEnabled);
+        Assert.False(ParseFile()!.LoggingEnabled);
+    }
+
+    [Fact]
+    public void LogFile_InAMissingDirectory_IsRejectedAtParseTime()
+    {
+        // Caught now rather than hours into an unattended run that would have logged nothing.
+        var ex = Assert.Throws<CliError>(() =>
+            ParseFile("--log-file", Path.Combine(_dir, "nope", "run.log")));
+        Assert.Contains("does not exist", ex.Message);
+    }
+
+    [Fact]
+    public void LogFile_NamingADirectory_IsRejected()
+    {
+        var ex = Assert.Throws<CliError>(() => ParseFile("--log-file", _dir));
+        Assert.Contains("is a directory", ex.Message);
+    }
+
+    [Fact]
+    public void LogFile_DoesNotChangeTheRunFingerprint()
+    {
+        // It only changes what the run looks like, so an interrupted run can be resumed with a
+        // log file added to the command line.
+        Assert.Equal(ParseDir()!.RunFingerprint,
+            ParseDir("--log-file", Path.Combine(_dir, "run.log"))!.RunFingerprint);
+    }
+
+    [Fact]
     public void QuickMarksWithMarkBeforeJingle_IsAllowed()
     {
         // --mark-before-jingle walks back from whatever mark default-mode placement produced,

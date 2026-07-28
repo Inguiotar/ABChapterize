@@ -13,6 +13,7 @@ namespace ABChapterize.Tests;
 /// Tests for <see cref="FileProcessor.EnumerateTargets"/>: extension matching, --recurse,
 /// --filter regexps, and the exclusion of this tool's own temporary and backup files.
 /// </summary>
+[Collection(ConsoleCapture.Name)]
 public sealed class FileEnumerationTests : IDisposable
 {
     private readonly string _dir;

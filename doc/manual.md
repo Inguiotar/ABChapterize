@@ -919,8 +919,8 @@ The details worth knowing:
 - The record notes which options the run used. Change any option that affects
   the outcome and the stale record is discarded rather than misapplied;
   options that only change the output's appearance (`--quiet`, `--verbose`,
-  `--no-bar`, `--summary`, `--jobs`, `--cpu-only`) do not count, so those can
-  be added or dropped when resuming.
+  `--log-file`, `--no-bar`, `--summary`, `--jobs`, `--cpu-only`) do not count,
+  so those can be added or dropped when resuming.
 - A file the run renamed (a `.missing-marks` tag added or dropped) is
   recognized under either name.
 - Deleting the file by hand is always safe; it only ever costs the resume.
@@ -971,6 +971,18 @@ of its own; see [Custom marks](#custom-marks).
   their timings and confidence) after the header line — the best way to see
   exactly what the recognizer heard, and what `--verbose` did before this flag
   existed. Implies `--verbose`.
+
+`-o`, `--log-file <path>`
+: Write the log to a file instead of the console. This switches logging on by
+  itself, so `--verbose` is not needed alongside it — add `-T` if the
+  transcripts should go in as well. The console is left with its progress bar
+  and its result lines, and the file receives those too — the per-file
+  summaries, including the ones `--quiet` keeps off the screen, and the
+  `--summary` block closing the run. An existing file is appended to,
+  never overwritten; each run is bracketed by a header line naming the version
+  and the command line, and a closing line. Every line is written out as it
+  happens, so an interrupted run still leaves a complete log behind. The path's
+  directory must exist. See [section 12](#12-output-progress-and-logging).
 
 `-B`, `--no-bar`
 : Never display progress bars; per-file results are printed as timestamped
@@ -1486,6 +1498,15 @@ Whisper transcript for that window — every segment with its timings and
 confidence (`p=0.87`). This is the primary diagnosis tool: it shows verbatim
 what the recognizer heard, so you can see *why* an announcement was missed and
 adjust `--chapter-phrase`, `--min-silence-length` or the model.
+
+**`--log-file <path>`** (`-o`) sends that whole log to a file rather than the
+console, and switches it on in the first place — `-o run.log` alone logs
+everything `--verbose` would have printed, `-o run.log -T` adds the
+transcripts. The console keeps its progress bar and per-file result lines,
+which the file also receives, so a run stays watchable while the detail is
+kept for later. Timestamps in the file carry the date as well, and each run
+appends a header and a footer line rather than replacing what is already
+there, so one log can collect a whole library's worth of runs.
 
 **Confidence flagging** — every chapter mark carries Whisper's own confidence
 (the average token probability of the segment the number was parsed from).

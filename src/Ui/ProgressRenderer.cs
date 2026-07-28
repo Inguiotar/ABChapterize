@@ -93,7 +93,8 @@ public sealed class ProgressRenderer : IDisposable
 {
     private readonly bool _interactive;
     private readonly bool _quiet;
-    private readonly bool _verbose;
+    private readonly bool _logToConsole;
+    private readonly LogFile? _logFile;
     private readonly bool _logStyle;
     private readonly Timer? _timer;
     private readonly List<(WorkTracker Tracker, string Label)> _slots = [];
@@ -108,13 +109,18 @@ public sealed class ProgressRenderer : IDisposable
     /// <param name="quiet">Suppress the bar and non-important summary lines (--quiet).</param>
     /// <param name="verbose">Print <see cref="Log"/> messages as timestamped log lines (--verbose).</param>
     /// <param name="noBar">Suppress the progress bar; summary lines use the log format (--no-bar).</param>
-    public ProgressRenderer(bool quiet, bool verbose = false, bool noBar = false)
+    /// <param name="logFile">Opened <c>--log-file</c> destination, or null. It takes the log stream
+    /// over entirely: with a log file the console shows its bar and summaries and nothing else,
+    /// which is the point of asking for one.</param>
+    public ProgressRenderer(bool quiet, bool verbose = false, bool noBar = false, LogFile? logFile = null)
     {
         _quiet = quiet;
-        _verbose = verbose;
-        // In both verbose and no-bar mode the per-file summaries become part of the log
-        // stream, so they use the same timestamped format (and appear exactly once).
-        _logStyle = verbose || noBar;
+        _logFile = logFile;
+        _logToConsole = verbose && logFile == null;
+        // Wherever the log lines end up, the per-file summaries join them there and use the same
+        // timestamped format. On the console that leaves --no-bar as the remaining reason to
+        // switch formats: without a bar to replace, a summary is just another line of log.
+        _logStyle = _logToConsole || noBar;
         _interactive = !quiet && !noBar && !Console.IsOutputRedirected;
         if (_interactive)
         {
@@ -151,6 +157,9 @@ public sealed class ProgressRenderer : IDisposable
         {
             _slots.RemoveAll(s => ReferenceEquals(s.Tracker, tracker));
             ClearBlock();
+            // A summary is the one line worth having in both places: --quiet may hold it back from
+            // the console, but a log file exists to be complete.
+            _logFile?.Write(summary);
             if (!_quiet || important)
                 Console.WriteLine(_logStyle ? FormatLog(summary) : summary);
             if (_slots.Count == 0)
@@ -159,19 +168,38 @@ public sealed class ProgressRenderer : IDisposable
     }
 
     /// <summary>
-    /// Prints a --verbose log line. All active progress bars are erased first (under the
-    /// same lock the bar renderer uses) so they are never left behind above the log output;
-    /// the next timer tick simply redraws them below. No-op unless --verbose is active.
+    /// Records a log line, on the console (--verbose) or in the --log-file. On the console all
+    /// active progress bars are erased first (under the same lock the bar renderer uses) so they
+    /// are never left behind above the log output; the next timer tick simply redraws them below.
+    /// No-op when neither destination is active.
     /// </summary>
     /// <param name="message">The log message (without timestamp).</param>
     public void Log(string message)
     {
-        if (!_verbose)
-            return;
         lock (_lock)
         {
+            _logFile?.Write(message);
+            if (!_logToConsole)
+                return;
             ClearBlock();
             Console.WriteLine(FormatLog(message));
+        }
+    }
+
+    /// <summary>
+    /// Prints a line that belongs to the run rather than to any one file - the model banner, the
+    /// closing --summary block - and mirrors it into the --log-file. Unlike a per-file summary
+    /// this is never suppressed by --quiet: every caller already decides for itself whether the
+    /// line is wanted at all.
+    /// </summary>
+    /// <param name="line">The line to print.</param>
+    public void Announce(string line)
+    {
+        lock (_lock)
+        {
+            _logFile?.Write(line);
+            ClearBlock();
+            Console.WriteLine(line);
         }
     }
 

@@ -225,6 +225,7 @@ when chapters are written. The most useful knobs:
 | `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (confidence, silence/jingle, Whisper-audio and transcription-speed stats) at the end. |
 | `-v`, `--verbose` | Log processing details, each probe/chunk as a `<length>@<time>` header. |
 | `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
+| `-o`, `--log-file <path>` | Write the log to a file instead of the console — switches logging on by itself (add `-T` for the transcripts). The console keeps its progress bar and result lines, which the file gets too. Appends to an existing file. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
 | `-d`, `--dry-run` | Detect chapters but write nothing; print what would be written. |
 | `-E`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. |

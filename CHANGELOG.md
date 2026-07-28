@@ -51,6 +51,15 @@ for you, not how it was built. The format follows
   with `--prologue-title`/`--epilogue-title`, and switch either off entirely by
   passing an empty phrase, e.g. `--prologue-phrase ""`. These marks do not count
   toward the chapter-number sequence, so they never create or fill a gap.
+- **`--log-file <path>`** (`-o`) keeps the log in a file instead of on screen.
+  Asking for one is enough to switch logging on — `--verbose` is not needed
+  alongside it, and `-T` still adds the transcripts. The console keeps its
+  progress bar and its result lines, and the file receives those too — per-file
+  summaries (including the ones `--quiet` holds back) and the `--summary` block
+  — so an unattended run stays watchable while its detail is kept for later. An existing file is appended to rather than
+  overwritten, with each run bracketed by a header naming the version and the
+  command line; lines are written as they happen, so even a run that is cut
+  short leaves its log behind.
 - **Several files and folders in one command.** The trailing argument is now a
   list: `abchapterize -r "D:\Audiobooks" "E:\More" "one-off.m4b"` works, mixing
   files and folders freely. Duplicates (and files that a listed folder already

@@ -384,6 +384,21 @@ public sealed class CliOptions
     /// <summary>Suppress the progress bar; per-file summaries use the log-line format (--no-bar / -B).</summary>
     public bool NoBar { get; private set; }
 
+    /// <summary>
+    /// Path of the file the log stream is written to (--log-file / -o), or null for no log file.
+    /// Asking for one turns logging on by itself - there would be nothing to write otherwise - and
+    /// sends the whole stream to the file rather than the console, so the console keeps its
+    /// progress bar and per-file summaries alone. <see cref="VerboseTranscripts"/> still decides
+    /// how much detail the stream carries.
+    /// </summary>
+    public string? LogFilePath { get; private set; }
+
+    /// <summary>True when log lines are produced at all, for whichever destination
+    /// (<see cref="Verbose"/> or <see cref="LogFilePath"/>) asked for them. Call sites that only
+    /// build a log message when someone is listening test this rather than
+    /// <see cref="Verbose"/>.</summary>
+    public bool LoggingEnabled => Verbose || LogFilePath != null;
+
     /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
     public bool Summary { get; private set; }
 
@@ -512,6 +527,7 @@ public sealed class CliOptions
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
         ['J'] = "--jobs", ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
+        ['o'] = "--log-file",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -540,7 +556,7 @@ public sealed class CliOptions
     /// Short hash of every option that changes what a run does to a file - the language and
     /// phrase, the models, the detection tuning and safety nets, the file selection, the output
     /// mode. Options that only change what the run <i>looks like</i> (--quiet, --verbose,
-    /// --no-bar, --summary, --jobs, --cpu-only) are deliberately left out, so adding one of those
+    /// --log-file, --no-bar, --summary, --jobs, --cpu-only) are deliberately left out, so adding one of those
     /// to an interrupted run's command line still resumes it.
     /// <para>
     /// <see cref="ABChapterize.Processing.BatchProgress"/> stores this alongside the files a run
@@ -897,6 +913,7 @@ public sealed class CliOptions
             case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--jobs": Jobs = ParseJobs(nextParam()); return true;
+            case "--log-file": LogFilePath = ParseLogFilePath(nextParam()); return true;
             default: return false;
         }
     }
@@ -980,6 +997,26 @@ public sealed class CliOptions
         if (!int.TryParse(value, out var n) || n < 1)
             throw new CliError($"Invalid --jobs value \"{value}\": expected a positive number or \"auto\".");
         return n;
+    }
+
+    /// <summary>
+    /// Validates a --log-file path. The file itself is only opened once the run starts, but a
+    /// misspelled directory is caught here: a run that logs is usually one nobody watches, and
+    /// noticing hours later that there is no log defeats the purpose of asking for one.
+    /// </summary>
+    /// <param name="value">The raw --log-file parameter.</param>
+    /// <exception cref="CliError">Thrown for an empty path, a path naming an existing directory,
+    /// or one whose parent directory does not exist.</exception>
+    private static string ParseLogFilePath(string value)
+    {
+        if (value.Trim().Length == 0)
+            throw new CliError("--log-file requires a file name.");
+        if (Directory.Exists(value))
+            throw new CliError($"--log-file \"{value}\" is a directory, not a file.");
+        var directory = Path.GetDirectoryName(Path.GetFullPath(value));
+        if (directory != null && !Directory.Exists(directory))
+            throw new CliError($"--log-file directory does not exist: {directory}");
+        return value;
     }
 
     /// <summary>Parses a non-negative integer parameter, shared by --max-chapters and
@@ -1449,6 +1486,11 @@ public sealed class CliOptions
           -T, --verbose-transcripts Like --verbose, but also dumps every Whisper transcript's
                                     segments (to see exactly what the recognizer heard). Implies
                                     --verbose.
+          -o, --log-file <path>     Write the log to a file instead of the console. Logging is
+                                    switched on by this, so --verbose is not needed as well (add
+                                    -T for the transcripts); the console keeps just its progress
+                                    bar and per-file summaries, which the file receives too. An
+                                    existing file is appended to, never overwritten.
           -B, --no-bar              Do not display progress bars; per-file summary lines are
                                     printed in the same timestamped format as --verbose logs.
           -s, --summary             Print a summary at the end: file counts, total and average

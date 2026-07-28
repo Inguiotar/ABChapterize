@@ -80,6 +80,12 @@ public sealed class FileProcessor
     /// check that a --filter regexp or extension list actually matches the intended files
     /// before committing to a real run. --filter is required to reach this mode at all (see
     /// <see cref="CliOptions"/>'s validation), so the listing is always filtered.
+    /// <para>
+    /// The only output path that stays on <see cref="Console"/> rather than going through
+    /// <see cref="ProgressRenderer.Announce"/>: the listing is this mode's result, not a report
+    /// about a run, and a --log-file copy of it would be a copy of the answer rather than a record
+    /// of how it was reached.
+    /// </para>
     /// </summary>
     private void RunNoOp()
     {
@@ -113,7 +119,7 @@ public sealed class FileProcessor
             .Where(bak => known.Add(CliOptions.NormalizePath(bak))));
         if (backups.Count == 0)
         {
-            Console.WriteLine("No .bak backups of supported audio files found; nothing to revert.");
+            _progress.Announce("No .bak backups of supported audio files found; nothing to revert.");
             return;
         }
         var watch = Stopwatch.StartNew();
@@ -125,12 +131,12 @@ public sealed class FileProcessor
                 File.Delete(original);
             File.Move(bak, original);
             if (!_options.Quiet)
-                Console.WriteLine($"{Path.GetFileName(original)}: reverted from backup");
+                _progress.Announce($"{Path.GetFileName(original)}: reverted from backup");
         }
         if (_options.Summary)
         {
-            Console.WriteLine($"Summary: {backups.Count} backup(s) encountered, {backups.Count} reverted");
-            Console.WriteLine($"Total time: {FormatTime(watch.Elapsed)}");
+            _progress.Announce($"Summary: {backups.Count} backup(s) encountered, {backups.Count} reverted");
+            _progress.Announce($"Total time: {FormatTime(watch.Elapsed)}");
         }
     }
 
@@ -146,7 +152,7 @@ public sealed class FileProcessor
         var groups = EnumerateTargetGroups(_options.EffectiveExtensions);
         if (groups.Sum(g => g.Files.Count) == 0)
         {
-            Console.WriteLine(_options.FilterRegex != null || _options.FilterExtensions != null
+            _progress.Announce(_options.FilterRegex != null || _options.FilterExtensions != null
                 ? "No audio files matching --filter found."
                 : $"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
             return;
@@ -155,7 +161,7 @@ public sealed class FileProcessor
         var files = ApplyBatchProgress(groups);
         if (files.Count == 0)
         {
-            Console.WriteLine("Every selected file was already processed by an earlier, " +
+            _progress.Announce("Every selected file was already processed by an earlier, " +
                               "interrupted run; nothing left to do (--ignore-progress redoes them).");
             return;
         }
@@ -210,7 +216,7 @@ public sealed class FileProcessor
             pending.AddRange(todo.Select(f => new PendingFile(f, progress)));
         }
         if (resumed > 0 && !_options.Quiet)
-            Console.WriteLine($"Resuming an interrupted run: {resumed} file(s) already processed, skipped.");
+            _progress.Announce($"Resuming an interrupted run: {resumed} file(s) already processed, skipped.");
         return pending;
     }
 
@@ -226,7 +232,7 @@ public sealed class FileProcessor
     {
         var hardCap = ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount, 1, 8));
         if (!_options.Quiet && hardCap > 1)
-            Console.WriteLine($"Importing chapters for {files.Count} file(s), up to {hardCap} at a time.");
+            _progress.Announce($"Importing chapters for {files.Count} file(s), up to {hardCap} at a time.");
         await RunConcurrentlyAsync(files, hardCap, ct,
             (file, token) => ProcessOneImportAsync(file, ffmpeg, token));
     }
@@ -341,7 +347,7 @@ public sealed class FileProcessor
     /// <param name="hardCap">Resolved concurrency.</param>
     /// <param name="separatePass3Model">Whether --pass3-model asked for a second model.</param>
     private void PrintModelBanner(string runtimeName, int fileCount, int hardCap, bool separatePass3Model)
-        => Console.WriteLine($"Whisper model \"{_options.Model}\" loaded ({runtimeName} backend" +
+        => _progress.Announce($"Whisper model \"{_options.Model}\" loaded ({runtimeName} backend" +
                              (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
                              (separatePass3Model
                                  ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +
@@ -358,15 +364,15 @@ public sealed class FileProcessor
     {
         var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
         var noChaptersNote = _noChaptersFound > 0 ? $", {_noChaptersFound} with no chapters found" : "";
-        Console.WriteLine(
+        _progress.Announce(
             $"Summary: {fileCount} file(s) encountered, {_processed} processed, " +
             $"{_skipped} skipped{warningNote}{noChaptersNote}");
         var average = _processed > 0
             ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
             : "";
-        Console.WriteLine($"Total time: {FormatTime(elapsed)}{average}");
+        _progress.Announce($"Total time: {FormatTime(elapsed)}{average}");
         foreach (var line in _runStats.FormatRunSummaryLines())
-            Console.WriteLine(line);
+            _progress.Announce(line);
     }
 
     /// <summary>
@@ -401,7 +407,7 @@ public sealed class FileProcessor
     {
         var gate = new AdaptiveConcurrencyGate(hardCap, initialSoftLimit: 1);
         using var monitor = new ConcurrencyMonitor(gate, TimeSpan.FromSeconds(2),
-            _options.Verbose ? msg => _progress.Log(msg) : null);
+            _options.LoggingEnabled ? msg => _progress.Log(msg) : null);
 
         var tasks = new List<Task>();
         Exception? firstError = null;
@@ -649,7 +655,7 @@ public sealed class FileProcessor
     {
         var watch = Stopwatch.StartNew();
         // --verbose log sink; every message is prefixed with the file name.
-        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
+        var log = _options.LoggingEnabled ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
         var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
         if (await ResolveXheAacDecoderAsync(new FileContext(file, name, work, log, info, ffmpeg), ct)
             is not { } ctx)
@@ -1141,7 +1147,7 @@ public sealed class FileProcessor
         string file, string name, WorkTracker work, FfmpegClient ffmpeg, CancellationToken ct)
     {
         var watch = Stopwatch.StartNew();
-        var log = _options.Verbose ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
+        var log = _options.LoggingEnabled ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
         var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
         if (!File.Exists(sidecarPath))
         {

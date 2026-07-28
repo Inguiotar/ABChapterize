@@ -58,10 +58,14 @@ public static class Program
             cts.Cancel();
         };
 
-        using var progress = new ProgressRenderer(options.Quiet, options.Verbose, options.NoBar);
-        var processor = new FileProcessor(options, progress);
         try
         {
+            // Opened before the renderer and therefore closed after it, so the renderer's last
+            // summary line still reaches the file. A log file that cannot be opened is fatal
+            // rather than ignored, and lands in the AppError handler below.
+            using var logFile = options.LogFilePath != null ? LogFile.Open(options.LogFilePath) : null;
+            using var progress = new ProgressRenderer(options.Quiet, options.Verbose, options.NoBar, logFile);
+            var processor = new FileProcessor(options, progress);
             await processor.RunAsync(cts.Token);
             return 0;
         }
