@@ -187,14 +187,21 @@ abchapterize --recurse --jobs 4 "D:\Audiobooks"
 Run `abchapterize --help` for a quick reference, or see the
 [manual](doc/manual.md) for the full story — including exactly
 [what is kept and what is stripped](doc/manual.md#5-what-is-kept-and-what-is-stripped)
-when chapters are written. The most useful knobs:
+when chapters are written. Grouped below exactly as `--help` groups them:
+
+**File selection**
 
 | Option | What it does |
 | --- | --- |
 | `-r`, `--recurse` | Descend into subdirectories. |
-| `-b`, `--backup` | Keep the original file as `*.bak`. |
-| `-R`, `--revert` | Restore all `*.bak` backups (undo). |
-| `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter`; combinable only with `--recurse` and the output options. |
+| `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
+| `-f`, `--force` | Redo files that already have chapter marks. |
+| `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
+
+**Detection tuning**
+
+| Option | What it does |
+| --- | --- |
 | `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `/chapter/`, localized by `--lang`). |
 | `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `/prolog/`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
@@ -205,34 +212,72 @@ when chapters are written. The most useful knobs:
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`, or `custom:<path>` for a GGML model file of your own (used as-is: not downloaded, not checksum-verified, ranked against the built-in models by file size). `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
 | `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model`, `custom:<path>` included (default: same as `--model`). Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. Loaded lazily, only if pass 3 runs. |
 | `-C`, `--cpu-only` | Force Whisper onto the CPU backend instead of the fastest available hardware acceleration. The Silero VAD pre-pass already always runs on CPU regardless of this option, so it only affects Whisper. |
-| `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
-| `-f`, `--force` | Redo files that already have chapter marks. |
-| `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
+| `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
+| `-Q`, `--quick-marks` | **Experimental.** Skip the refinement that normally re-transcribes the audio at every mark to confirm the phrase is really there (see [How it works](#how-it-works)). Faster — saves one or more transcriptions per chapter — but marks, while usually usable, may end up after the chapter phrase rather than before it, even together with `-j`. |
+| `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |
+| `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
+
+**Detection safety nets**
+
+| Option | What it does |
+| --- | --- |
 | `-a`, `--early-abort <minutes>` | Always on (default: 60; `0` disables it). Give up on a file, unchanged, once this many minutes of play time have been probed with no chapter found — avoids transcribing a whole book that plainly isn't going to yield any. Only applies to a fresh detection run. |
 | `-e`, `--expected-start-chapter <n>` | For a split-book part that doesn't start at chapter 1: the number this file is expected to start at. Without it (the default), whatever number pass 2 finds first is trusted outright and nothing below it is ever searched for. With it, a first chapter found *below* `<n>` aborts the file outright, unchanged; a first chapter found *above* `<n>` has pass 3 search for the missing numbers down to `<n>`, tagging the file `.missing-marks-…` if it still can't find them all. Only applies to a fresh detection run. |
 | `-L`, `--trailing-scan` | Transcribe everything after the last chapter found, through to the end of the file, looking for further chapters (default: off). A missing chapter is normally spotted as a hole in the number sequence, which needs a known chapter on either side of it — so one missing *after* the last chapter found is the one case nothing notices, and the file comes out looking complete. This closes that hole, but there are no expected numbers to satisfy here, so the scan can never stop early: every file pays a full final chapter's worth of transcription, whether or not anything was wrong. |
 | `-N`, `--max-chapter-number <n>` | Highest chapter number this book plausibly has (default: no limit). A detected chapter numbered above `<n>` is discarded as a mishearing — without it, one misheard "chapter 510" in a twelve-chapter book turns everything in between into a gap to hunt for. Not to be confused with `--max-chapters` above, which counts *pre-existing* marks. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
 | `-h`, `--verify-threshold <n>` | Requires `--verify`. If more than `<n>` marks fail verification, the ones that passed are no longer trusted as gap-recovery anchors either — the whole file falls back to full detection, same as when nothing at all is confirmed. |
-| `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
-| `-Q`, `--quick-marks` | **Experimental.** Skip the refinement that normally re-transcribes the audio at every mark to confirm the phrase is really there (see [How it works](#how-it-works)). Faster — saves one or more transcriptions per chapter — but marks, while usually usable, may end up after the chapter phrase rather than before it, even together with `-j`. |
-| `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |
-| `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. |
+
+**Chapter titles**
+
+| Option | What it does |
+| --- | --- |
 | `-t`, `--title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
 | `-i`, `--intro-title <word>` | Title for the intro mark before the first detected mark (default: `Intro`, localized by `--lang`). |
 | `-P`, `--prologue-title <word>` | Title for the prologue mark (default: `Prologue`, localized by `--lang`). |
 | `-G`, `--epilogue-title <word>` | Title for the epilogue mark (default: `Epilogue`, localized by `--lang`). |
-| `-q`, `--quiet` / `-s`, `--summary` | Less per-file output / totals (confidence, silence/jingle, Whisper-audio and transcription-speed stats) at the end. |
-| `-v`, `--verbose` | Log processing details, each probe/chunk as a `<length>@<time>` header. |
-| `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
-| `-o`, `--log-file <path>` | Write the log to a file instead of the console — switches logging on by itself (add `-T` for the transcripts). The console keeps its progress bar and result lines, which the file gets too. Appends to an existing file. |
-| `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
+
+**Output & review**
+
+| Option | What it does |
+| --- | --- |
 | `-d`, `--dry-run` | Detect chapters but write nothing; print what would be written. |
 | `-E`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. |
 | `-I`, `--import` | Skip Whisper entirely and write chapters from a previously exported sidecar file instead — for reapplying a hand-corrected result. |
 | `-S`, `--simple-metadata` | Use a plain `H:MM:SS.fff  Title` sidecar format instead of FFMETADATA for `--export`/`--import`. |
+
+**File & backup management**
+
+| Option | What it does |
+| --- | --- |
+| `-b`, `--backup` | Keep the original file as `*.bak`. |
+| `-R`, `--revert` | Restore all `*.bak` backups (undo). |
+| `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter`; combinable only with `--recurse` and the output options. |
 | `--ignore-progress` | Start every listed folder over instead of resuming it. While a folder is being processed, the files finished so far are recorded in an `.abchapterize-progress` file inside it, which is deleted again as soon as that folder is done — so an interrupted run resumes by itself when the same command is run again. Progress recorded under different options is discarded automatically, so this is only needed to redo files the very same command already finished. |
+
+**Logging & display**
+
+| Option | What it does |
+| --- | --- |
+| `-q`, `--quiet` | Suppress the per-file lines; warnings and errors are still shown. |
+| `-v`, `--verbose` | Log processing details, each probe/chunk as a `<length>@<time>` header. |
+| `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
+| `-o`, `--log-file <path>` | Write the log to a file instead of the console — switches logging on by itself (add `-T` for the transcripts). The console keeps its progress bar and result lines, which the file gets too. Appends to an existing file. |
+| `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
+| `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics. |
+
+**Performance**
+
+| Option | What it does |
+| --- | --- |
 | `-J`, `--jobs <n\|auto>` | Number of files processed concurrently (default: `auto` — adjusted between 1 and a hardware-derived ceiling based on live CPU load). `-J 1` forces strictly sequential processing. |
+
+**Info**
+
+| Option | What it does |
+| --- | --- |
+| `-?`, `--help` | Show the usage info, from which these groups are taken. |
+| `--version` | Show version and build information. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`). Decimal
 values accept either separator (`-n 2.5` = `-n 2,5`); printed numbers always
