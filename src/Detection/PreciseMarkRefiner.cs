@@ -20,7 +20,7 @@ namespace ABChapterize.Detection;
 /// mark, quiet-snapped.</param>
 /// <param name="PhraseHeard">True when the phrase was heard - either at the incoming mark itself
 /// or at a candidate the search confirmed - so <paramref name="Mark"/> is known to sit
-/// <see cref="DetectionTuning.DefaultMarkLeadSeconds"/> before a real announcement onset. False
+/// <see cref="CliOptions.MarkLeadSeconds"/> before a real announcement onset. False
 /// only in the "could not confirm the phrase" case, where the mark is still whatever the default
 /// heuristics produced and its distance from the announcement is unknown. Downstream steps that
 /// reason about where the announcement is relative to the mark - <see
@@ -210,7 +210,7 @@ internal sealed class PreciseMarkRefiner
         if (confirmed is { } hit)
         {
             var onset = await FindOnsetEdgeAsync(hit, file, inputDecoder, phraseRegex, ct);
-            result = Math.Max(0, onset - DefaultMarkLeadSeconds);
+            result = Math.Max(0, onset - _options.MarkLeadSeconds);
             _log?.Invoke(result == mark
                 ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
                 : $"mark corrected from {FormatTimestamp(mark)} to {FormatTimestamp(result)} " +
@@ -243,7 +243,7 @@ internal sealed class PreciseMarkRefiner
     /// walk reached the far side of the jingle rather than stopping short of it.
     /// <para>
     /// Deliberately <em>not</em> run when the phrase was heard, the overwhelmingly common case:
-    /// <paramref name="originalMark"/> then sits <see cref="DefaultMarkLeadSeconds"/> before a real
+    /// <paramref name="originalMark"/> then sits <see cref="CliOptions.MarkLeadSeconds"/> before a real
     /// announcement onset and the walk only retreats from it, so the walked mark cannot physically
     /// sit on the announcement's audio - the very failure this check was written (2026-07-26) to
     /// catch. Against a confirmed mark it degenerates into an unreliable,

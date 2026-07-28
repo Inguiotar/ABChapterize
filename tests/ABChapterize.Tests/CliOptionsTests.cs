@@ -5,6 +5,7 @@
 using Xunit;
 using ABChapterize.Cli;
 using ABChapterize.Language;
+using ABChapterize.Detection;
 
 namespace ABChapterize.Tests;
 
@@ -352,6 +353,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--trailing-scan")]
     [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
+    [InlineData("--mark-lead", "0.5")]
     [InlineData("--early-abort", "30")]
     [InlineData("--expected-start-chapter", "5")]
     [InlineData("--max-chapter-number", "50")]
@@ -1145,6 +1147,38 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal(2.5, o.MinSilenceSeconds);
     }
 
+    [Theory]
+    [InlineData("-0.1")]
+    [InlineData("11")]
+    [InlineData("abc")]
+    public void InvalidMarkLeads_AreRejected(string value)
+    {
+        Assert.Throws<CliError>(() => ParseFile("--mark-lead", value));
+    }
+
+    [Fact]
+    public void MarkLead_DefaultsToTheTuningConstant_AndIsOverridable()
+    {
+        Assert.Equal(DetectionTuning.DefaultMarkLeadSeconds, ParseFile()!.MarkLeadSeconds);
+        Assert.Equal(0.6, ParseFile("--mark-lead", "0.6")!.MarkLeadSeconds);
+        Assert.Equal(0.6, ParseFile("-k", "0.6")!.MarkLeadSeconds);
+    }
+
+    [Fact]
+    public void MarkLead_Zero_IsAccepted()
+    {
+        // "Mark exactly at the onset" is a legitimate taste, not a mistake - unlike the other
+        // duration options, whose zero would mean "no silence/jingle at all" and break their logic.
+        Assert.Equal(0, ParseFile("--mark-lead", "0")!.MarkLeadSeconds);
+    }
+
+    [Fact]
+    public void MarkLead_ChangesTheRunFingerprint()
+    {
+        // A resumed run must not mix marks placed with two different leads.
+        Assert.NotEqual(ParseFile()!.RunFingerprint, ParseFile("--mark-lead", "0.6")!.RunFingerprint);
+    }
+
     [Fact]
     public void DecimalOptions_AcceptACommaAsWellAsAPointAsTheDecimalSeparator()
     {
@@ -1156,6 +1190,8 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal(12.5, ParseFile("--max-jingle-length", "12.5")!.MaxJingleSeconds);
         Assert.Equal(1.5, ParseFile("--early-abort", "1,5")!.EarlyAbortMinutes);
         Assert.Equal(1.5, ParseFile("--early-abort", "1.5")!.EarlyAbortMinutes);
+        Assert.Equal(0.4, ParseFile("--mark-lead", "0,4")!.MarkLeadSeconds);
+        Assert.Equal(0.4, ParseFile("--mark-lead", "0.4")!.MarkLeadSeconds);
     }
 
     [Fact]

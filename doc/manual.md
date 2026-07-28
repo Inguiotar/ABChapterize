@@ -127,8 +127,9 @@ against the chapter phrase (see `--chapter-phrase`), and the chapter number is
 parsed from digits or number words
 (see [section 7](#7-languages-and-number-recognition)).
 
-Where a chapter announcement is found, the mark is placed 0.25 seconds before
-it, no matter what precedes it — a silence, a jingle, or nothing at all. When a
+Where a chapter announcement is found, the mark is placed a fixed lead-in
+before it — 0.35 seconds by default, `--mark-lead` — no matter what precedes
+it: a silence, a jingle, or nothing at all. When a
 jingle precedes the announcement, Whisper's own timestamp for it is not always
 trusted outright: if the voice-activity pre-pass shows the announcement's own
 opening syllable was brief enough to be folded into the jingle's non-speech
@@ -148,8 +149,8 @@ from — is double-checked by
 transcribing short, isolated clips of the audio near it: candidate positions
 both before and after the mark are tried until one of them really does hear
 the chapter phrase first, and the announcement's own beginning is then
-measured to within a tenth of a second. The mark is set 0.25 seconds ahead of
-it. Hearing the phrase at the mark is not by itself taken as proof that the
+measured to within a tenth of a second. The mark is set `--mark-lead` seconds
+ahead of it. Hearing the phrase at the mark is not by itself taken as proof that the
 mark is right — a jingle is not transcribed at all, so a mark several seconds
 inside one hears the announcement just as clearly as a mark sitting on it. On
 the rare chapter where none of those nearby candidates
@@ -617,7 +618,7 @@ so that logs and reports stay comparable regardless of regional settings.
 
 `-j`, `--mark-before-jingle`
 : Anchor the chapter mark to the end of the previous
-  chapter's actual narration instead of the default fixed 0.25-second offset
+  chapter's actual narration instead of the default fixed `--mark-lead` offset
   (see `--max-jingle-length` below): starting from whatever mark default mode
   (normally already refined, see `--quick-marks` below)
   found, the mark is walked backward — out of any silence
@@ -641,8 +642,20 @@ so that logs and reports stay comparable regardless of regional settings.
   widening and VAD pre-pass this placement relies on (see
   [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) already run by default
   regardless of this option. Without `--mark-before-jingle`, a mark is
-  always placed 0.25 seconds before the chapter phrase, no matter what
+  always placed `--mark-lead` seconds before the chapter phrase, no matter what
   precedes it.
+
+`-k`, `--mark-lead <seconds>`
+: How far in front of the announcement a mark is placed; default 0.35.
+  This is a matter of taste, not of accuracy: marks are located just as
+  precisely whatever it is set to, and it only decides how much lead-in you
+  hear before the narrator starts speaking. Raise it for a longer run-up,
+  lower it to land closer to the first word — though below roughly 0.2 the
+  opening consonant of the announcement starts to get clipped, and a hard one
+  such as the "K" of "Kapitel" is easy to lose without noticing. `0` marks the
+  measured onset itself. Ignored under `--mark-before-jingle`, which takes its
+  position from the jingle rather than from a fixed offset. Both `,` and `.`
+  work as the decimal point.
 
 `-Q`, `--quick-marks`
 : **Experimental.** Skip the mark refinement that normally runs, and take
@@ -650,7 +663,8 @@ so that logs and reports stay comparable regardless of regional settings.
   starting point `--mark-before-jingle` walks backward from — is verified by
   re-transcribing short clips of the audio near it, until one of them hears
   the chapter phrase first; the announcement's beginning is then measured to
-  within a tenth of a second and the mark set 0.25 seconds ahead of it. A mark
+  within a tenth of a second and the mark set `--mark-lead` seconds ahead of
+  it. A mark
   that can never be confirmed this way is
   left as originally placed rather than guessed at. Whatever mark results is
   then nudged up to 0.15 seconds earlier to the quietest point in that

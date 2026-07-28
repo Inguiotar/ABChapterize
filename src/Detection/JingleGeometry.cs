@@ -570,7 +570,8 @@ internal static class JingleGeometry
 
     /// <summary>
     /// Resolves the phrase-onset estimate the <em>default</em> (non --mark-before-jingle) mark
-    /// placement backs <see cref="DefaultMarkLeadSeconds"/> off from, for phrases anchored to a
+    /// placement backs the mark lead (<see cref="ABChapterize.Cli.CliOptions.MarkLeadSeconds"/>)
+    /// off from, for phrases anchored to a
     /// jingle region. Whisper's segment timestamp for a "Kapitel N" announcement spoken over or
     /// inside a jingle is exactly the failure --mark-before-jingle's containment/smeared-phrase
     /// machinery (<see cref="FindJingleRegionForPhrase"/>, <see cref="FindSmearedJingleRegion"/>)
@@ -643,7 +644,7 @@ internal static class JingleGeometry
     /// (see <see cref="ResolveDefaultPhraseOnset"/>) and sensitive to the decode window's content -
     /// VAD's classification of a stretch of audio does not depend on the window it was decoded in,
     /// making it an independent cross-check for an already-computed mark: scanning from that mark
-    /// and re-deriving it as <c>onset - <see cref="DefaultMarkLeadSeconds"/></c> is a no-op when the
+    /// and re-deriving it as <c>onset - markLead</c> is a no-op when the
     /// mark was already correct (it then sits exactly that far before the onset the scan finds), and
     /// otherwise only moves a too-early mark forward - never backward past one already at or beyond
     /// the onset, matching the "any remaining error is too early, never too late" invariant the
@@ -680,8 +681,8 @@ internal static class JingleGeometry
 
     /// <summary>
     /// Refines a default-mode (non --mark-before-jingle) mark by advancing past non-speech from it
-    /// with <see cref="AdvancePastNonSpeech"/> and re-deriving <see cref="DefaultMarkLeadSeconds"/>
-    /// from whatever genuine speech onset that finds, rather than trusting
+    /// with <see cref="AdvancePastNonSpeech"/> and re-deriving the mark lead from whatever genuine
+    /// speech onset that finds, rather than trusting
     /// <paramref name="preliminaryMark"/>'s upstream reasoning outright. Necessary on real audio:
     /// even after the clustering fix in <see cref="ResolveDefaultPhraseOnset"/>, several chapters
     /// still landed at the very start of their jingle rather than before the announcement. It also
@@ -704,9 +705,12 @@ internal static class JingleGeometry
     /// <param name="speech">Raw VAD speech segments; empty when the VAD pre-pass did not run, in
     /// which case there is nothing to advance past and <paramref name="preliminaryMark"/> is
     /// returned unchanged.</param>
+    /// <param name="markLead">Seconds to place the mark ahead of the onset found, i.e.
+    /// <see cref="ABChapterize.Cli.CliOptions.MarkLeadSeconds"/>. Must be the same value
+    /// <paramref name="preliminaryMark"/> was derived with, or the no-op case stops being one.</param>
     /// <returns>The refined mark, or <paramref name="preliminaryMark"/> unchanged when VAD did not
     /// run or the scan found nothing further ahead.</returns>
-    internal static double RefineDefaultMark(double preliminaryMark, List<SpeechSegment> speech)
+    internal static double RefineDefaultMark(double preliminaryMark, List<SpeechSegment> speech, double markLead)
     {
         if (speech.Count == 0)
             return preliminaryMark;
@@ -716,7 +720,7 @@ internal static class JingleGeometry
         // o > preliminaryMark test excludes it from the redundant correction.
         if (onset is not { } o || o <= preliminaryMark)
             return preliminaryMark;
-        return Math.Max(0, o - DefaultMarkLeadSeconds);
+        return Math.Max(0, o - markLead);
     }
 
     /// <summary>

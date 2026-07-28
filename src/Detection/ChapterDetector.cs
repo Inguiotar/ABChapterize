@@ -1234,17 +1234,17 @@ public sealed class ChapterDetector
                 phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
                 nonSpeechRegions, candidateVadRegion: null, speechSegments, matchSegments);
             time = RefineDefaultMark(
-                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, speechSegments) - DefaultMarkLeadSeconds),
-                speechSegments);
+                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, speechSegments) - _options.MarkLeadSeconds),
+                speechSegments, _options.MarkLeadSeconds);
             (statSilence, statRegion) = (anchorSilence, vadRegion);
         }
         else
         {
-            // Without a VAD pre-pass, the mark always goes DefaultMarkLeadSeconds before the
+            // Without a VAD pre-pass, the mark always goes --mark-lead seconds before the
             // phrase itself; the preceding silence (if any close enough) is still located
             // purely to feed the --min-silence-length auto tightening via MarkPlacer's statistics.
             var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStart, phraseAbs, allSilences);
-            time = Math.Max(0, phraseAbs - DefaultMarkLeadSeconds);
+            time = Math.Max(0, phraseAbs - _options.MarkLeadSeconds);
             statSilence = anchor;
         }
         var markCtx = new MarkContext(

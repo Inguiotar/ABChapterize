@@ -673,6 +673,12 @@ internal sealed class RegionProber
         ? _namedFound.Count(m => m.Kind == ChapterKind)
         : _found.Count;
 
+    /// <summary>Seconds every default-mode mark is placed ahead of the announcement onset
+    /// (<c>--mark-lead</c>), named once here because all four placement paths below must agree on
+    /// it - <see cref="JingleGeometry.RefineDefaultMark"/>'s no-op case depends on the value that
+    /// produced its input.</summary>
+    private double MarkLead => _env.Options.MarkLeadSeconds;
+
     /// <summary><see cref="NamedPhrase.Kind"/> of the synthetic chapter phrase, the one named kind
     /// that is exempt from the <c>--custom</c> mark cap.</summary>
     private string ChapterKind => Language.Profile!.ChapterAnnouncement.Kind;
@@ -797,14 +803,14 @@ internal sealed class RegionProber
     {
         var phraseAbs = start + match.PhraseStartSeconds;
         if (_env.Vad == null)
-            return (Math.Max(0, phraseAbs - DefaultMarkLeadSeconds), candidate.Silence, null);
+            return (Math.Max(0, phraseAbs - MarkLead), candidate.Silence, null);
 
         var (markSilence, markRegion) = ResolveJingleAnchor(
             phraseAbs, start + match.PhraseEndSeconds, start, _ctx.AllSilences,
             _ctx.NonSpeechRegions, candidateVadRegion: null, _ctx.SpeechSegments, trimmedAbs);
         var time = RefineDefaultMark(
-            Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, _ctx.SpeechSegments) - DefaultMarkLeadSeconds),
-            _ctx.SpeechSegments);
+            Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, _ctx.SpeechSegments) - MarkLead),
+            _ctx.SpeechSegments, MarkLead);
         return (time, markSilence ?? candidate.Silence, markRegion);
     }
 
@@ -950,7 +956,7 @@ internal sealed class RegionProber
     /// fallback.
     /// </para>
     /// <para>
-    /// Without it, the mark always goes <see cref="DefaultMarkLeadSeconds"/> before the phrase
+    /// Without it, the mark always goes <see cref="MarkLead"/> before the phrase
     /// itself, regardless of what precedes it. A phrase directly following the triggering silence
     /// (the classic shape) anchors to that silence. One deeper in the window than the timing rule
     /// allows can still be accepted right away, without waiting for a later candidate's window, but
@@ -983,13 +989,13 @@ internal sealed class RegionProber
             if (markSilence == null && markRegion == null)
                 markSilence = candidate.Silence;
             var time = RefineDefaultMark(
-                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, _ctx.SpeechSegments) - DefaultMarkLeadSeconds),
-                _ctx.SpeechSegments);
+                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, _ctx.SpeechSegments) - MarkLead),
+                _ctx.SpeechSegments, MarkLead);
             return (time, markSilence, markRegion);
         }
 
         if (match.PhraseStartSeconds <= PhraseLatestStart)
-            return (Math.Max(0, phraseAbs - DefaultMarkLeadSeconds), candidate.Silence, null);
+            return (Math.Max(0, phraseAbs - MarkLead), candidate.Silence, null);
 
         // Each of the three ways this can fail is named separately rather than folded into one
         // rejection: two of them point straight at a --min-silence-length that is too strict for
@@ -1004,7 +1010,7 @@ internal sealed class RegionProber
             return RejectProbeMark(match, phraseAbs,
                 $"the silence before it is only {anchor.EndSeconds - anchor.StartSeconds:0.00} s long, " +
                 $"below --min-silence-length {_env.Options.MinSilenceSeconds:0.##} s");
-        return (Math.Max(0, phraseAbs - DefaultMarkLeadSeconds), anchor, null);
+        return (Math.Max(0, phraseAbs - MarkLead), anchor, null);
     }
 
     /// <summary>Logs why <see cref="ResolveProbeMark"/> is dropping a chapter number the recognizer

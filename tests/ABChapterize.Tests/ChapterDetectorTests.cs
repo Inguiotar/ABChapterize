@@ -219,9 +219,23 @@ public sealed class ChapterDetectorTests : IDisposable
     private static TranscriptSegment Seg(double startSeconds, string text, double confidence = 1.0)
         => new(startSeconds, startSeconds + 2, text, confidence);
 
-    /// <summary>Builds validated options with the temp file as target.</summary>
+    /// <summary>
+    /// The --mark-lead every test below is written against, pinned rather than inherited from
+    /// <see cref="DetectionTuning.DefaultMarkLeadSeconds"/>: the lead is a matter of taste and will
+    /// be retuned again, while what these tests are about is <em>which onset</em> placement picked,
+    /// not how far in front of it the mark sits. Inheriting the default would make eighty-odd
+    /// expectations - most of them about gap tracking or language handling - churn on a change that
+    /// says nothing about detection. <see cref="MarkLead_ShiftsEveryDefaultModeMark"/> covers the
+    /// offset itself, and CliOptionsTests covers the default's value.
+    /// </summary>
+    private const double PinnedMarkLeadSeconds = 0.25;
+
+    /// <summary>Builds validated options with the temp file as target, at
+    /// <see cref="PinnedMarkLeadSeconds"/> unless the test asks for a lead of its own.</summary>
     private CliOptions Options(params string[] args)
-        => CliOptions.Parse([.. args, _file])!;
+        => CliOptions.Parse(args.Contains("--mark-lead") || args.Contains("-k")
+            ? [.. args, _file]
+            : [.. args, "--mark-lead", $"{PinnedMarkLeadSeconds}", _file])!;
 
     /// <summary>The named marks reduced to what these tests are actually about - which phrase
     /// produced what title, where - so that a bookkeeping field like
@@ -247,7 +261,7 @@ public sealed class ChapterDetectorTests : IDisposable
     /// the expected position but never after it.
     /// <para>
     /// The expected values are where the heuristic alone would put the mark - the phrase onset the
-    /// script states, less <see cref="DetectionTuning.DefaultMarkLeadSeconds"/>. Precise marking
+    /// script states, less <see cref="PinnedMarkLeadSeconds"/>. Precise marking
     /// does not trust that position; it brackets the true onset by bisection and reports the last
     /// probe that still confirmed the phrase, which lands within one step below the real edge
     /// rather than exactly on it. Pinning these tests to the bisection's own arithmetic would make
@@ -832,6 +846,28 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(0.25)]
+    [InlineData(0.35)]
+    [InlineData(1.5)]
+    public async Task MarkLead_ShiftsEveryDefaultModeMark(double lead)
+    {
+        // The one test that does not use the pinned lead: every other expectation here is written
+        // against a fixed offset, so this is where the offset itself has to be pinned to the
+        // announcement instead. Both onsets are far enough from 0 for a 1.5 s lead not to clamp.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--mark-lead", $"{lead}"),
+            [new(295, 300), new(595, 600)],
+            s =>
+            {
+                s.Add(300, Seg(2.0, " Chapter one."));
+                s.Add(600, Seg(2.0, " Chapter two."));
+            });
+
+        AssertChapters([new(1, 302 - lead), new(2, 602 - lead)], result.Chapters);
     }
 
     [Fact]

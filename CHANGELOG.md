@@ -26,6 +26,11 @@ for you, not how it was built. The format follows
   machine it came out in opposite order depending on whether the user was
   sitting at the desktop or connected remotely.
 
+- **`--mark-lead <seconds>`** (`-k`) sets how far in front of the announcement a
+  mark is placed. Marks are located just as precisely whatever it is; all it
+  decides is how much lead-in you hear before the narrator starts, which is a
+  matter of taste. `0` marks the measured onset itself, and `--mark-before-jingle`
+  ignores it, taking its position from the jingle instead.
 - **Marks for anything else the narrator announces.** `--custom` takes
   `phrase:title` mappings, several of them separated by semicolons:
 
@@ -104,6 +109,12 @@ for you, not how it was built. The format follows
 
 ### Changed
 
+- **Marks now sit 0.35 seconds before the announcement instead of 0.25.** Since
+  marks became accurate to a tenth of a second, the old lead-in turned out to be
+  cutting it too fine: a chapter would occasionally start so close to the first
+  word that its opening consonant was clipped — and a hard one, like the "K" of
+  "Kapitel", is easy to lose without a listener being able to say whether they
+  heard it. Use `--mark-lead` to set it back, or anywhere else you like.
 - **A single discrete GPU is now preferred automatically**, and the startup line
   names the GPU in use instead of only the backend:
 

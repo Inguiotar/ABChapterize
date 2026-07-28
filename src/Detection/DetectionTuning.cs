@@ -64,11 +64,21 @@ internal static class DetectionTuning
     internal const double JingleLeadSeconds = 0.5;
 
     /// <summary>
-    /// Without --mark-before-jingle, the mark goes this many seconds before the detected phrase,
-    /// whatever precedes it: no silence/jingle anchor is consulted for the timestamp at all, only
-    /// for the --min-silence-length/--max-jingle-length auto statistics.
+    /// Default for <see cref="ABChapterize.Cli.CliOptions.MarkLeadSeconds"/> (--mark-lead): without
+    /// --mark-before-jingle, the mark goes this many seconds before the detected phrase, whatever
+    /// precedes it - no silence/jingle anchor is consulted for the timestamp at all, only for the
+    /// --min-silence-length/--max-jingle-length auto statistics.
     /// </summary>
-    internal const double DefaultMarkLeadSeconds = 0.25;
+    /// <remarks>
+    /// Raised from 0.25 to 0.35 on 2026-07-29 after listening to real marks: at 0.25 the mark lands
+    /// so close to the announcement that a plosive onset - the /k/ of "Kapitel" - can be clipped
+    /// without the listener being able to say whether they heard it. That consonant is the awkward
+    /// case on purpose: a stop's burst carries almost no energy before its release, so neither
+    /// Whisper's onset estimate nor an attentive ear resolves it to a tenth of a second, and the
+    /// cheapest insurance is to start earlier. The refiner's own accuracy is not the limit here -
+    /// it pins onsets to 0.1 s - the audible margin is.
+    /// </remarks>
+    internal const double DefaultMarkLeadSeconds = 0.35;
 
     /// <summary>
     /// Slack when matching a VAD non-speech region (the jingle) to a Whisper phrase. The region

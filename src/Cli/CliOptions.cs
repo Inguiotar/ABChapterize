@@ -295,6 +295,19 @@ public sealed class CliOptions
     public bool MarkBeforeJingle { get; private set; }
 
     /// <summary>
+    /// How far before the announcement's onset a mark is placed, in seconds (--mark-lead, default
+    /// <see cref="DetectionTuning.DefaultMarkLeadSeconds"/>).
+    /// </summary>
+    /// <remarks>
+    /// A matter of taste rather than accuracy, which is why it is an option and not a tuning
+    /// constant: the refinement pins the onset to a tenth of a second either way, but how much
+    /// silence one wants to hear before the narrator starts differs from listener to listener - and
+    /// a lead too short can clip a plosive onset outright. Ignored under --mark-before-jingle,
+    /// which derives its position from the jingle rather than from a fixed offset.
+    /// </remarks>
+    public double MarkLeadSeconds { get; private set; } = DetectionTuning.DefaultMarkLeadSeconds;
+
+    /// <summary>
     /// Opts out of the mark refinement that normally runs on every mark (--quick-marks / -Q),
     /// trading placement accuracy for speed: probing alone decides where each mark goes, with no
     /// re-transcription to confirm it. Marks placed this way are usually usable, but a mark can
@@ -537,7 +550,7 @@ public sealed class CliOptions
     private static readonly Dictionary<char, string> ShortOptions = new()
     {
         ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--mark-before-jingle",
-        ['Q'] = "--quick-marks",
+        ['Q'] = "--quick-marks", ['k'] = "--mark-lead",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
         ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
         ['x'] = "--max-chapters", ['N'] = "--max-chapter-number",
@@ -555,7 +568,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet;
+    private bool _langSet, _phraseSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _titleSet, _introSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet;
     private bool _prologuePhraseSet, _prologueTitleSet, _epiloguePhraseSet, _epilogueTitleSet;
 
     /// <summary>
@@ -571,7 +584,7 @@ public sealed class CliOptions
            || Export || Import || SimpleMetadata || Verify || IgnoreProgress || Jobs != null
            || _langSet || _phraseSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _titleSet || _introSet || _jingleLenSet || _minSilenceSet || _earlyAbortSet
-           || _expectedStartSet || _prologuePhraseSet || _prologueTitleSet
+           || _markLeadSet || _expectedStartSet || _prologuePhraseSet || _prologueTitleSet
            || _epiloguePhraseSet || _epilogueTitleSet
            || _customMappings.Count > 0 || IgnoreChapterNumbers;
 
@@ -603,7 +616,7 @@ public sealed class CliOptions
                 $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
                 $"earlyabort={EarlyAbortMinutes}", $"expectedstart={ExpectedStartChapter}",
                 $"trailingscan={TrailingScan}", $"verify={Verify}", $"verifythreshold={VerifyFailThreshold}",
-                $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}",
+                $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}", $"marklead={MarkLeadSeconds}",
                 $"maxjingle={MaxJingleSeconds}/{AutoMaxJingle}", $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
@@ -730,11 +743,11 @@ public sealed class CliOptions
         if (o.UseGpu != null && o.CpuOnly)
             throw new CliError("--use-gpu and --cpu-only contradict each other: one picks a GPU, the other refuses to use any.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
-                "--mark-before-jingle, --quick-marks, --max-jingle-length, --min-silence-length, --early-abort, " +
+                "--mark-before-jingle, --quick-marks, --mark-lead, --max-jingle-length, --min-silence-length, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify " +
                 "have no effect and cannot be combined with it.");
 
@@ -935,6 +948,7 @@ public sealed class CliOptions
             case "--filter": ParseFilter(nextParam()); return true;
             case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
+            case "--mark-lead": MarkLeadSeconds = ParseMarkLead(nextParam()); _markLeadSet = true; return true;
             case "--jobs": Jobs = ParseJobs(nextParam()); return true;
             case "--log-file": LogFilePath = ParseLogFilePath(nextParam()); return true;
             default: return false;
@@ -1101,6 +1115,23 @@ public sealed class CliOptions
         if (!int.TryParse(value, out var n) || n < 0)
             throw new CliError($"Invalid {optName} value \"{value}\": expected a non-negative number.");
         return n;
+    }
+
+    /// <summary>
+    /// Parses the --mark-lead parameter: seconds between 0 and 10.
+    /// </summary>
+    /// <param name="value">The raw parameter.</param>
+    /// <remarks>
+    /// 0 is allowed and means "mark exactly at the onset" - a legitimate choice for someone who
+    /// wants no lead-in at all, and the refinement still places it to the same accuracy. The upper
+    /// bound only rules out values that would land in the previous chapter's narration; anything
+    /// beyond a couple of seconds is already better served by --mark-before-jingle.
+    /// </remarks>
+    private static double ParseMarkLead(string value)
+    {
+        if (!NumberCulture.TryParseDecimal(value, out var s) || s < 0 || s > 10)
+            throw new CliError($"Invalid --mark-lead value \"{value}\": expected seconds between 0 and 10.");
+        return s;
     }
 
     /// <summary>
@@ -1413,9 +1444,18 @@ public sealed class CliOptions
                                     second jingle's start rather than in front of the first.
                                     When VAD finds no jingle - an ordinary in-narration
                                     pause - the mark is left exactly where it would otherwise
-                                    be. Without this option, the mark is always placed 0.25
-                                    seconds before the chapter phrase, no matter what
-                                    precedes it.
+                                    be. Without this option, the mark is always placed
+                                    --mark-lead seconds before the chapter phrase, no matter
+                                    what precedes it.
+          -k, --mark-lead <seconds> How far before the announcement a mark is placed (default
+                                    0.35). Purely a matter of taste: marks are located to the
+                                    same accuracy whatever this is, it only decides how much
+                                    lead-in you hear before the narrator starts. Raise it for
+                                    a longer run-up, lower it to land closer to the first
+                                    word - though below about 0.2 the opening consonant of the
+                                    announcement can be clipped. 0 marks the onset itself.
+                                    Ignored under --mark-before-jingle, which takes its
+                                    position from the jingle instead.
           -Q, --quick-marks         [EXPERIMENTAL] Skip the refinement that normally verifies
                                     every mark, and take probing's own placement as final.
                                     Normally each mark is checked by re-transcribing the audio
@@ -1549,8 +1589,8 @@ public sealed class CliOptions
                                     the detection options have no effect and are rejected:
                                     --lang, --chapter-phrase, --prologue-phrase,
                                     --epilogue-phrase, --model, --pass3-model,
-                                    --mark-before-jingle, --quick-marks, --max-jingle-length,
-                                    --min-silence-length, --early-abort,
+                                    --mark-before-jingle, --quick-marks, --mark-lead,
+                                    --max-jingle-length, --min-silence-length, --early-abort,
                                     --expected-start-chapter, --max-chapter-number,
                                     --trailing-scan and --verify. Also mutually exclusive with
                                     --export, --revert and --no-op.
