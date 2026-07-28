@@ -144,11 +144,14 @@ voice-activity detector, in either direction: short of the true announcement
 or generously past it. Every mark placed by default-mode probing — including
 the starting point `--mark-before-jingle` would otherwise walk backward
 from — is double-checked by
-transcribing a short, isolated clip of the audio right at it: if the chapter
-phrase is really the first thing heard there, nothing changes; otherwise
-further candidate positions nearby — both before and after it — are checked
-the same way until the true announcement is found, and the mark is corrected
-to it. On the rare chapter where none of those nearby candidates
+transcribing short, isolated clips of the audio near it: candidate positions
+both before and after the mark are tried until one of them really does hear
+the chapter phrase first, and the announcement's own beginning is then
+measured to within a tenth of a second. The mark is set 0.25 seconds ahead of
+it. Hearing the phrase at the mark is not by itself taken as proof that the
+mark is right — a jingle is not transcribed at all, so a mark several seconds
+inside one hears the announcement just as clearly as a mark sitting on it. On
+the rare chapter where none of those nearby candidates
 confirm anything either, a second, wider sweep of the same area is tried
 before giving up. A mark that cannot be confirmed this way at all is left as
 originally placed rather than guessed at. Finally, whatever mark results —
@@ -641,11 +644,10 @@ so that logs and reports stay comparable regardless of regional settings.
 : **Experimental.** Skip the mark refinement that normally runs, and take
   probing's own placement as final. By default every mark — including the
   starting point `--mark-before-jingle` walks backward from — is verified by
-  re-transcribing the audio right at it: if the chapter phrase is heard there,
-  the mark is left alone (the common case, and the only cost paid for a
-  chapter that needed no correction); otherwise further candidate positions
-  nearby are checked the same way until the true announcement is confirmed and
-  the mark is corrected to it. A mark that can never be confirmed this way is
+  re-transcribing short clips of the audio near it, until one of them hears
+  the chapter phrase first; the announcement's beginning is then measured to
+  within a tenth of a second and the mark set 0.25 seconds ahead of it. A mark
+  that can never be confirmed this way is
   left as originally placed rather than guessed at. Whatever mark results is
   then nudged up to 0.15 seconds earlier to the quietest point in that
   stretch, but only when that is a clear (at least 6 dB) improvement; a mark

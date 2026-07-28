@@ -79,6 +79,25 @@ for you, not how it was built. The format follows
   them. `--help` and the manual list each language's exact default.
 - **A guide for adding a language**, [doc/adding-a-language.md](doc/adding-a-language.md),
   aimed at contributors who have never seen the rest of the codebase.
+- **Marks now land within a tenth of a second of the announcement, and get there
+  faster.** Precise marking used to accept a mark as soon as the chapter phrase
+  was audible from it — but a jingle is exactly what Whisper does not transcribe,
+  so a mark sitting several seconds inside one sounded just as convincing, and
+  the mark stayed that far early. It now measures where the announcement really
+  begins instead of taking the first plausible answer, and does so with a
+  handful of checks rather than creeping toward it a tenth of a second at a
+  time. Books with a musical sting before each chapter benefit most; marks that
+  were already right stay where they are, give or take that tenth of a second.
+  `--quick-marks` still skips the whole step.
+
+### Fixed
+
+- **A misheard chapter number no longer costs a genuine chapter its mark.** When
+  the final transcription pass went looking for, say, the chapter 2 missing
+  between chapters 1 and 3, a "chapter seven" misheard somewhere in that stretch
+  was accepted as a find — and chapter 3, now out of sequence behind it, was
+  dropped from the results. Only numbers that could actually be missing from the
+  stretch being searched are considered.
 
 ## [0.9.0] — 2026-07-27
 

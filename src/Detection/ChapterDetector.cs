@@ -1120,6 +1120,18 @@ public sealed class ChapterDetector
                                  "not above every chapter already found (in-text mention?)");
                     continue;
                 }
+                // A bounded gap knows exactly which numbers can live in it, so anything else is a
+                // mishearing or an in-text mention. Pass 2.5 rejects those against the region's own
+                // bounds and the retry scan below tests the same set; this scan did not, so a
+                // "chapter seven" heard in the gap between chapters 1 and 3 was planted here and
+                // then cost the genuine chapter 3 its mark, Normalize dropping it to keep the
+                // sequence monotonic.
+                if (remaining is not null && !remaining.Contains(match.Number))
+                {
+                    _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
+                                 "not one of the chapters missing from this gap");
+                    continue;
+                }
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans a Pass 3 chunk seam " +
                                  "(bridged from the previous chunk) - worth a spot check");

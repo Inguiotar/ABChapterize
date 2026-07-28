@@ -248,10 +248,13 @@ internal static class DetectionTuning
     internal const double MarkLoudnessWindowSeconds = 0.25;
 
     /// <summary>
-    /// Step size precise marking's round 2 (<see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>)
-    /// advances by when blindly sweeping for the phrase after round 1's VAD candidates confirmed
-    /// nothing in either direction. Matches <see cref="PreciseMarkLeadInSeconds"/>'s magnitude -
-    /// both are about the finest granularity worth probing at, given
+    /// The finest granularity precise marking probes at, in both of its senses: the step size
+    /// round 2 (<see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>) advances by when blindly
+    /// sweeping for the phrase after round 1's VAD candidates confirmed nothing, and the resolution
+    /// <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> bisects down to. The latter makes it the
+    /// tool's onset-accuracy guarantee: a reported onset always sits at or before the true one and
+    /// never more than this far before it. Matches <see cref="PreciseMarkLeadInSeconds"/>'s
+    /// magnitude - both are about the finest granularity worth probing at, given
     /// <see cref="PreciseMarkCheckWindowSeconds"/> - rather than some unrelated value.
     /// </summary>
     internal const double PreciseMarkFixedStepSeconds = 0.1;

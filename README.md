@@ -281,11 +281,11 @@ use `.`, whatever the machine's locale says.
 2b. **Mark refinement (skip with `--quick-marks`/`-Q`):** for
    the mark that still lands on the wrong spot — usually a jingle whose
    music briefly fools the voice-activity detector into sounding like speech —
-   every mark is double-checked by re-transcribing a short, isolated clip of
-   the audio right at it; if the phrase isn't really there, nearby candidates
-   are checked the same way until it's found and the mark is corrected,
-   falling back to a wider sweep of the same area on the rare chapter where
-   even that doesn't confirm anything. Costs one or more extra transcriptions
+   every mark is double-checked by re-transcribing short, isolated clips of
+   the audio near it until one hears the phrase first; the announcement's own
+   beginning is then measured to within a tenth of a second and the mark set
+   just ahead of it, falling back to a wider sweep of the same area on the rare
+   chapter where nothing confirms. Costs one or more extra transcriptions
    per chapter, which is what `--quick-marks` trades away for speed.
 2c. **Pass 2.5 — a cheap second opinion (only with a heavier `--pass3-model`):**
    most gaps aren't unprobeable audio, just a number the pass-2 model misread

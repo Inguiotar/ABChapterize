@@ -80,9 +80,14 @@ internal sealed class PreciseMarkRefiner
     private async Task<bool> PreciseMarkPhraseFoundAsync(
         double start, string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
     {
-        var decodeStart = Math.Max(0, start - PreciseMarkLeadInSeconds);
-        var samples = await _audio.DecodePcmAsync(
-            file, decodeStart, PreciseMarkCheckWindowSeconds + (start - decodeStart), inputDecoder, ct);
+        // The bisection reaches a probe position by repeated halving and the sweep by repeated
+        // addition, so an unrounded position accumulates binary-float dust (0.24999999999999997
+        // for what is conceptually 0.25). Rounding here keeps every decode request, and every
+        // timestamp derived from one, on clean values.
+        start = Math.Round(start, 6);
+        var decodeStart = Math.Round(Math.Max(0, start - PreciseMarkLeadInSeconds), 6);
+        var length = Math.Round(PreciseMarkCheckWindowSeconds + (start - decodeStart), 6);
+        var samples = await _audio.DecodePcmAsync(file, decodeStart, length, inputDecoder, ct);
         var transcript = await _transcribeCounting(samples, ct);
         // The lead-in can surface a trailing fragment of whatever preceded `start` as the first
         // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
@@ -103,33 +108,37 @@ internal sealed class PreciseMarkRefiner
     /// into stopping short of the true announcement; this asks the audio directly instead, at the
     /// cost of one or more extra transcriptions per chapter.
     /// <para>
-    /// First checks <paramref name="mark"/> itself: if its own phrase is heard there, it is
-    /// already correct and is returned unchanged - the common case, and the only cost paid for a
-    /// chapter that needed no correction. Otherwise, round 1 searches VAD speech-segment starts
-    /// within a plausible jingle-plus-phrase span (<see cref="CliOptions.MaxJingleSeconds"/> plus
-    /// <see cref="PhraseMarginSeconds"/>) of <paramref name="mark"/> - the same swallowed-blip
-    /// candidates <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> already reasons about, not a blind
-    /// fixed-step scan - via <see cref="WalkPreciseMarkCandidatesInterleavedAsync"/>, which tries
-    /// the forward (later-than-mark) and backward (earlier-than-mark) candidates one at a time in
-    /// alternation - backward, then forward, then backward again - rather than exhausting one
-    /// direction before ever trying the other.
+    /// Every path here ends in <see cref="FindOnsetEdgeAsync"/>, which is what actually pins the
+    /// announcement's onset; the searches before it only find <em>a</em> position where the phrase
+    /// is audible, so that the edge walk has somewhere to start. That split is what keeps the
+    /// accuracy guarantee uniform - the onset is located to within
+    /// <see cref="PreciseMarkFixedStepSeconds"/> whichever route got there.
     /// </para>
     /// <para>
-    /// The two directions are trusted asymmetrically, for two distinct failure shapes. A forward
-    /// success only locks in once the <em>next</em> forward candidate fails - that
-    /// success-then-fail pattern confirms the phrase truly begins at the earlier candidate, immune
-    /// to a stray false positive elsewhere in the jingle, since a real announcement's audio ends and
-    /// narration (or an unrelated cue) resumes right after it. A backward success is accepted the
-    /// moment it is heard: <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/>'s swallowed-blip
-    /// clustering can promote a later, unrelated blip inside an over-merged jingle region over the
-    /// announcement's own earlier one, landing <paramref name="mark"/> generously past the true
-    /// onset instead of short of it (confirmed live on chapters whose true onset sat mere seconds
-    /// before what the heuristic reported - Perry Rhodan "Die Dritte Macht", chapters 8 and 20,
-    /// 2026-07-24), and once the search has walked back past that blip to the real announcement
-    /// there is nothing earlier worth preferring. Because forward needs corroboration and backward
-    /// does not, the instant a forward candidate succeeds backward is abandoned for the rest of the
-    /// search. Both spans are bounded to the same jingle-plus-phrase distance from
-    /// <paramref name="mark"/>, so neither direction can wander into a neighbouring chapter.
+    /// <paramref name="mark"/> itself is deliberately <em>not</em> checked first as a shortcut, and
+    /// hearing the phrase there would not license one: a jingle is exactly what Whisper does not
+    /// transcribe, so a mark sitting seconds inside one answers "yes, the phrase starts here" just
+    /// as readily as a mark sitting on the announcement, and accepting that answer left marks
+    /// silently early by however long the jingle ran. The searches below have no such shortcut to
+    /// offer - they hunt for a foothold and hand it to the edge walk, which is the only step that
+    /// can tell the two apart.
+    /// </para>
+    /// <para>
+    /// Round 1 searches VAD speech-segment starts within a plausible jingle-plus-phrase span
+    /// (<see cref="CliOptions.MaxJingleSeconds"/> plus <see cref="PhraseMarginSeconds"/>) of
+    /// <paramref name="mark"/> - the same swallowed-blip candidates
+    /// <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> already reasons about, not a blind
+    /// fixed-step scan - via <see cref="WalkPreciseMarkCandidatesInterleavedAsync"/>, which tries
+    /// the forward (later-than-mark) and backward (earlier-than-mark) candidates one at a time in
+    /// alternation rather than exhausting one direction before ever trying the other. Searching
+    /// backward at all is not symmetry for its own sake: <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/>'s
+    /// swallowed-blip clustering can promote a later, unrelated blip inside an over-merged jingle
+    /// region over the announcement's own earlier one, landing <paramref name="mark"/> generously
+    /// <em>past</em> the true onset instead of short of it - confirmed live on chapters whose true
+    /// onset sat mere seconds before what the heuristic reported (Perry Rhodan "Die Dritte Macht",
+    /// chapters 8 and 20, 2026-07-24). Both spans are bounded to the same jingle-plus-phrase
+    /// distance from <paramref name="mark"/>, so neither direction can wander into a neighbouring
+    /// chapter.
     /// <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> itself is deliberately untouched:
     /// default-mode marking is all --quick-marks leaves in place, and its heuristic accuracy alone
     /// is what makes quick marks usable for jumping to a chapter.
@@ -166,8 +175,8 @@ internal sealed class PreciseMarkRefiner
     /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
     /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
-    /// empty when the VAD pre-pass did not run, in which case there is nothing to check beyond
-    /// <paramref name="mark"/> itself and it is returned unchanged whenever its own check fails.</param>
+    /// empty when the VAD pre-pass did not run, which costs round 1 every candidate it would have
+    /// had and leaves round 2's blind fixed-step sweep to do the whole job.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
     /// left as given when no candidate could be confirmed), quiet-snapped as a final step, paired
@@ -178,46 +187,41 @@ internal sealed class PreciseMarkRefiner
     {
         double result;
         var heard = true;
-        if (await PreciseMarkPhraseFoundAsync(mark, file, inputDecoder, phraseRegex, ct))
+        var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var forwardCandidates = speechSegments
+            .Where(s => s.StartSeconds > mark && s.StartSeconds <= mark + span)
+            .Select(s => s.StartSeconds)
+            .OrderBy(s => s);
+        var backwardCandidates = speechSegments
+            .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
+            .Select(s => s.StartSeconds)
+            .OrderByDescending(s => s);
+        var confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
+            forwardCandidates, backwardCandidates, file, inputDecoder, phraseRegex, ct);
+
+        if (confirmed is null)
         {
-            _log?.Invoke($"mark confirmed at {FormatTimestamp(mark)} - unchanged");
-            result = mark;
+            var forwardSteps = FixedStepCandidates(mark, span, forward: true);
+            var backwardSteps = FixedStepCandidates(mark, span, forward: false);
+            confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
+                forwardSteps, backwardSteps, file, inputDecoder, phraseRegex, ct);
+        }
+
+        if (confirmed is { } hit)
+        {
+            var onset = await FindOnsetEdgeAsync(hit, file, inputDecoder, phraseRegex, ct);
+            result = Math.Max(0, onset - DefaultMarkLeadSeconds);
+            _log?.Invoke(result == mark
+                ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
+                : $"mark corrected from {FormatTimestamp(mark)} to {FormatTimestamp(result)} " +
+                  $"(onset {FormatTimestamp(onset)})");
         }
         else
         {
-            var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
-            var forwardCandidates = speechSegments
-                .Where(s => s.StartSeconds > mark && s.StartSeconds <= mark + span)
-                .Select(s => s.StartSeconds)
-                .OrderBy(s => s);
-            var backwardCandidates = speechSegments
-                .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
-                .Select(s => s.StartSeconds)
-                .OrderByDescending(s => s);
-            var confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
-                forwardCandidates, backwardCandidates, file, inputDecoder, phraseRegex, ct);
-
-            if (confirmed is null)
-            {
-                var forwardSteps = FixedStepCandidates(mark, span, forward: true);
-                var backwardSteps = FixedStepCandidates(mark, span, forward: false);
-                confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
-                    forwardSteps, backwardSteps, file, inputDecoder, phraseRegex, ct);
-            }
-
-            if (confirmed is { } onset)
-            {
-                _log?.Invoke(
-                    $"mark corrected from {FormatTimestamp(mark)} to {FormatTimestamp(onset)}");
-                result = Math.Max(0, onset - DefaultMarkLeadSeconds);
-            }
-            else
-            {
-                _log?.Invoke(
-                    $"could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
-                result = mark;
-                heard = false;
-            }
+            _log?.Invoke(
+                $"could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
+            result = mark;
+            heard = false;
         }
 
         var quietest = await SnapToQuietestPointAsync(result, file, inputDecoder, ct);
@@ -445,6 +449,90 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
+    /// Pins the announcement's true onset, given any position <paramref name="confirmed"/> the
+    /// phrase was already heard at. This is what makes a confirmation worth anything: hearing the
+    /// phrase at a position proves only that nothing transcribable precedes it within
+    /// <see cref="PreciseMarkCheckWindowSeconds"/>, and a jingle is precisely the thing Whisper
+    /// does not transcribe - so every position from somewhere inside the jingle right up to the
+    /// onset itself answers "yes" identically. The answers form one plateau ending at the onset:
+    /// step past it and the window opens mid-announcement, whose leading fragment no longer matches
+    /// the phrase. The plateau's right edge <em>is</em> the onset, and finding it is the whole job.
+    /// <para>
+    /// Galloping (0.1 s, 0.2 s, 0.4 s, ...) to bracket that edge, then bisecting the bracket, holds
+    /// the guaranteed accuracy at one <see cref="PreciseMarkFixedStepSeconds"/> - the returned
+    /// position confirms and the position one step later does not, so the true onset lies within
+    /// that step after it, never before - while costing a logarithmic number of transcriptions
+    /// instead of one per step. A mark that was already right pays two extra checks; a mark 3.5 s
+    /// into a jingle pays about twelve, where walking the whole plateau at a fixed 0.1 s cost
+    /// thirty-five (measured on Stalker.m4b, 0:00:49.42 to 0:00:52.92, 2026-07-28, ~95 s for that
+    /// single mark). Bisection is exact here rather than approximate, which it would not be for an
+    /// arbitrary predicate: the plateau has exactly one edge, so no interval it discards could have
+    /// held another.
+    /// </para>
+    /// <para>
+    /// The gallop is capped at the same jingle-plus-phrase span the searches use, so a phrase that
+    /// somehow keeps confirming outwards can never walk into the next chapter; that case returns
+    /// the furthest position actually confirmed, the one place the step-accuracy guarantee does not
+    /// hold. It has not been observed on real audio - it needs the announcement to stay the first
+    /// audible thing across an entire jingle-length span.
+    /// </para>
+    /// </summary>
+    /// <param name="confirmed">A position the phrase was already heard at; the search starts here
+    /// and only ever moves later, since the plateau extends forward to the onset.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The announcement's onset: at or before the true one, and never more than
+    /// <see cref="PreciseMarkFixedStepSeconds"/> before it.</returns>
+    private async Task<double> FindOnsetEdgeAsync(
+        double confirmed, string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
+    {
+        var cap = _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var lo = confirmed;
+        double? hi = null;
+
+        for (var delta = PreciseMarkFixedStepSeconds; delta <= cap; delta *= 2)
+        {
+            ct.ThrowIfCancellationRequested();
+            var probe = Math.Round(confirmed + delta, 6);
+            if (!await PreciseMarkPhraseFoundAsync(probe, file, inputDecoder, phraseRegex, ct))
+            {
+                hi = probe;
+                break;
+            }
+            lo = probe;
+        }
+
+        if (hi is not { } failed)
+            return OnsetOf(lo);
+
+        while (failed - lo > PreciseMarkFixedStepSeconds)
+        {
+            ct.ThrowIfCancellationRequested();
+            var mid = Math.Round((lo + failed) / 2, 6);
+            if (await PreciseMarkPhraseFoundAsync(mid, file, inputDecoder, phraseRegex, ct))
+                lo = mid;
+            else
+                failed = mid;
+        }
+        return OnsetOf(lo);
+    }
+
+    /// <summary>
+    /// Converts the last probe position that still heard the phrase into the announcement's onset.
+    /// A probe decodes from <see cref="PreciseMarkLeadInSeconds"/> <em>before</em> the position it
+    /// asks about, so it keeps answering yes until that lead-in has cleared the onset too - the
+    /// plateau's right edge therefore sits one lead-in <em>past</em> the onset, not on it. Without
+    /// this the reported onset lands consistently late by that much, which is the wrong side to err
+    /// on: a mark derived from it would already have eaten into the announcement.
+    /// </summary>
+    /// <param name="lastConfirmed">The latest probe position at which the phrase was still the
+    /// first thing heard.</param>
+    private static double OnsetOf(double lastConfirmed)
+        => Math.Round(Math.Max(0, lastConfirmed - PreciseMarkLeadInSeconds), 6);
+
+    /// <summary>
     /// Generates precise marking round 2's blind, fixed-step candidate positions (see
     /// <see cref="RefinePreciseMarkAsync"/>): <paramref name="mark"/> plus/minus
     /// <see cref="PreciseMarkFixedStepSeconds"/>, 2x that, 3x that, and so on out to
@@ -474,19 +562,15 @@ internal sealed class PreciseMarkRefiner
     /// one at a time - backward, then forward, then backward again, and so on - rather than
     /// exhausting either direction before ever trying the other, so whichever direction the true
     /// announcement actually lies in is typically found in about half the checks a fully
-    /// sequential search would need. The two directions are accepted asymmetrically, as described
-    /// on <see cref="RefinePreciseMarkAsync"/>:
-    /// <list type="bullet">
-    /// <item>A backward success is trusted immediately and returned on the spot, with no further
-    /// checking.</item>
-    /// <item>A forward success instead switches the search to a forward-only continuation -
-    /// backward is abandoned outright from that point on - and forward candidates keep being
-    /// checked, in order, until one fails (which locks in the <em>previous</em> one as the
-    /// answer) or they simply run out (which accepts whichever was confirmed last; the caller's
-    /// search span already bounds how far this can wander).</item>
-    /// </list>
-    /// A run of consecutive forward successes during that continuation is logged as ambiguous,
-    /// each time moving the tentative answer to the most recently confirmed one.
+    /// sequential search would need.
+    /// <para>
+    /// Any success in either direction ends the search: what it returns is a foothold, not an
+    /// answer. A confirmation locates the plateau, and <see cref="FindOnsetEdgeAsync"/> then walks
+    /// it to the onset - so nothing is gained by preferring one confirming position within the same
+    /// plateau over another, and the two directions need no asymmetric treatment. Candidates lie
+    /// within the caller's jingle-plus-phrase span of the mark, which is what keeps a foothold from
+    /// belonging to a neighbouring chapter's announcement.
+    /// </para>
     /// </summary>
     /// <param name="forwardCandidates">Positions later than the mark, in the order to try them.</param>
     /// <param name="backwardCandidates">Positions earlier than the mark, in the order to try them.</param>
@@ -504,9 +588,8 @@ internal sealed class PreciseMarkRefiner
         using var backwardEnumerator = backwardCandidates.GetEnumerator();
         var forwardHasMore = forwardEnumerator.MoveNext();
         var backwardHasMore = backwardEnumerator.MoveNext();
-        double? forwardConfirmed = null;
 
-        while (forwardConfirmed is null && (backwardHasMore || forwardHasMore))
+        while (backwardHasMore || forwardHasMore)
         {
             if (backwardHasMore)
             {
@@ -522,29 +605,10 @@ internal sealed class PreciseMarkRefiner
                 var candidate = forwardEnumerator.Current;
                 ct.ThrowIfCancellationRequested();
                 if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
-                    forwardConfirmed = candidate;
+                    return candidate;
                 forwardHasMore = forwardEnumerator.MoveNext();
             }
         }
-
-        if (forwardConfirmed is null)
-            return null;
-
-        while (forwardHasMore)
-        {
-            var candidate = forwardEnumerator.Current;
-            ct.ThrowIfCancellationRequested();
-            if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
-            {
-                _log?.Invoke(
-                    $"consecutive candidates confirmed ({FormatTimestamp(forwardConfirmed.Value)} " +
-                    $"then {FormatTimestamp(candidate)}) - ambiguous, keeping the latter");
-                forwardConfirmed = candidate;
-                forwardHasMore = forwardEnumerator.MoveNext();
-                continue;
-            }
-            return forwardConfirmed;
-        }
-        return forwardConfirmed;
+        return null;
     }
 }

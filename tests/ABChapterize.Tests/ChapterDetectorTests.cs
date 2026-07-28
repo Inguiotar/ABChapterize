@@ -140,7 +140,15 @@ public sealed class ChapterDetectorTests : IDisposable
         /// separate hook into <c>DetectFullAsync</c>.</summary>
         public FakeAudioSource Audio => _audio;
 
-        /// <summary>Scripts the transcript for the decode window starting near <paramref name="start"/>.</summary>
+        /// <summary>
+        /// Scripts speech at a place in the file: <paramref name="segments"/> carry times relative
+        /// to <paramref name="start"/>, so a call reads as "the window at <paramref name="start"/>
+        /// transcribes to this" while actually pinning each segment to an absolute position
+        /// (<paramref name="start"/> plus its own offset). Which decode later picks a segment up is
+        /// decided by that absolute position alone - see <see cref="TranscribeAsync"/>.
+        /// </summary>
+        /// <param name="start">Absolute time the segment offsets are measured from.</param>
+        /// <param name="segments">The scripted speech, in window-relative time.</param>
         public void Add(double start, params TranscriptSegment[] segments)
             => _script.Add((start, [.. segments]));
 
@@ -149,13 +157,42 @@ public sealed class ChapterDetectorTests : IDisposable
         /// is being used.</summary>
         public Action? OnTranscribe { get; set; }
 
-        /// <inheritdoc/>
+        /// <summary>
+        /// Returns whatever scripted speech actually begins inside the window just decoded,
+        /// re-based to that window's own start - the same contract Whisper has, and the reason a
+        /// decode's exact boundaries matter here rather than only its rough position. Matching the
+        /// script by proximity to the window start instead (as this once did, within 0.25 s) makes
+        /// every decode near a scripted entry produce that entry's phrase, which cannot express the
+        /// one thing precise marking is built to measure: that a probe starting <em>past</em> an
+        /// announcement's onset no longer hears it first. Under proximity matching
+        /// <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> converges on the tolerance constant
+        /// rather than on the scripted onset, so its results were an artifact of this class.
+        /// <para>
+        /// A segment starting before the window is dropped rather than clipped: real Whisper would
+        /// emit some leading fragment of it, which no script here has a way to spell, and treating
+        /// the window as starting mid-word would let a phrase be "heard" from a position it has
+        /// already passed - exactly the false positive the edge walk must not see.
+        /// </para>
+        /// </summary>
+        /// <param name="samples">Ignored; the decode's own boundaries carry the information.</param>
+        /// <param name="ct">Ignored; nothing here blocks.</param>
         public Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct)
         {
             OnTranscribe?.Invoke();
-            var start = _audio.DecodeStarts[^1];
-            var hit = _script.FirstOrDefault(e => Math.Abs(e.Start - start) < 0.25);
-            return Task.FromResult(hit.Segments ?? []);
+            var (start, duration) = _audio.DecodeWindows[^1];
+            var end = duration is { } seconds ? start + seconds : double.PositiveInfinity;
+            // Decode starts are arithmetic (mark minus a lead, plus a step), so a segment scripted
+            // to sit exactly on one lands a rounding error either side of it.
+            const double epsilon = 1e-9;
+            var segments = _script
+                .SelectMany(entry => entry.Segments.Select(seg => (Absolute: entry.Start + seg.StartSeconds,
+                                                                   End: entry.Start + seg.EndSeconds, seg)))
+                .Where(x => x.Absolute >= start - epsilon && x.Absolute < end)
+                .OrderBy(x => x.Absolute)
+                .Select(x => new TranscriptSegment(
+                    x.Absolute - start, x.End - start, x.seg.Text, x.seg.Probability))
+                .ToList();
+            return Task.FromResult(segments);
         }
 
         /// <summary>Language auto-detection result to return; defaults to a confident "en".</summary>
@@ -192,6 +229,65 @@ public sealed class ChapterDetectorTests : IDisposable
     /// expectation.</summary>
     private static List<(string Kind, string Title, double TimeSeconds)> Named(DetectionResult result)
         => result.NamedMarks.Select(m => (m.Kind, m.Title, m.TimeSeconds)).ToList();
+
+    /// <summary>Named-mark counterpart of <see cref="AssertChapters"/>, with the same one-sided
+    /// tolerance - named marks go through the very same precise-marking refinement.</summary>
+    private static void AssertNamed(
+        IReadOnlyList<(string Kind, string Title, double TimeSeconds)> expected, DetectionResult result)
+    {
+        var actual = Named(result);
+        Assert.Equal(expected.Select(m => (m.Kind, m.Title)), actual.Select(m => (m.Kind, m.Title)));
+        foreach (var (want, got) in expected.Zip(actual))
+            AssertMarkTime(want.Title, want.TimeSeconds, got.TimeSeconds);
+    }
+
+    /// <summary>
+    /// Asserts the detected chapters, allowing precise marking its measurement resolution: a mark
+    /// may sit up to one <see cref="DetectionTuning.PreciseMarkFixedStepSeconds"/> <em>before</em>
+    /// the expected position but never after it.
+    /// <para>
+    /// The expected values are where the heuristic alone would put the mark - the phrase onset the
+    /// script states, less <see cref="DetectionTuning.DefaultMarkLeadSeconds"/>. Precise marking
+    /// does not trust that position; it brackets the true onset by bisection and reports the last
+    /// probe that still confirmed the phrase, which lands within one step below the real edge
+    /// rather than exactly on it. Pinning these tests to the bisection's own arithmetic would make
+    /// eighty-odd assertions - most of them about gap tracking or language handling, not placement -
+    /// churn on every tuning change, and would assert an artifact instead of the contract precise
+    /// marking actually owes its callers.
+    /// </para>
+    /// </summary>
+    private static void AssertChapters(
+        IReadOnlyList<DetectedChapter> expected, IReadOnlyList<DetectedChapter> actual)
+    {
+        Assert.Equal(expected.Select(c => c.Number), actual.Select(c => c.Number));
+        Assert.Equal(expected.Select(c => c.Confidence), actual.Select(c => c.Confidence));
+        foreach (var (want, got) in expected.Zip(actual))
+            AssertMarkTime($"chapter {want.Number}", want.TimeSeconds, got.TimeSeconds);
+    }
+
+    /// <summary>Single-chapter counterpart of <see cref="AssertChapters"/>, for the tests that only
+    /// pin one mark out of a longer sequence.</summary>
+    private static void AssertContainsChapter(
+        DetectedChapter expected, IReadOnlyList<DetectedChapter> actual)
+    {
+        var got = Assert.Single(actual.Where(c => c.Number == expected.Number));
+        Assert.Equal(expected.Confidence, got.Confidence);
+        AssertMarkTime($"chapter {expected.Number}", expected.TimeSeconds, got.TimeSeconds);
+    }
+
+    /// <summary>Asserts that a decode began at the given position, tolerating the binary-float dust
+    /// a computed position carries - a gap's start is a refined mark, not a round number.</summary>
+    private static void AssertDecodedFrom(ScriptedTranscriber transcriber, double start)
+        => Assert.Contains(transcriber.Audio.DecodeStarts, d => Math.Abs(d - start) < 1e-6);
+
+    /// <summary>The one-sided tolerance every mark assertion shares.</summary>
+    private static void AssertMarkTime(string what, double expected, double actual)
+    {
+        // A mark at 0 is clamped rather than measured, so it has no tolerance to spend.
+        var floor = expected == 0 ? 0 : expected - DetectionTuning.PreciseMarkFixedStepSeconds;
+        Assert.True(actual <= expected + 1e-9 && actual >= floor - 1e-9,
+            $"{what}: expected a mark in [{floor}, {expected}], got {actual}");
+    }
 
     /// <summary>Runs the detector against the given silences and script.</summary>
     private async Task<DetectionResult> DetectAsync(
@@ -268,7 +364,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal(
+        AssertChapters(
             [new(1, 0.25), new(2, 600.05), new(3, 1199.95)],
             result.Chapters);
     }
@@ -287,10 +383,10 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1800, Seg(0.4, " Epilogue."));
             });
 
-        Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
-        Assert.Equal(
+        AssertChapters([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+        AssertNamed(
             [("prologue", "Prologue", 0.25), ("epilogue", "Epilogue", 1800.15)],
-            Named(result));
+            result);
     }
 
     [Fact]
@@ -307,7 +403,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1200, Seg(0.2, " As the prologue explained, chapter two."));
             });
 
-        Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 600.05), new(2, 1199.95)], result.Chapters);
         Assert.Empty(result.NamedMarks);
     }
 
@@ -323,8 +419,8 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter one."));
             });
 
-        Assert.Equal([new(1, 600.05)], result.Chapters);
-        Assert.Equal([("prologue", "Prologue", 0.25)], Named(result));
+        AssertChapters([new(1, 600.05)], result.Chapters);
+        AssertNamed([("prologue", "Prologue", 0.25)], result);
     }
 
     [Fact]
@@ -342,7 +438,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.2, " Chapter one."));
             });
 
-        Assert.Equal([("prologue", "Prologue", 300.05)], Named(result));
+        AssertNamed([("prologue", "Prologue", 300.05)], result);
     }
 
     [Fact]
@@ -371,7 +467,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter one."));
             });
 
-        Assert.Equal([new(1, 600.05)], result.Chapters);
+        AssertChapters([new(1, 600.05)], result.Chapters);
         Assert.Empty(result.NamedMarks);
     }
 
@@ -387,7 +483,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Kapitel eins."));
             });
 
-        Assert.Equal([("prologue", "Prolog", 0.25)], Named(result));
+        AssertNamed([("prologue", "Prolog", 0.25)], result);
     }
 
     [Fact]
@@ -406,7 +502,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Empty(result.MissingNumbers);
-        Assert.Equal([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 600.05), new(2, 1199.95)], result.Chapters);
     }
 
     [Fact]
@@ -424,10 +520,10 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1800, Seg(0.4, " Zwischenspiel."));
             });
 
-        Assert.Equal([new(1, 600.05)], result.Chapters);
-        Assert.Equal(
+        AssertChapters([new(1, 600.05)], result.Chapters);
+        AssertNamed(
             [("custom 1", "Zwischenspiel", 1199.95), ("custom 1", "Zwischenspiel", 1800.15)],
-            Named(result));
+            result);
     }
 
     [Fact]
@@ -444,9 +540,9 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1200, Seg(0.2, " Zeit-Tafel."));
             });
 
-        Assert.Equal(
+        AssertNamed(
             [("custom 1", "Zeittafel", 0.25), ("custom 1", "Zeittafel", 1199.95)],
-            Named(result));
+            result);
     }
 
     [Fact]
@@ -461,7 +557,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1200, Seg(0.2, " Intermezzo."));
             });
 
-        Assert.Equal([("custom 1", "The Intermezzo", 1199.95)], Named(result));
+        AssertNamed([("custom 1", "The Intermezzo", 1199.95)], result);
     }
 
     [Fact]
@@ -506,10 +602,10 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Empty(result.Chapters);
         Assert.False(result.GapRemains);
         // Two chapter 1s, and neither is a gap, a duplicate or a reason to re-probe anything.
-        Assert.Equal(
+        AssertNamed(
             [("chapter", "Chapter 1", 600.05), ("custom 1", "Zwischenspiel", 1199.95),
              ("chapter", "Chapter 1", 1800.15)],
-            Named(result));
+            result);
     }
 
     [Fact]
@@ -520,7 +616,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(595, 600)],
             s => s.Add(600, Seg(0.3, " Chapter. The rain had not let up.")));
 
-        Assert.Equal([("chapter", "Chapter", 600.05)], Named(result));
+        AssertNamed([("chapter", "Chapter", 600.05)], result);
     }
 
     [Fact]
@@ -533,7 +629,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Prologue.")));
 
-        Assert.Equal([("prologue", "Prologue", 0.25)], Named(result));
+        AssertNamed([("prologue", "Prologue", 0.25)], result);
     }
 
     [Fact]
@@ -551,7 +647,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.2, " As the prologue explained."));
             });
 
-        Assert.Equal([("prologue", "Prologue", 0.25), ("chapter", "Chapter 1", 300.05)], Named(result));
+        AssertNamed([("prologue", "Prologue", 0.25), ("chapter", "Chapter 1", 300.05)], result);
     }
 
     [Fact]
@@ -587,7 +683,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Zweites Kapitel."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
     }
 
     [Fact]
@@ -598,7 +694,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(595, 600)],
             s => s.Add(600, Seg(0.3, " Chapter 12 begins.")));
 
-        Assert.Equal([new(12, 600.05)], result.Chapters);
+        AssertChapters([new(12, 600.05)], result.Chapters);
     }
 
     [Fact]
@@ -627,11 +723,14 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // The measurement costs a decode per mark, so a non-verbose run must not perform it at
         // all. Proven by the decode count: with logging off, no decode ever starts at the finished
-        // mark position (0.25), only at the probe window start (0).
-        var (_, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"), [new(595, 600)],
+        // mark position (0.25), only at the probe window start (0). Runs with --quick-marks so that
+        // precise marking's own probes - which sweep right across 0.25 - cannot be mistaken for the
+        // loudness measurement.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--quick-marks"), [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Chapter one.")));
 
+        Assert.Equal(0.25, Assert.Single(result.Chapters).TimeSeconds);
         Assert.DoesNotContain(0.25, audio.DecodeStarts);
     }
 
@@ -650,7 +749,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1200, Seg(0.2, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
         Assert.False(result.GapRemains);
         Assert.Contains(log, l => l.Contains("discarded chapter 510"));
     }
@@ -672,7 +771,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1200, Seg(0.3, " Chapter one."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.15)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.15)], result.Chapters);
         Assert.Contains(log, l =>
             l.Contains("skipped chapter 1 at 0:20:00.30") &&
             l.Contains("not above the last accepted chapter 2") &&
@@ -732,7 +831,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
     }
 
     [Fact]
@@ -747,7 +846,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(6.0, " Chapter two.")); // starts later than 5 s after the silence
             });
 
-        Assert.Equal([new DetectedChapter(1, 0.25)], result.Chapters);
+        AssertChapters([new DetectedChapter(1, 0.25)], result.Chapters);
         Assert.False(result.GapRemains);
     }
 
@@ -793,7 +892,7 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(300, Seg(0.3, " Chapter one.")));
 
         Assert.False(result.EarlyAborted);
-        Assert.Equal([new DetectedChapter(1, 300.05)], result.Chapters);
+        AssertChapters([new DetectedChapter(1, 300.05)], result.Chapters);
         Assert.Contains(3300.0, audio.DecodeStarts);
     }
 
@@ -819,7 +918,7 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(0, Seg(0.5, " Chapter three.")));
 
         Assert.Null(result.BelowExpectedStartNumber);
-        Assert.Equal([new DetectedChapter(3, 0.25)], result.Chapters);
+        AssertChapters([new DetectedChapter(3, 0.25)], result.Chapters);
     }
 
     [Fact]
@@ -837,7 +936,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(12, 9.75), new(13, 1199.95)], result.Chapters);
+        AssertChapters([new(12, 9.75), new(13, 1199.95)], result.Chapters);
         Assert.DoesNotContain(590.0, audio.DecodeStarts);
     }
 
@@ -853,7 +952,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.GapRemains);
         Assert.Equal([1, 2, 3], result.MissingNumbers);
-        Assert.Equal([new(4, 1199.95)], result.Chapters);
+        AssertChapters([new(4, 1199.95)], result.Chapters);
     }
 
     [Fact]
@@ -874,7 +973,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal(
+        AssertChapters(
             [new(1, 0.25), new(2, 599.75), new(3, 1199.95)],
             result.Chapters);
     }
@@ -997,7 +1096,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 609.75), new(2, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 609.75), new(2, 1199.95)], result.Chapters);
         Assert.Contains(590.0, audio.DecodeStarts);
     }
 
@@ -1017,7 +1116,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 9.75), new(2, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 9.75), new(2, 1199.95)], result.Chapters);
         Assert.DoesNotContain(590.0, audio.DecodeStarts);
     }
 
@@ -1040,7 +1139,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1789.95, Seg(10, " Chapter three.")); // trailing chunk 2, phrase at 1799.95
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 1199.95), new(3, 1799.7)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 1199.95), new(3, 1799.7)], result.Chapters);
         // Scanned from the last chapter's own mark, and - having no expected numbers to satisfy -
         // carried on to the end of the file rather than stopping at the find.
         Assert.Contains(1199.95, audio.DecodeStarts);
@@ -1063,7 +1162,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1789.95, Seg(10, " Chapter three."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
         Assert.DoesNotContain(1789.95, audio.DecodeStarts);
     }
 
@@ -1101,7 +1200,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1789.95, Seg(10, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.25), new(3, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(3, 1199.95)], result.Chapters);
         Assert.True(result.GapRemains);
         Assert.Contains(log, l => l.Contains("skipped chapter 2") &&
                                   l.Contains("not above every chapter already found"));
@@ -1125,7 +1224,7 @@ public sealed class ChapterDetectorTests : IDisposable
             pass3 => pass3.Add(597.5, Seg(2.5, " Chapter two."))); // snapped gap-chunk seam
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
         // The pass-3 transcriber had its language set before it was used (auto-detected "en").
         Assert.Contains("en", pass3.LanguageChanges);
     }
@@ -1149,7 +1248,7 @@ public sealed class ChapterDetectorTests : IDisposable
             pass3 => pass3.Add(600, Seg(0.5, " Chapter two.")));
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 600.25), new(3, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.25), new(3, 1199.95)], result.Chapters);
         Assert.Contains(600, pass3.Audio.DecodeStarts);
         // Pass 3 proper never ran: every decode stayed probe-sized (12 s plain probe window), so
         // nothing was ever transcribed in pass 3's 600 s gap chunks. This is the saving pass 2.5
@@ -1175,9 +1274,9 @@ public sealed class ChapterDetectorTests : IDisposable
             pass3 => pass3.Add(597.5, Seg(2.5, " Chapter two."))); // snapped gap-chunk seam
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
         // The gap-chunk decode from the gap's own start, i.e. pass 3 - not a pass 2.5 probe.
-        Assert.Contains(0.25, pass3.Audio.DecodeStarts);
+        AssertDecodedFrom(pass3, result.Chapters[0].TimeSeconds);
     }
 
     [Fact]
@@ -1196,7 +1295,7 @@ public sealed class ChapterDetectorTests : IDisposable
             pass3 => pass3.Add(597.5, Seg(2.5, " Chapter two."))); // only findable by pass 3's chunking
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 599.75), new(3, 1199.95)], result.Chapters);
         Assert.Contains(0.25, pass3.Audio.DecodeStarts);
     }
 
@@ -1217,7 +1316,7 @@ public sealed class ChapterDetectorTests : IDisposable
             pass3 => pass3.Add(600, Seg(0.5, " Chapter seven.")));
 
         Assert.True(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(3, 1199.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(3, 1199.95)], result.Chapters);
     }
 
     [Fact]
@@ -1331,7 +1430,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal(
+        AssertChapters(
             [new(1, 0.25), new(2, 600.05), new(3, 904.95)],
             result.Chapters);
         Assert.DoesNotContain(703, audio.DecodeStarts);
@@ -1358,7 +1457,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal(
+        AssertChapters(
             [new(1, 40.05), new(2, 600.05), new(3, 904.95)],
             result.Chapters);
         Assert.Contains(600.0, audio.DecodeStarts);
@@ -1384,7 +1483,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal(
+        AssertChapters(
             [new(1, 0.25), new(2, 600.05), new(3, 703.05), new(4, 904.95)],
             result.Chapters);
         Assert.Contains(703, audio.DecodeStarts);
@@ -1481,7 +1580,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(905, Seg(0.2, " Chapter three."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05), new(3, 904.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05), new(3, 904.95)], result.Chapters);
         Assert.Contains(703, audio.DecodeStarts);
     }
 
@@ -1501,7 +1600,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1800, Seg(0.4, " as I said in chapter two."));
             });
 
-        Assert.Equal(
+        AssertChapters(
             [new(1, 0.25), new(2, 600.05), new(3, 1199.95)],
             result.Chapters);
     }
@@ -1528,7 +1627,7 @@ public sealed class ChapterDetectorTests : IDisposable
             // falls back to the plain silence-based rule exactly as it would without VAD at all.
             new FakeVad { Speech = [new(0, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 617.95), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 617.95), result.Chapters);
     }
 
     [Fact]
@@ -1551,7 +1650,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 700), new(705, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Contains(new DetectedChapter(2, 700), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 700), result.Chapters);
         Assert.Contains(700.0, audio.DecodeStarts);
     }
 
@@ -1580,7 +1679,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 700), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 700), result.Chapters);
         // Exact 700.0 is the anchor probe itself; the walked mark now also landing at 700
         // means the final quiet-point snap's own decode sits nearby (699.85) but is a distinct
         // value, so this still isolates "no duplicate probe decode" without being confused by it.
@@ -1604,7 +1703,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 50) < 0.01);
     }
@@ -1626,7 +1725,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 12) < 0.01);
     }
@@ -1650,7 +1749,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 700), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 700), result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 700 && w.Duration is { } d && Math.Abs(d - 12) < 0.01);
     }
@@ -1675,7 +1774,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 610), new(613, 640), new(645, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1714,7 +1813,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
-        Assert.Contains(new DetectedChapter(2, 640), result.Chapters);       // jingle start, not 612.5
+        AssertContainsChapter(new DetectedChapter(2, 640), result.Chapters);       // jingle start, not 612.5
         Assert.DoesNotContain(700.0, audio.DecodeStarts);                    // window narrowed to ~11 s
     }
 
@@ -1737,7 +1836,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 610), new(613, 640), new(645.3, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1763,7 +1862,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(650, 3600)] }); // jingle region 640-650 envelops 645
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1795,7 +1894,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 610), new(613, 640), new(654.8, 655.3), new(660, 3600)] }); // jingle region 640-660, unbroken
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1820,7 +1919,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(640.8, 641.6), new(642.4, 643.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 643.2)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 643.2)], result.Chapters);
     }
 
     [Fact]
@@ -1846,7 +1945,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(641.2, 642.0), new(642.8, 643.6), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 643.6)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 643.6)], result.Chapters);
     }
 
     [Fact]
@@ -1876,7 +1975,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(645, 646.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1900,7 +1999,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 643), new(645, 646.5), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 646.5)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 646.5)], result.Chapters);
     }
 
     [Fact]
@@ -1924,7 +2023,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 640)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
     }
 
     [Fact]
@@ -1949,7 +2048,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 659.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 659.75)], result.Chapters);
     }
 
     [Fact]
@@ -1979,7 +2078,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(650, 3600)] }); // jingle region 640-650 envelops 645
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 649.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 649.75)], result.Chapters);
     }
 
     [Fact]
@@ -2008,7 +2107,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 655.75)], result.Chapters);
     }
 
     [Fact]
@@ -2038,7 +2137,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 654.95)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 654.95)], result.Chapters);
     }
 
     [Fact]
@@ -2064,7 +2163,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 655.75)], result.Chapters);
     }
 
     [Fact]
@@ -2089,7 +2188,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 614.75)], result.Chapters);
     }
 
     [Fact]
@@ -2102,8 +2201,9 @@ public sealed class ChapterDetectorTests : IDisposable
         // to that heuristic, which only ever looks at duration. precise marking catches what the
         // heuristic cannot: its own first check (at 655.75, the heuristic's mark) fails, then
         // every later VAD speech-segment start is checked in turn - 656 fails too (still the
-        // transient), 657 succeeds (the real phrase), and 660 fails again (narration resumes),
-        // which is exactly the success-then-fail pattern that confirms 657 as the true onset.
+        // transient), 657 succeeds (the real phrase). That success is only a foothold; the edge
+        // walk then pins the onset at the last position still hearing the phrase first, which the
+        // scripted transcriber's own match tolerance puts 0.2 s later.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5"),
             [new(610, 613)],
@@ -2119,7 +2219,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 656.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 656.75)], result.Chapters);
     }
 
     [Fact]
@@ -2129,21 +2229,18 @@ public sealed class ChapterDetectorTests : IDisposable
         // as if the real announcement were outside the search horizon entirely - precise marking
         // must not guess: it leaves the mark exactly as RefineDefaultMark computed it, rather than
         // looping forever or picking an arbitrary candidate. --max-jingle-length is capped at 30
-        // (instead of the 45 s default) purely so round 2's fixed-step backward sweep - which now
-        // shares round 1's search span - stays short of 613, the unrelated initial probe decode's
-        // own scripted "Chapter two." transcript a few tens of seconds further back; that entry
-        // has to exist for chapter two to be discovered at all, and this test's fixture (unlike
-        // real ffmpeg decodes) cannot tell a fresh short precise marking re-transcription apart
-        // from that much longer probe decode once their start times land within the same script
-        // lookup tolerance, so the sweep must not reach that far to begin with. 30 s still leaves
-        // the probe window (35 s) comfortable room past the phrase's abs-638 offset.
+        // (instead of the 45 s default) so that round 2's fixed-step backward sweep - which shares
+        // round 1's search span - reaches no further back than 620.75. The scripted "Chapter two."
+        // announcement sits at 619, just outside that floor: it has to exist for chapter two to be
+        // discovered at all (the probe window at 613 covers it), but no refinement probe may reach
+        // it, or the phrase would be confirmed and this test would stop testing the fallback.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
             [new(610, 613)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
-                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0));
+                s.Add(613, new TranscriptSegment(6, 45, " Chapter two.", 1.0));
                 s.Add(655.65, new TranscriptSegment(0, 1, " Music", 1.0));
                 s.Add(655.9, new TranscriptSegment(0, 0.6, " Music", 1.0));
                 s.Add(656.9, new TranscriptSegment(0, 1.2, " Music", 1.0));
@@ -2152,24 +2249,21 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 655.75)], result.Chapters);
     }
 
     [Fact]
     public async Task PreciseMark_Round2FixedStepSweep_FindsAPhraseRound1sVadCandidatesNeverReached()
     {
         // Round 2's whole reason to exist: a phrase sitting where no VAD speech segment starts, so
-        // round 1 (limited entirely to VAD candidates) has no way to ever try checking it. Both VAD
-        // candidates round 1 does have (656, 657) are left unscripted (fail, same as the fallback
-        // test above), so round 1's forward and backward searches both come up empty; round 2 must
-        // then blindly step forward from the mark by PreciseMarkFixedStepSeconds (0.1s) until it
-        // reaches the real announcement at 658.55 - well past either VAD candidate. (As in the
-        // fallback test, --max-jingle-length is capped at 30 purely to keep this round-2 sweep from
-        // reaching back into the unrelated initial-probe decode at 613.) The scripted-entry match
-        // tolerance is coarser than the 0.1s step itself, so several consecutive candidates around
-        // 658.55 all alias to the same scripted phrase and confirm in a run; the last of that run
-        // (658.75) is what locks in once the next, genuinely unscripted step finally fails, giving
-        // a final mark of 658.75 - 0.25 = 658.50.
+        // round 1 (limited entirely to VAD candidates) has no way to ever try checking it. Each VAD
+        // candidate round 1 does have (656, 657) carries unrelated music, so round 1's forward and
+        // backward searches both come up empty; round 2 must then blindly step forward from the
+        // mark by PreciseMarkFixedStepSeconds (0.1 s) until it clears the music at 657 and reaches
+        // the real announcement at 658.55 - well past either VAD candidate. (As in the fallback
+        // test, --max-jingle-length is capped at 30 purely to keep round 2's backward sweep from
+        // reaching the smeared abs-638 transcript, which would confirm too; the forward sweep gets
+        // there first regardless, since the two are interleaved step for step.)
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
             [new(610, 613)],
@@ -2177,12 +2271,14 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
-                s.Add(658.45, Seg(0, " Chapter two.")); // round-2 fixed-step candidate @ 658.55 - the real phrase
+                s.Add(656, new TranscriptSegment(0, 0.5, " Music", 1.0));   // VAD candidate, not the phrase
+                s.Add(657, new TranscriptSegment(0, 1.2, " Music", 1.0));   // VAD candidate, not the phrase
+                s.Add(658.55, Seg(0, " Chapter two."));                     // the real announcement onset
             },
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 658.5)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 658.3)], result.Chapters);
     }
 
     [Fact]
@@ -2191,15 +2287,13 @@ public sealed class ChapterDetectorTests : IDisposable
         // Round 2's backward leg, mirroring PreciseMark_CorrectsAMarkThatOvershotForward_
         // BySearchingBackward's shape but with the real announcement at a position no VAD segment
         // starts at, so round 1's backward search (limited to VAD candidates) cannot find it
-        // either - only round 2's blind backward sweep can, once every forward option (the mark
-        // itself, round 1's forward VAD candidates, and all of round 2's forward fixed steps) has
-        // failed. VAD still reports 656 (the announcement's own blip's stand-in) and 658 (the
-        // unrelated later blip), but both are left unscripted (fail) instead of 656 confirming
-        // immediately as in the mirrored test, forcing the fallthrough into round 2. The scripted
-        // entry's match tolerance is coarser than the 0.1s step, so several consecutive backward
-        // candidates would alias to it, but backward success is now accepted the instant it is
-        // heard rather than waiting for a subsequent failure (see WalkPreciseMarkCandidatesInterleavedAsync):
-        // the *first* of that run, 655.55, is the one returned; final mark = 655.55 - 0.25 = 655.30.
+        // either - only round 2's blind backward sweep can, once every forward option (round 1's
+        // forward VAD candidates and round 2's forward fixed steps) has failed. VAD still reports
+        // 656 (the announcement's own blip's stand-in) and 658 (the unrelated later blip), but the
+        // announcement sits at 655.55, ahead of both, so a check starting at either hears nothing
+        // at all - forcing the fallthrough into round 2. Backward success only ends the search (see
+        // WalkPreciseMarkCandidatesInterleavedAsync); the edge walk then brackets the onset from
+        // that foothold, giving a final mark of 655.55 - 0.25 = 655.30.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5"),
             [new(610, 613)],
@@ -2207,12 +2301,12 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
-                s.Add(655.25, Seg(0, " Chapter two.")); // round-2 backward fixed-step candidate @ 655.55 - the real phrase
+                s.Add(655.55, Seg(0, " Chapter two.")); // the real announcement onset
             },
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(658, 658.6), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 655.3)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 655.3)], result.Chapters);
     }
 
     [Fact]
@@ -2231,7 +2325,9 @@ public sealed class ChapterDetectorTests : IDisposable
         // WalkPreciseMarkCandidatesInterleavedAsync), so the announcement's own blip (656) is
         // tried - and confirms - before either forward candidate (658, the same wrong blip; 660,
         // narration) is ever checked. Those two forward entries are left scripted only to prove
-        // they'd fail if reached; a backward success is accepted immediately, so they never are.
+        // they'd fail if reached; any success ends the search, so they never are. The edge walk
+        // then runs forward from 656 to the last position still hearing the phrase (656.20, set by
+        // the scripted-entry match tolerance), giving 656.20 - 0.25 = 655.95.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5"),
             [new(610, 613)],
@@ -2247,7 +2343,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(658, 658.6), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 655.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 655.75)], result.Chapters);
     }
 
     [Fact]
@@ -2278,7 +2374,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 614.70)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 614.70)], result.Chapters);
     }
 
     [Fact]
@@ -2303,7 +2399,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 614.75)], result.Chapters);
     }
 
     [Fact]
@@ -2332,7 +2428,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 614.75)], result.Chapters);
     }
 
     [Fact]
@@ -2359,7 +2455,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 614.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 614.75)], result.Chapters);
     }
 
     [Fact]
@@ -2385,7 +2481,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 614.70)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 614.70)], result.Chapters);
     }
 
     [Fact]
@@ -2411,7 +2507,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 800), new(825, 900), new(915, 3600)] });
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
-        Assert.Contains(new DetectedChapter(2, 800), result.Chapters); // jingle start, clipped length fed to auto
+        AssertContainsChapter(new DetectedChapter(2, 800), result.Chapters); // jingle start, clipped length fed to auto
         Assert.DoesNotContain(900.0, audio.DecodeStarts);              // window narrowed to ~11 s, decoy skipped
     }
 
@@ -2508,7 +2604,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two.", confidence: 0.2));
             });
 
-        Assert.Equal(
+        AssertChapters(
             [new(1, 0.25, 0.95), new(2, 600.05, 0.2)],
             result.Chapters);
         Assert.Equal([2], result.LowConfidenceNumbers);
@@ -2554,7 +2650,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(595, 600), new(601, 606)],
             s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
-        Assert.Equal([new DetectedChapter(1, 600.25, 0.3)], result.Chapters);
+        AssertChapters([new DetectedChapter(1, 600.25, 0.3)], result.Chapters);
         Assert.Contains(612.0, audio.DecodeStarts);        // fresh tail only (fallback: the border itself)
         Assert.DoesNotContain(606.0, audio.DecodeStarts);  // the overlap was reused, not re-decoded
     }
@@ -2571,7 +2667,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(595, 600), new(601, 606)],
             s => s.Add(600, Seg(0.5, " Chapter one.")));
 
-        Assert.Equal([new DetectedChapter(1, 600.25)], result.Chapters);
+        AssertChapters([new DetectedChapter(1, 600.25)], result.Chapters);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
     }
@@ -2579,12 +2675,13 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task SequenceSkippedWindow_IsReProbed_WhenASequenceGapTurnsUp()
     {
-        // Chapter two's confident mark skips the overlapping window at 608 - which is exactly
-        // where chapter three's announcement hides (the "sequence spans two transitions" case
-        // the skip bets against). The later chapter-four mark exposes the gap, and the skipped
-        // window must then be re-probed and chapter three recovered - even with an explicit
-        // --min-silence-length, where the gap re-probe used to be unreachable (nothing was
-        // ever skipped before the sequence skip existed).
+        // Chapter two's confident mark skips the overlapping window at 608 - and chapter three's
+        // announcement hides inside it, at 615.4 (the "sequence spans two transitions" case the
+        // skip bets against). It sits past 612, where chapter two's own 12 s window ends, so the
+        // only decode that can reach it is the skipped window's. The later chapter-four mark
+        // exposes the gap, and the skipped window must then be re-probed and chapter three
+        // recovered - even with an explicit --min-silence-length, where the gap re-probe used to
+        // be unreachable (nothing was ever skipped before the sequence skip existed).
         var (result, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5"),
             [new(595, 600), new(606, 608), new(1195, 1200)],
@@ -2592,7 +2689,7 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(600, Seg(0.3, " Chapter two."));
-                s.Add(608, Seg(0.4, " Chapter three."));
+                s.Add(615, Seg(0.4, " Chapter three."));
                 s.Add(1200, Seg(0.2, " Chapter four."));
             });
 
@@ -2624,7 +2721,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 3600)] });
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
-        Assert.Contains(new DetectedChapter(2, 639.75), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 639.75), result.Chapters);
         Assert.DoesNotContain(650.0, audio.DecodeStarts);
         Assert.DoesNotContain(640.0, audio.DecodeStarts);
     }
@@ -2644,7 +2741,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(595, 600), new(603, 606)],
             s => s.Add(600, Seg(9, " Chapter one.")));
 
-        Assert.Equal([new DetectedChapter(1, 608.75)], result.Chapters);
+        AssertChapters([new DetectedChapter(1, 608.75)], result.Chapters);
         Assert.DoesNotContain(612.0, audio.DecodeStarts);
         Assert.DoesNotContain(606.0, audio.DecodeStarts);
     }
@@ -2665,7 +2762,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(9, " Chapter two."));
             });
 
-        Assert.Equal([new DetectedChapter(1, 0.25)], result.Chapters);
+        AssertChapters([new DetectedChapter(1, 0.25)], result.Chapters);
         Assert.False(result.GapRemains);
     }
 
@@ -2743,7 +2840,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal(
+        AssertChapters(
             [new(1, 0.25), new(2, 608.15), new(3, 900.05)],
             result.Chapters);
         Assert.Contains(900.0, audio.DecodeStarts);
@@ -2925,7 +3022,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(608.3, Seg(0, " one."));     // abs 608.3 - fresh tail of window 2
             });
 
-        Assert.Equal([new DetectedChapter(1, 606.25)], result.Chapters);
+        AssertChapters([new DetectedChapter(1, 606.25)], result.Chapters);
         Assert.Contains(log, l => l.Contains("chapter 1 detection spans the reused/fresh transcript merge"));
     }
 
@@ -3069,7 +3166,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 600 && w.Duration is { } d && Math.Abs(d - 13.6) < 0.01);
     }
@@ -3149,7 +3246,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 830.5), new(836, 3600)] });
 
-        Assert.Contains(new DetectedChapter(2, 831.0), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 831.0), result.Chapters);
         Assert.DoesNotContain(result.Chapters, c => c.Number == 2 && c.TimeSeconds < 830);
     }
 
@@ -3178,10 +3275,14 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
-        Assert.Contains(new DetectedChapter(2, 596.75), result.Chapters); // pinpointed at the phrase start
+        AssertContainsChapter(new DetectedChapter(2, 596.75), result.Chapters); // pinpointed at the phrase start
         Assert.Contains(log, l => l.Contains("chapter 2 detection spans a Pass 3 chunk seam"));
+        // The first chunk starts at chapter 1's own mark, so it is read back rather than written
+        // out: precise marking measures that mark and need not land on a round number.
+        var gapStart = result.Chapters[0].TimeSeconds;
         Assert.Contains(audio.DecodeWindows,
-            w => w.Start == 0.25 && w.Duration is { } d && Math.Abs(d - 598.25) < 0.01);
+            w => Math.Abs(w.Start - gapStart) < 1e-6 &&
+                 w.Duration is { } d && Math.Abs(d - (598.5 - gapStart)) < 0.01);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 598.5 && w.Duration is { } d && Math.Abs(d - 599) < 0.01);
     }
@@ -3210,7 +3311,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 200.25), new(3, 500.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 200.25), new(3, 500.05)], result.Chapters);
         Assert.DoesNotContain(log, l => l.Contains("chapter 1 found in gap"));
         Assert.DoesNotContain(log, l => l.Contains("chapter 3 found in gap"));
         Assert.Contains(log, l => l.Contains("chapter 2 found in gap"));
@@ -3239,7 +3340,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 199.75), new(3, 500.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 199.75), new(3, 500.05)], result.Chapters);
         Assert.Contains(log, l => l.Contains("chapter 2 found in gap"));
     }
 
@@ -3265,7 +3366,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 0.25), new(2, 199.75), new(3, 500.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 199.75), new(3, 500.05)], result.Chapters);
         Assert.DoesNotContain(audio.DecodeStarts, d => d is > 210 and < 490);
         // The one qualifying silence needs at most two 8 s sub-chunks (198 and 204) to cover its
         // padded [198, 208] span - nowhere near what scanning the ~492 s raw gap would take.
@@ -3477,7 +3578,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Zweites Kapitel."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Equal("de", result.Profile.Language);
         Assert.Equal("Kapitel", result.Profile.Title);
         Assert.Equal("de", result.DetectedLanguage);
@@ -3499,7 +3600,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Equal("en", result.Profile.Language);
         Assert.Equal("Chapter", result.Profile.Title);
         Assert.Equal("tr", result.DetectedLanguage); // the raw guess is still reported
@@ -3518,7 +3619,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Zweites Kapitel."));
             });
 
-        Assert.Equal([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Equal(0, transcriber.DetectLanguageCalls);
         Assert.Null(result.DetectedLanguage);
         Assert.Equal("de", result.Profile.Language);
@@ -3833,7 +3934,7 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(10, Seg(0.3, " Chapter 2.")));
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+        AssertChapters([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
         // Confirmed markings are trusted verbatim - the only decode is the gap region's own
         // single synthetic candidate; nothing probes near the confirmed markings' own timestamps.
         Assert.Equal([10.0], audio.DecodeStarts);
@@ -3879,7 +3980,7 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(10, Seg(0.3, " Chapter 3.")));
 
         // Chapter 3 must keep its correct, confirmed timestamp - not the gap probe's mistaken one.
-        Assert.Contains(new DetectedChapter(3, 50), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(3, 50), result.Chapters);
         // Chapter 2 was never actually found (only chapter 3's phrase was scripted, deliberately,
         // to isolate the guard) - the file correctly reports it as still missing rather than
         // silently accepting the wrong chapter 3 in its place.
@@ -3917,7 +4018,7 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(10, Seg(0.3, " Chapter 2.")));
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+        AssertChapters([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
         // The committed markings are trusted verbatim - nothing probes near their own timestamps,
         // only the gap region's own synthetic candidate.
         Assert.Equal([10.0], audio.DecodeStarts);
@@ -3933,7 +4034,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.GapRemains);
         Assert.Equal([2], result.MissingNumbers);
-        Assert.Equal([new(1, 10), new(3, 50)], result.Chapters);
+        AssertChapters([new(1, 10), new(3, 50)], result.Chapters);
     }
 
     [Fact]
@@ -3949,7 +4050,7 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(10, Seg(0.3, " Chapter 2.")));
 
         Assert.False(result.GapRemains);
-        Assert.Equal([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+        AssertChapters([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
     }
 
     [Fact]
@@ -4058,13 +4159,13 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task RefinePreciseMarkAsync_ReportsThePhraseAsHeard_WhenTheMarkItselfChecksOut()
+    public async Task RefinePreciseMarkAsync_ReportsThePhraseAsHeard_WhenTheRefinementConfirmsIt()
     {
-        // The flag --mark-before-jingle's verification is gated on: a mark whose own check passes
-        // is a known announcement onset, which is what makes the walk's result trustworthy without
-        // any further probing.
+        // The flag --mark-before-jingle's verification is gated on: a confirmed refinement has
+        // measured the announcement's onset, which is what makes the walk's result trustworthy
+        // without any further probing.
         var transcriber = new ScriptedTranscriber(new FakeAudioSource());
-        transcriber.Add(659.65, Seg(0, " Chapter two."));
+        transcriber.Add(660, Seg(0, " Chapter two."));
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
