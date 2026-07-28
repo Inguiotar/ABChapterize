@@ -1354,6 +1354,13 @@ public sealed class CliOptions
                                     already always runs on CPU regardless of this option, so it
                                     only affects Whisper. Useful to leave a GPU free for other
                                     work, or to sidestep a flaky/unsupported GPU backend.
+                                    There is no option for choosing which GPU yet: the Vulkan
+                                    backend takes the first device it enumerates, which on a
+                                    desktop with both an integrated and a discrete GPU is often
+                                    the slow integrated one. Set GGML_VK_VISIBLE_DEVICES (or
+                                    CUDA_VISIBLE_DEVICES) to a device index to override, e.g.
+                                    GGML_VK_VISIBLE_DEVICES=1. Measured 11x on such a machine,
+                                    so it is worth checking if a run seems slow.
           -j, --mark-before-jingle  A short jingle may precede the chapter phrase; anchor the
                                     mark to it instead of the default fixed offset (see
                                     --max-jingle-length below). A silence scan and a

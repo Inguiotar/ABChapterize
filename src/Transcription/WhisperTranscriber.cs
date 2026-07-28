@@ -38,6 +38,22 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     {
         // Prefer the fastest available backend; Whisper.net probes them in this order
         // and silently falls back to the next one.
+        //
+        // "Cuda first" is an aspiration, not a promise, and the fallback is invisible from
+        // the outside - only RuntimeName tells you what actually loaded. Whisper.net.Runtime.Cuda
+        // 1.9.1's ggml-cuda-whisper.dll needs two things that an NVIDIA GPU alone does not give it
+        // (both established on a GTX 1070 box, 2026-07-28, where the load failed with
+        // ERROR_MOD_NOT_FOUND and Vulkan took over):
+        //   - cublas64_13.dll, i.e. an installed CUDA 13 runtime. The package does not ship it.
+        //   - a supported architecture. Its embedded kernels cover sm_86/sm_89/sm_120a/sm_121a
+        //     (Ampere, Ada, Blackwell) with no older-arch PTX to JIT from, so Pascal-era cards
+        //     cannot run it even once cuBLAS is present.
+        // Vulkan covers both cases and is why the fallback order matters more than it looks.
+        //
+        // Neither backend offers device selection here, and ggml's Vulkan backend takes the first
+        // device it enumerates - the integrated GPU on many desktops. Users override it with
+        // GGML_VK_VISIBLE_DEVICES; on the same box that was an 11x difference (43% vs 467% of
+        // real-time, turbo model). Worth an explicit option one day.
         RuntimeOptions.RuntimeLibraryOrder = forceCpu
             ? [RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx]
             : [RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx];

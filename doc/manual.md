@@ -14,6 +14,7 @@ Contents:
 7. [Languages and number recognition](#7-languages-and-number-recognition)
 8. [Whisper models](#8-whisper-models)
 9. [GPU acceleration](#9-gpu-acceleration)
+   ([picking a GPU](#picking-a-gpu-on-a-multi-gpu-machine))
 10. [ffmpeg: requirements and discovery](#10-ffmpeg-requirements-and-discovery)
 11. [xHE-AAC (USAC) files](#11-xhe-aac-usac-files)
 12. [Output, progress and logging](#12-output-progress-and-logging)
@@ -1400,6 +1401,54 @@ Whisper model "turbo" loaded (Vulkan backend), 3 file(s) to process.
 GPU free for other work or to sidestep a flaky/unsupported GPU backend. The
 Silero VAD pre-pass always runs on CPU regardless, so this option only
 changes Whisper's own backend.
+
+### Picking a GPU on a multi-GPU machine
+
+ABChapterize has no option for choosing *which* GPU to use yet, and on the
+Vulkan backend the underlying runtime simply takes the first device it
+enumerates. On a desktop with a discrete card next to an integrated one, the
+integrated GPU is often device 0 — so the slow one wins by default, and
+nothing in the output says so: the startup line reports only "Vulkan
+backend", not which device it landed on. The difference is not subtle. On a
+test machine with an Intel UHD 630 as device 0 and a GeForce GTX 1070 as
+device 1, the same job ran at 43% of real-time on the default choice and
+467% on the discrete card — about **11× slower for free**.
+
+Until there is a proper option, set the Vulkan runtime's own environment
+variable before starting, listing the device(s) it may use:
+
+```
+set GGML_VK_VISIBLE_DEVICES=1        # Windows (cmd)
+$env:GGML_VK_VISIBLE_DEVICES = "1"   # Windows (PowerShell)
+export GGML_VK_VISIBLE_DEVICES=1     # Linux
+```
+
+The value is a device *index*, not a name, and the indices are whatever the
+Vulkan driver reports — they can change when GPUs or drivers do. If a run is
+unexpectedly slow, compare the reported transcription speed (see
+[section 12](#12-output-progress-and-logging)) with `0` and with `1` and keep
+the better one.
+
+The equivalent for the CUDA backend is `CUDA_VISIBLE_DEVICES`, which works
+the same way.
+
+### A note on CUDA
+
+CUDA is preferred over Vulkan whenever it can actually be loaded, but that
+takes more than an NVIDIA card being present:
+
+- The CUDA runtime libraries have to be installed on the machine. The
+  bundled native links against `cublas64_13.dll` (CUDA 13) and does not ship
+  it, so without a matching CUDA runtime installation the library fails to
+  load.
+- The card has to be recent enough. The bundled native carries kernels for
+  Ampere, Ada and Blackwell (`sm_86`, `sm_89`, `sm_120`, `sm_121`) only.
+  Older cards — Pascal, for instance — are not covered.
+
+Neither case is an error: the selection quietly falls through to Vulkan,
+which supports far older hardware and is usually a perfectly good outcome.
+Just don't assume "NVIDIA card" means "CUDA backend" — check the startup
+line, which names the backend that actually loaded.
 
 The `runtimes` folder next to the executable contains these native libraries
 and must be kept — without it, nothing works.
