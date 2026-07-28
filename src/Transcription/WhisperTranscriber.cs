@@ -34,7 +34,12 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     /// <param name="forceCpu">Skips the GPU backends entirely and loads straight onto CPU
     /// (--cpu-only, see <see cref="ABChapterize.Cli.CliOptions.CpuOnly"/>), rather than relying
     /// on them being unavailable or failing to load.</param>
-    public WhisperTranscriber(string modelPath, string language, int? threads = null, bool forceCpu = false)
+    /// <param name="gpuDevice">Index of the GPU to run on, resolved from a device *name* by
+    /// <see cref="ABChapterize.Gpu.GpuSelector"/> (--use-gpu), or null to let the backend keep its
+    /// own default of device 0. Ignored by the CPU backend, which has no devices to choose
+    /// between.</param>
+    public WhisperTranscriber(string modelPath, string language, int? threads = null, bool forceCpu = false,
+        int? gpuDevice = null)
     {
         // Prefer the fastest available backend; Whisper.net probes them in this order
         // and silently falls back to the next one.
@@ -50,15 +55,23 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
         //     cannot run it even once cuBLAS is present.
         // Vulkan covers both cases and is why the fallback order matters more than it looks.
         //
-        // Neither backend offers device selection here, and ggml's Vulkan backend takes the first
-        // device it enumerates - the integrated GPU on many desktops. Users override it with
-        // GGML_VK_VISIBLE_DEVICES; on the same box that was an 11x difference (43% vs 467% of
-        // real-time, turbo model). Worth an explicit option one day.
+        // gpuDevice is what --use-gpu resolves to. It is an index because that is all whisper.cpp
+        // accepts, but nothing outside this call ever handles one: the name is matched against a
+        // fresh in-process enumeration, because the same box enumerated its two GPUs in opposite
+        // order in a desktop session and over SSH (2026-07-28, confirmed from both ends - GPU load
+        // monitoring there, VRAM going 1225 -> 3208 MiB at 100% utilization here). An index
+        // written down anywhere outside one process's lifetime is a bug waiting to happen.
         RuntimeOptions.RuntimeLibraryOrder = forceCpu
             ? [RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx]
             : [RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx];
 
-        _factory = WhisperFactory.FromPath(modelPath);
+        // Only passed when a device was actually chosen: GpuDevice defaults to 0, so handing it
+        // the default explicitly would be indistinguishable from choosing device 0 on purpose - and
+        // on the CUDA backend, where our Vulkan-derived indices mean nothing, that distinction is
+        // the difference between "leave it alone" and "pin it to an ordinal we made up".
+        _factory = gpuDevice is { } device
+            ? WhisperFactory.FromPath(modelPath, new WhisperFactoryOptions { GpuDevice = device })
+            : WhisperFactory.FromPath(modelPath);
         _processor = _factory.CreateBuilder()
             .WithLanguage(language)
             .WithThreads(threads ?? Math.Max(2, Environment.ProcessorCount - 1))

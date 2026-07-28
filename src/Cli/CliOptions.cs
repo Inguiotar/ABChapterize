@@ -157,6 +157,21 @@ public sealed class CliOptions
     /// </summary>
     public bool CpuOnly { get; private set; }
 
+    /// <summary>
+    /// Which GPU Whisper should run on (--use-gpu), as a case-insensitive substring of the device
+    /// name - "gtx", "uhd", "radeon" - or a bare index for the rare machine holding two identical
+    /// cards. Null leaves the choice to
+    /// <see cref="ABChapterize.Gpu.GpuSelector.Select"/>'s automatic preference.
+    /// </summary>
+    /// <remarks>
+    /// A name rather than an index because an index is not stable: see
+    /// <see cref="ABChapterize.Gpu.GpuDevice"/> for the measurement showing the same machine
+    /// enumerating its two GPUs in opposite order depending on how the user logged in. Matching
+    /// happens against the devices this very process enumerates, so it cannot go stale between
+    /// listing and use.
+    /// </remarks>
+    public string? UseGpu { get; private set; }
+
     /// <summary>Discard pre-existing chapter markings instead of skipping the file (--force / -f).</summary>
     public bool Force { get; private set; }
 
@@ -712,6 +727,9 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
+        if (o.UseGpu != null && o.CpuOnly)
+            throw new CliError("--use-gpu and --cpu-only contradict each other: one picks a GPU, the other refuses to use any.");
+
         if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
@@ -898,6 +916,7 @@ public sealed class CliOptions
         {
             case "--lang": Language = nextParam(); _langSet = true; return true;
             case "--chapter-phrase": ChapterPhrase = nextParam(); _phraseSet = true; return true;
+            case "--use-gpu": UseGpu = ParseUseGpu(nextParam()); return true;
             case "--model": Model = ParseModelSelector("--model", nextParam()); _modelSet = true; return true;
             case "--pass3-model": Pass3Model = ParseModelSelector("--pass3-model", nextParam()); _pass3ModelSet = true; return true;
             case "--max-chapters": MaxChapters = ParseNonNegativeInt("--max-chapters", nextParam()); _maxSet = true; return true;
@@ -1082,6 +1101,21 @@ public sealed class CliOptions
         if (!int.TryParse(value, out var n) || n < 0)
             throw new CliError($"Invalid {optName} value \"{value}\": expected a non-negative number.");
         return n;
+    }
+
+    /// <summary>
+    /// Validates the --use-gpu parameter, which is otherwise taken as typed: the device list it
+    /// has to match is not known here, so a genuine match failure can only be reported later, by
+    /// <see cref="ABChapterize.Gpu.GpuSelector"/>, where the real names are available to print
+    /// alongside the complaint.
+    /// </summary>
+    /// <param name="value">The raw parameter.</param>
+    private static string ParseUseGpu(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+            throw new CliError("Invalid --use-gpu value: expected part of a GPU name, e.g. --use-gpu gtx (see --list-gpus).");
+        return trimmed;
     }
 
     /// <summary>Parses the --early-abort parameter into 0 (disables the feature) or a number of
@@ -1354,13 +1388,16 @@ public sealed class CliOptions
                                     already always runs on CPU regardless of this option, so it
                                     only affects Whisper. Useful to leave a GPU free for other
                                     work, or to sidestep a flaky/unsupported GPU backend.
-                                    There is no option for choosing which GPU yet: the Vulkan
-                                    backend takes the first device it enumerates, which on a
-                                    desktop with both an integrated and a discrete GPU is often
-                                    the slow integrated one. Set GGML_VK_VISIBLE_DEVICES (or
-                                    CUDA_VISIBLE_DEVICES) to a device index to override, e.g.
-                                    GGML_VK_VISIBLE_DEVICES=1. Measured 11x on such a machine,
-                                    so it is worth checking if a run seems slow.
+              --use-gpu <name>      Run Whisper on the GPU whose name contains <name>, matched
+                                    case-insensitively, e.g. "--use-gpu gtx" or "--use-gpu uhd".
+                                    See --list-gpus for the names on this machine. A number is
+                                    read as a device index if the machine has one, which is only
+                                    needed for two identical cards. Without this option a single
+                                    discrete GPU is preferred automatically, so it is normally
+                                    needed only to force the integrated one, or to choose among
+                                    several discrete cards. The chosen GPU is named in the
+                                    startup line either way. Vulkan only; the CUDA backend keeps
+                                    its own device 0.
           -j, --mark-before-jingle  A short jingle may precede the chapter phrase; anchor the
                                     mark to it instead of the default fixed offset (see
                                     --max-jingle-length below). A silence scan and a
@@ -1570,6 +1607,8 @@ public sealed class CliOptions
         Info:
           -?, --help                Show this help.
               --version             Show version information.
+              --list-gpus           List this machine's Vulkan GPUs with their names, as
+                                    --use-gpu matches them, then exit.
 
         Short options without parameters may be collapsed, e.g. "-rb" equals "-r -b".
 

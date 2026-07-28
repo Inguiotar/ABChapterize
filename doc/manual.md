@@ -739,7 +739,7 @@ The outcome is shown in the per-file result line, `--dry-run` listing and
 `--verbose` log:
 
 ```
-Whisper model "turbo" loaded (Vulkan backend, auto language detection), 2 file(s) to process.
+Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070, auto language detection), 2 file(s) to process.
 buch.m4b: 12 chapter(s) written (1-12) + intro, language: de (p=1.00)
 book.m4b: 8 chapter(s) written (1-8) + intro, language: en (p=0.98)
 ```
@@ -1391,10 +1391,11 @@ or listed here:
 
 The native Whisper runtime is selected automatically at start: **CUDA**
 (NVIDIA) when available, then **Vulkan** (any modern GPU, including inside
-WSL2), then CPU. The chosen backend is shown in the startup line:
+WSL2), then CPU. Both the backend and the GPU it settled on are shown in the
+startup line:
 
 ```
-Whisper model "turbo" loaded (Vulkan backend), 3 file(s) to process.
+Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070), 3 file(s) to process.
 ```
 
 `--cpu-only`/`-C` skips straight to the CPU backend instead, e.g. to leave a
@@ -1404,33 +1405,56 @@ changes Whisper's own backend.
 
 ### Picking a GPU on a multi-GPU machine
 
-ABChapterize has no option for choosing *which* GPU to use yet, and on the
-Vulkan backend the underlying runtime simply takes the first device it
-enumerates. On a desktop with a discrete card next to an integrated one, the
-integrated GPU is often device 0 — so the slow one wins by default, and
-nothing in the output says so: the startup line reports only "Vulkan
-backend", not which device it landed on. The difference is not subtle. On a
-test machine with an Intel UHD 630 as device 0 and a GeForce GTX 1070 as
-device 1, the same job ran at 43% of real-time on the default choice and
-467% on the discrete card — about **11× slower for free**.
+On a machine with exactly one discrete GPU next to an integrated one,
+ABChapterize picks the discrete card by itself and you need read no further.
+This matters more than it sounds: left to its own devices the Vulkan runtime
+takes whichever GPU it enumerates first, and on a test machine with a
+GeForce GTX 1070 beside an Intel UHD 630 that turned out to be the
+integrated one — the same job took 130 s there against 15 s on the GeForce,
+**8.6× slower**, with nothing in the output to say why.
 
-Until there is a proper option, set the Vulkan runtime's own environment
-variable before starting, listing the device(s) it may use:
+To override the automatic choice, name the GPU you want:
 
 ```
-set GGML_VK_VISIBLE_DEVICES=1        # Windows (cmd)
-$env:GGML_VK_VISIBLE_DEVICES = "1"   # Windows (PowerShell)
-export GGML_VK_VISIBLE_DEVICES=1     # Linux
+abchapterize --use-gpu gtx audiobook.m4b     # the discrete card
+abchapterize --use-gpu uhd audiobook.m4b     # the integrated one
 ```
 
-The value is a device *index*, not a name, and the indices are whatever the
-Vulkan driver reports — they can change when GPUs or drivers do. If a run is
-unexpectedly slow, compare the reported transcription speed (see
-[section 12](#12-output-progress-and-logging)) with `0` and with `1` and keep
-the better one.
+The text is matched case-insensitively against any part of the device name,
+so `gtx`, `nvidia`, `geforce` and `1070` all pick the same card. `--list-gpus`
+prints the names this machine reports:
 
-The equivalent for the CUDA backend is `CUDA_VISIBLE_DEVICES`, which works
-the same way.
+```
+> abchapterize --list-gpus
+Vulkan GPUs on this machine:
+  0: Intel(R) UHD Graphics 630 (integrated)
+  1: NVIDIA GeForce GTX 1070 (discrete)
+```
+
+A request matching no GPU, or more than one, stops the run and lists what is
+actually available — it never quietly falls back to a different card than the
+one you asked for. The startup line names the GPU in use either way, so a
+wrong choice is visible in the first line of output rather than only in the
+wall clock.
+
+Two situations still need a decision from you, because there is no sensible
+way to guess: several discrete cards, and no discrete card at all. In both,
+the runtime's own default applies until you pass `--use-gpu`.
+
+**On names rather than numbers.** The indices `--list-gpus` prints are
+positions in this machine's Vulkan enumeration, and they are less stable than
+they look: on the test machine above, an interactive desktop session and a
+remote SSH session enumerated the two cards in *opposite* order. An index
+noted down once can therefore be wrong the next time you log in differently,
+which is why `--use-gpu` matches on the name and resolves it afresh on every
+run. A bare number is accepted as an index — for the rare machine with two
+identical cards, where names cannot tell them apart — but only if such an
+index exists, so `--use-gpu 1070` still means the GeForce.
+
+The Vulkan runtime's own `GGML_VK_VISIBLE_DEVICES` environment variable still
+works and is left alone if you set it, but it hides GPUs from the backend and
+renumbers the rest, so combining it with `--use-gpu` is rejected rather than
+guessed at. `--use-gpu` replaces it.
 
 ### A note on CUDA
 
@@ -1449,6 +1473,11 @@ Neither case is an error: the selection quietly falls through to Vulkan,
 which supports far older hardware and is usually a perfectly good outcome.
 Just don't assume "NVIDIA card" means "CUDA backend" — check the startup
 line, which names the backend that actually loaded.
+
+`--use-gpu` and `--list-gpus` work on the Vulkan side, where multi-GPU
+machines actually cause trouble. When CUDA loads, it keeps its own device 0;
+a machine with several CUDA cards is rare enough not to have earned an option
+of its own yet.
 
 The `runtimes` folder next to the executable contains these native libraries
 and must be kept — without it, nothing works.

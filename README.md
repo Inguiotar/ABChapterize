@@ -40,10 +40,11 @@ Prebuilt binaries for Windows and Linux are available on the
   it is used — a compromised or tampered-with download is rejected rather
   than silently loaded.
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
-  On a machine with more than one GPU, see
-  [picking a GPU](doc/manual.md#picking-a-gpu-on-a-multi-gpu-machine) before
-  concluding it is slow: without help, the Vulkan backend takes the first
-  device it finds, which on many desktops is the integrated one.
+  On a laptop or desktop with both an integrated and a discrete GPU, the
+  discrete one is picked automatically (left alone, the Vulkan runtime may
+  well grab the integrated one — measured 8.6x slower on a test machine), and
+  the GPU in use is named in the startup line. Override with
+  `--use-gpu <name>`; `--list-gpus` shows the names.
 - **Processes batches in parallel** — multiple files at once, auto-throttled to
   live CPU load (and capped at 1 concurrent file on GPU backends by default,
   for VRAM/context safety); override with `--jobs`.
@@ -111,7 +112,7 @@ That's it. On the first run, the speech model is downloaded automatically
 Then the audiobook is scanned and the chapter marks are written:
 
 ```
-Whisper model "turbo" loaded (Vulkan backend, auto language detection), 1 file(s) to process.
+Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070, auto language detection), 1 file(s) to process.
 My Audiobook.m4b: 23 chapter(s) written (1-23) + intro, language: en (p=1.00)
 ```
 
@@ -215,7 +216,9 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `--ignore-chapter-numbers` | Detect chapter announcements as usual but form no opinion about their numbers: the spoken number still reaches the title, nothing checks the sequence. Passes 2.5 and 3 never run and nothing is ever tagged `.missing-marks`. Cannot combine with `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` or `--verify`. |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`, or `custom:<path>` for a GGML model file of your own (used as-is: not downloaded, not checksum-verified, ranked against the built-in models by file size). `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
 | `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model`, `custom:<path>` included (default: same as `--model`). Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. Loaded lazily, only if pass 3 runs. |
-| `-C`, `--cpu-only` | Force Whisper onto the CPU backend instead of the fastest available hardware acceleration. The Silero VAD pre-pass already always runs on CPU regardless of this option, so it only affects Whisper. There is no option for choosing *which* GPU yet — set `GGML_VK_VISIBLE_DEVICES` (or `CUDA_VISIBLE_DEVICES`) to a device index for that, see [picking a GPU](doc/manual.md#picking-a-gpu-on-a-multi-gpu-machine). |
+| `-C`, `--cpu-only` | Force Whisper onto the CPU backend instead of the fastest available hardware acceleration. The Silero VAD pre-pass already always runs on CPU regardless of this option, so it only affects Whisper. |
+| `--use-gpu <name>` | Run Whisper on the GPU whose name contains `<name>`, case-insensitively — `--use-gpu gtx`, `--use-gpu uhd`. Only needed to override the automatic preference for a single discrete GPU, or to choose between several discrete ones. A request matching no GPU, or more than one, is an error listing the real names. Vulkan only. See [picking a GPU](doc/manual.md#picking-a-gpu-on-a-multi-gpu-machine). |
+| `--list-gpus` | List this machine's Vulkan GPUs as `--use-gpu` matches them, then exit. |
 | `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
 | `-Q`, `--quick-marks` | **Experimental.** Skip the refinement that normally re-transcribes the audio at every mark to confirm the phrase is really there (see [How it works](#how-it-works)). Faster — saves one or more transcriptions per chapter — but marks, while usually usable, may end up after the chapter phrase rather than before it, even together with `-j`. |
 | `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |

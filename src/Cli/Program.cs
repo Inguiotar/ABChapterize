@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Audio;
+using ABChapterize.Gpu;
 using ABChapterize.Processing;
 using ABChapterize.Ui;
 
@@ -30,6 +31,11 @@ public static class Program
             Console.WriteLine($"abchapterize {CliOptions.Version}{buildInfo}");
             return 0;
         }
+
+        // Likewise standalone: --list-gpus answers "what may I pass to --use-gpu on this machine?"
+        // and needs neither a file nor a model.
+        if (args.Contains("--list-gpus"))
+            return ListGpus();
 
         CliOptions? options;
         try
@@ -85,5 +91,42 @@ public static class Program
             Console.Error.WriteLine($"Error: {ex.GetType().Name}: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Prints the Vulkan GPUs of this machine, as <c>--use-gpu</c> sees them.
+    /// </summary>
+    /// <returns>0 even when nothing was found: "this machine has no Vulkan GPU" is an answer to
+    /// the question that was asked, not a failure to answer it.</returns>
+    private static int ListGpus()
+    {
+        var devices = VulkanDeviceEnumerator.Enumerate();
+        if (devices.Count == 0)
+        {
+            Console.WriteLine("No Vulkan GPUs found (Whisper will use CUDA or the CPU backend).");
+            return 0;
+        }
+
+        Console.WriteLine("Vulkan GPUs on this machine:");
+        foreach (var device in devices)
+            Console.WriteLine($"  {device}");
+
+        // The indices are printed for completeness, but the names are what --use-gpu is for; see
+        // GpuDevice's remarks for why an index is worth less than it looks.
+        Console.WriteLine();
+        Console.WriteLine("Pass any distinctive part of a name to --use-gpu, e.g. --use-gpu "
+            + FirstWordOf(devices[^1].Name).ToLowerInvariant() + ".");
+        return 0;
+    }
+
+    /// <summary>
+    /// First whitespace-separated word of a device name, used to make the <c>--list-gpus</c> hint
+    /// concrete instead of generic.
+    /// </summary>
+    /// <param name="name">A device name as the driver reported it.</param>
+    private static string FirstWordOf(string name)
+    {
+        var word = name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? name;
+        return word.Length > 0 ? word : name;
     }
 }

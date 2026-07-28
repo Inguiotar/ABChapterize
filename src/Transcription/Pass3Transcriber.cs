@@ -23,6 +23,7 @@ public sealed class SharedPass3Transcriber : IAsyncDisposable
     private readonly string _model;
     private readonly string _initialLanguage;
     private readonly bool _forceCpu;
+    private readonly int? _gpuDevice;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private WhisperTranscriber? _inner;
 
@@ -33,11 +34,14 @@ public sealed class SharedPass3Transcriber : IAsyncDisposable
     /// <see cref="TranscribeAsync"/>), exactly as the pass-2 transcribers do.</param>
     /// <param name="forceCpu">Forwarded to the lazily-created <see cref="WhisperTranscriber"/>
     /// (--cpu-only, see <see cref="CliOptions.CpuOnly"/>).</param>
-    public SharedPass3Transcriber(string model, string initialLanguage, bool forceCpu = false)
+    /// <param name="gpuDevice">Forwarded likewise, so pass 3 lands on the same GPU the rest of the
+    /// run chose (--use-gpu, see <see cref="CliOptions.UseGpu"/>).</param>
+    public SharedPass3Transcriber(string model, string initialLanguage, bool forceCpu = false, int? gpuDevice = null)
     {
         _model = model;
         _initialLanguage = initialLanguage;
         _forceCpu = forceCpu;
+        _gpuDevice = gpuDevice;
     }
 
     /// <summary>
@@ -58,7 +62,7 @@ public sealed class SharedPass3Transcriber : IAsyncDisposable
             {
                 var path = await ModelCatalog.EnsureModelAsync(_model, ct);
                 // Serialized, so this one instance may use the full CPU budget (threads: null).
-                _inner = new WhisperTranscriber(path, _initialLanguage, forceCpu: _forceCpu);
+                _inner = new WhisperTranscriber(path, _initialLanguage, forceCpu: _forceCpu, gpuDevice: _gpuDevice);
             }
             _inner.ChangeLanguage(language);
             return await _inner.TranscribeAsync(samples, ct);

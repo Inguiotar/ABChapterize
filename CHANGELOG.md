@@ -9,6 +9,23 @@ for you, not how it was built. The format follows
 
 ### Added
 
+- **Pick the GPU by name.** `--use-gpu gtx` runs Whisper on the GPU whose name
+  contains "gtx", matched case-insensitively against any part of it, and
+  `--list-gpus` prints the names your machine reports:
+
+  ```
+  > abchapterize --list-gpus
+  Vulkan GPUs on this machine:
+    0: Intel(R) UHD Graphics 630 (integrated)
+    1: NVIDIA GeForce GTX 1070 (discrete)
+  ```
+
+  A request that matches no GPU, or more than one, stops the run and lists what
+  is available rather than quietly using a different card. Names are matched
+  instead of numbers on purpose: the numbering is the driver's, and on one test
+  machine it came out in opposite order depending on whether the user was
+  sitting at the desktop or connected remotely.
+
 - **Marks for anything else the narrator announces.** `--custom` takes
   `phrase:title` mappings, several of them separated by semicolons:
 
@@ -87,6 +104,18 @@ for you, not how it was built. The format follows
 
 ### Changed
 
+- **A single discrete GPU is now preferred automatically**, and the startup line
+  names the GPU in use instead of only the backend:
+
+  ```
+  Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070), 3 file(s) to process.
+  ```
+
+  Previously the Vulkan runtime took whichever GPU it enumerated first, which on
+  a machine with an integrated GPU beside a discrete one could be the integrated
+  one — 8.6× slower on the test machine, with nothing in the output to say so.
+  Machines with one GPU, several discrete GPUs, or none that report themselves
+  as discrete are unaffected; use `--use-gpu` to decide those cases.
 - **The built-in chapter, prologue and epilogue phrases now cover each
   language's spelling variants.** They are regular expressions rather than
   single words, so a transcript that dropped an accent still matches
