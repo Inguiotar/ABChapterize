@@ -1218,7 +1218,8 @@ public sealed class FileProcessor
     }
 
     /// <summary>Applies the extension, temporary-file, backup and --filter rules to one target's
-    /// candidates and sorts what survives.</summary>
+    /// candidates and sorts what survives into <see cref="NaturalPathComparer">natural</see>
+    /// order.</summary>
     /// <param name="target">The file or directory to look at.</param>
     /// <param name="suffixes">Case-insensitive file name suffixes to accept.</param>
     private IEnumerable<string> SelectFiles(CliOptions.Target target, string[] suffixes)
@@ -1233,6 +1234,6 @@ public sealed class FileProcessor
             .Where(f => !f.Contains(".abchapterize.", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.Revert || !f.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.FilterRegex == null || _options.FilterRegex.IsMatch(f))
-            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+            .OrderBy(f => f, NaturalPathComparer.Instance);
     }
 }

@@ -483,7 +483,9 @@ so that logs and reports stay comparable regardless of regional settings.
   Naming a file with an unsupported extension is an error. Targets are
   processed in the order given, and nothing is processed twice: a path listed
   again, or a file a listed directory already covers, is silently dropped the
-  second time around.
+  second time around. Within a directory, files are processed in natural order:
+  like an alphabetical listing, except that runs of digits count as whole
+  numbers, so "Track 2.mp3" comes before "Track 10.mp3".
 
 `-r`, `--recurse`
 : Descend into subdirectories. Requires at least one directory target.

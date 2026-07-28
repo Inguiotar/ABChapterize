@@ -270,7 +270,7 @@ public sealed class ChapterDetectorTests : IDisposable
     private static void AssertContainsChapter(
         DetectedChapter expected, IReadOnlyList<DetectedChapter> actual)
     {
-        var got = Assert.Single(actual.Where(c => c.Number == expected.Number));
+        var got = Assert.Single(actual, c => c.Number == expected.Number);
         Assert.Equal(expected.Confidence, got.Confidence);
         AssertMarkTime($"chapter {expected.Number}", expected.TimeSeconds, got.TimeSeconds);
     }

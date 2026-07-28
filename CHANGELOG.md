@@ -92,6 +92,10 @@ for you, not how it was built. The format follows
 
 ### Fixed
 
+- **Numbered files are processed in the order a human would expect.** A folder's
+  files used to be sorted character by character, so "Track 10.mp3" came before
+  "Track 2.mp3". Digits are now compared as whole numbers, which also fixes the
+  order files are reported in and what an interrupted run considers already done.
 - **A misheard chapter number no longer costs a genuine chapter its mark.** When
   the final transcription pass went looking for, say, the chapter 2 missing
   between chapters 1 and 3, a "chapter seven" misheard somewhere in that stretch
