@@ -267,7 +267,7 @@ public sealed class FileProcessor
             : null;
 
         if (!_options.Quiet)
-            PrintModelBanner(first.RuntimeName, files.Count, hardCap, pass3Shared != null, gpu.Reported);
+            PrintModelBanner(first.RuntimeName, files.Count, hardCap, pass3Shared != null, gpu);
 
         var pool = await BuildTranscriberPoolAsync(first, hardCap, modelPath, initialLanguage, gpu.Selected?.Index);
 
@@ -364,23 +364,26 @@ public sealed class FileProcessor
         if (_options.CpuOnly)
             return GpuChoice.None;
 
-        // GGML_VK_VISIBLE_DEVICES hides devices from the backend, so the backend's indices become
-        // positions in a filtered list while ours are positions in the full one - the two no longer
-        // refer to the same GPUs. Rather than guess at the mapping, defer to whichever the user
-        // expressed most recently: an explicit --use-gpu wins and says so, while a bare run leaves
-        // an env var that was set on purpose alone.
+        var devices = VulkanDeviceEnumerator.Enumerate();
+
+        // GGML_VK_VISIBLE_DEVICES hides devices from the backend and renumbers the rest, so an index
+        // we hand over would no longer mean what we meant by it. Imposing nothing is therefore the
+        // only safe answer - but the banner can still say which GPU the variable leaves in charge,
+        // and must: staying silent about it is indistinguishable from GPU naming being broken.
         var visibleDevices = Environment.GetEnvironmentVariable("GGML_VK_VISIBLE_DEVICES");
         if (!string.IsNullOrWhiteSpace(visibleDevices))
         {
-            if (_options.UseGpu == null)
-                return GpuChoice.None;
+            if (_options.UseGpu != null)
+                throw new AppError(
+                    $"--use-gpu cannot be combined with GGML_VK_VISIBLE_DEVICES (set to \"{visibleDevices}\"), " +
+                    "which hides GPUs from the backend and renumbers the rest. Unset it - --use-gpu replaces it.");
 
-            throw new AppError(
-                $"--use-gpu cannot be combined with GGML_VK_VISIBLE_DEVICES (set to \"{visibleDevices}\"), " +
-                "which hides GPUs from the backend and renumbers the rest. Unset it - --use-gpu replaces it.");
+            return new GpuChoice(
+                Selected: null,
+                GpuSelector.ResolveVisibleDevices(devices, visibleDevices),
+                DeferredTo: $"GGML_VK_VISIBLE_DEVICES={visibleDevices}");
         }
 
-        var devices = VulkanDeviceEnumerator.Enumerate();
         var selection = GpuSelector.Select(devices, _options.UseGpu);
         if (selection.Error != null)
             throw new AppError(selection.Error);
@@ -399,7 +402,7 @@ public sealed class FileProcessor
     /// <param name="fileCount">Number of files in the run.</param>
     /// <param name="hardCap">Resolved concurrency.</param>
     /// <param name="separatePass3Model">Whether --pass3-model asked for a second model.</param>
-    /// <param name="gpu">The GPU this run is expected to use, or null when it is not known.</param>
+    /// <param name="gpu">What this run decided about GPUs.</param>
     /// <remarks>
     /// The device name is printed because its absence is what made a wrong GPU invisible: a banner
     /// saying only "Vulkan backend" looks identical whether the run is on a discrete card, on the
@@ -407,14 +410,37 @@ public sealed class FileProcessor
     /// Vulkan backend, since that is where the enumeration the name comes from applies.
     /// </remarks>
     private void PrintModelBanner(string runtimeName, int fileCount, int hardCap, bool separatePass3Model,
-        GpuDevice? gpu)
+        GpuChoice gpu)
         => _progress.Announce($"Whisper model \"{_options.Model}\" loaded ({runtimeName} backend" +
-                             (gpu != null && runtimeName == "Vulkan" ? $" on {gpu.Name}" : "") +
+                             DescribeGpu(runtimeName, gpu) +
                              (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
                              (separatePass3Model
                                  ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +
                              $"{fileCount} file(s) to process" +
                              (hardCap > 1 ? $", up to {hardCap} at a time." : "."));
+
+    /// <summary>
+    /// The GPU clause of the startup banner: which device, and - when an environment variable rather
+    /// than this tool chose it - which variable, so that a run nobody can explain has the reason in
+    /// its first line.
+    /// </summary>
+    /// <param name="runtimeName">Native backend Whisper.net actually loaded.</param>
+    /// <param name="gpu">What <see cref="ResolveGpu"/> decided.</param>
+    private static string DescribeGpu(string runtimeName, GpuChoice gpu)
+    {
+        // GGML_VK_VISIBLE_DEVICES only filters Vulkan's device list, so on any other backend it is
+        // as irrelevant as the device name itself.
+        if (runtimeName != "Vulkan")
+            return "";
+
+        return (gpu.Reported, gpu.DeferredTo) switch
+        {
+            ({ } device, null) => $" on {device.Name}",
+            ({ } device, { } note) => $" on {device.Name} via {note}",
+            (null, { } note) => $", device chosen by {note}",
+            _ => "",
+        };
+    }
 
     /// <summary>
     /// Prints the --summary report closing a run: the file counts and elapsed time this class

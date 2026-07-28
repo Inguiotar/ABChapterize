@@ -50,6 +50,43 @@ public static class GpuSelector
     }
 
     /// <summary>
+    /// Works out which device <c>GGML_VK_VISIBLE_DEVICES</c> leaves the backend running on, so that
+    /// a run deferring to it can still name its GPU instead of falling silent.
+    /// </summary>
+    /// <param name="devices">Devices as enumerated, in backend index order; may be empty.</param>
+    /// <param name="visibleDevices">The variable's raw value.</param>
+    /// <returns>The device the backend will default to, or null when the value does not resolve to
+    /// one - in which case the caller should name the variable rather than a device.</returns>
+    /// <remarks>
+    /// The variable is a comma-separated list of indices into the very enumeration this class is
+    /// handed, and the backend keeps only those devices, in that order - so its device 0, the one it
+    /// uses unless told otherwise, is the first entry. Reading it here is safe despite the
+    /// enumeration order differing between session types (see <see cref="GpuDevice"/>), because both
+    /// the variable and this lookup are resolved inside the session the backend runs in.
+    /// <para>
+    /// Confirmed against the project's two-GPU test box on 2026-07-28: over SSH our enumeration
+    /// reported 0 = Intel UHD 630, 1 = NVIDIA GTX 1070, and <c>GGML_VK_VISIBLE_DEVICES=1</c> was the
+    /// run that put the GTX at ~60% load in nvidia-smi while <c>=0</c> left it at its idle baseline.
+    /// ggml says as much itself: on a single-GPU machine, <c>=7</c> aborts the run with
+    /// <c>ggml_vulkan: Invalid device index 7 in GGML_VK_VISIBLE_DEVICES</c> (2026-07-29), so the
+    /// value is bounds-checked against the same physical-device list, not a free-form filter.
+    /// </para>
+    /// <para>
+    /// Anything unparseable or out of range yields null rather than a guess. This is a variable
+    /// people set by hand, and a wrong name in the banner would be worse than no name at all - the
+    /// silent fallback it replaces (2026-07-29) already cost one confused test run on the remote
+    /// machine, where a bare "Vulkan backend" was indistinguishable from GPU naming being broken.
+    /// </para>
+    /// </remarks>
+    public static GpuDevice? ResolveVisibleDevices(IReadOnlyList<GpuDevice> devices, string visibleDevices)
+    {
+        var first = visibleDevices.Split(',', StringSplitOptions.TrimEntries).FirstOrDefault();
+        return int.TryParse(first, out var index)
+            ? devices.FirstOrDefault(d => d.Index == index)
+            : null;
+    }
+
+    /// <summary>
     /// Picks a device without being asked: the first discrete one when there is a choice to make.
     /// </summary>
     /// <param name="devices">Devices as enumerated.</param>

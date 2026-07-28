@@ -130,7 +130,10 @@ for you, not how it was built. The format follows
   cases. The device is named either way, which also makes a less obvious case
   visible: a software rasterizer like `llvmpipe` is a real Vulkan device, so a
   container or WSL2 distro without GPU passthrough would report "Vulkan backend"
-  while quietly running on the CPU. It now says `on llvmpipe`.
+  while quietly running on the CPU. It now says `on llvmpipe`. A run that steps
+  aside for the Vulkan runtime's own `GGML_VK_VISIBLE_DEVICES` variable names
+  both the variable and the GPU it leaves in charge, rather than falling back
+  to a bare "Vulkan backend" that looks like the naming failed.
 - **The built-in chapter, prologue and epilogue phrases now cover each
   language's spelling variants.** They are regular expressions rather than
   single words, so a transcript that dropped an accent still matches

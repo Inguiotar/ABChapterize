@@ -155,4 +155,28 @@ public class GpuSelectorTests
         Assert.Null(selection.Device);
         Assert.Null(selection.Error);
     }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData(" 1 ")]
+    [InlineData("1,0")]      // the backend keeps both, in this order, and defaults to the first
+    public void ResolveVisibleDevices_NamesTheDeviceTheBackendWillDefaultTo(string value)
+        => Assert.Equal(Nvidia, GpuSelector.ResolveVisibleDevices(TwoGpuBox, value));
+
+    [Fact]
+    public void ResolveVisibleDevices_ReadsTheSameEnumerationOurOwnIndicesDo()
+        => Assert.Equal(Intel, GpuSelector.ResolveVisibleDevices(TwoGpuBox, "0"));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("gtx")]      // names are ours; the variable only ever took indices
+    [InlineData("2")]        // out of range
+    [InlineData("-1")]
+    [InlineData(",1")]
+    public void ResolveVisibleDevices_YieldsNothing_RatherThanGuessing(string value)
+        => Assert.Null(GpuSelector.ResolveVisibleDevices(TwoGpuBox, value));
+
+    [Fact]
+    public void ResolveVisibleDevices_YieldsNothing_WhenNoDeviceEnumerates()
+        => Assert.Null(GpuSelector.ResolveVisibleDevices([], "0"));
 }

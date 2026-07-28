@@ -1477,7 +1477,15 @@ index exists, so `--use-gpu 1070` still means the GeForce.
 The Vulkan runtime's own `GGML_VK_VISIBLE_DEVICES` environment variable still
 works and is left alone if you set it, but it hides GPUs from the backend and
 renumbers the rest, so combining it with `--use-gpu` is rejected rather than
-guessed at. `--use-gpu` replaces it.
+guessed at. `--use-gpu` replaces it. A run that defers to the variable says so
+in its startup line, and still names the GPU it leaves in charge:
+
+```
+Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070 via GGML_VK_VISIBLE_DEVICES=1), 3 file(s) to process.
+```
+
+If the value does not resolve to one of the GPUs `--list-gpus` shows, the line
+names the variable alone — the device is then whatever the runtime makes of it.
 
 ### A note on CUDA
 

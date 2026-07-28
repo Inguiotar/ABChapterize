@@ -17,10 +17,13 @@ namespace ABChapterize.Gpu;
 /// <param name="Selected">Device to hand the Whisper backend, or null to leave its default alone.</param>
 /// <param name="Reported">Device the run is expected to use, for the banner; null when no Vulkan
 /// device exists, or when the choice was skipped entirely.</param>
-public sealed record GpuChoice(GpuDevice? Selected, GpuDevice? Reported)
+/// <param name="DeferredTo">The <c>GGML_VK_VISIBLE_DEVICES</c> setting this run stepped aside for,
+/// as <c>NAME=value</c>, or null when nothing did. Worth printing even alongside a resolved
+/// <paramref name="Reported"/>: the device then came from an environment variable rather than from
+/// this tool's own preference, which is what someone wondering why <c>--use-gpu</c> is refused
+/// needs to see.</param>
+public sealed record GpuChoice(GpuDevice? Selected, GpuDevice? Reported, string? DeferredTo = null)
 {
-    /// <summary>No GPU opinion at all - CPU-only runs, and runs deferring to
-    /// <c>GGML_VK_VISIBLE_DEVICES</c>, where our own indices no longer describe what the backend
-    /// sees and naming a device would be a guess.</summary>
+    /// <summary>No GPU opinion at all, and nothing to say about one - CPU-only runs.</summary>
     public static GpuChoice None { get; } = new(null, null);
 }
