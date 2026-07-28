@@ -114,7 +114,9 @@ public sealed class CliOptions
     /// </summary>
     public bool IgnoreChapterNumbers { get; private set; }
 
-    /// <summary>Whisper model selector (--model / -m): tiny, base, small, medium, turbo or large.</summary>
+    /// <summary>Whisper model selector (--model / -m): tiny, base, small, medium, turbo or large,
+    /// or <c>custom:&lt;path&gt;</c> for a GGML file of the user's own (see
+    /// <see cref="ParseModelSelector"/>).</summary>
     public string Model { get; private set; } = "turbo";
 
     /// <summary>
@@ -123,7 +125,8 @@ public sealed class CliOptions
     /// user asks for a different one. A lighter model can speed pass 3 up ("I'll likely fix the
     /// stragglers by hand anyway"), a heavier one ("large") can make one last, best-effort attempt
     /// at the chapters the main model missed. The pass-3 model is loaded (and downloaded) lazily,
-    /// only when a file actually reaches pass 3.
+    /// only when a file actually reaches pass 3. Takes a <c>custom:&lt;path&gt;</c> selector just
+    /// like <see cref="Model"/>.
     /// </summary>
     public string Pass3Model { get; private set; } = "turbo";
 
@@ -134,10 +137,15 @@ public sealed class CliOptions
     /// <c>RunPass25Async</c>), which is only ever worth its extra probes when the model doing them
     /// can actually hear something the pass-2 model could not; with an equal or lighter pass-3
     /// model it would just re-probe the same audio to the same conclusion, more slowly.
-    /// Ranking comes from <see cref="ModelNames"/>'s own order.
+    /// <para>
+    /// Ranking is by model size (see <see cref="ModelCatalog.ApproximateSizeBytes"/>), which
+    /// reproduces <see cref="ModelNames"/>'s own order for the built-in models and is the only
+    /// thing there is to go on for a <c>custom:</c> file. Settled once during
+    /// <see cref="Parse"/> rather than re-derived per gap, so a custom file's size is read from
+    /// disk exactly once.
+    /// </para>
     /// </summary>
-    public bool Pass3ModelIsUpgrade
-        => Array.IndexOf(ModelNames, Pass3Model) > Array.IndexOf(ModelNames, Model);
+    public bool Pass3ModelIsUpgrade { get; private set; }
 
     /// <summary>
     /// Forces the CPU backend for Whisper instead of the fastest available hardware
@@ -745,17 +753,13 @@ public sealed class CliOptions
         if (o.Language != "auto" && !Regex.IsMatch(o.Language, "^[a-z]{2}$"))
             throw new CliError($"Invalid language code \"{o.Language}\": expected a two-letter code like \"en\", or \"auto\".");
 
-        if (!ModelNames.Contains(o.Model.ToLowerInvariant()))
-            throw new CliError($"Invalid model \"{o.Model}\": expected one of {string.Join(", ", ModelNames)}.");
-        o.Model = o.Model.ToLowerInvariant();
-
-        // Defaulting the pass-3 model to the main one also leaves Pass3ModelIsUpgrade false, so
-        // pass 2.5 stays off unless --pass3-model actually names a heavier model.
+        // Both selectors were validated where they were parsed. Defaulting the pass-3 model to the
+        // main one also leaves Pass3ModelIsUpgrade false, so pass 2.5 stays off unless
+        // --pass3-model actually names a heavier model.
         if (!o._pass3ModelSet)
             o.Pass3Model = o.Model;
-        else if (!ModelNames.Contains(o.Pass3Model.ToLowerInvariant()))
-            throw new CliError($"Invalid pass-3 model \"{o.Pass3Model}\": expected one of {string.Join(", ", ModelNames)}.");
-        o.Pass3Model = o.Pass3Model.ToLowerInvariant();
+        o.Pass3ModelIsUpgrade = ModelCatalog.ApproximateSizeBytes(o.Pass3Model)
+                                > ModelCatalog.ApproximateSizeBytes(o.Model);
 
         if (o.ChapterPhrase.Length == 0)
             throw new CliError("The chapter phrase must not be empty.");
@@ -894,8 +898,8 @@ public sealed class CliOptions
         {
             case "--lang": Language = nextParam(); _langSet = true; return true;
             case "--chapter-phrase": ChapterPhrase = nextParam(); _phraseSet = true; return true;
-            case "--model": Model = nextParam(); _modelSet = true; return true;
-            case "--pass3-model": Pass3Model = nextParam(); _pass3ModelSet = true; return true;
+            case "--model": Model = ParseModelSelector("--model", nextParam()); _modelSet = true; return true;
+            case "--pass3-model": Pass3Model = ParseModelSelector("--pass3-model", nextParam()); _pass3ModelSet = true; return true;
             case "--max-chapters": MaxChapters = ParseNonNegativeInt("--max-chapters", nextParam()); _maxSet = true; return true;
             case "--max-chapter-number": MaxChapterNumber = ParseMaxChapterNumber(nextParam()); _maxChapterNumberSet = true; return true;
             case "--early-abort": EarlyAbortMinutes = ParseEarlyAbort(nextParam()); _earlyAbortSet = true; return true;
@@ -997,6 +1001,56 @@ public sealed class CliOptions
         if (!int.TryParse(value, out var n) || n < 1)
             throw new CliError($"Invalid --jobs value \"{value}\": expected a positive number or \"auto\".");
         return n;
+    }
+
+    /// <summary>
+    /// Validates a --model/--pass3-model selector: one of the catalog's names, or
+    /// <c>custom:&lt;path&gt;</c> naming a GGML file of the user's own (a fine-tune, a quantized
+    /// build, or a model the catalog does not carry).
+    /// <para>
+    /// A custom path is expanded and made absolute here, for two reasons: two spellings of the same
+    /// file must compare equal, because that string comparison is what decides whether pass 3 needs
+    /// a second model loaded at all; and a leading <c>~</c> reaches this unexpanded on Windows,
+    /// where the shell does not do it - the one place the tool has to do a shell's job to make the
+    /// documented syntax work as typed.
+    /// </para>
+    /// </summary>
+    /// <param name="optName">Long option name, for the error messages.</param>
+    /// <param name="value">The raw parameter.</param>
+    /// <exception cref="CliError">Thrown for an unknown model name, an empty custom path, or a
+    /// custom path that does not name an existing file.</exception>
+    private static string ParseModelSelector(string optName, string value)
+    {
+        if (!value.StartsWith(ModelCatalog.CustomPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var name = value.ToLowerInvariant();
+            return ModelNames.Contains(name)
+                ? name
+                : throw new CliError($"Invalid model \"{value}\" for {optName}: expected one of " +
+                                     $"{string.Join(", ", ModelNames)}, or \"{ModelCatalog.CustomPrefix}<path>\" " +
+                                     "to use a GGML model file of your own.");
+        }
+
+        var path = ExpandHomeDirectory(value[ModelCatalog.CustomPrefix.Length..].Trim());
+        if (path.Length == 0)
+            throw new CliError($"{optName} \"{value}\" names no file: expected \"{ModelCatalog.CustomPrefix}<path>\".");
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            { throw new CliError($"{optName}: \"{path}\" is not a usable file path ({ex.Message})"); }
+        if (!File.Exists(full))
+            throw new CliError($"{optName}: the model file \"{full}\" does not exist.");
+        return ModelCatalog.CustomPrefix + full;
+    }
+
+    /// <summary>Replaces a leading <c>~</c> with the user's home directory, leaving every other
+    /// path untouched.</summary>
+    /// <param name="path">The path as typed.</param>
+    private static string ExpandHomeDirectory(string path)
+    {
+        if (path is not ['~', var second, ..] || (second != '/' && second != '\\'))
+            return path == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : path;
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path[2..]);
     }
 
     /// <summary>
@@ -1281,15 +1335,20 @@ public sealed class CliOptions
                                     --expected-start-chapter, --max-chapter-number, --trailing-scan
                                     or --verify.
           -m, --model <name>        Whisper model: tiny, base, small, medium, turbo or large
-                                    (default: turbo).
+                                    (default: turbo), or "custom:<path>" for a GGML model file of
+                                    your own, e.g. -m custom:~/models/my-finetune.bin. A custom
+                                    file is used as it is: never downloaded, never checked against
+                                    a known checksum, and only ranked against the built-in models
+                                    by its size (which is what decides pass 2.5, see
+                                    --pass3-model).
           -M, --pass3-model <name>  Whisper model for pass 3 (gap filling) only; same choices as
                                     --model (default: whatever --model is). Use a lighter model to
                                     speed pass 3 up, or "large" for one last best-effort attempt at
-                                    the chapters the main model missed. A model better than --model
-                                    also enables pass 2.5, a quick re-probe of the gap with it
-                                    before pass 3 transcribes the region in full. Loaded and
-                                    downloaded lazily, only when a file actually reaches pass 2.5
-                                    or pass 3.
+                                    the chapters the main model missed. A bigger model than
+                                    --model's also enables pass 2.5, a quick re-probe of the gap
+                                    with it before pass 3 transcribes the region in full. Loaded
+                                    and downloaded lazily, only when a file actually reaches pass
+                                    2.5 or pass 3.
           -C, --cpu-only            Force Whisper onto the CPU backend instead of the fastest
                                     available hardware acceleration. The Silero VAD pre-pass
                                     already always runs on CPU regardless of this option, so it

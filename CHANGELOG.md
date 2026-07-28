@@ -51,6 +51,16 @@ for you, not how it was built. The format follows
   with `--prologue-title`/`--epilogue-title`, and switch either off entirely by
   passing an empty phrase, e.g. `--prologue-phrase ""`. These marks do not count
   toward the chapter-number sequence, so they never create or fill a gap.
+- **Your own Whisper model.** `--model custom:<path>` — and `--pass3-model
+  custom:<path>` — takes a GGML model file from anywhere on disk instead of one
+  of the six built-in selectors: a fine-tune for a narrator or language, a
+  quantized build, or just a model kept elsewhere. A leading `~` is expanded to
+  your home directory, on Windows too, and the path is checked while the command
+  line is parsed, so a typo fails before the run starts rather than hours into
+  it. The file is used exactly as it is — never downloaded, never checked
+  against a pinned checksum. Where ABChapterize needs to know whether one model
+  outclasses another (deciding whether the quick pass 2.5 gap re-probe is worth
+  it), it compares their file sizes.
 - **`--log-file <path>`** (`-o`) keeps the log in a file instead of on screen.
   Asking for one is enough to switch logging on — `--verbose` is not needed
   alongside it, and `-T` still adds the transcripts. The console keeps its

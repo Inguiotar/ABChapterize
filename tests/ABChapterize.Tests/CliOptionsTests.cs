@@ -385,6 +385,88 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseFile("--pass3-model", "gigantic"));
     }
 
+    /// <summary>Creates a fake GGML file of the given size in the temp directory and returns the
+    /// <c>custom:</c> selector naming it.</summary>
+    /// <param name="name">File name to create.</param>
+    /// <param name="bytes">Size to give it - what the model ranking goes by.</param>
+    private string CustomModel(string name, long bytes)
+    {
+        var path = Path.Combine(_dir, name);
+        using (var f = File.Create(path))
+            f.SetLength(bytes);
+        return "custom:" + path;
+    }
+
+    [Fact]
+    public void CustomModel_IsAcceptedForBothModelOptions_AsAnAbsolutePath()
+    {
+        var selector = CustomModel("my-finetune.bin", 1000);
+        var o = ParseFile("--model", selector, "--pass3-model", selector)!;
+        Assert.Equal(selector, o.Model);
+        Assert.Equal(selector, o.Pass3Model);
+    }
+
+    [Fact]
+    public void CustomModel_KeepsItsPathsCase()
+    {
+        // A built-in name is case-normalized; a path must not be, or it would break on Linux.
+        var selector = CustomModel("MyFineTune.bin", 1000);
+        Assert.Equal(selector, ParseFile("-m", selector)!.Model);
+    }
+
+    [Fact]
+    public void CustomModel_IsResolvedToAnAbsolutePath()
+    {
+        // Two spellings of one file must produce one selector: that string comparison is what
+        // decides whether pass 3 loads a second model at all.
+        var absolute = ParseFile("-m", CustomModel("m.bin", 1000))!.Model;
+        var viaDots = ParseFile("-m", $"custom:{Path.Combine(_dir, "sub", "..", "m.bin")}")!.Model;
+        Assert.Equal(absolute, viaDots);
+    }
+
+    [Fact]
+    public void CustomModel_ThatDoesNotExist_IsRejected()
+    {
+        var ex = Assert.Throws<CliError>(() =>
+            ParseFile("--model", "custom:" + Path.Combine(_dir, "nothing-here.bin")));
+        Assert.Contains("does not exist", ex.Message);
+    }
+
+    [Fact]
+    public void CustomModel_WithoutAPath_IsRejected()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--model", "custom:"));
+    }
+
+    [Fact]
+    public void CustomModel_RanksAgainstBuiltInModelsBySize()
+    {
+        // Bigger than "large" (3.1 GB) is not worth writing to disk, so the comparison is made in
+        // the other direction: a 1 KB file is lighter than every built-in model, and pass 2.5 is
+        // therefore off in one direction and on in the other.
+        var tinyCustom = CustomModel("small-custom.bin", 1000);
+        Assert.False(ParseFile("--model", "tiny", "--pass3-model", tinyCustom)!.Pass3ModelIsUpgrade);
+        Assert.True(ParseFile("--model", tinyCustom, "--pass3-model", "tiny")!.Pass3ModelIsUpgrade);
+    }
+
+    [Fact]
+    public void TwoCustomModels_RankAgainstEachOtherBySize()
+    {
+        var smaller = CustomModel("a.bin", 1000);
+        var bigger = CustomModel("b.bin", 2000);
+        Assert.True(ParseFile("-m", smaller, "-M", bigger)!.Pass3ModelIsUpgrade);
+        Assert.False(ParseFile("-m", bigger, "-M", smaller)!.Pass3ModelIsUpgrade);
+    }
+
+    [Fact]
+    public void CustomModel_TakesPartInTheRunFingerprint()
+    {
+        // Different weights, different results - resuming across them would be wrong.
+        Assert.NotEqual(
+            CliOptions.Parse(["-m", CustomModel("a.bin", 1000), _dir])!.RunFingerprint,
+            CliOptions.Parse(["-m", CustomModel("b.bin", 1000), _dir])!.RunFingerprint);
+    }
+
     [Theory]
     // Strictly better than the pass-2 model: pass 2.5's gap re-probe is worth its transcriptions.
     [InlineData("tiny", "large", true)]

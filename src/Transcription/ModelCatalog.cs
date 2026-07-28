@@ -24,49 +24,107 @@ public static class ModelCatalog
     private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// GGML file name, approximate download size, and pinned SHA-256/SHA3-256 digests for every
-    /// model selector. Two independently-designed hash algorithms must both match before a
-    /// download is accepted (see <see cref="VerifyHashes"/>): a compromise of the Hugging Face
-    /// repository that swapped a model file for something else would have to defeat both digests
-    /// at once, not just one, to go undetected. The digests were captured directly from the
+    /// GGML file name, exact size in bytes, approximate download size, and pinned SHA-256/SHA3-256
+    /// digests for every model selector. Two independently-designed hash algorithms must both match
+    /// before a download is accepted (see <see cref="VerifyHashes"/>): a compromise of the Hugging
+    /// Face repository that swapped a model file for something else would have to defeat both
+    /// digests at once, not just one, to go undetected. The digests were captured directly from the
     /// repository's Git LFS metadata (SHA-256) and by hashing the downloaded bytes (SHA3-256) at
-    /// the time this list was written.
+    /// the time this list was written; the byte sizes were measured on the same files (2026-07-28)
+    /// and describe exactly the bytes those digests cover.
+    /// <para>
+    /// The sizes exist for <see cref="ApproximateSizeBytes"/>, which needs a model's weight before
+    /// the file is necessarily on disk. They ascend in the same order as
+    /// <see cref="CliOptions.ModelNames"/>, "turbo" between "medium" and "large" included, so
+    /// ranking two models by size agrees with the catalog's own quality order - which is what lets
+    /// a <c>custom:</c> model be ranked against a built-in one at all.
+    /// </para>
     /// </summary>
-    private static readonly Dictionary<string, (string FileName, string ApproxSize, string Sha256, string Sha3_256)> Models = new()
+    private static readonly Dictionary<string, (string FileName, long Bytes, string ApproxSize, string Sha256, string Sha3_256)> Models = new()
     {
-        ["tiny"] = ("ggml-tiny.bin", "75 MB",
+        ["tiny"] = ("ggml-tiny.bin", 77_691_713, "75 MB",
             "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
             "735e6afc370ed51e69fc219361339fed771ee9770faff27057333af7ad2e00ba"),
-        ["base"] = ("ggml-base.bin", "140 MB",
+        ["base"] = ("ggml-base.bin", 147_951_465, "140 MB",
             "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
             "11f83e4f60e406bab839beb4769d1a9218033b2ba51acadda7a9afff73818c8d"),
-        ["small"] = ("ggml-small.bin", "465 MB",
+        ["small"] = ("ggml-small.bin", 487_601_967, "465 MB",
             "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
             "40c4027bd9b0a5d0a3a05eb7d8f4b38f3005fbb5da02b6cb86027fc478a924cc"),
-        ["medium"] = ("ggml-medium.bin", "1.5 GB",
+        ["medium"] = ("ggml-medium.bin", 1_533_763_059, "1.5 GB",
             "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
             "34f7f9d75840a25317fc18961c308f12392e110cbaee04d25fccf75bff24ea5f"),
-        ["turbo"] = ("ggml-large-v3-turbo.bin", "1.6 GB",
+        ["turbo"] = ("ggml-large-v3-turbo.bin", 1_624_555_275, "1.6 GB",
             "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
             "01060757e2cbdec1eb55cdbc9f65293256103fb5b4c9fe4e4f237263637609b0"),
-        ["large"] = ("ggml-large-v3.bin", "3.1 GB",
+        ["large"] = ("ggml-large-v3.bin", 3_095_033_483, "3.1 GB",
             "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
             "0a1556022c6b7846bbd12d41342c1ca320647949c96cbe3900cbc07bc3d15a66"),
     };
 
     /// <summary>
+    /// Prefix marking a <c>--model</c>/<c>--pass3-model</c> selector as a GGML file of the user's
+    /// own rather than one of the catalog's, e.g. <c>custom:D:\models\my-finetune.bin</c>. What
+    /// follows it is a path, already resolved to an absolute one by
+    /// <see cref="CliOptions.ParseModelSelector"/>, so two spellings of the same file compare equal
+    /// and a run fails at parse time rather than after loading a model.
+    /// </summary>
+    public const string CustomPrefix = "custom:";
+
+    /// <summary>True when the selector names a file of the user's own.</summary>
+    /// <param name="model">A model selector.</param>
+    public static bool IsCustom(string model) => model.StartsWith(CustomPrefix, StringComparison.Ordinal);
+
+    /// <summary>The file path inside a <c>custom:</c> selector.</summary>
+    /// <param name="model">A selector <see cref="IsCustom"/> holds for.</param>
+    public static string CustomPath(string model) => model[CustomPrefix.Length..];
+
+    /// <summary>
+    /// How big the model behind a selector is, in bytes: the catalog's recorded size for a built-in
+    /// one - available whether or not it has been downloaded yet - and the file's real size for a
+    /// <c>custom:</c> one. This is the whole basis on which two models are ranked against each
+    /// other (see <see cref="CliOptions.Pass3ModelIsUpgrade"/>): nothing about a GGML file
+    /// advertises how capable it is, but within the Whisper family a larger file has always been
+    /// the more capable model, and a fine-tune keeps the size of the model it was derived from.
+    /// </summary>
+    /// <param name="model">A validated model selector.</param>
+    /// <returns>The size in bytes, or 0 for a custom file that has since disappeared - which ranks
+    /// it below everything rather than throwing, as the run's own model load will fail with a far
+    /// more useful message moments later.</returns>
+    public static long ApproximateSizeBytes(string model)
+    {
+        if (!IsCustom(model))
+            return Models.TryGetValue(model, out var m) ? m.Bytes : 0;
+        try { return new FileInfo(CustomPath(model)).Length; }
+        catch (IOException) { return 0; }
+        catch (UnauthorizedAccessException) { return 0; }
+    }
+
+    /// <summary>
     /// Returns the full path of the GGML file for a model selector (tiny, base, small, medium,
     /// turbo, large), downloading the file into the "models" folder next to the executable when
     /// it is not there yet. Partial downloads are written to a temporary file first, so an
-    /// aborted download never counts as an installed model.
+    /// aborted download never counts as an installed model. A <c>custom:</c> selector is simply
+    /// its own path: nothing is downloaded, and nothing is verified against a pinned digest either
+    /// - the file came from the user, not from the network.
     /// </summary>
     /// <param name="model">Validated model selector from the command line.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     /// <exception cref="AppError">
     /// Thrown when the download fails; the message contains step-by-step manual instructions.
+    /// Also when a custom model file has disappeared since the command line was parsed - which is
+    /// worth its own check because the pass-3 model is only resolved once a file reaches pass 3,
+    /// possibly hours into a run.
     /// </exception>
     public static async Task<string> EnsureModelAsync(string model, CancellationToken ct)
     {
+        if (IsCustom(model))
+        {
+            var custom = CustomPath(model);
+            return File.Exists(custom)
+                ? custom
+                : throw new AppError($"The Whisper model file \"{custom}\" does not exist (any more).");
+        }
         if (!Models.TryGetValue(model, out var m))
             throw new AppError($"Unknown model \"{model}\".");
 

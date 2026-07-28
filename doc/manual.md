@@ -575,15 +575,16 @@ so that logs and reports stay comparable regardless of regional settings.
 `-m`, `--model <name>`
 : Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default) or
   `large`. `tiny` and `base` are not recommended for real audiobooks; see
-  [section 8](#8-whisper-models).
+  [section 8](#8-whisper-models). `custom:<path>` uses a GGML model file of
+  your own instead — see [Using your own model](#using-your-own-model).
 
 `-M`, `--pass3-model <name>`
 : Whisper model to use for [pass 3](#pass-3--gap-filling-only-when-needed)
-  (gap filling) only; same choices as `--model`, defaulting to whatever
-  `--model` is. Use a lighter model to make pass 3 faster (when you expect to
-  fix any stragglers by hand anyway), or `large` for one last, best-effort
-  attempt at the chapters the main model missed. Naming a *better* model here
-  than `--model` also enables
+  (gap filling) only; same choices as `--model` including `custom:<path>`, and
+  defaulting to whatever `--model` is. Use a lighter model to make pass 3
+  faster (when you expect to fix any stragglers by hand anyway), or `large` for
+  one last, best-effort attempt at the chapters the main model missed. Naming a
+  *bigger* model here than `--model`'s also enables
   [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
   which often closes the gap far quicker than pass 3 would. The pass-3 model is
   downloaded and loaded lazily — only if and when a file actually reaches
@@ -1321,6 +1322,37 @@ repository on Hugging Face, with a progress display; partial downloads never
 count as installed. If the download fails (offline machine, write-protected
 folder), the error message contains step-by-step instructions for installing
 the model manually.
+
+### Using your own model
+
+`--model custom:<path>` (and `--pass3-model custom:<path>`) points at a GGML
+Whisper model file anywhere on disk instead of one from the table above — a
+fine-tune for a particular narrator or language, a quantized build, or simply
+a model kept outside the `models` folder:
+
+```
+abchapterize -m custom:~/models/ggml-my-finetune.bin book.m4b
+abchapterize -m small -M "custom:D:\models\ggml-large-v3-q5_0.bin" book.m4b
+```
+
+A leading `~` is expanded to your home directory, on Windows too. The path is
+checked when the command line is parsed, so a typo fails immediately rather
+than after the first hours of a batch run.
+
+Such a file is used exactly as it is: nothing is downloaded, and nothing is
+checked against a pinned digest — it is yours, so vouching for it is yours too
+(see [Download integrity verification](#download-integrity-verification) for
+what that check does and does not cover). It also has to be a model the
+whisper.cpp engine underneath can load; if it is not, the failure comes from
+that loader.
+
+The one place ABChapterize forms an opinion about a custom model is
+[pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
+which needs to know whether `--pass3-model` is an upgrade over `--model` or
+not. That comparison is made by **file size**, for custom and built-in models
+alike — within the Whisper family the bigger file has always been the more
+capable model. A custom model smaller than `--model`'s therefore behaves like
+naming a lighter built-in one: pass 2.5 stays off, pass 3 still uses it.
 
 ### Download integrity verification
 
