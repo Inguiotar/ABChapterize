@@ -374,10 +374,10 @@ internal sealed class RegionProber
     {
         // "Nothing found" means no numbered chapter - a lone prologue is not enough to call the
         // file productive, and BuildDetectionResult would discard it anyway. With
-        // --no-numbered-chapters there are no numbers to wait for, so the named marks are what
+        // --ignore-chapter-numbers the chapters themselves land in the named list, so that is what
         // counts instead; otherwise every such run would abort at the threshold regardless.
         var foundSomething = _found.Count > 0 ||
-                             (!_env.Options.NumberedChapters && _namedFound.Count > 0);
+                             (_env.Options.IgnoreChapterNumbers && _namedFound.Count > 0);
         if (candidate.Start < _ctx.EarlyAbortSeconds || foundSomething)
             return false;
         EarlyAborted = true;
@@ -594,7 +594,9 @@ internal sealed class RegionProber
         // (a short front matter, or a wide jingle window) must still yield the prologue.
         await ScanWindowForNamedMarksAsync(candidate, start, segments, trimmedAbs, ct);
 
-        if (!_env.Options.NumberedChapters)
+        // With --ignore-chapter-numbers a chapter is just another titled position, so it goes down
+        // the same path the prologue does and nothing below this point applies to it.
+        if (_env.Options.IgnoreChapterNumbers)
             return marks;
 
         // Language.Profile is resolved on the first probe, which is always a full decode (the cache
@@ -613,11 +615,14 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Finds the prologue/epilogue announcements in one decoded window and turns the in-scope ones
+    /// Finds the prologue/epilogue announcements in one decoded window - plus the chapter
+    /// announcements themselves under <c>--ignore-chapter-numbers</c> - and turns the in-scope ones
     /// into named marks. Kept apart from the numbered scan because nothing these produce takes part
-    /// in the chapter sequence: no number is parsed, no threshold is tightened, no jingle length is
-    /// observed and no window sequence is settled - a named mark is a title at a position and
-    /// nothing more, so it must not steer machinery that reasons about consecutive chapters.
+    /// in the chapter sequence: no jingle length is observed and no window sequence is settled - a
+    /// named mark is a title at a position and nothing more, so it must not steer machinery that
+    /// reasons about consecutive chapters. It does feed the adaptive silence threshold, which is not
+    /// sequence reasoning but a statement about how this book separates its sections, and which
+    /// starves into probing every candidate in the file if only numbered chapters may feed it.
     /// </summary>
     /// <param name="candidate">The candidate whose window this is.</param>
     /// <param name="start">Absolute start of the window.</param>
@@ -634,25 +639,43 @@ internal sealed class RegionProber
                 continue;
             await AcceptNamedMatchAsync(match, candidate, start, trimmedAbs, ct);
         }
+
+        if (!_env.Options.IgnoreChapterNumbers)
+            return;
+
+        // After the prologue/epilogue pass, so that a window holding both a scoped announcement and
+        // a chapter still resolves the scoped one against the chapter count it had on arrival.
+        foreach (var match in FindChapterAnnouncements(segments, Language.Profile!))
+            await AcceptNamedMatchAsync(match, candidate, start, trimmedAbs, ct);
     }
 
     /// <summary>
     /// Whether a named phrase may become a mark at this point of the file, judged purely by how
-    /// many numbered chapters are known so far - see <see cref="NamedPhraseScope"/> for why that is
-    /// the only usable landmark. With --no-numbered-chapters there is no such landmark at all, and
-    /// both positional scopes stand open for the whole file; which occurrence then wins is settled
-    /// in <see cref="AcceptNamedMatchAsync"/> instead. Rejections are silent: unlike a numbered
-    /// match, which was plainly heard and whose disappearance is worth explaining, "epilogue"
-    /// turning up in the middle of a book is an ordinary word in ordinary prose and logging every
-    /// occurrence would drown the log.
+    /// many chapters are known so far - see <see cref="NamedPhraseScope"/> for why that is the only
+    /// usable landmark. Rejections are silent: unlike a numbered match, which was plainly heard and
+    /// whose disappearance is worth explaining, "epilogue" turning up in the middle of a book is an
+    /// ordinary word in ordinary prose and logging every occurrence would drown the log.
     /// </summary>
     /// <param name="phrase">The phrase that matched.</param>
     private bool IsInScope(NamedPhrase phrase) => phrase.Scope switch
     {
         NamedPhraseScope.Anywhere => true,
-        NamedPhraseScope.BeforeFirstChapter => !_env.Options.NumberedChapters || _found.Count == 0,
-        _ => !_env.Options.NumberedChapters || _found.Count > 0,
+        NamedPhraseScope.BeforeFirstChapter => ChaptersSoFar == 0,
+        _ => ChaptersSoFar > 0,
     };
+
+    /// <summary>How many chapter announcements this region has accepted so far - the landmark both
+    /// positional <see cref="NamedPhraseScope"/>s are measured against. Under
+    /// <c>--ignore-chapter-numbers</c> chapters live in the named list rather than in the numbered
+    /// one, and counting only the latter would leave the epilogue's scope shut for the whole
+    /// file.</summary>
+    private int ChaptersSoFar => _env.Options.IgnoreChapterNumbers
+        ? _namedFound.Count(m => m.Kind == ChapterKind)
+        : _found.Count;
+
+    /// <summary><see cref="NamedPhrase.Kind"/> of the synthetic chapter phrase, the one named kind
+    /// that is exempt from the <c>--custom</c> mark cap.</summary>
+    private string ChapterKind => Language.Profile!.ChapterAnnouncement.Kind;
 
     /// <summary>
     /// Places, logs and records one in-scope named match - unless <see cref="ShouldDropNamedMatch"/>
@@ -681,12 +704,33 @@ internal sealed class RegionProber
         if (ShouldDropNamedMatch(match.Phrase, phraseAbs))
             return;
 
+        // Same reasoning as TightenThreshold's _lastNumber guard: the silence before the region's
+        // very first mark is front matter's, routinely far longer than any break between sections,
+        // and adopting it alone would raise the threshold past every real candidate that follows.
+        var teachesThreshold = _found.Count > 0 || _namedFound.Count > 0;
         var (time, markSilence, markRegion) = ResolveNamedMark(match, candidate, start, trimmedAbs);
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
             _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs);
         time = await _env.Marks.PlaceAsync(
             null, time, phraseAbs, markSilence, markRegion, markCtx, ct);
 
+        // Second dedupe pass, now against the placed time. The pre-placement one compares phrase
+        // times, which two probes of the same announcement can easily disagree about by more than
+        // the dedupe window - overlapping windows are re-segmented by Whisper from scratch, so the
+        // same words can land in a segment starting seconds apart. Once both have been walked back
+        // to their anchor they coincide exactly, and that is the only reliable moment to notice.
+        // Confirmed on "Die Dritte Macht.m4b" 2026-07-28, where it produced four duplicate pairs
+        // (among them "Kapitel 6" and "Kapitel 7", the same announcement heard two ways, both at
+        // 2:46:06.53). Costs the placement work of the loser, which only a re-heard mark pays.
+        if (_namedFound.Any(m => m.Kind == match.Phrase.Kind &&
+                                 Math.Abs(m.TimeSeconds - time) < NamedMarkDedupeSeconds))
+            return;
+
+        if (teachesThreshold)
+        {
+            ProposeThreshold(markSilence);
+            AdoptProposedThreshold($"\"{match.Title}\"");
+        }
         if (!match.Phrase.Repeatable)
             _namedFound.RemoveAll(m => m.Kind == match.Phrase.Kind);
         _namedFound.Add(new DetectedMark(
@@ -699,9 +743,9 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Whether an in-scope named match is to be passed over without becoming a mark. Three reasons,
-    /// all of them specific to a phrase that carries no number and therefore has no sequence to be
-    /// judged against:
+    /// Whether an in-scope named match is to be passed over without becoming a mark. Two reasons,
+    /// both of them specific to a phrase that takes no part in the chapter sequence and so has
+    /// nothing to be judged against:
     /// <list type="bullet">
     /// <item><description>the same announcement was already marked - overlapping probe windows
     /// re-decode the same audio routinely, and without this every such overlap would yield a
@@ -709,12 +753,9 @@ internal sealed class RegionProber
     /// <see cref="DetectionTuning.NamedMarkDedupeSeconds"/>);</description></item>
     /// <item><description>the file has reached its --custom mark cap (see
     /// <see cref="DetectionTuning.MaxCustomMarksPerFile"/>), which is reported all the way out to
-    /// the file's summary line rather than only logged;</description></item>
-    /// <item><description>a prologue already has its mark and there is no chapter sequence to close
-    /// its scope (--no-numbered-chapters). "Last match wins" relies on that closing boundary; with
-    /// the scope open to the end of the file it would walk the mark to whichever late mention came
-    /// last, so the first match is kept instead. The epilogue keeps the last one either way - it is
-    /// bounded by the file end in both modes.</description></item>
+    /// the file's summary line rather than only logged. Chapter announcements are exempt: under
+    /// --ignore-chapter-numbers they arrive through this same path, and a cap sized for structural
+    /// interludes would cut an omnibus off partway through.</description></item>
     /// </list>
     /// </summary>
     /// <param name="phrase">The phrase that matched.</param>
@@ -725,30 +766,27 @@ internal sealed class RegionProber
                                  Math.Abs(m.PhraseTimeSeconds - phraseAbs) < NamedMarkDedupeSeconds))
             return true;
 
-        if (phrase.Repeatable)
-        {
-            if (_namedFound.Count(m => m.Repeatable) < MaxCustomMarksPerFile)
-                return false;
-            if (!CustomLimitHit)
-                _env.Log?.Invoke($"custom mark limit of {MaxCustomMarksPerFile} reached at " +
-                                 $"{FormatTimestamp(phraseAbs)} - further --custom matches are ignored " +
-                                 "for this file (a mapping matching ordinary prose?)");
-            CustomLimitHit = true;
-            return true;
-        }
+        if (!phrase.Repeatable || phrase.Kind == ChapterKind)
+            return false;
 
-        return phrase.Scope == NamedPhraseScope.BeforeFirstChapter &&
-               !_env.Options.NumberedChapters &&
-               _namedFound.Any(m => m.Kind == phrase.Kind);
+        if (_namedFound.Count(m => m.Repeatable && m.Kind != ChapterKind) < MaxCustomMarksPerFile)
+            return false;
+        if (!CustomLimitHit)
+            _env.Log?.Invoke($"custom mark limit of {MaxCustomMarksPerFile} reached at " +
+                             $"{FormatTimestamp(phraseAbs)} - further --custom matches are ignored " +
+                             "for this file (a mapping matching ordinary prose?)");
+        CustomLimitHit = true;
+        return true;
     }
 
     /// <summary>
     /// The default-mode mark for a named match, resolved exactly as <see cref="ResolveProbeMark"/>
     /// does for a numbered one - minus its rejection rules. Those exist to keep an in-text mention
-    /// of a chapter number out of the sequence, a concern a named mark does not have: it carries no
-    /// number to corrupt anything with, and its scope has already ruled out the mentions that
-    /// matter. So a named phrase deeper in the window than the timing rule allows still gets a mark
-    /// at the plain fixed offset rather than being dropped for want of a qualifying anchor.
+    /// of a chapter number out of the sequence, a concern no mark arriving here has: there is no
+    /// sequence for it to corrupt. So a named phrase deeper in the window than the timing rule
+    /// allows still gets a mark at the plain fixed offset rather than being dropped for want of a
+    /// qualifying anchor. Those rules only ever ran without VAD anyway - the default VAD path
+    /// places every match it is given - so this is one code path's behaviour, not two.
     /// </summary>
     /// <param name="match">The named match, in window-relative time.</param>
     /// <param name="candidate">The candidate whose window this probe decoded.</param>
@@ -1066,13 +1104,20 @@ internal sealed class RegionProber
     {
         if (_lastNumber.HasValue)
             ProposeThreshold(mark.MarkSilence);
+        AdoptProposedThreshold($"chapter {mark.Number}");
+    }
 
+    /// <summary>Makes whatever <see cref="ProposeThreshold"/> has accumulated the threshold actually
+    /// used from here on, announcing a real change.</summary>
+    /// <param name="after">What was just marked, for the log line.</param>
+    private void AdoptProposedThreshold(string after)
+    {
         // The first set is a raise from the floor ("tightened"), everything after can only ever be
         // a lowering.
         var newThreshold = _adaptedThresholdSeconds ?? _env.Options.MinSilenceSeconds;
         if (newThreshold != _threshold)
             _env.Log?.Invoke($"threshold {(newThreshold > _threshold ? "tightened" : "lowered")} " +
-                             $"to {newThreshold:0.##} s after chapter {mark.Number}");
+                             $"to {newThreshold:0.##} s after {after}");
         _threshold = newThreshold;
     }
 

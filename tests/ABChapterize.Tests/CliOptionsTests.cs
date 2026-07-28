@@ -236,39 +236,41 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void NoNumberedChapters_SwitchesNumberedDetectionOff()
-        => Assert.False(ParseFile("--no-numbered-chapters")!.NumberedChapters);
+    public void IgnoreChapterNumbers_IsOffByDefault()
+        => Assert.False(ParseFile()!.IgnoreChapterNumbers);
+
+    [Fact]
+    public void IgnoreChapterNumbers_SwitchesNumberReasoningOff()
+        => Assert.True(ParseFile("--ignore-chapter-numbers")!.IgnoreChapterNumbers);
 
     [Theory]
-    [InlineData("--chapter-phrase", "part")]
-    [InlineData("--title", "Part")]
     [InlineData("--pass3-model", "large")]
     [InlineData("--expected-start-chapter", "3")]
     [InlineData("--max-chapter-number", "40")]
-    public void NoNumberedChapters_RejectsANumberBasedOption(string opt, string value)
-        => Assert.Throws<CliError>(() => ParseFile("--no-numbered-chapters", opt, value));
+    public void IgnoreChapterNumbers_RejectsANumberBasedOption(string opt, string value)
+        => Assert.Throws<CliError>(() => ParseFile("--ignore-chapter-numbers", opt, value));
 
     [Theory]
     [InlineData("--trailing-scan")]
     [InlineData("--verify")]
     [InlineData("--import")]
-    public void NoNumberedChapters_RejectsANumberBasedFlag(string flag)
-        => Assert.Throws<CliError>(() => ParseFile("--no-numbered-chapters", flag));
+    public void IgnoreChapterNumbers_RejectsANumberBasedFlag(string flag)
+        => Assert.Throws<CliError>(() => ParseFile("--ignore-chapter-numbers", flag));
+
+    [Theory]
+    [InlineData("--chapter-phrase", "part")]
+    [InlineData("--title", "Part")]
+    public void IgnoreChapterNumbers_StillTakesTheChapterPhraseOptions(string opt, string value)
+        => Assert.True(ParseFile("--ignore-chapter-numbers", opt, value)!.IgnoreChapterNumbers);
 
     [Fact]
-    public void NoNumberedChapters_IsRejected_WhenNoNamedPhraseIsLeft()
-        => Assert.Throws<CliError>(() => ParseFile(
-            "--no-numbered-chapters", "--prologue-phrase", "", "--epilogue-phrase", ""));
-
-    [Fact]
-    public void NoNumberedChapters_IsAccepted_WithACustomMappingAlone()
+    public void IgnoreChapterNumbers_IsAccepted_WithEveryNamedPhraseSwitchedOff()
     {
         var options = ParseFile(
-            "--no-numbered-chapters", "--prologue-phrase", "", "--epilogue-phrase", "",
-            "--custom", "interlude:Interlude")!;
+            "--ignore-chapter-numbers", "--prologue-phrase", "", "--epilogue-phrase", "")!;
 
-        Assert.False(options.NumberedChapters);
-        Assert.Equal("Interlude", options.DefaultProfile.NamedPhrases.Single().Title);
+        Assert.True(options.IgnoreChapterNumbers);
+        Assert.Empty(options.DefaultProfile.NamedPhrases);
     }
 
     [Fact]

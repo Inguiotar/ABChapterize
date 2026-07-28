@@ -103,14 +103,16 @@ public sealed class CliOptions
     private readonly List<CustomMapping> _customMappings = [];
 
     /// <summary>
-    /// Whether numbered chapter announcements are detected at all (false with
-    /// <c>--no-numbered-chapters</c>). Switching them off leaves only the named phrases - the
-    /// prologue, the epilogue and the <c>--custom</c> mappings - and with them the whole
-    /// chapter-number sequence: no gap is ever found or filled, so passes 2.5 and 3 never run, no
-    /// file is ever tagged ".missing-marks", and every option that reasons in chapter numbers is
-    /// rejected outright rather than silently ignored.
+    /// Whether the chapter numbers heard in an announcement are reasoned about
+    /// (<c>--ignore-chapter-numbers</c>). The announcements themselves are still detected and still
+    /// become marks either way; what this drops is everything built on the numbers forming a
+    /// sequence: no gap is ever found or filled, so passes 2.5 and 3 never run, no file is ever
+    /// tagged ".missing-marks", and every option that states an expectation about the numbers is
+    /// rejected outright rather than silently ignored. A parsed number still reaches the mark's
+    /// title, it just no longer has to agree with its neighbours - which is the point, for a book
+    /// that restarts its count per part or numbers nothing at all.
     /// </summary>
-    public bool NumberedChapters { get; private set; } = true;
+    public bool IgnoreChapterNumbers { get; private set; }
 
     /// <summary>Whisper model selector (--model / -m): tiny, base, small, medium, turbo or large.</summary>
     public string Model { get; private set; } = "turbo";
@@ -532,7 +534,7 @@ public sealed class CliOptions
            || _titleSet || _introSet || _jingleLenSet || _minSilenceSet || _earlyAbortSet
            || _expectedStartSet || _prologuePhraseSet || _prologueTitleSet
            || _epiloguePhraseSet || _epilogueTitleSet
-           || _customMappings.Count > 0 || !NumberedChapters;
+           || _customMappings.Count > 0 || IgnoreChapterNumbers;
 
     /// <summary>
     /// Short hash of every option that changes what a run does to a file - the language and
@@ -556,7 +558,7 @@ public sealed class CliOptions
                 $"recurse={Recurse}", $"backup={Backup}", $"force={Force}",
                 $"lang={Language}", $"phrase={ChapterPhrase}", $"title={Title}", $"intro={IntroTitle}",
                 $"prologue={ProloguePhrase}/{PrologueTitle}", $"epilogue={EpiloguePhrase}/{EpilogueTitle}",
-                $"numbered={NumberedChapters}",
+                $"ignorenumbers={IgnoreChapterNumbers}",
                 $"custom={string.Join('|', _customMappings.Select(m => $"{m.Phrase}=>{m.Title}"))}",
                 $"model={Model}", $"pass3={Pass3Model}",
                 $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
@@ -686,24 +688,26 @@ public sealed class CliOptions
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || !o.NumberedChapters || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
+        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
-                "--epilogue-phrase, --custom, --custom-file, --no-numbered-chapters, --model, --pass3-model, " +
+                "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --max-jingle-length, --min-silence-length, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify " +
                 "have no effect and cannot be combined with it.");
 
-        // --no-numbered-chapters removes the chapter-number sequence detection is otherwise built
+        // --ignore-chapter-numbers removes the chapter-number sequence detection is otherwise built
         // around, and with it every option that reasons in those numbers. Rejecting them outright
         // beats silently ignoring them: each one names an expectation about numbers this run will
         // never form an opinion about, so accepting it would promise something that cannot happen.
-        if (!o.NumberedChapters && (o._phraseSet || o._titleSet || o._pass3ModelSet ||
-                                    o._expectedStartSet || o._maxChapterNumberSet || o.TrailingScan || o.Verify))
+        // --chapter-phrase and --title stay legal - the phrase is still what is listened for and the
+        // title word is still what the mark is called.
+        if (o.IgnoreChapterNumbers && (o._pass3ModelSet || o._expectedStartSet ||
+                                       o._maxChapterNumberSet || o.TrailingScan || o.Verify))
             throw new CliError(
-                "--no-numbered-chapters detects no numbered chapters at all, so --chapter-phrase, " +
-                "--title, --pass3-model, --expected-start-chapter, --max-chapter-number, " +
-                "--trailing-scan and --verify have nothing to act on and cannot be combined with it.");
+                "--ignore-chapter-numbers forms no opinion about chapter numbers, so --pass3-model, " +
+                "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify have " +
+                "nothing to act on and cannot be combined with it.");
 
         if (o.MaxChapterNumber is { } cap && o.ExpectedStartChapter is { } start && cap < start)
             throw new CliError(
@@ -771,14 +775,6 @@ public sealed class CliOptions
         if (!o._epilogueTitleSet)
             o.EpilogueTitle = language.EpilogueTitle;
 
-        // Checked against the resolved profile rather than the raw options, so it accounts for the
-        // localized defaults filling in whatever was not given: with numbered chapters switched off
-        // the named phrases are all that is left, and switching those off too leaves a run that
-        // could not produce a single mark no matter how long it listened.
-        if (!o.NumberedChapters && o.DefaultProfile.NamedPhrases.Count == 0)
-            throw new CliError(
-                "--no-numbered-chapters leaves nothing to detect: the prologue and epilogue phrases " +
-                "are both switched off and no --custom mapping was given.");
         return o;
     }
 
@@ -864,7 +860,7 @@ public sealed class CliOptions
             case "--simple-metadata": SimpleMetadata = true; return true;
             case "--verify": Verify = true; return true;
             case "--ignore-progress": IgnoreProgress = true; return true;
-            case "--no-numbered-chapters": NumberedChapters = false; return true;
+            case "--ignore-chapter-numbers": IgnoreChapterNumbers = true; return true;
             default: return false;
         }
     }
@@ -1237,15 +1233,16 @@ public sealed class CliOptions
           -U, --custom-file <path>  Read --custom mappings from a text file, one per line. Blank
                                     lines and lines starting with "#" are ignored, and semicolons
                                     need no escaping here since line breaks separate the mappings.
-              --no-numbered-chapters
-                                    Do not look for numbered chapter announcements at all, leaving
-                                    only the prologue, epilogue and --custom marks. Nothing then
-                                    reasons about chapter numbers: no sequence gap is ever found or
-                                    filled, so passes 2.5 and 3 never run and no file is tagged
-                                    ".missing-marks". Cannot be combined with --chapter-phrase,
-                                    --title, --pass3-model, --expected-start-chapter,
-                                    --max-chapter-number, --trailing-scan or --verify, and at least
-                                    one named phrase must remain for the run to detect anything.
+              --ignore-chapter-numbers
+                                    Detect chapter announcements as usual, but form no opinion about
+                                    the numbers in them. Every announcement heard becomes a mark
+                                    where it is heard, keeping whatever number was spoken in its
+                                    title, and no sequence gap is ever found or filled: passes 2.5
+                                    and 3 never run and no file is tagged ".missing-marks". For
+                                    books that restart their count per part, or number nothing at
+                                    all. Cannot be combined with --pass3-model,
+                                    --expected-start-chapter, --max-chapter-number, --trailing-scan
+                                    or --verify.
           -m, --model <name>        Whisper model: tiny, base, small, medium, turbo or large
                                     (default: turbo).
           -M, --pass3-model <name>  Whisper model for pass 3 (gap filling) only; same choices as

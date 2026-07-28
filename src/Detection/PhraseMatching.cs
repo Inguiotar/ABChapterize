@@ -72,45 +72,86 @@ internal static class PhraseMatching
 
         foreach (Match m in profile.PhraseRegex.Matches(text))
         {
-            int number;
-            // The exact character range actually consulted to find the phrase and parse its
-            // number - just the match itself unless a head/tail slice contributed too - used
-            // below to tell whether this detection drew on text from both sides of a Pass 2
-            // overlap's cache/fresh boundary.
-            var consumedStart = m.Index;
-            var consumedEnd = m.Index + m.Length;
-            if (profile.PhraseHasNumberGroup && m.Groups.Count > 1 && m.Groups[1].Success)
-            {
-                if (!int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out number))
-                    continue;
-            }
-            else
-            {
-                var tail = text[(m.Index + m.Length)..];
-                if (tail.Length > 80)
-                    tail = tail[..80];
-                if (NumberWordParser.TryExtractNumber(tail, profile.Language, out number))
-                {
-                    consumedEnd += tail.Length;
-                }
-                else
-                {
-                    // No number after the phrase - try the ordinal-first announcement
-                    // order ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm").
-                    var head = text[..m.Index];
-                    if (head.Length > 80)
-                        head = head[^80..];
-                    if (!NumberWordParser.TryExtractNumberBefore(head, profile.Language, out number))
-                        continue;
-                    consumedStart -= head.Length;
-                }
-            }
+            if (!TryParseAnnouncedNumber(text, m, profile, out var number, out var consumedStart, out var consumedEnd))
+                continue;
 
             var segIndex = SegmentIndexAt(segStartChar, m.Index);
             var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
             yield return new PhraseMatch(
                 number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
                 segments[segIndex].Probability, spansMerge);
+        }
+    }
+
+    /// <summary>
+    /// Reads the chapter number belonging to one phrase match, from the regexp's own capturing group
+    /// if it has one, else from the words following the phrase ("Chapter Seven"), else from those
+    /// preceding it ("Erstes Kapitel", "Birinci Bölüm"). The 80-character head/tail slices bound how
+    /// far a number may sit from the phrase and still count as announced with it, keeping an
+    /// unrelated number later in the same segment out.
+    /// </summary>
+    /// <param name="text">The flattened window text the match came from.</param>
+    /// <param name="m">The phrase match itself.</param>
+    /// <param name="profile">Language profile supplying the number grammar and group convention.</param>
+    /// <param name="number">The parsed chapter number, when one was found.</param>
+    /// <param name="consumedStart">Start of the character range actually consulted - the match
+    /// itself, extended backwards when a preceding slice supplied the number.</param>
+    /// <param name="consumedEnd">End of that range, extended forwards when a following slice
+    /// supplied it. Together the two tell <see cref="FindPhraseMatches"/> whether the detection drew
+    /// on text from both sides of a Pass 2 overlap's cache/fresh boundary.</param>
+    private static bool TryParseAnnouncedNumber(
+        string text, Match m, LanguageProfile profile,
+        out int number, out int consumedStart, out int consumedEnd)
+    {
+        consumedStart = m.Index;
+        consumedEnd = m.Index + m.Length;
+        if (profile.PhraseHasNumberGroup && m.Groups.Count > 1 && m.Groups[1].Success)
+            return int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out number);
+
+        var tail = text[(m.Index + m.Length)..];
+        if (tail.Length > 80)
+            tail = tail[..80];
+        if (NumberWordParser.TryExtractNumber(tail, profile.Language, out number))
+        {
+            consumedEnd += tail.Length;
+            return true;
+        }
+
+        var head = text[..m.Index];
+        if (head.Length > 80)
+            head = head[^80..];
+        if (!NumberWordParser.TryExtractNumberBefore(head, profile.Language, out number))
+            return false;
+        consumedStart -= head.Length;
+        return true;
+    }
+
+    /// <summary>
+    /// Searches the transcribed segments for chapter announcements without requiring any of them to
+    /// carry a number - what <c>--ignore-chapter-numbers</c> runs instead of
+    /// <see cref="FindPhraseMatches"/>. A number that is spoken still reaches the title, because
+    /// "Kapitel 3" is what the listener expects to see even when nothing checks that a 2 came before
+    /// it; one that is not simply leaves the bare title word, which is the whole point for a book
+    /// that announces its chapters without numbering them.
+    /// </summary>
+    /// <param name="segments">The window's transcript segments, in the caller's time base.</param>
+    /// <param name="profile">Language profile supplying the chapter phrase, title and number grammar.</param>
+    internal static IEnumerable<NamedMatch> FindChapterAnnouncements(
+        List<TranscriptSegment> segments, LanguageProfile profile)
+    {
+        if (segments.Count == 0)
+            yield break;
+
+        var (text, segStartChar) = Flatten(segments);
+        foreach (Match m in profile.PhraseRegex.Matches(text))
+        {
+            var title = TryParseAnnouncedNumber(text, m, profile, out var number, out _, out _)
+                ? $"{profile.Title} {number}"
+                : profile.Title;
+            var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
+            yield return new NamedMatch(
+                profile.ChapterAnnouncement, title,
+                segment.StartSeconds, segment.EndSeconds, segment.Probability);
         }
     }
 

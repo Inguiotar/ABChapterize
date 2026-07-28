@@ -347,11 +347,11 @@ public sealed class ChapterDetector
         _log?.Invoke("Pass 2 finished");
 
         // Passes 2.5 and 3 exist only to close holes in the chapter-number sequence, so with
-        // --no-numbered-chapters there is nothing for either of them to chase: Pass 2 already
+        // --ignore-chapter-numbers there is nothing for either of them to chase: Pass 2 already
         // probed every candidate the file has, and no gap can be defined without numbers to be
         // missing from.
         var pass2Completed = !earlyAborted && belowExpectedStartNumber == null;
-        if (_options.NumberedChapters)
+        if (!_options.IgnoreChapterNumbers)
         {
             if (pass2Completed)
                 chapters = await RunPass25Async(file, info, work, chapters, namedFound, jingleCeilingSeconds,
@@ -652,9 +652,9 @@ public sealed class ChapterDetector
         // A file that yielded no chapter at all is left unchanged by FileProcessor, and a lone
         // prologue or epilogue must not be what makes it worth rewriting: a book whose chapter
         // announcements were never heard is a failed detection, not a two-mark book. With
-        // --no-numbered-chapters that reasoning inverts - the named marks are the entire point of
-        // the run, and there is no chapter whose absence could condemn them.
-        var named = chapters.Count > 0 || !_options.NumberedChapters
+        // --ignore-chapter-numbers that reasoning inverts - the chapters are themselves named marks
+        // then, and there is no numbered list whose emptiness could condemn them.
+        var named = chapters.Count > 0 || _options.IgnoreChapterNumbers
             ? namedMarks.OrderBy(m => m.TimeSeconds).ToList()
             : [];
 

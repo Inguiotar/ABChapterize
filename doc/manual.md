@@ -339,24 +339,36 @@ At most 100 custom marks are written per file. Beyond that the rest are
 dropped and the file's summary line says so: a phrase that matches ordinary
 prose (`--custom "the:the"`) would otherwise pepper a whole book with marks.
 
-### Detecting nothing but named marks
+### Detecting chapters without believing their numbers
 
-`--no-numbered-chapters` switches numbered chapter detection off entirely,
-leaving only the prologue, the epilogue and the `--custom` marks. Nothing then
-reasons about chapter numbers: no sequence gap is ever found or filled, so
-[Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model) and
-[Pass 3](#pass-3--gap-filling-only-when-needed) never run and no file is ever
-tagged ".missing-marks". A run finishes after Pass 2.
+`--ignore-chapter-numbers` leaves detection working exactly as it normally
+does — the chapter phrase is still searched for, every announcement still
+becomes a mark, and the marks are still placed with the same silence, jingle
+and refinement machinery — but the tool stops forming any opinion about the
+numbers it hears.
 
-Because they can no longer be placed relative to chapter 1, the prologue and
-epilogue lose their usual positional rule: the prologue keeps its *first*
-match in the file and the epilogue its *last*.
+Whatever number was spoken still ends up in the title (`Chapter 7`), and an
+announcement with no number at all is marked too, titled with the bare word
+(`Chapter`). Nothing checks that the numbers ascend, that none is missing, or
+that the book starts at 1. Consequently no sequence gap is ever found or
+filled, so [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model)
+and [Pass 3](#pass-3--gap-filling-only-when-needed) never run and no file is
+ever tagged `.missing-marks`. A run finishes after Pass 2, which usually makes
+it a good deal quicker than a normal one.
+
+Use it for books whose numbering the tool cannot make sense of: one that
+restarts its count in every part, one made of several novels bound together,
+or one that announces "Chapter" and then simply reads on.
+
+The prologue and epilogue keep their usual positional rules — the prologue
+before the first chapter heard, the epilogue after it — and `--custom` marks
+behave as always. The per-file limit of 100 custom marks does not apply to
+chapter announcements.
 
 The options that reason in chapter numbers are rejected rather than silently
-ignored: `--chapter-phrase`, `--title`, `--pass3-model`,
-`--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` and
-`--verify`. At least one named phrase must remain, so switching the prologue
-and epilogue off as well requires at least one `--custom` mapping.
+ignored: `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
+`--trailing-scan` and `--verify`. `--chapter-phrase` and `--title` remain
+perfectly useful and are accepted.
 
 ### The intro chapter
 
@@ -547,13 +559,13 @@ so that logs and reports stay comparable regardless of regional settings.
 : Read `--custom` mappings from a text file, one per line; blank lines and
   lines starting with `#` are ignored.
 
-`--no-numbered-chapters`
-: Do not look for numbered chapter announcements at all, leaving only the
-  prologue, epilogue and `--custom` marks. Cannot be combined with
-  `--chapter-phrase`, `--title`, `--pass3-model`, `--expected-start-chapter`,
-  `--max-chapter-number`, `--trailing-scan` or `--verify`, and at least one
-  named phrase must remain. See
-  [Detecting nothing but named marks](#detecting-nothing-but-named-marks).
+`--ignore-chapter-numbers`
+: Detect chapter announcements as usual, but form no opinion about the numbers
+  in them: no sequence, no gaps, no missing chapters. The spoken number still
+  reaches the title. Cannot be combined with `--pass3-model`,
+  `--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` or
+  `--verify`. See
+  [Detecting chapters without believing their numbers](#detecting-chapters-without-believing-their-numbers).
 
 `-m`, `--model <name>`
 : Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default) or

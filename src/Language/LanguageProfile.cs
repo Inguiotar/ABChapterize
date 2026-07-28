@@ -26,4 +26,18 @@ namespace ABChapterize.Language;
 /// <c>--prologue-phrase</c>/<c>--epilogue-phrase</c> and no <c>--custom</c> mapping was given.</param>
 public sealed record LanguageProfile(
     string Language, string ChapterPhrase, Regex PhraseRegex, bool PhraseHasNumberGroup,
-    string Title, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases);
+    string Title, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases)
+{
+    /// <summary>
+    /// The chapter phrase dressed up as a <see cref="NamedPhrase"/>, for
+    /// <c>--ignore-chapter-numbers</c>: with no sequence to place an announcement in, a chapter is
+    /// exactly what a prologue already is - a title at a position - and reusing that path gives it
+    /// the same placement, deduplication and threshold feedback for free. Repeatable and unscoped,
+    /// since a book announces many chapters and nothing bounds where they may fall. The title here
+    /// is the bare word only; the spoken number is appended per match by
+    /// <see cref="ABChapterize.Detection.PhraseMatching.FindChapterAnnouncements"/>, which is where
+    /// it is parsed.
+    /// </summary>
+    public NamedPhrase ChapterAnnouncement { get; } =
+        new("chapter", PhraseRegex, Title, NamedPhraseScope.Anywhere, Repeatable: true);
+}

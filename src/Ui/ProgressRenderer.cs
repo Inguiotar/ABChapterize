@@ -40,7 +40,7 @@ public sealed class WorkTracker
 
     /// <summary>How many non-numbered marks (prologue, epilogue, <c>--custom</c>) have been found
     /// so far. Shown only in place of the chapter number, i.e. while none has been found - which is
-    /// the whole run with <c>--no-numbered-chapters</c>, where the slot would otherwise sit at
+    /// the whole run with <c>--ignore-chapter-numbers</c>, where the slot would otherwise sit at
     /// "----" from start to finish however much the file is yielding.</summary>
     public int NamedMarks { get; set; }
 

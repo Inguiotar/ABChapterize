@@ -357,6 +357,13 @@ internal static class DetectionTuning
     /// second or two differently than the first, so exact equality would not catch it. Chosen far
     /// above that jitter and far below any plausible spacing of two genuine structural
     /// announcements, which are minutes apart in a real book.
+    /// <para>
+    /// Applied twice per match, to the phrase time before placement and to the placed time after -
+    /// the jitter can exceed this window on the phrase time alone (a re-decode may put the same
+    /// words in a segment starting well over ten seconds earlier), while the anchors both walk back
+    /// to agree exactly. Only the second check caught the four duplicate pairs seen on
+    /// "Die Dritte Macht.m4b", 2026-07-28.
+    /// </para>
     /// </summary>
     internal const double NamedMarkDedupeSeconds = 10;
 

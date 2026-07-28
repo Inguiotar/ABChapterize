@@ -29,16 +29,17 @@ for you, not how it was built. The format follows
   written per file — beyond that the rest are dropped and the file's summary
   line says so, so a phrase that matches ordinary prose cannot pepper a whole
   book with marks.
-- **`--no-numbered-chapters`** switches numbered chapter detection off
-  altogether, for books whose structure is not "Chapter 1, Chapter 2, …" at all.
-  Only the prologue, the epilogue and the `--custom` marks are then detected;
-  nothing looks for gaps in a chapter sequence, so no file is ever tagged
-  `.missing-marks` and a run finishes right after the probing pass. The options
-  that only mean something for numbered chapters (`--chapter-phrase`, `--title`,
-  `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
-  `--trailing-scan`, `--verify`) are rejected alongside it rather than silently
-  ignored. With no chapter to place them against, the prologue keeps its first
-  match in the file and the epilogue its last.
+- **`--ignore-chapter-numbers`** keeps detecting chapter announcements but stops
+  reasoning about the numbers in them — for books that restart their count in
+  every part, bind several novels together, or announce "Chapter" and simply
+  read on. Every announcement heard becomes a mark, keeping whatever number was
+  spoken in its title (and just the bare title word when none was). Nothing
+  checks that the numbers ascend or that any are missing, so no file is ever
+  tagged `.missing-marks` and a run finishes right after the probing pass, which
+  usually makes it noticeably quicker. The options that only mean something for
+  a chapter sequence (`--pass3-model`, `--expected-start-chapter`,
+  `--max-chapter-number`, `--trailing-scan`, `--verify`) are rejected alongside
+  it rather than silently ignored.
 - **Prologues and epilogues get their own marks.** A narrator announcing a
   "prologue" or an "epilogue" now produces a mark titled accordingly, alongside
   the numbered chapters. Both are on by default and localized by `--lang`, in

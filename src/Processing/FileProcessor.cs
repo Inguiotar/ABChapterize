@@ -659,9 +659,10 @@ public sealed class FileProcessor
         // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed markings
         // are trusted as-is. --force means "redo the whole file from scratch" and takes priority,
         // falling through to the normal policy below.
-        // The resume path is entirely about chapter numbers the tag names, so a run that detects
-        // none re-detects the file from scratch instead - the tag is simply not this run's business.
-        if (!_options.Force && _options.NumberedChapters && HasMissingMarksTag(file))
+        // The resume path is entirely about chapter numbers the tag names, so a run that forms no
+        // opinion about them re-detects the file from scratch instead - the tag is simply not this
+        // run's business.
+        if (!_options.Force && !_options.IgnoreChapterNumbers && HasMissingMarksTag(file))
             return await ProcessResumeAsync(ctx, detector, watch, ct);
 
         if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
@@ -932,9 +933,7 @@ public sealed class FileProcessor
             : result.BelowExpectedStartNumber is { } foundNumber
                 ? $"{ctx.Name}: first chapter found ({foundNumber}) is below --expected-start-chapter " +
                   $"{_options.ExpectedStartChapter}; file unchanged{langHint}"
-                : _options.NumberedChapters
-                    ? $"{ctx.Name}: no chapter phrases found; file unchanged{langHint}"
-                    : $"{ctx.Name}: none of the configured phrases found; file unchanged{langHint}";
+                : $"{ctx.Name}: no chapter phrases found; file unchanged{langHint}";
         _progress.FinishWithSummary(ctx.Work, summary);
     }
 
@@ -968,8 +967,9 @@ public sealed class FileProcessor
     }
 
     /// <summary>What the summary line calls the marks this file yielded: the numbered chapters with
-    /// their range, or - when the run detected none, either because the book had none or because
-    /// --no-numbered-chapters switched them off - the named marks on their own.</summary>
+    /// their range, or - when the run produced no numbered chapter, either because the book had
+    /// none or because --ignore-chapter-numbers puts them all in the named list - the named marks
+    /// on their own.</summary>
     /// <param name="result">The file's detection result.</param>
     private static string FormatWrittenCount(DetectionResult result)
         => result.Chapters.Count > 0

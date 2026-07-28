@@ -490,30 +490,46 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task NoNumberedChapters_DetectsOnlyTheNamedMarks()
+    public async Task IgnoreChapterNumbers_MarksEveryAnnouncement_KeepingItsSpokenNumber()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--no-numbered-chapters",
+            Options("--max-jingle-length", "0", "--ignore-chapter-numbers",
                     "--custom", "zwischenspiel:Zwischenspiel"),
-            [new(595, 600), new(1195, 1200)],
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
                 s.Add(600, Seg(0.3, " Chapter one."));
                 s.Add(1200, Seg(0.2, " Zwischenspiel."));
+                s.Add(1800, Seg(0.4, " Chapter one."));
             });
 
         Assert.Empty(result.Chapters);
         Assert.False(result.GapRemains);
-        Assert.Equal([("custom 1", "Zwischenspiel", 1199.95)], Named(result));
+        // Two chapter 1s, and neither is a gap, a duplicate or a reason to re-probe anything.
+        Assert.Equal(
+            [("chapter", "Chapter 1", 600.05), ("custom 1", "Zwischenspiel", 1199.95),
+             ("chapter", "Chapter 1", 1800.15)],
+            Named(result));
     }
 
     [Fact]
-    public async Task NoNumberedChapters_KeepsTheNamedMarks_WithoutASingleChapter()
+    public async Task IgnoreChapterNumbers_MarksAnAnnouncementThatCarriesNoNumber()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--ignore-chapter-numbers"),
+            [new(595, 600)],
+            s => s.Add(600, Seg(0.3, " Chapter. The rain had not let up.")));
+
+        Assert.Equal([("chapter", "Chapter", 600.05)], Named(result));
+    }
+
+    [Fact]
+    public async Task IgnoreChapterNumbers_KeepsTheNamedMarks_WithoutASingleChapter()
     {
         // With numbers on, a lone prologue is a failed detection and gets dropped; with them off it
         // is exactly what the run was asked for.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--no-numbered-chapters", "--early-abort", "0"),
+            Options("--max-jingle-length", "0", "--ignore-chapter-numbers", "--early-abort", "0"),
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Prologue.")));
 
@@ -521,30 +537,30 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task NoNumberedChapters_KeepsTheFirstPrologueMatch()
+    public async Task IgnoreChapterNumbers_StillScopesThePrologueAtTheFirstChapter()
     {
-        // "Last match wins" needs a chapter to close the scope. Without one the scope runs to the
-        // end of the file, so the first match is the announcement and every later one is prose.
+        // The chapters live in the named list here, so the prologue's scope has to close on those -
+        // otherwise "as the prologue explained" would walk the mark into the middle of the book.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--no-numbered-chapters"),
+            Options("--max-jingle-length", "0", "--ignore-chapter-numbers"),
             [new(295, 300), new(595, 600)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Prologue."));
-                s.Add(300, Seg(0.3, " As the prologue explained."));
-                s.Add(600, Seg(0.2, " Nothing here."));
+                s.Add(300, Seg(0.3, " Chapter one."));
+                s.Add(600, Seg(0.2, " As the prologue explained."));
             });
 
-        Assert.Equal([("prologue", "Prologue", 0.25)], Named(result));
+        Assert.Equal([("prologue", "Prologue", 0.25), ("chapter", "Chapter 1", 300.05)], Named(result));
     }
 
     [Fact]
-    public async Task NoNumberedChapters_DoesNotEarlyAbort_WhileNamedMarksAreFound()
+    public async Task IgnoreChapterNumbers_DoesNotEarlyAbort_WhileNamedMarksAreFound()
     {
-        // --early-abort counts "no chapter found"; with no chapters to find, the named marks are
+        // --early-abort counts "no chapter found"; with the chapters in the named list, those are
         // what proves the file is yielding something.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--no-numbered-chapters", "--early-abort", "1",
+            Options("--max-jingle-length", "0", "--ignore-chapter-numbers", "--early-abort", "1",
                     "--custom", "interlude:Interlude"),
             [new(27, 30), new(597, 600)],
             s =>
