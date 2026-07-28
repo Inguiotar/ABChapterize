@@ -255,7 +255,7 @@ public sealed class FileProcessor
         var initialLanguage = _options.AutoLanguage ? "en" : _options.Language;
         var gpu = ResolveGpu();
         var first = new WhisperTranscriber(modelPath, initialLanguage, forceCpu: _options.CpuOnly,
-            gpuDevice: gpu?.Index);
+            gpuDevice: gpu.Selected?.Index);
         var hardCap = ResolveDetectionConcurrency(first, files.Count);
 
         // A different --pass3-model gets one shared, lazily-loaded instance for the whole run (see
@@ -263,13 +263,13 @@ public sealed class FileProcessor
         // costs little and beats loading a second model per concurrent file. The same model as
         // --model means no separate instance at all - gap work reuses each file's transcriber.
         var pass3Shared = _options.Pass3Model != _options.Model
-            ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly, gpu?.Index)
+            ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly, gpu.Selected?.Index)
             : null;
 
         if (!_options.Quiet)
-            PrintModelBanner(first.RuntimeName, files.Count, hardCap, pass3Shared != null, gpu);
+            PrintModelBanner(first.RuntimeName, files.Count, hardCap, pass3Shared != null, gpu.Reported);
 
-        var pool = await BuildTranscriberPoolAsync(first, hardCap, modelPath, initialLanguage, gpu?.Index);
+        var pool = await BuildTranscriberPoolAsync(first, hardCap, modelPath, initialLanguage, gpu.Selected?.Index);
 
         // Shared like ffmpeg above - one instance for the whole run, safe for concurrent use (see
         // SileroVadDetector's threading remarks) - and only needed for the VAD pre-pass.
@@ -349,9 +349,9 @@ public sealed class FileProcessor
 
     /// <summary>
     /// Resolves which GPU this run should use, from <c>--use-gpu</c> or the automatic preference
-    /// for a discrete card.
+    /// for a discrete card, and which one the banner should name.
     /// </summary>
-    /// <returns>The chosen device, or null to leave the backend on its own default.</returns>
+    /// <returns>The choice; see <see cref="GpuChoice"/> for why those are two different things.</returns>
     /// <exception cref="AppError">The user named a device that does not match exactly one GPU.
     /// Failing loudly is the point: silently falling back to the default would reproduce the very
     /// situation --use-gpu exists to end, where a run quietly uses the wrong card.</exception>
@@ -359,10 +359,10 @@ public sealed class FileProcessor
     /// Skipped entirely under --cpu-only, which has no device to choose, and harmless on machines
     /// without Vulkan: the enumeration comes back empty and nothing is imposed.
     /// </remarks>
-    private GpuDevice? ResolveGpu()
+    private GpuChoice ResolveGpu()
     {
         if (_options.CpuOnly)
-            return null;
+            return GpuChoice.None;
 
         // GGML_VK_VISIBLE_DEVICES hides devices from the backend, so the backend's indices become
         // positions in a filtered list while ours are positions in the full one - the two no longer
@@ -373,18 +373,25 @@ public sealed class FileProcessor
         if (!string.IsNullOrWhiteSpace(visibleDevices))
         {
             if (_options.UseGpu == null)
-                return null;
+                return GpuChoice.None;
 
             throw new AppError(
                 $"--use-gpu cannot be combined with GGML_VK_VISIBLE_DEVICES (set to \"{visibleDevices}\"), " +
                 "which hides GPUs from the backend and renumbers the rest. Unset it - --use-gpu replaces it.");
         }
 
-        var selection = GpuSelector.Select(VulkanDeviceEnumerator.Enumerate(), _options.UseGpu);
+        var devices = VulkanDeviceEnumerator.Enumerate();
+        var selection = GpuSelector.Select(devices, _options.UseGpu);
         if (selection.Error != null)
             throw new AppError(selection.Error);
 
-        return selection.Device;
+        // Naming the device even when nothing was selected is the whole point of the banner: the
+        // backend's own default is index 0, and a machine with a single Vulkan device can still be
+        // running on something nobody wanted. A WSL2 distro with no GPU passthrough enumerates
+        // exactly one device, llvmpipe - a software rasterizer that answers to "Vulkan backend"
+        // just like a real GPU would, which is how a CPU-rasterized run went unnoticed here for ten
+        // days (2026-07-18 to 2026-07-28).
+        return new GpuChoice(selection.Device, selection.Device ?? devices.FirstOrDefault());
     }
 
     /// <summary>Prints the one-off "model loaded" line that opens a detection run.</summary>
@@ -392,16 +399,17 @@ public sealed class FileProcessor
     /// <param name="fileCount">Number of files in the run.</param>
     /// <param name="hardCap">Resolved concurrency.</param>
     /// <param name="separatePass3Model">Whether --pass3-model asked for a second model.</param>
-    /// <param name="gpu">The GPU this run selected, or null when the backend's default applies.</param>
+    /// <param name="gpu">The GPU this run is expected to use, or null when it is not known.</param>
     /// <remarks>
     /// The device name is printed because its absence is what made a wrong GPU invisible: a banner
-    /// saying only "Vulkan backend" looks identical whether the run is on a discrete card or on the
-    /// integrated one at a fraction of the speed.
+    /// saying only "Vulkan backend" looks identical whether the run is on a discrete card, on the
+    /// integrated one at a fraction of the speed, or on a software rasterizer. Only named on the
+    /// Vulkan backend, since that is where the enumeration the name comes from applies.
     /// </remarks>
     private void PrintModelBanner(string runtimeName, int fileCount, int hardCap, bool separatePass3Model,
         GpuDevice? gpu)
         => _progress.Announce($"Whisper model \"{_options.Model}\" loaded ({runtimeName} backend" +
-                             (gpu != null ? $" on {gpu.Name}" : "") +
+                             (gpu != null && runtimeName == "Vulkan" ? $" on {gpu.Name}" : "") +
                              (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
                              (separatePass3Model
                                  ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +

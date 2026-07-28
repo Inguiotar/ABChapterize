@@ -1439,7 +1439,16 @@ wall clock.
 
 Two situations still need a decision from you, because there is no sensible
 way to guess: several discrete cards, and no discrete card at all. In both,
-the runtime's own default applies until you pass `--use-gpu`.
+the runtime's own default applies until you pass `--use-gpu` — but the
+startup line still names the device it ended up on.
+
+That last part is worth a glance on any unfamiliar machine, because "Vulkan
+backend" alone does not mean a GPU is doing the work. A software rasterizer
+such as Mesa's `llvmpipe` is a genuine Vulkan device and will be used quite
+happily if it is the only one present — a container or a WSL2 distro without
+GPU passthrough is the usual way to end up there. If the startup line names
+`llvmpipe`, the run is on the CPU by a slower route than `--cpu-only` would
+take, and the fix is on the driver side rather than anything here.
 
 **On names rather than numbers.** The indices `--list-gpus` prints are
 positions in this machine's Vulkan enumeration, and they are less stable than

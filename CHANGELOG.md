@@ -115,7 +115,11 @@ for you, not how it was built. The format follows
   a machine with an integrated GPU beside a discrete one could be the integrated
   one — 8.6× slower on the test machine, with nothing in the output to say so.
   Machines with one GPU, several discrete GPUs, or none that report themselves
-  as discrete are unaffected; use `--use-gpu` to decide those cases.
+  as discrete keep the runtime's own choice; use `--use-gpu` to decide those
+  cases. The device is named either way, which also makes a less obvious case
+  visible: a software rasterizer like `llvmpipe` is a real Vulkan device, so a
+  container or WSL2 distro without GPU passthrough would report "Vulkan backend"
+  while quietly running on the CPU. It now says `on llvmpipe`.
 - **The built-in chapter, prologue and epilogue phrases now cover each
   language's spelling variants.** They are regular expressions rather than
   single words, so a transcript that dropped an accent still matches
