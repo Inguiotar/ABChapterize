@@ -146,6 +146,17 @@ matches ordinary prose puts marks in the middle of scenes. Pick the one word a
 narrator actually says, and let users reach for `--chapter-phrase` for the
 rest.
 
+The exception, should your language have one: if two *different* words are
+genuinely interchangeable as the thing narrators announce — not "one common
+one and one a publisher occasionally uses", but two you would be equally
+unsurprised to hear — then the default has to cover both, or half the
+audiobooks in that language get nothing. Write it as one alternation,
+`/(?:woord|kapittel)/`, and the earlier note applies: `(?:...)`, never
+`(...)`. Test it against prose before you commit to it. The bar is high on
+purpose, and no built-in language has cleared it so far: all eleven get by on
+a single word, and the only alternations among them (Swedish and Danish
+`kapit(?:el|let)`) are two endings of one word rather than two words.
+
 For the prologue and the epilogue, prefer your language's Latin-derived form
 ("Prolog", "Prólogo", …) over a native near-synonym. Words like German
 "Vorwort" or Turkish "Önsöz" mean *foreword* — front matter *about* the book —
