@@ -153,9 +153,10 @@ measured to within a tenth of a second. The mark is set `--mark-lead` seconds
 ahead of it. Hearing the phrase at the mark is not by itself taken as proof that the
 mark is right — a jingle is not transcribed at all, so a mark several seconds
 inside one hears the announcement just as clearly as a mark sitting on it. On
-the rare chapter where none of those nearby candidates
-confirm anything either, a second, wider sweep of the same area is tried
-before giving up. A mark that cannot be confirmed this way at all is left as
+the rare chapter where none of those nearby candidates confirm anything
+either — or where the mark was left far from the announcement to begin with —
+the whole stretch the phrase was heard in is searched instead, closing in on
+it a few checks at a time rather than combing through it. A mark that cannot be confirmed this way at all is left as
 originally placed rather than guessed at. Finally, whatever mark results —
 confirmed, corrected, or left as is — is nudged up to 0.15 seconds earlier to
 the quietest point in that stretch, but only when doing so is a clear (at
@@ -164,8 +165,7 @@ later. This keeps a player from starting playback abruptly mid-sound (an
 audible "plop") without ever risking eating into the announcement itself.
 This costs one or more extra Whisper transcriptions per chapter on top of pass
 2's own probe — most of all for chapters preceded by a jingle with several
-false-positive candidates, or the rarer chapter needing that second, wider
-sweep. `--quick-marks`/`-Q` skips the whole layer when that time matters more
+false-positive candidates, or the rarer chapter needing that wider search. `--quick-marks`/`-Q` skips the whole layer when that time matters more
 than the last few tenths of a second of accuracy (the machinery is documented
 in the source).
 

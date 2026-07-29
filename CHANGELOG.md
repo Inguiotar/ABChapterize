@@ -158,12 +158,19 @@ for you, not how it was built. The format follows
   were already right stay where they are, give or take that tenth of a second.
   `--quick-marks` still skips the whole step.
 
+- **A mark left far from its announcement is now recovered in seconds rather
+  than minutes.** When the usual nearby candidates all fail, the fallback used
+  to comb the surrounding audio a tenth of a second at a time — which, for a
+  mark that had landed half a minute early, meant hundreds of transcriptions
+  and twenty minutes of apparent silence on one mark. It now closes in on the
+  announcement instead, roughly halving the search each time, and finds the
+  same position in a couple of dozen checks. Marks that were already being
+  placed correctly are unaffected.
+
 - **`--verbose` now reports mark refinement** instead of going quiet while it
   works. Each mark logs the candidates it is about to check, and — for the rare
-  mark whose announcement none of them confirm — an explicit line before the
-  fallback sweep begins, saying how far it will search and how many checks that
-  can take. That sweep has always been able to run for minutes on a single
-  mark; now it says so rather than looking like the run has hung.
+  mark whose announcement none of them confirm — the stretch it is about to
+  search and where in it the announcement turned out to be.
 
 ### Fixed
 

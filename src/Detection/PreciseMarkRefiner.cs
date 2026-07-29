@@ -1,4 +1,4 @@
-// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
+﻿// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
@@ -30,7 +30,7 @@ internal readonly record struct PreciseMarkResult(double Mark, bool PhraseHeard)
 
 /// <summary>Implements the precise marking correction (<see cref="CliOptions.PreciseMark"/>):
 /// verifies a default-mode mark by directly asking Whisper whether the chapter phrase starts
-/// there, and if not, searches nearby VAD-candidate and fixed-step positions - see
+/// there, and if not, searches for where it really starts - see
 /// <see cref="RefinePreciseMarkAsync"/>, the entry point <see cref="ChapterDetector"/> calls,
 /// for the full algorithm.</summary>
 internal sealed class PreciseMarkRefiner
@@ -128,7 +128,7 @@ internal sealed class PreciseMarkRefiner
     /// (<see cref="CliOptions.MaxJingleSeconds"/> plus <see cref="PhraseMarginSeconds"/>) of
     /// <paramref name="mark"/> - the same swallowed-blip candidates
     /// <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> already reasons about, not a blind
-    /// fixed-step scan - via <see cref="WalkPreciseMarkCandidatesInterleavedAsync"/>, which tries
+    /// blind scan - via <see cref="WalkPreciseMarkCandidatesInterleavedAsync"/>, which tries
     /// the forward (later-than-mark) and backward (earlier-than-mark) candidates one at a time in
     /// alternation rather than exhausting one direction before ever trying the other. Searching
     /// backward at all is not symmetry for its own sake: <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/>'s
@@ -145,14 +145,14 @@ internal sealed class PreciseMarkRefiner
     /// </para>
     /// <para>
     /// If round 1 never confirms anything in either direction - it relies entirely on
-    /// VAD-reported speech-segment starts, so it can only find what VAD itself noticed - a second
-    /// round repeats the same interleaved search over the same span, but stepping by a fixed <see
-    /// cref="PreciseMarkFixedStepSeconds"/> instead of VAD candidates: a blind scan immune to VAD
-    /// missing or mis-clustering the announcement's blip entirely (e.g. a jingle quiet enough, or
-    /// short enough, that VAD reports no speech segment inside it at all). Costs more
-    /// transcriptions than round 1 (a check roughly every <see
-    /// cref="PreciseMarkFixedStepSeconds"/> across the whole span instead of only at actual VAD
-    /// segment starts), so it only ever runs after round 1 has already come up empty.
+    /// VAD-reported speech-segment starts, so it can only find what VAD itself noticed - round 2
+    /// (<see cref="LocatePhraseByShrinkingWindowAsync"/>) goes looking without VAD's help, immune
+    /// to a jingle quiet enough, or short enough, that VAD reports no speech segment inside it at
+    /// all. It searches the stretch the phrase was matched in rather than a span around the mark,
+    /// which is what lets it recover a mark left far from its announcement, and it bisects rather
+    /// than scanning, so it costs a couple of dozen transcriptions at most where a blind
+    /// step-by-step sweep cost hundreds. It still only runs after round 1 has come up empty, since
+    /// its transcriptions are individually much larger.
     /// </para>
     /// <para>
     /// When neither round nor direction ever confirms a candidate, <paramref name="mark"/> itself
@@ -176,14 +176,20 @@ internal sealed class PreciseMarkRefiner
     /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
     /// empty when the VAD pre-pass did not run, which costs round 1 every candidate it would have
-    /// had and leaves round 2's blind fixed-step sweep to do the whole job.</param>
+    /// had and leaves round 2 to do the whole job.</param>
+    /// <param name="phraseAbs">Absolute start of the transcript segment(s) the phrase was matched
+    /// in - round 2's search bracket, together with the two that follow.</param>
+    /// <param name="phraseEndAbs">Absolute end of those segment(s).</param>
+    /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in, capping
+    /// that bracket - see <see cref="MarkContext.TranscriptEnd"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
     /// left as given when no candidate could be confirmed), quiet-snapped as a final step, paired
     /// with whether the phrase was ever actually heard - see <see cref="PreciseMarkResult"/>.</returns>
     internal async Task<PreciseMarkResult> RefinePreciseMarkAsync(
         double mark, string file, string? inputDecoder, Regex phraseRegex,
-        List<SpeechSegment> speechSegments, CancellationToken ct)
+        List<SpeechSegment> speechSegments, double phraseAbs, double phraseEndAbs,
+        double transcriptEnd, CancellationToken ct)
     {
         double result;
         var heard = true;
@@ -204,18 +210,8 @@ internal sealed class PreciseMarkRefiner
 
         if (confirmed is null)
         {
-            var forwardSteps = FixedStepCandidates(mark, span, forward: true);
-            var backwardSteps = FixedStepCandidates(mark, span, forward: false);
-            // Announced before it starts rather than after: this is the one step that can run for
-            // minutes on a single mark (up to 2 x span/step transcriptions, and a mark left far
-            // from its announcement by a smeared Whisper timestamp really does walk most of that),
-            // and an unexplained silent wait is indistinguishable from a hang - which is exactly
-            // how it was first reported, on Stalker.m4b's "Zeittafel", 2026-07-29.
-            _log?.Invoke($"no VAD candidate confirmed near {FormatTimestamp(mark)} - " +
-                         $"sweeping +/-{span:0.#} s at {PreciseMarkFixedStepSeconds:0.##} s steps, " +
-                         $"up to {forwardSteps.Count() + backwardSteps.Count()} check(s)");
-            confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
-                forwardSteps, backwardSteps, file, inputDecoder, phraseRegex, ct);
+            confirmed = await LocatePhraseByShrinkingWindowAsync(
+                mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
         }
 
         if (confirmed is { } hit)
@@ -270,9 +266,9 @@ internal sealed class PreciseMarkRefiner
     /// of it and is trusted outright. If it <em>is</em>, the walk stopped too late, and
     /// <paramref name="walked"/> is corrected by searching backward from it - VAD speech-segment
     /// starts within the same jingle-plus-margin span precise marking's own round 1 already
-    /// searches (see <see cref="RefinePreciseMarkAsync"/>), falling back to the same fixed-step
-    /// blind scan as its round 2 - for the first (nearest) candidate where the phrase is no longer
-    /// the first thing heard.
+    /// searches (see <see cref="RefinePreciseMarkAsync"/>), falling back to a blind fixed-step scan
+    /// of its own (<see cref="FixedStepCandidates"/>) - for the first (nearest) candidate where the
+    /// phrase is no longer the first thing heard.
     /// </para>
     /// <para>
     /// Search is backward-only and never re-tries forward: the observed failure always left the
@@ -544,12 +540,243 @@ internal sealed class PreciseMarkRefiner
         => Math.Round(Math.Max(0, lastConfirmed - PreciseMarkLeadInSeconds), 6);
 
     /// <summary>
-    /// Generates precise marking round 2's blind, fixed-step candidate positions (see
-    /// <see cref="RefinePreciseMarkAsync"/>): <paramref name="mark"/> plus/minus
-    /// <see cref="PreciseMarkFixedStepSeconds"/>, 2x that, 3x that, and so on out to
-    /// <paramref name="span"/>, unlike round 1's candidates, which come from actual VAD
-    /// speech-segment starts. Stops early, short of <paramref name="span"/>, if a backward step
-    /// would otherwise go negative - there is nothing before the start of the file to check.
+    /// Precise marking's round 2 (see <see cref="RefinePreciseMarkAsync"/>): finds a position where
+    /// the announcement is the first thing heard, without any help from VAD, by asking a question
+    /// that has a single answer rather than hunting for one that has many.
+    /// <para>
+    /// The obvious approach - stepping <see cref="PreciseMarkFixedStepSeconds"/> at a time across
+    /// the span, checking each position with <see cref="PreciseMarkPhraseFoundAsync"/> - is what
+    /// this replaces, and it could not be bisected: a fixed-width window slid across the audio
+    /// answers "yes" only on the stretch that both reaches the announcement and has nothing else
+    /// transcribable in front of it, an <em>island</em> somewhere in the span, and no comparison of
+    /// two "no"s tells you which side of it you are on. Sweeping the island out one step at a time
+    /// was therefore the only option, at up to 2 x span / step transcriptions - 726 of them, some
+    /// twenty minutes, on the mark that prompted this (Stalker.m4b's "Zeittafel", 2026-07-29).
+    /// </para>
+    /// <para>
+    /// Anchoring the window's <em>end</em> instead removes the island (the insight is the user's):
+    /// ask whether the phrase appears anywhere between a moving start and a fixed end past the
+    /// announcement, and the answer is yes for every start before the onset and no for every start
+    /// after it. One step, one edge, bisectable - see
+    /// <see cref="FindPhraseSurvivalEdgeAsync"/>. Verified before it was built, on the same mark:
+    /// starts of 22.6, 30, 40, 46, 50, 51.5, 52 and 52.5 s all still found "Zeittafel" against an
+    /// end of 54 s, and 53 s did not.
+    /// </para>
+    /// <para>
+    /// That edge is not itself the answer the caller wants - it sits at or fractionally past the
+    /// onset (see <see cref="PreciseMarkFootholdBackoffsSeconds"/>), whereas everything downstream
+    /// is built on positions that err early. So the edge is only used to aim: a handful of
+    /// backoffs behind it are offered to the ordinary check, and the first one it confirms is
+    /// returned as the foothold for <see cref="FindOnsetEdgeAsync"/>, exactly as round 1's
+    /// confirmations are. Returning null when none of them confirms is the honest outcome and not a
+    /// fallback worth adding: the edge came from the phrase appearing <em>somewhere</em> in a long
+    /// window, which an unrelated mention in the narration can also produce.
+    /// </para>
+    /// </summary>
+    /// <param name="mark">The mark being refined; the gallop starts here, clamped into the
+    /// bracket.</param>
+    /// <param name="phraseAbs">Absolute start of the matched segment(s).</param>
+    /// <param name="phraseEndAbs">Absolute end of the matched segment(s).</param>
+    /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>A position at which the phrase is the first thing heard, or null when the search
+    /// found no edge or no backoff behind it could be confirmed.</returns>
+    private async Task<double?> LocatePhraseByShrinkingWindowAsync(
+        double mark, double phraseAbs, double phraseEndAbs, double transcriptEnd, string file,
+        string? inputDecoder, Regex phraseRegex, CancellationToken ct)
+    {
+        // The bracket the announcement has to lie in: the segment(s) it was matched in, a phrase
+        // margin either side for a timestamp that reported them slightly narrow, and never past the
+        // end of the audio it was heard in.
+        var floor = Math.Max(0, phraseAbs - PhraseMarginSeconds);
+        var ceiling = Math.Min(phraseEndAbs + PhraseMarginSeconds, transcriptEnd);
+        if (ceiling - floor <= PreciseMarkFixedStepSeconds)
+            return null;
+
+        // Announced before it starts rather than after: round 2 is the step that can keep a single
+        // mark busy for a while, and an unexplained silent wait is indistinguishable from a hang -
+        // which is exactly how its predecessor was first reported, on Stalker.m4b's "Zeittafel",
+        // 2026-07-29.
+        _log?.Invoke($"no VAD candidate confirmed near {FormatTimestamp(mark)} - narrowing in on " +
+                     $"the phrase between {FormatTimestamp(floor)} and {FormatTimestamp(ceiling)}");
+
+        if (await FindPhraseSurvivalEdgeAsync(
+                Math.Clamp(mark, floor, ceiling), floor, ceiling, file, inputDecoder, phraseRegex, ct)
+            is not { } edge)
+            return null;
+
+        _log?.Invoke($"phrase survives up to {FormatTimestamp(edge)} - " +
+                     $"confirming the announcement just before it");
+
+        foreach (var backoff in PreciseMarkFootholdBackoffsSeconds)
+        {
+            var candidate = Math.Round(Math.Max(0, edge - backoff), 6);
+            ct.ThrowIfCancellationRequested();
+            if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
+                return candidate;
+            if (candidate == 0)
+                break;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the last position from which <paramref name="phraseRegex"/> still survives being cut
+    /// off at the front - the step edge <see cref="LocatePhraseByShrinkingWindowAsync"/> aims by.
+    /// Every probe transcribes from the position asked about to a <em>fixed</em> end past the
+    /// announcement, so the predicate is monotone and a bracket can be halved; see that method for
+    /// why a fixed-width window could not be.
+    /// <para>
+    /// Galloping outward from <paramref name="origin"/> before bisecting keeps the common case
+    /// cheap - a mark already sitting near its announcement costs two or three probes - while still
+    /// bracketing a mark tens of seconds away in about ten. Each stride doubles, so probes land 0.1,
+    /// 0.3, 0.7, 1.5 s and onward from the start; doubling the stride rather than the offset means
+    /// the failing probe leaves a bracket no larger than the ground already covered, which is what
+    /// the bisection below then halves. The direction is decided by the answer at
+    /// <paramref name="origin"/> itself: still surviving means the onset is later, not surviving
+    /// means it is earlier.
+    /// </para>
+    /// <para>
+    /// Why the caller's bracket is drawn round the matched <em>segment</em> rather than round the
+    /// mark, and why that is not a detail: Whisper transcribes in 30 s chunks, so a window long
+    /// enough to span more than one re-segments differently for a shift of a few hundred
+    /// milliseconds, and the phrase can drop out of the transcript for reasons having nothing to do
+    /// with where the window starts. The predicate is noise at that point, and bisecting noise
+    /// converges on nonsense. Measured twice while this was built, both on Stalker.m4b's
+    /// "Zeittafel" (true onset 52.7 s, 2026-07-29): anchored 55 s out, the phrase was reported
+    /// surviving from 22.92 s but not from 23.32 s and the edge came back 29 s early; anchored at
+    /// the detecting window's end but started from the mark 30 s before it, the very first stride
+    /// straddled a chunk boundary and did it again. Bracketed to the matched segment - which
+    /// contains the announcement however badly its start timestamp is smeared - no window exceeds
+    /// that segment plus two phrase margins, and the same audio behaved perfectly monotonically.
+    /// </para>
+    /// <para>
+    /// The anchor is additionally pulled in to just past every position that fails: a failure proves
+    /// the phrase ends before that position plus a phrase's length. That matters for a Pass 3 gap
+    /// chunk, whose matched segment can be far longer than Pass 2's whole window. It cannot
+    /// invalidate an earlier answer - each new anchor still sits a full phrase margin past the
+    /// onset, so anything that survived under the old one survives under the new one too.
+    /// </para>
+    /// </summary>
+    /// <param name="origin">Position the gallop starts from; inside the bracket.</param>
+    /// <param name="floor">Earliest position the onset can be at.</param>
+    /// <param name="ceiling">Latest position it can be at, and the window's end anchor.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The last surviving position, accurate to <see cref="PreciseMarkFixedStepSeconds"/>;
+    /// null when the phrase survives right across the range (so no edge exists to aim by) or is not
+    /// found anywhere in it.</returns>
+    private async Task<double?> FindPhraseSurvivalEdgeAsync(
+        double origin, double floor, double ceiling, string file, string? inputDecoder,
+        Regex phraseRegex, CancellationToken ct)
+    {
+        var end = ceiling;
+
+        async Task<bool> SurvivesAsync(double from)
+        {
+            ct.ThrowIfCancellationRequested();
+            var found = await PhraseSurvivesFromAsync(from, end, file, inputDecoder, phraseRegex, ct);
+            if (!found)
+                end = Math.Min(end, from + PhraseMarginSeconds);
+            return found;
+        }
+
+        double lastTrue, firstFalse;
+        var stride = PreciseMarkFixedStepSeconds;
+        if (await SurvivesAsync(origin))
+        {
+            lastTrue = origin;
+            while (true)
+            {
+                var probe = Math.Min(ceiling, Math.Round(lastTrue + stride, 6));
+                if (!await SurvivesAsync(probe))
+                {
+                    firstFalse = probe;
+                    break;
+                }
+                if (probe >= ceiling)
+                    return null;
+                lastTrue = probe;
+                stride *= 2;
+            }
+        }
+        else
+        {
+            firstFalse = origin;
+            while (true)
+            {
+                var probe = Math.Max(floor, Math.Round(firstFalse - stride, 6));
+                if (await SurvivesAsync(probe))
+                {
+                    lastTrue = probe;
+                    break;
+                }
+                if (probe <= floor)
+                    return null;
+                firstFalse = probe;
+                stride *= 2;
+            }
+        }
+
+        while (firstFalse - lastTrue > PreciseMarkFixedStepSeconds)
+        {
+            var mid = Math.Round((lastTrue + firstFalse) / 2, 6);
+            if (await SurvivesAsync(mid))
+                lastTrue = mid;
+            else
+                firstFalse = mid;
+        }
+        return lastTrue;
+    }
+
+    /// <summary>
+    /// Asks whether <paramref name="phraseRegex"/> is still found anywhere between
+    /// <paramref name="from"/> and <paramref name="until"/> - the monotone question
+    /// <see cref="FindPhraseSurvivalEdgeAsync"/> bisects on.
+    /// <para>
+    /// Two deliberate differences from <see cref="PreciseMarkPhraseFoundAsync"/>, which asks a
+    /// different question of the same audio. There is no lead-in: cutting the audio exactly at
+    /// <paramref name="from"/> is the entire experiment, and a lead-in would blunt the very edge
+    /// being measured. And the match is against the whole transcript rather than its first non-blank
+    /// segment: what is being tested is whether the phrase is still <em>there</em>, not whether it
+    /// comes first, and a window this long will normally have plenty of narration before it.
+    /// </para>
+    /// </summary>
+    /// <param name="from">Absolute position to start decoding at.</param>
+    /// <param name="until">Absolute position to stop decoding at.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True when some transcribed segment of that stretch matches the phrase.</returns>
+    private async Task<bool> PhraseSurvivesFromAsync(
+        double from, double until, string file, string? inputDecoder, Regex phraseRegex,
+        CancellationToken ct)
+    {
+        from = Math.Round(Math.Max(0, from), 6);
+        var length = Math.Round(until - from, 6);
+        if (length <= 0)
+            return false;
+        var samples = await _audio.DecodePcmAsync(file, from, length, inputDecoder, ct);
+        var transcript = await _transcribeCounting(samples, ct);
+        return transcript.Any(s => s.Text != null && phraseRegex.IsMatch(s.Text));
+    }
+
+    /// <summary>
+    /// Generates the blind, fixed-step candidate positions
+    /// <see cref="VerifyMarkBeforeJingleAsync"/> falls back on once its VAD candidates are
+    /// exhausted: <paramref name="mark"/> plus/minus <see cref="PreciseMarkFixedStepSeconds"/>,
+    /// 2x that, 3x that, and so on out to <paramref name="span"/>. Stepping is affordable there,
+    /// unlike in <see cref="LocatePhraseByShrinkingWindowAsync"/>, because that search stops at the
+    /// first candidate where the announcement is <em>no longer</em> audible - and a check window
+    /// only reaches <see cref="PreciseMarkCheckWindowSeconds"/> forward, so retreating past that
+    /// much silences it. Stops early, short of <paramref name="span"/>, if a backward step would
+    /// otherwise go negative - there is nothing before the start of the file to check.
     /// </summary>
     /// <param name="mark">Position the steps count out from; never itself included.</param>
     /// <param name="span">How far out from <paramref name="mark"/> to keep stepping.</param>

@@ -1135,7 +1135,7 @@ public sealed class ChapterDetector
                 if (match.SpansMerge)
                     _log?.Invoke($"chapter {match.Number} detection spans a Pass 3 chunk seam " +
                                  "(bridged from the previous chunk) - worth a spot check");
-                await RecordGapChapterMatch(match, matchSegments, found, remaining, knownChapters,
+                await RecordGapChapterMatch(match, matchSegments, chunkEnd, found, remaining, knownChapters,
                     allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile, ct);
             }
 
@@ -1196,6 +1196,8 @@ public sealed class ChapterDetector
     /// <param name="match">The confirmed phrase match, in absolute file time.</param>
     /// <param name="matchSegments">The transcript the match was found in (absolute file time),
     /// for the VAD edge adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
+    /// <param name="transcriptEnd">Absolute end of the chunk <paramref name="matchSegments"/> was
+    /// transcribed from - see <see cref="MarkContext.TranscriptEnd"/>.</param>
     /// <param name="found">Chapters found in this gap so far; appended to.</param>
     /// <param name="remaining">Still-missing chapter numbers for this gap; the match's number is
     /// removed from it. Null for an open-ended region, which keeps no such list.</param>
@@ -1212,7 +1214,7 @@ public sealed class ChapterDetector
     /// <param name="profile">Language profile supplying the phrase precise marking looks for.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task RecordGapChapterMatch(
-        PhraseMatch match, List<TranscriptSegment> matchSegments,
+        PhraseMatch match, List<TranscriptSegment> matchSegments, double transcriptEnd,
         List<DetectedChapter> found, HashSet<int>? remaining, IReadOnlyList<DetectedChapter> knownChapters,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
         WorkTracker work, string file, string? inputDecoder, LanguageProfile profile, CancellationToken ct)
@@ -1248,8 +1250,10 @@ public sealed class ChapterDetector
             statSilence = anchor;
         }
         var markCtx = new MarkContext(
-            file, inputDecoder, profile.PhraseRegex, allSilences, speechSegments, matchSegments);
-        time = await _marks!.PlaceAsync(match.Number, time, phraseAbs, statSilence, statRegion, markCtx, ct);
+            file, inputDecoder, profile.PhraseRegex, allSilences, speechSegments, matchSegments,
+            transcriptEnd);
+        time = await _marks!.PlaceAsync(
+            match.Number, time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx, ct);
         found.Add(new DetectedChapter(match.Number, time, match.Confidence));
         remaining?.Remove(match.Number);
         var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), _options.ExpectedStartChapter);
@@ -1350,7 +1354,7 @@ public sealed class ChapterDetector
                         : remaining.Contains(match.Number);
                     if (!wanted || knownChapters.Any(k => k.Number == match.Number))
                         continue;
-                    await RecordGapChapterMatch(match, subAbs, found, remaining, knownChapters,
+                    await RecordGapChapterMatch(match, subAbs, subStart + len, found, remaining, knownChapters,
                         allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile, ct);
                     if (remaining is { Count: 0 })
                         break;

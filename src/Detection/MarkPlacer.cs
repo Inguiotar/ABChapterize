@@ -1,4 +1,4 @@
-// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
+﻿// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
@@ -28,9 +28,14 @@ namespace ABChapterize.Detection;
 /// <param name="TranscriptAbs">The transcript this mark's phrase was found in, in absolute file
 /// time, so the backward walk can tell genuine preceding narration apart from a musical or vocal
 /// transient inside the jingle - see <see cref="JingleGeometry.IsGenuineSpeech"/>.</param>
+/// <param name="TranscriptEnd">Absolute end of the audio <paramref name="TranscriptAbs"/> was
+/// transcribed from - the window's own planned end, not the last segment's timestamp, which is
+/// exactly the kind of figure precise marking exists because it cannot trust. Known to lie past the
+/// announcement, since the announcement was found inside it, which is the one thing
+/// <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>'s round 2 needs of it.</param>
 internal readonly record struct MarkContext(
     string File, string? InputDecoder, Regex PhraseRegex, List<Silence> AllSilences,
-    List<SpeechSegment> SpeechSegments, List<TranscriptSegment> TranscriptAbs);
+    List<SpeechSegment> SpeechSegments, List<TranscriptSegment> TranscriptAbs, double TranscriptEnd);
 
 /// <summary>
 /// Turns a default-mode mark into the final one and records what the file's statistics need to
@@ -91,6 +96,9 @@ internal sealed class MarkPlacer
     /// is exactly the atypical one the "inter-chapter" statistics already exclude chapter 1 for.</param>
     /// <param name="defaultMark">The default-mode mark the caller's own pass computed.</param>
     /// <param name="phraseAbs">Absolute phrase start time, the clip point for the jingle length.</param>
+    /// <param name="phraseEndAbs">Absolute end of the transcript segment(s) the phrase was matched
+    /// in. Together with <paramref name="phraseAbs"/> this brackets where the announcement can
+    /// actually be - see <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>'s round 2.</param>
     /// <param name="statSilence">The silence the mark anchored to, or null when none.</param>
     /// <param name="statRegion">The jingle region preceding the phrase, or null (always null when
     /// the VAD pre-pass did not run).</param>
@@ -98,14 +106,15 @@ internal sealed class MarkPlacer
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The final mark position.</returns>
     internal async Task<double> PlaceAsync(
-        int? number, double defaultMark, double phraseAbs, Silence? statSilence,
+        int? number, double defaultMark, double phraseAbs, double phraseEndAbs, Silence? statSilence,
         NonSpeechRegion? statRegion, MarkContext ctx, CancellationToken ct)
     {
         var time = defaultMark;
         var phraseHeard = false;
         if (_options.PreciseMark)
             (time, phraseHeard) = await _refiner.RefinePreciseMarkAsync(
-                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.SpeechSegments, ct);
+                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.SpeechSegments,
+                phraseAbs, phraseEndAbs, ctx.TranscriptEnd, ct);
         if (_options.MarkBeforeJingle)
             time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx, ct);
         if (number is { } chapterNumber)

@@ -258,16 +258,41 @@ internal static class DetectionTuning
     internal const double MarkLoudnessWindowSeconds = 0.25;
 
     /// <summary>
-    /// The finest granularity precise marking probes at, in both of its senses: the step size
-    /// round 2 (<see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>) advances by when blindly
-    /// sweeping for the phrase after round 1's VAD candidates confirmed nothing, and the resolution
-    /// <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> bisects down to. The latter makes it the
-    /// tool's onset-accuracy guarantee: a reported onset always sits at or before the true one and
-    /// never more than this far before it. Matches <see cref="PreciseMarkLeadInSeconds"/>'s
-    /// magnitude - both are about the finest granularity worth probing at, given
-    /// <see cref="PreciseMarkCheckWindowSeconds"/> - rather than some unrelated value.
+    /// The finest granularity precise marking probes at: the resolution both of its bisections -
+    /// <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> and
+    /// <see cref="PreciseMarkRefiner.FindPhraseSurvivalEdgeAsync"/> - narrow their bracket down to,
+    /// and the step <see cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>'s backward scan
+    /// advances by. The first makes it the tool's onset-accuracy guarantee: a reported onset always
+    /// sits at or before the true one and never more than this far before it. Matches
+    /// <see cref="PreciseMarkLeadInSeconds"/>'s magnitude - both are about the finest granularity
+    /// worth probing at, given <see cref="PreciseMarkCheckWindowSeconds"/> - rather than some
+    /// unrelated value.
     /// </summary>
     internal const double PreciseMarkFixedStepSeconds = 0.1;
+
+    /// <summary>
+    /// How far back from the survival edge
+    /// <see cref="PreciseMarkRefiner.FindPhraseSurvivalEdgeAsync"/> reported that
+    /// <see cref="PreciseMarkRefiner.LocatePhraseByShrinkingWindowAsync"/> tries, in turn, to place
+    /// a probe the ordinary <see cref="PreciseMarkCheckWindowSeconds"/> check will confirm.
+    /// <para>
+    /// The edge itself is the wrong place to ask: it is the last position from which the phrase
+    /// still survives being cut off at the front, so it sits <em>at or just past</em> the onset -
+    /// Whisper tolerates losing the first few tens of milliseconds of a word and still spells it
+    /// correctly. A check window opening there starts mid-syllable, and the fragment it transcribes
+    /// no longer matches the phrase. Each backoff steps further into the quiet (or the jingle)
+    /// ahead of the announcement, where the phrase is cleanly the first thing heard.
+    /// </para>
+    /// <para>
+    /// Geometric rather than fixed-step, and only four of them, because this is a foothold hunt and
+    /// not a measurement: whichever one lands, <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/>
+    /// walks forward from it to the onset anyway, so a backoff that overshoots into the jingle costs
+    /// that walk one or two extra probes and nothing else. The last one is deliberately larger than
+    /// a typical announcement's lead-in silence: past that, a "no" means the phrase is genuinely not
+    /// where the edge claimed, which is worth learning quickly rather than creeping toward.
+    /// </para>
+    /// </summary>
+    internal static readonly double[] PreciseMarkFootholdBackoffsSeconds = [0.0, 0.5, 1.5, 4.0];
 
     /// <summary>
     /// How far <em>before</em> a confirmed or left-as-is mark

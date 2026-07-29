@@ -1,4 +1,4 @@
-// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
+﻿// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
@@ -461,7 +461,8 @@ internal sealed class RegionProber
             windowSegmentsAbs, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
         var segments = ShiftSegments(trimmedAbs, -start);
 
-        return await ScanWindowForMarksAsync(candidate, start, segments, trimmedAbs, mergeBoundarySegIndex, ct);
+        return await ScanWindowForMarksAsync(
+            candidate, start, windowEnd, segments, trimmedAbs, mergeBoundarySegIndex, ct);
     }
 
     /// <summary>
@@ -574,6 +575,8 @@ internal sealed class RegionProber
     /// ones into marks.</summary>
     /// <param name="candidate">The candidate whose window this is.</param>
     /// <param name="start">Absolute start of the window.</param>
+    /// <param name="windowEnd">Absolute planned end of the window - what precise marking
+    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
     /// <param name="segments">The window transcript in window-relative time, for phrase matching.</param>
     /// <param name="trimmedAbs">The same transcript in absolute file time, for the jingle edge
     /// adjustment inside <see cref="JingleGeometry.ResolveJingleAnchor"/>.</param>
@@ -581,7 +584,7 @@ internal sealed class RegionProber
     /// <see cref="AssembleWindowTranscriptAsync"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<List<ProbeMark>> ScanWindowForMarksAsync(
-        ProbeCandidate candidate, double start, List<TranscriptSegment> segments,
+        ProbeCandidate candidate, double start, double windowEnd, List<TranscriptSegment> segments,
         List<TranscriptSegment> trimmedAbs, int? mergeBoundarySegIndex, CancellationToken ct)
     {
         var marks = new List<ProbeMark>();
@@ -592,7 +595,7 @@ internal sealed class RegionProber
         // The prologue's own scope closes the moment the first numbered chapter is accepted, so the
         // named scan runs first: a window holding both the prologue announcement and chapter 1
         // (a short front matter, or a wide jingle window) must still yield the prologue.
-        await ScanWindowForNamedMarksAsync(candidate, start, segments, trimmedAbs, ct);
+        await ScanWindowForNamedMarksAsync(candidate, start, windowEnd, segments, trimmedAbs, ct);
 
         // With --ignore-chapter-numbers a chapter is just another titled position, so it goes down
         // the same path the prologue does and nothing below this point applies to it.
@@ -606,7 +609,8 @@ internal sealed class RegionProber
             var phraseAbs = start + match.PhraseStartSeconds;
             if (IsOutOfSequence(match, phraseAbs, windowLast))
                 continue;
-            if (await AcceptMatchAsync(match, candidate, start, phraseAbs, trimmedAbs, ct) is not { } mark)
+            if (await AcceptMatchAsync(match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct)
+                is not { } mark)
                 continue;
             marks.Add(mark);
             windowLast = mark.Number;
@@ -626,18 +630,20 @@ internal sealed class RegionProber
     /// </summary>
     /// <param name="candidate">The candidate whose window this is.</param>
     /// <param name="start">Absolute start of the window.</param>
+    /// <param name="windowEnd">Absolute planned end of the window - what precise marking
+    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
     /// <param name="segments">The window transcript in window-relative time, for phrase matching.</param>
     /// <param name="trimmedAbs">The same transcript in absolute file time, for the jingle anchor.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ScanWindowForNamedMarksAsync(
-        ProbeCandidate candidate, double start, List<TranscriptSegment> segments,
+        ProbeCandidate candidate, double start, double windowEnd, List<TranscriptSegment> segments,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
         foreach (var match in FindNamedMatches(segments, Language.Profile!))
         {
             if (!IsInScope(match.Phrase))
                 continue;
-            await AcceptNamedMatchAsync(match, candidate, start, trimmedAbs, ct);
+            await AcceptNamedMatchAsync(match, candidate, start, windowEnd, trimmedAbs, ct);
         }
 
         if (!_env.Options.IgnoreChapterNumbers)
@@ -646,7 +652,7 @@ internal sealed class RegionProber
         // After the prologue/epilogue pass, so that a window holding both a scoped announcement and
         // a chapter still resolves the scoped one against the chapter count it had on arrival.
         foreach (var match in FindChapterAnnouncements(segments, Language.Profile!))
-            await AcceptNamedMatchAsync(match, candidate, start, trimmedAbs, ct);
+            await AcceptNamedMatchAsync(match, candidate, start, windowEnd, trimmedAbs, ct);
     }
 
     /// <summary>
@@ -700,10 +706,12 @@ internal sealed class RegionProber
     /// <param name="match">The named match, in window-relative time.</param>
     /// <param name="candidate">The candidate whose window this probe decoded.</param>
     /// <param name="start">Absolute start of that window.</param>
+    /// <param name="windowEnd">Absolute planned end of the window - what precise marking
+    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
     /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task AcceptNamedMatchAsync(
-        NamedMatch match, ProbeCandidate candidate, double start,
+        NamedMatch match, ProbeCandidate candidate, double start, double windowEnd,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
         var phraseAbs = start + match.PhraseStartSeconds;
@@ -718,9 +726,9 @@ internal sealed class RegionProber
             return;
         var (time, markSilence, markRegion) = placement;
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
-            _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs);
+            _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs, windowEnd);
         time = await _env.Marks.PlaceAsync(
-            null, time, phraseAbs, markSilence, markRegion, markCtx, ct);
+            null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct);
 
         // Second dedupe pass, now against the placed time. The pre-placement one compares phrase
         // times, which two probes of the same announcement can easily disagree about by more than
@@ -844,11 +852,13 @@ internal sealed class RegionProber
     /// <param name="match">The phrase match, in window-relative time.</param>
     /// <param name="candidate">The candidate whose window this probe decoded.</param>
     /// <param name="start">Absolute start of that window.</param>
+    /// <param name="windowEnd">Absolute planned end of the window - what precise marking
+    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
     /// <param name="phraseAbs">Absolute phrase start time.</param>
     /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<ProbeMark?> AcceptMatchAsync(
-        PhraseMatch match, ProbeCandidate candidate, double start, double phraseAbs,
+        PhraseMatch match, ProbeCandidate candidate, double start, double windowEnd, double phraseAbs,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
         if (ResolveProbeMark(match, candidate, start, trimmedAbs) is not { } placement)
@@ -856,9 +866,10 @@ internal sealed class RegionProber
         var (time, markSilence, markRegion) = placement;
 
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile!.PhraseRegex,
-            _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs);
+            _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs, windowEnd);
         time = await _env.Marks.PlaceAsync(
-            match.Number, time, phraseAbs, markSilence, markRegion, markCtx, ct);
+            match.Number, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion,
+            markCtx, ct);
 
         if (match.SpansMerge)
             _env.Log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +

@@ -338,8 +338,8 @@ use `.`, whatever the machine's locale says.
    every mark is double-checked by re-transcribing short, isolated clips of
    the audio near it until one hears the phrase first; the announcement's own
    beginning is then measured to within a tenth of a second and the mark set
-   just ahead of it, falling back to a wider sweep of the same area on the rare
-   chapter where nothing confirms. Costs one or more extra transcriptions
+   just ahead of it, falling back to a search of the whole stretch the phrase was
+   heard in on the rare chapter where nothing confirms. Costs one or more extra transcriptions
    per chapter, which is what `--quick-marks` trades away for speed.
 2c. **Pass 2.5 — a cheap second opinion (only with a heavier `--pass3-model`):**
    most gaps aren't unprobeable audio, just a number the pass-2 model misread
