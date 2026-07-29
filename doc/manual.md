@@ -1228,26 +1228,32 @@ The chapter number in an announcement is recognized in three ways:
 | English | `en` | chapter twenty-one | twenty-first chapter |
 | German | `de` | Kapitel einundzwanzig | Einundzwanzigstes Kapitel |
 | French | `fr` | chapitre vingt et un | premier chapitre |
-| Spanish | `es` | capítulo veintiuno | primer capítulo |
+| Spanish | `es` | capítulo veintiuno | vigésimo primer capítulo |
 | Italian | `it` | capitolo ventuno | primo capitolo |
 | Dutch | `nl` | hoofdstuk eenentwintig | eenentwintigste hoofdstuk |
 | Turkish | `tr` | bölüm yirmi bir | yirmi birinci bölüm |
-| Portuguese | `pt` | capítulo vinte e um | primeiro capítulo |
+| Portuguese | `pt` | capítulo vinte e um | vigésimo primeiro capítulo |
 | Polish | `pl` | rozdział dwadzieścia jeden | rozdział dwudziesty pierwszy |
 | Swedish | `sv` | kapitel tjugoett | tjugoförsta kapitlet |
 | Danish | `da` | kapitel enogtyve | enogtyvende kapitel |
 
-All numbers from 0 to 999 are understood, as cardinals and as ordinals, and
+Cardinals are understood from 0 to 999 in every language, ordinals as far as
+the language spells them compositionally (see below), and
 the number may come **after** the phrase ("Chapter Seven") or **before** it
 ("Erstes Kapitel", "2. Kapitel", "chapitre premier", "Birinci Bölüm").
 The parsers are exhaustively unit-tested against independent reference
-spellers for every cardinal number 0–999 in every language. Word ordinals
-are exhaustively tested 1–999 too, except for Spanish, Portuguese and
-Danish, which only recognize a common, non-compound set of word ordinals
-(1st-10th for Spanish/Portuguese, 1st-20th for Danish) since their compound
-ordinals beyond that are rare in chapter announcements and, for Danish,
-irregular enough (halvtredsindstyvende for 50th) to not be worth the risk —
-digit ordinals ("21.", "50.") always work regardless of language.
+spellers for every cardinal number 0–999 in every language, and for every
+word ordinal too. Word ordinals reach 999 in most languages; Spanish and
+Portuguese stop at 199, and Danish at 100 standing on its own, since past
+that point these three reach for words ("ducentésimo") that no chapter
+announcement plausibly uses. Digit ordinals ("21.", "200.") work at any
+value regardless of language.
+
+Spelling variants are covered rather than assumed: masculine and feminine
+("vigésima primera"), fused and separate ("decimoctavo" as well as "décimo
+octavo"), accented and not, European and Brazilian Portuguese, and both the
+formal and the everyday Danish tens ("halvtredsindstyvende" and
+"halvtredsende" for 50th).
 
 Where two of the three readings would fit the same word, the language's own
 number words win over the Roman reading: French "dix" is ten, not 509.

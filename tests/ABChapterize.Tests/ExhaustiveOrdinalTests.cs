@@ -134,36 +134,70 @@ public class ExhaustiveOrdinalTests
         }
     }
 
+    /// <summary>
+    /// Spanish ordinals reach 199 rather than 999 (see <c>SpanishNumberParser</c>), and are
+    /// checked in all three spellings a narrator may pick: masculine, feminine, and the
+    /// twenties' fused single word.
+    /// </summary>
+    [Fact]
+    public void Spanish_AllOrdinals_GenderAndFusedVariants()
+    {
+        for (var n = 1; n <= 199; n++)
+        {
+            AssertRoundTrip(Spellers.SpanishOrdinal(n), "es", n);
+            AssertRoundTrip(Spellers.SpanishOrdinal(n, feminine: true), "es", n);
+            AssertRoundTrip(Spellers.SpanishOrdinal(n, fuse: true), "es", n);
+            AssertRoundTrip(Spellers.SpanishOrdinal(n, feminine: true, fuse: true), "es", n);
+            AssertRoundTrip(Deaccent(Spellers.SpanishOrdinal(n)), "es", n);
+        }
+    }
+
+    /// <summary>Portuguese ordinals reach 199 rather than 999 (see <c>PortugueseNumberParser</c>).</summary>
+    [Fact]
+    public void Portuguese_AllOrdinals_GenderAndAccentVariants()
+    {
+        for (var n = 1; n <= 199; n++)
+        {
+            AssertRoundTrip(Spellers.PortugueseOrdinal(n), "pt", n);
+            AssertRoundTrip(Spellers.PortugueseOrdinal(n, feminine: true), "pt", n);
+            AssertRoundTrip(Deaccent(Spellers.PortugueseOrdinal(n)), "pt", n);
+        }
+    }
+
+    /// <summary>Danish ordinals reach 100 (see <c>DanishNumberParser</c>), in both the formal
+    /// "-indstyvende" tens and the short everyday ones.</summary>
+    [Fact]
+    public void Danish_AllOrdinals_FormalAndColloquialTens()
+    {
+        for (var n = 1; n <= 100; n++)
+        {
+            AssertRoundTrip(Spellers.DanishOrdinal(n), "da", n);
+            AssertRoundTrip(Spellers.DanishOrdinal(n, colloquialTens: true), "da", n);
+        }
+    }
+
+    /// <summary>Strips the acute accents Spanish and Portuguese ordinals carry, which a
+    /// transcript may or may not reproduce.</summary>
+    private static string Deaccent(string s) => s
+        .Replace('á', 'a').Replace('é', 'e').Replace('í', 'i').Replace('ó', 'o').Replace('ú', 'u');
+
     [Theory]
-    // Portuguese irregular ordinals 1st-10th ("capítulo primeiro").
-    [InlineData("primeiro", "pt", 1)]
-    [InlineData("primeira", "pt", 1)]
-    [InlineData("segundo", "pt", 2)]
-    [InlineData("terceiro", "pt", 3)]
-    [InlineData("quarto", "pt", 4)]
-    [InlineData("quinto", "pt", 5)]
-    [InlineData("sexto", "pt", 6)]
-    [InlineData("sétimo", "pt", 7)]
-    [InlineData("oitavo", "pt", 8)]
-    [InlineData("nono", "pt", 9)]
-    [InlineData("décimo", "pt", 10)]
-    // Danish ordinals 1st-20th ("Første kapitel"); compound ordinals beyond that are out
-    // of scope for this parser (see DanishNumberParser class docs).
-    [InlineData("første", "da", 1)]
-    [InlineData("anden", "da", 2)]
-    [InlineData("andet", "da", 2)]
-    [InlineData("tredje", "da", 3)]
-    [InlineData("fjerde", "da", 4)]
-    [InlineData("femte", "da", 5)]
-    [InlineData("sjette", "da", 6)]
-    [InlineData("syvende", "da", 7)]
-    [InlineData("ottende", "da", 8)]
-    [InlineData("niende", "da", 9)]
-    [InlineData("tiende", "da", 10)]
-    [InlineData("tyvende", "da", 20)]
+    // The two Spanish ordinals with a lexeme of their own, alongside the compositional
+    // "décimo primero"/"décimo segundo" the exhaustive test already covers.
+    [InlineData("undécimo", "es", 11)]
+    [InlineData("undecima", "es", 11)]
+    [InlineData("duodécimo", "es", 12)]
+    [InlineData("duodécima", "es", 12)]
+    // "nono" is the older 9th, alive inside "decimonono".
+    [InlineData("decimonono", "es", 19)]
+    // Portuguese European/Brazilian doublets in the ordinal tens.
+    [InlineData("setuagésimo", "pt", 70)]
+    [InlineData("oitogésimo", "pt", 80)]
+    [InlineData("cinquagésimo", "pt", 50)]
     // Danish ordinal combined with a hundreds word ahead of it.
     [InlineData("et hundrede og femte", "da", 105)]
     [InlineData("hundrede og tyvende", "da", 120)]
+    [InlineData("to hundrede og enogtyvende", "da", 221)]
     public void OrdinalVariants_ParseTargeted(string text, string language, int expected)
         => AssertParses(text + ".", language, expected);
 

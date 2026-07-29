@@ -12,12 +12,20 @@ namespace ABChapterize.Language.Parsers;
 /// forms are accepted. Units and tens fuse into one word with "og" ("enogtyve" = 21,
 /// "trekvartfems"-style oddities aside), while the hundreds are a separate word
 /// ("hundrede") optionally preceded by its multiplier and an "og" connector: "tre hundrede
-/// og enogtyve" = 321. Ordinals are understood only for the common, non-compound forms
-/// 1st-20th ("Første kapitel") - the ordinal tens 50th-90th use irregular long forms
-/// ("halvtredsindstyvende") that are vanishingly rare in ordinal-first chapter
-/// announcements, so - like the Spanish and Italian parsers - compound ordinals are out
-/// of scope here.
+/// og enogtyve" = 321. Ordinals are understood too ("Første kapitel",
+/// "Enogtyvende kapitel"), compounds included.
 /// </summary>
+/// <remarks>
+/// The ordinal tens inherit the vigesimal mess and then add a second layer to it: 50th is
+/// formally "halvtredsindstyvende", built on the long form rather than on the everyday
+/// "halvtreds", and 40th is "fyrretyvende" although 40 is normally just "fyrre". Each of
+/// 40th-90th therefore has a shorter colloquial variant too ("halvtredsende", "fyrrende"),
+/// and both spellings are accepted, because which one a narrator says is not predictable.
+/// 30th ("tredivte") is irregular in its own way, being the one ordinal ten that does not
+/// end in "-ende". Ordinals stop at 100th ("hundrede", spelled exactly like the cardinal),
+/// so they run 1-199 against the cardinals' 0-999; a digit ordinal ("200.") works at any
+/// value.
+/// </remarks>
 public sealed class DanishNumberParser : INumberWordParser
 {
     /// <inheritdoc/>
@@ -74,15 +82,32 @@ public sealed class DanishNumberParser : INumberWordParser
         ["seks"] = 6, ["syv"] = 7, ["otte"] = 8, ["ni"] = 9,
     };
 
-    /// <summary>Ordinals 1st-20th; compound ordinals beyond that are out of scope (see class docs).</summary>
+    /// <summary>Ordinals 1st-19th, none of which take part in a compound.</summary>
     private static readonly Dictionary<string, int> Ordinals = new()
     {
         ["forste"] = 1, ["anden"] = 2, ["andet"] = 2, ["tredje"] = 3, ["fjerde"] = 4,
         ["femte"] = 5, ["sjette"] = 6, ["syvende"] = 7, ["ottende"] = 8, ["niende"] = 9,
         ["tiende"] = 10, ["ellevte"] = 11, ["tolvte"] = 12, ["trettende"] = 13,
         ["fjortende"] = 14, ["femtende"] = 15, ["sekstende"] = 16, ["syttende"] = 17,
-        ["attende"] = 18, ["nittende"] = 19, ["tyvende"] = 20,
+        ["attende"] = 18, ["nittende"] = 19,
     };
+
+    /// <summary>
+    /// Ordinal tens 20th-90th, formal and colloquial spellings alike (see class docs). These
+    /// serve twice: standing alone ("tyvende kapitel") and as the tail of a fused compound
+    /// ("enogtyvende"), which is why they are a list rather than merged into
+    /// <see cref="Ordinals"/>.
+    /// </summary>
+    private static readonly (string Word, int Value)[] OrdinalTens =
+    [
+        ("tyvende", 20), ("tredivte", 30),
+        ("fyrretyvende", 40), ("fyrrende", 40),
+        ("halvtredsindstyvende", 50), ("halvtredsende", 50),
+        ("tresindstyvende", 60), ("tressende", 60),
+        ("halvfjerdsindstyvende", 70), ("halvfjerdsende", 70),
+        ("firsindstyvende", 80), ("firsende", 80),
+        ("halvfemsindstyvende", 90), ("halvfemsende", 90),
+    ];
 
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
@@ -146,26 +171,45 @@ public sealed class DanishNumberParser : INumberWordParser
         var s = Normalize(token);
 
         if (Units.TryGetValue(s, out number) || Teens.TryGetValue(s, out number)
-            || Tens.TryGetValue(s, out number) || Ordinals.TryGetValue(s, out number))
+            || Tens.TryGetValue(s, out number) || Ordinals.TryGetValue(s, out number)
+            || TryTens(OrdinalTens, s, out number))
             return true;
 
-        // Fused compound like "enogtyve": <unit>og<tens>, using the short tens form only.
+        // Fused compound: <unit>og<tens>, cardinal ("enogtyve") or ordinal ("enogtyvende").
+        // The cardinal form uses the short tens only - Danish never fuses "-indstyve" - while
+        // the ordinal one has no such restriction, its formal tens being long to begin with.
         foreach (var (unitWord, unitValue) in UnitsForCompound)
         {
             if (!s.StartsWith(unitWord + "og", StringComparison.Ordinal))
                 continue;
             var tensPart = s[(unitWord.Length + 2)..];
-            foreach (var (tensWord, tensValue) in ShortTens)
+            if (TryTens(ShortTens, tensPart, out var tensValue)
+                || TryTens(OrdinalTens, tensPart, out tensValue))
             {
-                if (tensPart == tensWord)
-                {
-                    number = unitValue + tensValue;
-                    return true;
-                }
+                number = unitValue + tensValue;
+                return true;
             }
         }
 
         number = 0;
+        return false;
+    }
+
+    /// <summary>Looks one word up in a tens table.</summary>
+    /// <param name="table">Either the cardinal <see cref="ShortTens"/> or <see cref="OrdinalTens"/>.</param>
+    /// <param name="word">The normalized word, or the tail of a fused compound.</param>
+    /// <param name="value">Receives the tens value on success.</param>
+    private static bool TryTens((string Word, int Value)[] table, string word, out int value)
+    {
+        foreach (var (candidate, v) in table)
+        {
+            if (word == candidate)
+            {
+                value = v;
+                return true;
+            }
+        }
+        value = 0;
         return false;
     }
 

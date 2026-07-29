@@ -7,9 +7,17 @@ namespace ABChapterize.Language.Parsers;
 /// <summary>
 /// Parses Spanish spoken numbers 0-999: "siete", "veintiuno", "treinta y uno",
 /// "ciento uno", "novecientos noventa y nueve". Accented and unaccented spellings are
-/// both accepted, and "capítulo primero" style ordinals (1st-10th) are understood too,
-/// since Spanish chapter one is customarily announced that way.
+/// both accepted, and so are ordinals ("capítulo primero", "capítulo vigésimo primero"),
+/// since Spanish chapters are customarily announced that way.
 /// </summary>
+/// <remarks>
+/// Spanish ordinals are their own lexemes rather than a suffix on the cardinal, so unlike
+/// Italian they cannot be derived - "vigésimo" has nothing in common with "veinte". They
+/// are therefore listed, which bounds the range: the scale words stop at "centésimo", so
+/// ordinals run 1-199 while cardinals run 0-999. The multiplied hundreds ordinals
+/// ("ducentésimo" and up) are left out as unheard-of in a chapter announcement; a digit
+/// ordinal ("200.º") still works at any value.
+/// </remarks>
 public sealed class SpanishNumberParser : INumberWordParser
 {
     /// <inheritdoc/>
@@ -50,21 +58,50 @@ public sealed class SpanishNumberParser : INumberWordParser
         ["novecientos"] = 900, ["novecientas"] = 900,
     };
 
-    /// <summary>Ordinals 1st-10th, with and without accents ("capítulo primero").</summary>
-    private static readonly Dictionary<string, int> Ordinals = new()
+    /// <summary>
+    /// Ordinal units 1st-9th, in every form a chapter announcement uses: masculine, feminine,
+    /// and the apocopated "primer"/"tercer" that stand before a masculine noun ("primer
+    /// capítulo"). Keys are accent-free; <see cref="Normalize"/> puts the input in that form.
+    /// </summary>
+    private static readonly Dictionary<string, int> OrdinalUnits = new()
     {
         ["primero"] = 1, ["primer"] = 1, ["primera"] = 1,
         ["segundo"] = 2, ["segunda"] = 2,
         ["tercero"] = 3, ["tercer"] = 3, ["tercera"] = 3,
         ["cuarto"] = 4, ["cuarta"] = 4, ["quinto"] = 5, ["quinta"] = 5,
-        ["sexto"] = 6, ["sexta"] = 6, ["séptimo"] = 7, ["septimo"] = 7, ["séptima"] = 7,
-        ["septima"] = 7, ["octavo"] = 8, ["octava"] = 8, ["noveno"] = 9, ["novena"] = 9,
-        ["décimo"] = 10, ["decimo"] = 10, ["décima"] = 10, ["decima"] = 10,
+        ["sexto"] = 6, ["sexta"] = 6, ["septimo"] = 7, ["septima"] = 7,
+        ["octavo"] = 8, ["octava"] = 8,
+        // "nono" is the older form that survives inside "decimonono" (19th).
+        ["noveno"] = 9, ["novena"] = 9, ["nono"] = 9, ["nona"] = 9,
+    };
+
+    /// <summary>
+    /// Ordinal scale words 10th-100th, as stems without their gender vowel, in descending order
+    /// so that a run like "centésimo vigésimo primero" (121st) can require each rank to be
+    /// smaller than the last. Accent-free, matching <see cref="Normalize"/>; the fused spellings
+    /// drop the accent anyway ("vigésimo" but "vigesimoprimero").
+    /// </summary>
+    private static readonly (string Stem, int Value)[] OrdinalScales =
+    [
+        ("centesim", 100), ("nonagesim", 90), ("octogesim", 80), ("septuagesim", 70),
+        ("sexagesim", 60), ("quincuagesim", 50), ("cuadragesim", 40), ("trigesim", 30),
+        ("vigesim", 20), ("decim", 10),
+    ];
+
+    /// <summary>The two ordinals with no compositional spelling of their own; 11th and 12th are
+    /// also sayable as "décimo primero"/"decimoprimero", which the scale rules already cover.</summary>
+    private static readonly Dictionary<string, int> OrdinalIrregulars = new()
+    {
+        ["undecimo"] = 11, ["undecima"] = 11, ["duodecimo"] = 12, ["duodecima"] = 12,
     };
 
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {
+        // Ordinals first: no ordinal word is also a cardinal, so this cannot shadow anything.
+        if (TryParseOrdinal(tokens, out number, out consumed))
+            return true;
+
         number = 0;
         consumed = 0;
         var total = 0;
@@ -104,14 +141,6 @@ public sealed class SpanishNumberParser : INumberWordParser
                 consumed = i + 1;
                 continue;
             }
-            if (!any && Ordinals.TryGetValue(part, out var o))
-            {
-                total = o;
-                any = true;
-                stage = 3;
-                consumed = i + 1;
-                continue;
-            }
             break; // first non-fitting word ends the number
         }
 
@@ -120,4 +149,101 @@ public sealed class SpanishNumberParser : INumberWordParser
         number = total;
         return true;
     }
+
+    /// <summary>
+    /// Parses an ordinal run: at most one word per rank, strictly descending
+    /// ("centésimo vigésimo primero" = 121st), where the tens and the unit may also be fused
+    /// into one word ("vigesimoprimero", "decimoséptimo"). Requiring each rank to be smaller
+    /// than the last is what keeps a nonsense sequence like "vigésimo trigésimo" from adding up.
+    /// </summary>
+    /// <param name="tokens">Words at the position the caller is reading from.</param>
+    /// <param name="number">Receives the ordinal's value on success.</param>
+    /// <param name="consumed">Receives how many tokens the ordinal occupied.</param>
+    private static bool TryParseOrdinal(IReadOnlyList<string> tokens, out int number, out int consumed)
+    {
+        number = 0;
+        consumed = 0;
+        var total = 0;
+        var ceiling = int.MaxValue; // the rank of the previous word; the next must be below it
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var s = Normalize(tokens[i]);
+
+            if (ceiling == int.MaxValue && OrdinalIrregulars.TryGetValue(s, out var irregular))
+            {
+                number = irregular;
+                consumed = i + 1;
+                return true;
+            }
+            if (TryScale(s, ceiling, out var scale, out var fusedUnit))
+            {
+                total += scale + fusedUnit;
+                consumed = i + 1;
+                if (fusedUnit != 0)
+                    break; // a fused word carries its own unit, so the run ends with it
+                ceiling = scale;
+                continue;
+            }
+            if (total != 0 && OrdinalUnits.TryGetValue(s, out var unit))
+            {
+                total += unit;
+                consumed = i + 1;
+            }
+            else if (total == 0 && i == 0 && OrdinalUnits.TryGetValue(s, out var lone))
+            {
+                total = lone;
+                consumed = 1;
+            }
+            break; // a unit ends the run, and so does anything unrecognized
+        }
+
+        if (total == 0)
+            return false;
+        number = total;
+        return true;
+    }
+
+    /// <summary>
+    /// Matches one scale word below <paramref name="ceiling"/>, either bare ("vigésimo") or with
+    /// a unit fused onto it ("vigesimoprimero"). The fused form appends the gender vowel of the
+    /// scale, which elides against a unit that starts with the same vowel — hence
+    /// "decimoctavo" for "decimo" + "octavo".
+    /// </summary>
+    /// <param name="s">One normalized word.</param>
+    /// <param name="ceiling">The previous rank's value; the match must come in below it.</param>
+    /// <param name="scale">Receives the scale's value on success.</param>
+    /// <param name="fusedUnit">Receives the fused unit's value, or 0 when the word was bare.</param>
+    private static bool TryScale(string s, int ceiling, out int scale, out int fusedUnit)
+    {
+        scale = 0;
+        fusedUnit = 0;
+        foreach (var (stem, value) in OrdinalScales)
+        {
+            if (value >= ceiling || !s.StartsWith(stem, StringComparison.Ordinal))
+                continue;
+            var rest = s[stem.Length..];
+            if (rest is "o" or "a")
+            {
+                scale = value;
+                return true;
+            }
+            // Either the vowel survives ("decimo|septimo") or it elided into the unit
+            // ("decim|octavo"); both leave the unit as the whole remainder.
+            var unitWord = rest.Length > 1 && (rest[0] == 'o' || rest[0] == 'a') ? rest[1..] : rest;
+            if (OrdinalUnits.TryGetValue(unitWord, out var unit)
+                || OrdinalUnits.TryGetValue(rest, out unit))
+            {
+                scale = value;
+                fusedUnit = unit;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Lowercases and strips the acute accents the ordinal tables are keyed without,
+    /// so that "vigésimo" and the accentless "vigesimo" of the fused forms share one entry.</summary>
+    private static string Normalize(string token) => token.ToLowerInvariant()
+        .Replace('á', 'a').Replace('é', 'e').Replace('í', 'i').Replace('ó', 'o').Replace('ú', 'u');
 }

@@ -21,6 +21,16 @@ for you, not how it was built. The format follows
   wrote" is not read as chapter 1. Where a word could be either, the language's own
   number words win: French "dix" is ten, not 509.
 
+- **Spanish, Portuguese and Danish now understand compound spelled-out
+  ordinals.** "Capítulo vigésimo primero", "capítulo vigésimo primeiro" and
+  "Enogtyvende kapitel" are read as chapter 21; previously these three
+  languages recognized only the short list of simple ordinals (1st–10th, and
+  1st–20th for Danish) and a chapter announced this way went unnoticed. Both
+  genders, the fused Spanish spelling ("decimoctavo"), the European and
+  Brazilian Portuguese variants, and both the formal and everyday Danish tens
+  ("halvtredsindstyvende" and "halvtredsende") are accepted. Spanish and
+  Portuguese now cover 1st–199th, Danish 1st–100th.
+
 - **An announcement whose number cannot be read no longer passes in silence.**
   When the chapter phrase is heard but no number can be made of what follows it,
   `--verbose` now says so and quotes what was actually transcribed there — and

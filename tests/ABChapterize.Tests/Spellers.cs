@@ -595,4 +595,117 @@ public static class Spellers
         var cut = s.LastIndexOf(' ') + 1;
         return s[..cut] + irregular[s[cut..]];
     }
+
+    /// <summary>
+    /// Spells 1-199 as a Spanish ordinal. Spanish ordinals share nothing with the cardinals,
+    /// so this is a table rather than a transformation of <see cref="Spanish"/>.
+    /// </summary>
+    /// <param name="n">Number to spell, 1-199.</param>
+    /// <param name="feminine">Spell the feminine forms ("vigésima primera").</param>
+    /// <param name="fuse">Write the tens and unit as one word ("vigesimoprimero"), which
+    /// Spanish does for the twenties and, less commonly, above them.</param>
+    public static string SpanishOrdinal(int n, bool feminine = false, bool fuse = false)
+    {
+        string[] units =
+        [
+            "", "primer", "segund", "tercer", "cuart", "quint",
+            "sext", "séptim", "octav", "noven",
+        ];
+        string[] scales =
+        [
+            "", "décim", "vigésim", "trigésim", "cuadragésim", "quincuagésim",
+            "sexagésim", "septuagésim", "octogésim", "nonagésim", "centésim",
+        ];
+        var vowel = feminine ? "a" : "o";
+
+        var hundreds = n / 100;
+        var rest = n % 100;
+        var head = hundreds == 1 ? scales[10] + vowel : "";
+
+        var tens = scales[rest / 10] is var t && t.Length > 0 ? t + vowel : "";
+        var unit = units[rest % 10] is var u && u.Length > 0 ? u + vowel : "";
+
+        // The apocopated "primer"/"tercer" only exist bare; in every other form the stem
+        // takes its vowel, so "primer" + "o" is exactly right.
+        var tail = tens.Length > 0 && unit.Length > 0
+            ? fuse ? Fuse(scales[rest / 10], unit) : tens + " " + unit
+            : tens + unit;
+        return head.Length > 0 && tail.Length > 0 ? head + " " + tail : head + tail;
+
+        // Fusing drops the scale's accent, keeps its vowel masculine whatever the unit's
+        // gender is ("decimoctava"), and elides that vowel against a matching one:
+        // "décimo" + "octavo" -> "decimoctavo".
+        static string Fuse(string scale, string unit)
+        {
+            var stem = scale.Replace("é", "e") + "o";
+            return unit[0] == 'o' ? stem[..^1] + unit : stem + unit;
+        }
+    }
+
+    /// <summary>
+    /// Spells 1-199 as a Portuguese ordinal ("vigésimo primeiro", "centésimo décimo").
+    /// Portuguese never fuses the tens and the unit, so there is no variant to pick.
+    /// </summary>
+    /// <param name="n">Number to spell, 1-199.</param>
+    /// <param name="feminine">Spell the feminine forms ("vigésima primeira").</param>
+    public static string PortugueseOrdinal(int n, bool feminine = false)
+    {
+        string[] units =
+        [
+            "", "primeir", "segund", "terceir", "quart", "quint",
+            "sext", "sétim", "oitav", "non",
+        ];
+        string[] scales =
+        [
+            "", "décim", "vigésim", "trigésim", "quadragésim", "quinquagésim",
+            "sexagésim", "septuagésim", "octogésim", "nonagésim", "centésim",
+        ];
+        var vowel = feminine ? "a" : "o";
+
+        var parts = new List<string>();
+        if (n / 100 == 1)
+            parts.Add(scales[10] + vowel);
+        if (n % 100 / 10 > 0)
+            parts.Add(scales[n % 100 / 10] + vowel);
+        if (n % 10 > 0)
+            parts.Add(units[n % 10] + vowel);
+        return string.Join(' ', parts);
+    }
+
+    /// <summary>
+    /// Spells 1-100 as a Danish ordinal ("enogtyvende", "halvtredsindstyvende"). Below 20 the
+    /// forms are their own words; from 21 up a compound puts the cardinal unit in front of the
+    /// ordinal ten, as one word.
+    /// </summary>
+    /// <param name="n">Number to spell, 1-100.</param>
+    /// <param name="colloquialTens">Use the short everyday ordinal tens ("halvtredsende")
+    /// instead of the formal "-indstyvende" ones.</param>
+    public static string DanishOrdinal(int n, bool colloquialTens = false)
+    {
+        string[] below20 =
+        [
+            "", "første", "anden", "tredje", "fjerde", "femte", "sjette", "syvende",
+            "ottende", "niende", "tiende", "ellevte", "tolvte", "trettende", "fjortende",
+            "femtende", "sekstende", "syttende", "attende", "nittende",
+        ];
+        string[] formalTens =
+        [
+            "", "", "tyvende", "tredivte", "fyrretyvende", "halvtredsindstyvende",
+            "tresindstyvende", "halvfjerdsindstyvende", "firsindstyvende",
+            "halvfemsindstyvende",
+        ];
+        string[] shortTens =
+        [
+            "", "", "tyvende", "tredivte", "fyrrende", "halvtredsende",
+            "tressende", "halvfjerdsende", "firsende", "halvfemsende",
+        ];
+        string[] units = ["", "en", "to", "tre", "fire", "fem", "seks", "syv", "otte", "ni"];
+
+        if (n == 100)
+            return "hundrede";
+        if (n < 20)
+            return below20[n];
+        var tens = (colloquialTens ? shortTens : formalTens)[n / 10];
+        return n % 10 == 0 ? tens : units[n % 10] + "og" + tens;
+    }
 }

@@ -223,6 +223,13 @@ This is the part that takes an evening. Your job: turn the words Whisper wrote
 from 0 to 999, as **cardinals** ("chapter twenty-one") and as **ordinals**
 ("the twenty-first chapter") — audiobooks use both.
 
+Ordinals are allowed to stop short of 999 if your language spells them as
+words of their own rather than deriving them from the cardinals. Spanish
+("vigésimo" has nothing to do with "veinte") stops at 199 and Danish at 100
+for exactly that reason: the words above are ones no narrator would say. Go as
+far as the language stays regular, say where you stopped in the class doc
+comment, and let the digit ordinals cover the rest.
+
 Create `src\Language\Parsers\CzechNumberParser.cs` implementing
 `INumberWordParser`. Read `INumberWordParser.cs` first; it is short and states
 the contract precisely. Then pick the existing parser whose language works
