@@ -136,29 +136,65 @@ public class ProgressRendererTests
     }
 
     [Fact]
-    public void BuildSpans_LeaveTheBarFillUncolored_AndItsBracketsDarkGray()
+    public void BuildSpans_DrawTheBarWhite_BetweenDarkGrayBrackets()
     {
-        // The bar is read by its shape, not its content, so it keeps the terminal's own foreground
-        // color while the brackets around it recede into the structural dark grey.
         var spans = ProgressRenderer.BuildSpans(Slot(50, 100));
 
         Assert.Equal("[", spans[0].Text);
         Assert.Equal(ConsoleColor.DarkGray, spans[0].Color);
         Assert.Equal(24, spans[1].Text.Length);
-        Assert.Null(spans[1].Color);
+        Assert.Equal(ConsoleColor.White, spans[1].Color);
         Assert.Equal("]", spans[2].Text);
         Assert.Equal(ConsoleColor.DarkGray, spans[2].Color);
     }
 
     [Fact]
-    public void BuildSpans_DrawSeparatorsDarkGray_AndEachSectionInItsOwnColor()
+    public void BuildSpans_SeparateEverySectionWithADarkGrayPipe()
     {
         var spans = ProgressRenderer.BuildSpans(Slot(50, 100, highestChapter: 6));
 
         Assert.All(spans.Where(s => s.Text == " | "), s => Assert.Equal(ConsoleColor.DarkGray, s.Color));
-        var sections = spans.Where(s => s.Text is not (" | " or "[" or "]") && s.Color != null).ToList();
-        Assert.Equal([" Pass 1", "  50%", "ch 6", "0:00", "book.m4b"], sections.Select(s => s.Text));
-        Assert.Equal(sections.Count, sections.Select(s => s.Color).Distinct().Count());
+        // The percentage leads, the phase follows it behind a pipe of its own, and the file name
+        // closes the line.
+        Assert.Equal(
+            "[############------------]  50% | Pass 1 | ch 6 | 0:00 | book.m4b",
+            ConsoleColors.PlainText(spans));
+    }
+
+    [Fact]
+    public void BuildSpans_ColorThePercentageAndTheTimerAlike()
+    {
+        var spans = ProgressRenderer.BuildSpans(Slot(50, 100));
+        var percent = spans.Single(s => s.Text == "  50%");
+        var timer = spans.Single(s => s.Text == "0:00");
+
+        Assert.Equal(ConsoleColor.Cyan, percent.Color);
+        Assert.Equal(percent.Color, timer.Color);
+    }
+
+    [Fact]
+    public void BuildSpans_MuteTheChapterSectionWhileItIsStillAPlaceholder()
+    {
+        // Nothing to read there yet, so "----" sits at the separators' dark grey rather than
+        // claiming the chapter color for a count that does not exist.
+        var placeholder = ProgressRenderer.BuildSpans(Slot(50, 100)).Single(s => s.Text == "----");
+        Assert.Equal(ConsoleColor.DarkGray, placeholder.Color);
+
+        var found = ProgressRenderer.BuildSpans(Slot(50, 100, highestChapter: 6)).Single(s => s.Text == "ch 6");
+        Assert.Equal(ConsoleColor.DarkGreen, found.Color);
+    }
+
+    [Fact]
+    public void BuildSpans_SplitTheMissingCountOffFromItsBrackets()
+    {
+        // The brackets are structure and stay grey; the negative number is the one thing on the
+        // line reporting something outstanding, so it alone goes dark red.
+        var spans = ProgressRenderer.BuildSpans(Slot(50, 100, highestChapter: 6, missingChapters: 2));
+        var tail = spans.SkipWhile(s => s.Text != "ch 6").Take(4).ToList();
+
+        Assert.Equal([("ch 6", ConsoleColor.DarkGreen), ("(", ConsoleColor.DarkGray),
+                      ("-2", ConsoleColor.DarkRed), (")", ConsoleColor.DarkGray)],
+            tail.Select(s => (s.Text, s.Color)));
     }
 
     [Fact]

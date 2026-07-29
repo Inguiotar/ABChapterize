@@ -9,10 +9,11 @@ for you, not how it was built. The format follows
 
 ### Added
 
-- **The progress bar is now in color** where the terminal supports it: dark grey
-  separators and brackets, one muted color each for the phase, the percentage,
-  the chapter count, the timer and the file name, and the bar fill itself left in
-  the terminal's own foreground color. Nothing else is ever colored, so a
+- **The progress bar is now in color** where the terminal supports it: the bar
+  fill and the file name in white, separators and brackets in dark grey, the
+  percentage and the timer in cyan, the phase in a darker cyan, and the chapter
+  count in dark green — grey while it is still `----`, and with the bracketed
+  count of missing chapters in dark red. Nothing else is ever colored, so a
   `--log-file` or a piped run looks exactly as it did before. **`--color`** takes
   `auto` (the default), `always` or `never`; `auto` stays quiet when the output
   is redirected, when `NO_COLOR` is set, and on Unix unless `TERM` names a
@@ -122,6 +123,9 @@ for you, not how it was built. The format follows
 
 ### Changed
 
+- **The progress bar leads with the percentage**, with the phase moved behind it
+  into a separated section of its own — `[####----]  42% | Pass 2 | ch 6 | …`
+  rather than `[####----] Pass 2  42% | ch 6 | …`.
 - **Marks now sit 0.35 seconds before the announcement instead of 0.25.** Since
   marks became accurate to a tenth of a second, the old lead-in turned out to be
   cutting it too fine: a chapter would occasionally start so close to the first

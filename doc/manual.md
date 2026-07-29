@@ -1629,12 +1629,14 @@ Combine with `--summary` for a batch run that prints totals at the end.
 timestamped log format instead of drawing bars — the right choice for CI
 logs.
 
-The bar is drawn in color where the terminal supports it: the separators and
-the brackets around the bar in dark grey, the bar fill in the terminal's own
-foreground color, and one muted color each for the phase, the percentage, the
-chapter count, the timer and the file name. **`--color never`** turns that off,
-**`--color always`** forces it on where it was not detected. Nothing outside
-the bar is ever colored.
+The bar is drawn in color where the terminal supports it: the bar fill and the
+file name in white, the separators and brackets in dark grey, the percentage
+and the timer in cyan, the phase in a darker cyan, and the chapter count in
+dark green — grey while it is still `----`, and with the bracketed count of
+missing chapters in dark red, since that is the one part of the line reporting
+something outstanding. **`--color never`** turns all of it off, **`--color
+always`** forces it on where it was not detected. Nothing outside the bar is
+ever colored.
 
 **`--verbose`** additionally logs, with a `[HH:mm:ss]` timestamp and the file
 name, everything the pipeline does:

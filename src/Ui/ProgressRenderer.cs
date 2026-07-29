@@ -93,28 +93,38 @@ public sealed class ProgressRenderer : IDisposable
 {
     /// <summary>
     /// The progress bar's colors. Kept restrained on purpose: the bar is on screen for hours at a
-    /// stretch, so structure (brackets, separators) recedes into dark grey, the bar fill itself
-    /// stays in the terminal's own foreground color, and the four informational sections get one
-    /// muted color each purely so the eye can jump straight to the one it wants.
+    /// stretch, so structure (brackets, separators) recedes into dark grey and the informational
+    /// sections get one muted color each, purely so the eye can jump straight to the one it wants.
+    /// Only two things are allowed to stand out - the bar fill and the file name - and only one is
+    /// warm, the count of chapters still missing.
     /// </summary>
     private static class Palette
     {
         /// <summary>Brackets and the "|" separators - shape, not information.</summary>
         public const ConsoleColor Structure = ConsoleColor.DarkGray;
 
+        /// <summary>The bar fill, sharing the file name's white: together they are the line's
+        /// two "what and how far" anchors, and everything else is detail hung off them.</summary>
+        public const ConsoleColor Bar = ConsoleColor.White;
+
         /// <summary>The phase label ("Pass 2"), and "Muxing..." standing in for the chapter count.</summary>
         public const ConsoleColor Phase = ConsoleColor.DarkCyan;
 
-        /// <summary>The percentage, one shade up from the phase it belongs to.</summary>
-        public const ConsoleColor Percent = ConsoleColor.Cyan;
+        /// <summary>The two numbers that only ever count upward, percentage and timer.</summary>
+        public const ConsoleColor Progress = ConsoleColor.Cyan;
 
         /// <summary>The chapter/mark count - the run's actual yield.</summary>
-        public const ConsoleColor Chapters = ConsoleColor.DarkYellow;
+        public const ConsoleColor Chapters = ConsoleColor.DarkGreen;
 
-        /// <summary>The per-file elapsed timer.</summary>
-        public const ConsoleColor Timer = ConsoleColor.DarkGreen;
+        /// <summary>The chapter placeholder before anything has been found, deliberately as
+        /// muted as the separators: there is nothing to read there yet.</summary>
+        public const ConsoleColor NoChapters = ConsoleColor.DarkGray;
 
-        /// <summary>The file name, brightest because it is what identifies the line.</summary>
+        /// <summary>The count of chapters still missing below the highest one found - the only
+        /// part of the line reporting something outstanding, so the only warm color in it.</summary>
+        public const ConsoleColor Missing = ConsoleColor.DarkRed;
+
+        /// <summary>The file name, sharing <see cref="Bar"/>'s white.</summary>
         public const ConsoleColor Label = ConsoleColor.White;
     }
 
@@ -302,10 +312,8 @@ public sealed class ProgressRenderer : IDisposable
         => ConsoleColors.PlainText(BuildSpans(slot));
 
     /// <summary>
-    /// Builds one progress bar line as its colored sections. The bar fill itself deliberately gets
-    /// no color of its own: it is the one part of the line read by its shape rather than its
-    /// content, and a colored block that long would dominate everything beside it. Internal for
-    /// unit testing, which guards that split between colored and uncolored sections.
+    /// Builds one progress bar line as its colored sections. Internal for unit testing, which
+    /// guards which section gets which color.
     /// </summary>
     /// <param name="slot">The tracker and label of the file to draw a line for.</param>
     internal static List<ColoredSpan> BuildSpans((WorkTracker Tracker, string Label) slot)
@@ -323,38 +331,60 @@ public sealed class ProgressRenderer : IDisposable
         // separate phase label after the bar since that would just repeat the same word.
         var muxing = slot.Tracker.PhaseLabel == "Muxing";
 
-        var spans = new List<ColoredSpan>(11)
+        var spans = new List<ColoredSpan>(13)
         {
             new("[", Palette.Structure),
-            new(bar, null),
+            new(bar, Palette.Bar),
             new("]", Palette.Structure),
+            new($" {percent,3}%", Palette.Progress),
         };
         if (!muxing && slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
-            spans.Add(new($" {phaseLabel}", Palette.Phase));
-        spans.Add(new($" {percent,3}%", Palette.Percent));
+        {
+            spans.Add(Separator);
+            spans.Add(new(phaseLabel, Palette.Phase));
+        }
         spans.Add(Separator);
-        spans.Add(muxing
-            ? new("Muxing...", Palette.Phase)
-            : new(FormatChapters(slot.Tracker), Palette.Chapters));
+        if (muxing)
+            spans.Add(new("Muxing...", Palette.Phase));
+        else
+            AddChapterSpans(spans, slot.Tracker);
         spans.Add(Separator);
-        spans.Add(new(timer, Palette.Timer));
+        spans.Add(new(timer, Palette.Progress));
         spans.Add(Separator);
         spans.Add(new(slot.Label, Palette.Label));
         return spans;
     }
 
     /// <summary>
-    /// Formats the bar's chapter section: "----" until the first chapter is found (nothing can
+    /// Appends the bar's chapter section: "----" until the first chapter is found (nothing can
     /// change during Pass 1 anyway); then the highest detected chapter number, with the count of
     /// still-missing earlier chapters - the ones Pass 3 would have to chase - as e.g. "ch 6(-2)".
+    /// The missing count is split off into its own span so the number alone carries the warning
+    /// color while its brackets stay structural.
     /// </summary>
+    /// <param name="spans">The line being built, appended to in place.</param>
     /// <param name="tracker">The file's work tracker.</param>
-    private static string FormatChapters(WorkTracker tracker)
-        => tracker.HighestChapter is var highest and > 0
-            ? $"ch {highest}" + (tracker.MissingChapters is var missing and > 0 ? $"(-{missing})" : "")
-            : tracker.NamedMarks is var named and > 0
-                ? $"mk {named}"
-                : "----";
+    private static void AddChapterSpans(List<ColoredSpan> spans, WorkTracker tracker)
+    {
+        if (tracker.HighestChapter is var highest and > 0)
+        {
+            spans.Add(new($"ch {highest}", Palette.Chapters));
+            if (tracker.MissingChapters is var missing and > 0)
+            {
+                spans.Add(new("(", Palette.Structure));
+                spans.Add(new($"-{missing}", Palette.Missing));
+                spans.Add(new(")", Palette.Structure));
+            }
+        }
+        else if (tracker.NamedMarks is var named and > 0)
+        {
+            spans.Add(new($"mk {named}", Palette.Chapters));
+        }
+        else
+        {
+            spans.Add(new("----", Palette.NoChapters));
+        }
+    }
 
     /// <summary>
     /// Writes one bar line, honoring <see cref="_color"/>. A console that refuses a color change
