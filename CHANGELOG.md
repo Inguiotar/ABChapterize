@@ -9,6 +9,18 @@ for you, not how it was built. The format follows
 
 ### Added
 
+- **Chapter numbers announced as Roman numerals are now recognized**, in every
+  language, alongside digits and spelled-out words. This is not about books that
+  print their chapters that way — it is about Whisper, which transcribes a spoken
+  "chapter thirteen" as `CHAPTER XIII` whenever it settles on a book-heading style,
+  and may do that for some chapters of a book and not others. Until now those
+  chapters were heard and then silently discarded for want of a readable number,
+  which typically showed up as one stubborn chapter missing from an otherwise clean
+  run. Only the standard spelling counts (`IIII` is not 4), and a one-letter numeral
+  needs the period a heading gives it (`Chapter V.`), so an English "chapter I
+  wrote" is not read as chapter 1. Where a word could be either, the language's own
+  number words win: French "dix" is ten, not 509.
+
 - **The progress bar and the `--summary` block are now in color** where the
   terminal supports it. In the bar: the fill and the file name in white,
   separators and brackets in dark grey, the percentage and the timer in cyan, the

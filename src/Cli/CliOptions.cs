@@ -1375,7 +1375,8 @@ public sealed class CliOptions
                                     after the phrase ("chapter two", "Erstes Kapitel") - are
                                     understood in
                                     {string.Join(", ", LanguageRegistry.SupportedCodes)}; digits
-                                    ("2.", "2nd", "2e") work in every language. For these
+                                    ("2.", "2nd", "2e") and Roman numerals ("XIII") work in every
+                                    language. For these
                                     languages, --lang also localizes the defaults of
                                     --chapter-phrase, --prologue-phrase, --epilogue-phrase,
                                     --title, --intro-title, --prologue-title and

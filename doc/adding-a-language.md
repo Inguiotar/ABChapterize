@@ -34,7 +34,8 @@ from you:
    maybe fifteen minutes of work.
 2. **Numbers.** How is "seventeen" spelled out in your language? This is the
    larger job, and it is optional in the sense that the tool still works
-   without it — announcements with *digits* ("Kapitel 17") are understood in
+   without it — announcements with *digits* ("Kapitel 17") and *Roman
+   numerals* ("Kapitel XVII") are understood in
    every language, always. Only spelled-out numbers need a parser.
 
 You can ship step 1 alone and add step 2 later. A pull request with just the
@@ -178,11 +179,17 @@ phrase with a capital letter.
 ### `NumberParser`
 
 Point it at your parser from step 3. If you are not writing one yet, use
-English for the moment — digits still work, spelled-out numbers just will not:
+English for the moment — digits and Roman numerals still work, spelled-out
+numbers just will not:
 
 ```csharp
 public INumberWordParser NumberParser { get; } = new EnglishNumberParser();
 ```
+
+One thing you do *not* have to worry about: your language's number words are
+tried before the Roman-numeral reading, so a word that happens to be spelled
+like one is safe. French "dix" is ten, even though `DIX` is also a perfectly
+good Roman 509.
 
 (Do please come back and replace it. Many audiobooks spell their numbers out.)
 

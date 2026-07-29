@@ -207,7 +207,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 
 | Option | What it does |
 | --- | --- |
-| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
+| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) and Roman numerals (`XIII`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `/chapter/`, localized by `--lang`). |
 | `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `/prolog/`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
 | `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
@@ -311,7 +311,8 @@ use `.`, whatever the machine's locale says.
 2. **Pass 2 — probing:** a short stretch of audio after each silence (and
    after each silence-less jingle VAD found) is
    transcribed with Whisper and matched against the chapter phrase. The chapter
-   number is parsed from digits or from numbers written out as words (0-999,
+   number is parsed from digits, Roman numerals, or numbers written out as
+   words (0-999,
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
    Seven") or precedes
    it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). Window borders are

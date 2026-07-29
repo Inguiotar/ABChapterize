@@ -124,7 +124,7 @@ seconds (up to 50 seconds, with the 45 s ceiling, before it self-tightens —
 see below), or a fixed 12 seconds when
 `--max-jingle-length 0` says no jingle is expected. Each transcript is matched
 against the chapter phrase (see `--chapter-phrase`), and the chapter number is
-parsed from digits or number words
+parsed from digits, Roman numerals or number words
 (see [section 7](#7-languages-and-number-recognition)).
 
 Where a chapter announcement is found, the mark is placed a fixed lead-in
@@ -1199,10 +1199,19 @@ By default (`--lang auto`), the language used below is detected per file -
 see [Auto language detection](#auto-language-detection). An explicit
 `--lang <code>` pins the whole run to one language instead.
 
-The chapter number in an announcement is recognized in two ways:
+The chapter number in an announcement is recognized in three ways:
 
 - **Digits** work in *every* language: "Chapter 12", "Kapitel 12.",
   "2nd", "2e", …
+- **Roman numerals** work in every language too: "Chapter XIII", "XVII.
+  Kapitel". Whisper writes an announcement this way whenever it settles on a
+  book-heading style for it ("CHAPTER XIII. THE SHAKING OF THE SHEETS"), which
+  it may do for some chapters of a book and not others, so nothing about the
+  book itself tells you in advance whether this form will turn up. Only
+  the standard spelling of a number counts — "IIII" and "IC" are not read as 4
+  and 99 — and a *one-letter* numeral (I, V, X, L, C, D, M) is read as a number
+  only when a period follows it, as a heading gives it: without that guard,
+  every English "chapter I wrote" would become a chapter 1.
 - **Numbers transcribed as words** — Whisper often writes numbers out
   ("Chapter twenty-one") — are parsed for these languages:
 
@@ -1231,6 +1240,9 @@ Danish, which only recognize a common, non-compound set of word ordinals
 ordinals beyond that are rare in chapter announcements and, for Danish,
 irregular enough (halvtredsindstyvende for 50th) to not be worth the risk —
 digit ordinals ("21.", "50.") always work regardless of language.
+
+Where two of the three readings would fit the same word, the language's own
+number words win over the Roman reading: French "dix" is ten, not 509.
 
 For these languages, `--lang` also localizes the defaults of
 `--chapter-phrase`, `--title` and `--intro-title`:
