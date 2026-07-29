@@ -70,7 +70,7 @@ public static class Program
             // summary line still reaches the file. A log file that cannot be opened is fatal
             // rather than ignored, and lands in the AppError handler below.
             using var logFile = options.LogFilePath != null ? LogFile.Open(options.LogFilePath) : null;
-            using var progress = new ProgressRenderer(options.Quiet, options.Verbose, options.NoBar, logFile);
+            using var progress = new ProgressRenderer(options.Quiet, options.Verbose, options.NoBar, logFile, options.Color);
             var processor = new FileProcessor(options, progress);
             await processor.RunAsync(cts.Token);
             return 0;

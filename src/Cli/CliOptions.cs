@@ -11,6 +11,7 @@ using ABChapterize.Concurrency;
 using ABChapterize.Detection;
 using ABChapterize.Language;
 using ABChapterize.Transcription;
+using ABChapterize.Ui;
 
 namespace ABChapterize.Cli;
 
@@ -421,6 +422,13 @@ public sealed class CliOptions
     public bool NoBar { get; private set; }
 
     /// <summary>
+    /// Whether the progress bar is colorized (--color). Nothing else is: log lines, per-file
+    /// summaries and the banner stay plain, so the output that can end up in a log file or a pipe
+    /// never carries color at all.
+    /// </summary>
+    public ColorMode Color { get; private set; } = ColorMode.Auto;
+
+    /// <summary>
     /// Path of the file the log stream is written to (--log-file / -o), or null for no log file.
     /// Asking for one turns logging on by itself - there would be nothing to write otherwise - and
     /// sends the whole stream to the file rather than the console, so the console keeps its
@@ -593,7 +601,7 @@ public sealed class CliOptions
     /// phrase, the models, the detection tuning and safety nets, the file selection, the output
     /// mode. The list below is an allowlist, so an option is exempt by not being named in it:
     /// everything that only changes what the run <i>looks like</i> (--quiet, --verbose,
-    /// --verbose-transcripts, --log-file, --no-bar, --summary) or how fast it gets there
+    /// --verbose-transcripts, --log-file, --no-bar, --color, --summary) or how fast it gets there
     /// (--jobs, --cpu-only, --use-gpu) stays out, so adding or dropping one of those on an
     /// interrupted run's command line still resumes it.
     /// <para>
@@ -960,6 +968,7 @@ public sealed class CliOptions
             case "--mark-lead": MarkLeadSeconds = ParseMarkLead(nextParam()); _markLeadSet = true; return true;
             case "--jobs": Jobs = ParseJobs(nextParam()); return true;
             case "--log-file": LogFilePath = ParseLogFilePath(nextParam()); return true;
+            case "--color": Color = ParseColorMode(nextParam()); return true;
             default: return false;
         }
     }
@@ -1034,6 +1043,16 @@ public sealed class CliOptions
             throw new CliError($"Invalid --min-silence-length value \"{value}\": expected seconds between 0.1 and 60, or \"auto\".");
         return (s, false);
     }
+
+    /// <summary>Parses the --color parameter into a <see cref="ColorMode"/>.</summary>
+    /// <param name="value">The raw parameter.</param>
+    private static ColorMode ParseColorMode(string value) => value.ToLowerInvariant() switch
+    {
+        "auto" => ColorMode.Auto,
+        "always" => ColorMode.Always,
+        "never" => ColorMode.Never,
+        _ => throw new CliError($"Invalid --color value \"{value}\": expected \"auto\", \"always\" or \"never\"."),
+    };
 
     /// <summary>Parses the --jobs parameter into a positive job count, or "auto".</summary>
     private static int? ParseJobs(string value)
@@ -1645,6 +1664,14 @@ public sealed class CliOptions
                                     existing file is appended to, never overwritten.
           -B, --no-bar              Do not display progress bars; per-file summary lines are
                                     printed in the same timestamped format as --verbose logs.
+              --color <mode>        Colorize the progress bar (and only that - log lines and
+                                    summaries always stay plain): "auto" (default), "always" or
+                                    "never". "auto" switches color off when the output is
+                                    redirected, when NO_COLOR is set, and on Unix unless TERM
+                                    names a 16-color terminal such as "xterm-256color". Use
+                                    "always" for a terminal it misjudges, such as Git Bash on
+                                    Windows, a CI log, or a modern terminal still calling
+                                    itself plain "xterm".
           -s, --summary             Print a summary at the end: file counts, total and average
                                     processing time.
 

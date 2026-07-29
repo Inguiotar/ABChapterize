@@ -272,6 +272,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
 | `-o`, `--log-file <path>` | Write the log to a file instead of the console — switches logging on by itself (add `-T` for the transcripts). The console keeps its progress bar and result lines, which the file gets too. Appends to an existing file. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
+| `--color <mode>` | Colorize the progress bar: `auto` (default), `always` or `never`. Nothing else is ever colored. |
 | `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics. |
 
 **Performance**

@@ -9,6 +9,17 @@ for you, not how it was built. The format follows
 
 ### Added
 
+- **The progress bar is now in color** where the terminal supports it: dark grey
+  separators and brackets, one muted color each for the phase, the percentage,
+  the chapter count, the timer and the file name, and the bar fill itself left in
+  the terminal's own foreground color. Nothing else is ever colored, so a
+  `--log-file` or a piped run looks exactly as it did before. **`--color`** takes
+  `auto` (the default), `always` or `never`; `auto` stays quiet when the output
+  is redirected, when `NO_COLOR` is set, and on Unix unless `TERM` names a
+  16-color terminal. `--color always` overrides it for the
+  terminals it misjudges — Git Bash on Windows, CI logs, and anything modern
+  still calling itself plain `xterm`.
+
 - **Pick the GPU by name.** `--use-gpu gtx` runs Whisper on the GPU whose name
   contains "gtx", matched case-insensitively against any part of it, and
   `--list-gpus` prints the names your machine reports:

@@ -91,7 +91,38 @@ public sealed class WorkTracker
 /// </summary>
 public sealed class ProgressRenderer : IDisposable
 {
+    /// <summary>
+    /// The progress bar's colors. Kept restrained on purpose: the bar is on screen for hours at a
+    /// stretch, so structure (brackets, separators) recedes into dark grey, the bar fill itself
+    /// stays in the terminal's own foreground color, and the four informational sections get one
+    /// muted color each purely so the eye can jump straight to the one it wants.
+    /// </summary>
+    private static class Palette
+    {
+        /// <summary>Brackets and the "|" separators - shape, not information.</summary>
+        public const ConsoleColor Structure = ConsoleColor.DarkGray;
+
+        /// <summary>The phase label ("Pass 2"), and "Muxing..." standing in for the chapter count.</summary>
+        public const ConsoleColor Phase = ConsoleColor.DarkCyan;
+
+        /// <summary>The percentage, one shade up from the phase it belongs to.</summary>
+        public const ConsoleColor Percent = ConsoleColor.Cyan;
+
+        /// <summary>The chapter/mark count - the run's actual yield.</summary>
+        public const ConsoleColor Chapters = ConsoleColor.DarkYellow;
+
+        /// <summary>The per-file elapsed timer.</summary>
+        public const ConsoleColor Timer = ConsoleColor.DarkGreen;
+
+        /// <summary>The file name, brightest because it is what identifies the line.</summary>
+        public const ConsoleColor Label = ConsoleColor.White;
+    }
+
+    /// <summary>The " | " between two sections of a bar line.</summary>
+    private static readonly ColoredSpan Separator = new(" | ", Palette.Structure);
+
     private readonly bool _interactive;
+    private bool _color;
     private readonly bool _quiet;
     private readonly bool _logToConsole;
     private readonly LogFile? _logFile;
@@ -112,7 +143,11 @@ public sealed class ProgressRenderer : IDisposable
     /// <param name="logFile">Opened <c>--log-file</c> destination, or null. It takes the log stream
     /// over entirely: with a log file the console shows its bar and summaries and nothing else,
     /// which is the point of asking for one.</param>
-    public ProgressRenderer(bool quiet, bool verbose = false, bool noBar = false, LogFile? logFile = null)
+    /// <param name="color">Whether the progress bar is colorized (--color). Only the bar is
+    /// affected: log lines, per-file summaries and the run banner stay plain, so anything that may
+    /// end up in a log file or a pipe never carries color in the first place.</param>
+    public ProgressRenderer(bool quiet, bool verbose = false, bool noBar = false, LogFile? logFile = null,
+        ColorMode color = ColorMode.Auto)
     {
         _quiet = quiet;
         _logFile = logFile;
@@ -122,6 +157,7 @@ public sealed class ProgressRenderer : IDisposable
         // switch formats: without a bar to replace, a summary is just another line of log.
         _logStyle = _logToConsole || noBar;
         _interactive = !quiet && !noBar && !Console.IsOutputRedirected;
+        _color = _interactive && ConsoleColors.ShouldColorize(color);
         if (_interactive)
         {
             // Hide the cursor for the whole interactive run: the block is erased and redrawn
@@ -224,36 +260,55 @@ public sealed class ProgressRenderer : IDisposable
             var maxRows = Math.Max(1, SafeWindowHeight() - 1);
             var rows = Math.Min(_slots.Count, maxRows);
             var width = SafeWindowWidth() - 1;
-            var lines = new List<string>(rows);
+            var lines = new List<List<ColoredSpan>>(rows);
+            var texts = new List<string>(rows);
             for (var i = 0; i < rows; i++)
             {
-                var line = BuildLine(_slots[i]);
+                var spans = BuildSpans(_slots[i]);
+                var line = ConsoleColors.PlainText(spans);
                 if (width > 10 && line.Length > width)
+                {
+                    spans = ConsoleColors.Truncate(spans, width);
                     line = line[..width];
-                lines.Add(line);
+                }
+                lines.Add(spans);
+                texts.Add(line);
             }
 
-            // Nothing to do when the identical block is already drawn. When the block was erased
-            // by an interleaved log/summary line, _blockLineCount is 0, so this never wrongly
-            // skips the redraw needed to put the bar back.
-            if (_blockLineCount > 0 && lines.SequenceEqual(_lastLines))
+            // Nothing to do when the identical block is already drawn. The comparison runs on the
+            // plain text, which is the whole reason colors are applied at write time: it stays a
+            // comparison of what the user actually sees. When the block was erased by an
+            // interleaved log/summary line, _blockLineCount is 0, so this never wrongly skips the
+            // redraw needed to put the bar back.
+            if (_blockLineCount > 0 && texts.SequenceEqual(_lastLines))
                 return;
 
             ClearBlock();
-            foreach (var line in lines)
-                Console.WriteLine(line);
+            foreach (var spans in lines)
+                WriteBarLine(spans);
             _blockLineCount = rows;
-            _lastLines = lines;
+            _lastLines = texts;
         }
     }
 
     /// <summary>
-    /// Builds one progress bar line for a single active file. Internal for unit testing: the
-    /// per-tick redraw is skipped only when this exact string is unchanged (see <see
-    /// cref="Render"/>), so the tests assert that the percent number and chapter display both take
-    /// part in the string and therefore always trigger a redraw when they change.
+    /// Builds one progress bar line for a single active file as the plain text it renders as.
+    /// Internal for unit testing: the per-tick redraw is skipped only when this exact string is
+    /// unchanged (see <see cref="Render"/>), so the tests assert that the percent number and
+    /// chapter display both take part in the string and therefore always trigger a redraw when
+    /// they change.
     /// </summary>
     internal static string BuildLine((WorkTracker Tracker, string Label) slot)
+        => ConsoleColors.PlainText(BuildSpans(slot));
+
+    /// <summary>
+    /// Builds one progress bar line as its colored sections. The bar fill itself deliberately gets
+    /// no color of its own: it is the one part of the line read by its shape rather than its
+    /// content, and a colored block that long would dominate everything beside it. Internal for
+    /// unit testing, which guards that split between colored and uncolored sections.
+    /// </summary>
+    /// <param name="slot">The tracker and label of the file to draw a line for.</param>
+    internal static List<ColoredSpan> BuildSpans((WorkTracker Tracker, string Label) slot)
     {
         var fraction = slot.Tracker.Fraction;
         var percent = (int)Math.Floor(fraction * 100);
@@ -266,19 +321,76 @@ public sealed class ProgressRenderer : IDisposable
         // Muxing has no chapter count of its own to show (the chapters were already decided
         // by the time it runs) - it gets a plain "Muxing..." in the slot instead, with no
         // separate phase label after the bar since that would just repeat the same word.
-        if (slot.Tracker.PhaseLabel == "Muxing")
-            return $"[{bar}] {percent,3}% | Muxing... | {timer} | {slot.Label}";
+        var muxing = slot.Tracker.PhaseLabel == "Muxing";
 
-        var phase = slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel ? $" {phaseLabel}" : "";
-        // "----" until the first chapter is found (nothing can change during Pass 1 anyway);
-        // then the highest detected chapter number, with the count of still-missing earlier
-        // chapters - the ones Pass 3 would have to chase - as e.g. "ch 6(-2)".
-        var chapters = slot.Tracker.HighestChapter is var highest and > 0
-            ? $"ch {highest}" + (slot.Tracker.MissingChapters is var missing and > 0 ? $"(-{missing})" : "")
-            : slot.Tracker.NamedMarks is var named and > 0
+        var spans = new List<ColoredSpan>(11)
+        {
+            new("[", Palette.Structure),
+            new(bar, null),
+            new("]", Palette.Structure),
+        };
+        if (!muxing && slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
+            spans.Add(new($" {phaseLabel}", Palette.Phase));
+        spans.Add(new($" {percent,3}%", Palette.Percent));
+        spans.Add(Separator);
+        spans.Add(muxing
+            ? new("Muxing...", Palette.Phase)
+            : new(FormatChapters(slot.Tracker), Palette.Chapters));
+        spans.Add(Separator);
+        spans.Add(new(timer, Palette.Timer));
+        spans.Add(Separator);
+        spans.Add(new(slot.Label, Palette.Label));
+        return spans;
+    }
+
+    /// <summary>
+    /// Formats the bar's chapter section: "----" until the first chapter is found (nothing can
+    /// change during Pass 1 anyway); then the highest detected chapter number, with the count of
+    /// still-missing earlier chapters - the ones Pass 3 would have to chase - as e.g. "ch 6(-2)".
+    /// </summary>
+    /// <param name="tracker">The file's work tracker.</param>
+    private static string FormatChapters(WorkTracker tracker)
+        => tracker.HighestChapter is var highest and > 0
+            ? $"ch {highest}" + (tracker.MissingChapters is var missing and > 0 ? $"(-{missing})" : "")
+            : tracker.NamedMarks is var named and > 0
                 ? $"mk {named}"
                 : "----";
-        return $"[{bar}]{phase} {percent,3}% | {chapters} | {timer} | {slot.Label}";
+
+    /// <summary>
+    /// Writes one bar line, honoring <see cref="_color"/>. A console that refuses a color change
+    /// mid-line leaves that one line garbled, which self-heals on the next redraw since the whole
+    /// block is erased and rewritten anyway; colors are switched off from then on so it does not
+    /// keep happening.
+    /// </summary>
+    /// <param name="spans">The line's colored sections.</param>
+    private void WriteBarLine(IReadOnlyList<ColoredSpan> spans)
+    {
+        if (!_color)
+        {
+            Console.WriteLine(ConsoleColors.PlainText(spans));
+            return;
+        }
+        try
+        {
+            foreach (var span in spans)
+            {
+                if (span.Color is { } color)
+                {
+                    Console.ForegroundColor = color;
+                    Console.Write(span.Text);
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.Write(span.Text);
+                }
+            }
+        }
+        catch
+        {
+            _color = false;
+        }
+        Console.WriteLine();
     }
 
     /// <summary>
@@ -337,11 +449,16 @@ public sealed class ProgressRenderer : IDisposable
         try { return Console.WindowHeight; } catch { return 24; }
     }
 
-    /// <summary>Stops the refresh timer and restores the cursor hidden for the interactive run.</summary>
+    /// <summary>Stops the refresh timer and restores the cursor hidden for the interactive run.
+    /// The color reset is a safety net for a run torn down mid-line (Ctrl+C during a redraw), so
+    /// the shell prompt never inherits a bar section's color.</summary>
     public void Dispose()
     {
         _timer?.Dispose();
-        if (_interactive)
-            TrySetCursorVisible(true);
+        if (!_interactive)
+            return;
+        TrySetCursorVisible(true);
+        if (_color)
+            try { Console.ResetColor(); } catch { /* cosmetic only */ }
     }
 }

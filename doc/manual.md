@@ -940,7 +940,7 @@ The details worth knowing:
 - The record notes which options the run used. Change any option that affects
   the outcome and the stale record is discarded rather than misapplied;
   options that only change the output's appearance (`--quiet`, `--verbose`,
-  `--verbose-transcripts`, `--log-file`, `--no-bar`, `--summary`) or how fast
+  `--verbose-transcripts`, `--log-file`, `--no-bar`, `--color`, `--summary`) or how fast
   the run gets there (`--jobs`, `--cpu-only`, `--use-gpu`) do not count, so
   those can be added or dropped when resuming — including moving an
   interrupted batch to a different machine or a different GPU.
@@ -1015,6 +1015,21 @@ of its own; see [Custom marks](#custom-marks).
 : Never display progress bars; per-file results are printed as timestamped
   log lines. Useful for CI jobs and log files. (Progress bars are also
   disabled automatically when the output is redirected.)
+
+`--color <mode>`
+: Whether the progress bar is drawn in color: `auto` (the default), `always`
+  or `never`. The bar is the only thing ever colored — log lines, per-file
+  result lines and the summary stay plain, so nothing that can end up in a
+  `--log-file` or a pipe carries color. `auto` turns color off when the output
+  is redirected and when the `NO_COLOR` environment variable is set to
+  anything. On Unix it additionally wants `TERM` to name a 16-color terminal
+  such as `xterm-256color`: a terminal that still calls itself plain `xterm` is
+  described by its own terminfo entry as having eight colors, and everything
+  the tool draws is translated through that entry, so the bar's dark grey would
+  come out as black on black. Since no terminal can actually be asked whether
+  it does color, `auto` sometimes guesses wrong — Git Bash on Windows, CI logs
+  and that `xterm` case are the usual ones, and `--color always` overrides it
+  for all of them.
 
 `-s`, `--summary`
 : Print a summary at the end of the run: files encountered / processed /
@@ -1613,6 +1628,13 @@ Combine with `--summary` for a batch run that prints totals at the end.
 **`--no-bar`** keeps the per-file result lines but prints them in the
 timestamped log format instead of drawing bars — the right choice for CI
 logs.
+
+The bar is drawn in color where the terminal supports it: the separators and
+the brackets around the bar in dark grey, the bar fill in the terminal's own
+foreground color, and one muted color each for the phase, the percentage, the
+chapter count, the timer and the file name. **`--color never`** turns that off,
+**`--color always`** forces it on where it was not detected. Nothing outside
+the bar is ever colored.
 
 **`--verbose`** additionally logs, with a `[HH:mm:ss]` timestamp and the file
 name, everything the pipeline does:

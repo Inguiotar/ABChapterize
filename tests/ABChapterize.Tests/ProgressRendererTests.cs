@@ -124,6 +124,44 @@ public class ProgressRendererTests
     }
 
     [Fact]
+    public void BuildSpans_JoinToExactlyTheLineTheyRender()
+    {
+        // Colors are applied at write time, so the spans must carry the visible text and nothing
+        // else: the renderer measures and compares the joined string, and any discrepancy between
+        // the two would show up as wrong truncation or a skipped redraw rather than as wrong color.
+        var slot = Slot(50, 100, highestChapter: 6, missingChapters: 2);
+        Assert.Equal(
+            ProgressRenderer.BuildLine(slot),
+            ConsoleColors.PlainText(ProgressRenderer.BuildSpans(slot)));
+    }
+
+    [Fact]
+    public void BuildSpans_LeaveTheBarFillUncolored_AndItsBracketsDarkGray()
+    {
+        // The bar is read by its shape, not its content, so it keeps the terminal's own foreground
+        // color while the brackets around it recede into the structural dark grey.
+        var spans = ProgressRenderer.BuildSpans(Slot(50, 100));
+
+        Assert.Equal("[", spans[0].Text);
+        Assert.Equal(ConsoleColor.DarkGray, spans[0].Color);
+        Assert.Equal(24, spans[1].Text.Length);
+        Assert.Null(spans[1].Color);
+        Assert.Equal("]", spans[2].Text);
+        Assert.Equal(ConsoleColor.DarkGray, spans[2].Color);
+    }
+
+    [Fact]
+    public void BuildSpans_DrawSeparatorsDarkGray_AndEachSectionInItsOwnColor()
+    {
+        var spans = ProgressRenderer.BuildSpans(Slot(50, 100, highestChapter: 6));
+
+        Assert.All(spans.Where(s => s.Text == " | "), s => Assert.Equal(ConsoleColor.DarkGray, s.Color));
+        var sections = spans.Where(s => s.Text is not (" | " or "[" or "]") && s.Color != null).ToList();
+        Assert.Equal([" Pass 1", "  50%", "ch 6", "0:00", "book.m4b"], sections.Select(s => s.Text));
+        Assert.Equal(sections.Count, sections.Select(s => s.Color).Distinct().Count());
+    }
+
+    [Fact]
     public void BuildLine_IsStableWhenNothingChanges()
     {
         // Identical state must produce an identical line - this is exactly what lets the renderer
