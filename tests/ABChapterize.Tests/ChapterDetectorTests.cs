@@ -2819,6 +2819,51 @@ public sealed class ChapterDetectorTests : IDisposable
             l.Contains("no silence precedes it inside the probe window"));
     }
 
+    [Theory]
+    [InlineData("--custom", "zeittafel:Zeittafel", "custom")]
+    [InlineData("--epilogue-phrase", "epilog", "epilogue")]
+    public async Task DeepNamedPhrase_WithNoSilenceBeforeIt_IsSkippedLikeAChapterWouldBe(
+        string option, string value, string kind)
+    {
+        // Named phrases used to be exempt from the anchoring rules, so a narrator merely mentioning
+        // one of these words deep in a window got a mark. They are announcements or they are
+        // nothing, exactly as a chapter phrase is - and the log has to name which one it dropped.
+        // Nothing separates the mention at 1209 from its window start at 1200, so there is no
+        // anchor for it, exactly as in DeepPhrase_WithNoSilenceBeforeIt_LogsWhyItWasSkipped.
+        var word = value.Split(':')[0];
+        var (result, log, _) = await DetectWithLogAsync(
+            Options(option, value, "--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(9, $" Und dann kam der {word}."));
+            });
+
+        Assert.Empty(result.NamedMarks);
+        Assert.Contains(log, l =>
+            l.Contains($"skipped {kind}") &&
+            l.Contains("at 0:20:09.00") &&
+            l.Contains("no silence precedes it inside the probe window"));
+    }
+
+    [Fact]
+    public async Task NamedPhrase_DirectlyAfterItsSilence_IsStillAccepted()
+    {
+        // The other half of the rule: tightening acceptance must not cost a real announcement its
+        // mark. This one starts 0.2 s into its window, well inside the 5 s the timing rule grants.
+        var result = await DetectAsync(
+            Options("--custom", "zeittafel:Zeittafel", "--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Zeittafel."));
+            });
+
+        AssertNamed([("custom 1", "Zeittafel", 1199.95)], result);
+    }
+
     [Fact]
     public async Task DeepPhrase_WithTooDistantASilenceBeforeIt_LogsTheMeasuredDistance()
     {

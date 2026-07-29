@@ -321,9 +321,14 @@ abchapterize --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel" b
 
 A phrase is a plain word or a `/regexp/`, exactly as for `--chapter-phrase`,
 and no number is parsed or expected. Unlike the prologue and epilogue, a
-custom phrase is accepted **anywhere** in the file and **as often as it
+custom phrase is accepted at **any point** in the file and **as often as it
 occurs** — a book with an interlude between every chapter gets a mark for each
-of them. Titles may pull text out of the phrase's own capturing groups with
+of them.
+
+What it is *not* is a full-text search: a custom phrase has to be **announced**,
+and is held to exactly the same standard as a chapter phrase for deciding
+whether it was. A narrator mentioning a timeline in passing gets no mark; the
+narrator announcing "Zeittafel" after a pause does. Titles may pull text out of the phrase's own capturing groups with
 `$1`, `$2` or a group name; write `$$` for a literal dollar sign.
 
 Syntax notes:

@@ -40,8 +40,10 @@ for you, not how it was built. The format follows
 
   A phrase is a plain word or a `/regexp/`, exactly as for `--chapter-phrase`,
   and no chapter number is parsed or expected. Unlike the prologue and epilogue,
-  a custom phrase is matched anywhere in the file and as often as it occurs, so
-  a book with an interlude between every chapter gets a mark for each of them.
+  a custom phrase is matched at any point in the file and as often as it occurs,
+  so a book with an interlude between every chapter gets a mark for each of
+  them. It still has to be *announced*, judged by the same rules as a chapter
+  phrase — a passing mention in the narration is not a mark.
   Titles can pull text out of the phrase's own capturing groups with `$1`, `$2`
   or a group name. Only the first colon separates phrase from title, so a title
   may contain further ones; a `/regexp/` phrase ends at its closing slash
@@ -156,8 +158,21 @@ for you, not how it was built. The format follows
   were already right stay where they are, give or take that tenth of a second.
   `--quick-marks` still skips the whole step.
 
+- **`--verbose` now reports mark refinement** instead of going quiet while it
+  works. Each mark logs the candidates it is about to check, and — for the rare
+  mark whose announcement none of them confirm — an explicit line before the
+  fallback sweep begins, saying how far it will search and how many checks that
+  can take. That sweep has always been able to run for minutes on a single
+  mark; now it says so rather than looking like the run has hung.
+
 ### Fixed
 
+- **A prologue, epilogue or `--custom` phrase now has to be announced.** These
+  were exempt from the checks that tell a real announcement from a mention of
+  the same words in passing, so a narrator saying "…and then there is the
+  epilogue" could get a mark. They are now judged exactly as a chapter
+  announcement is. Only affects runs with `--max-jingle-length 0`; with the
+  voice-activity pre-pass on (the default) neither kind was being checked.
 - **Numbered files are processed in the order a human would expect.** A folder's
   files used to be sorted character by character, so "Track 10.mp3" came before
   "Track 2.mp3". Digits are now compared as whole numbers, which also fixes the

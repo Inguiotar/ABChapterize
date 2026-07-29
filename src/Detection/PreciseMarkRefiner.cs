@@ -196,6 +196,9 @@ internal sealed class PreciseMarkRefiner
             .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
             .Select(s => s.StartSeconds)
             .OrderByDescending(s => s);
+        _log?.Invoke($"refining mark at {FormatTimestamp(mark)} - checking " +
+                     $"{forwardCandidates.Count() + backwardCandidates.Count()} VAD candidate(s) " +
+                     $"within {span:0.#} s");
         var confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
             forwardCandidates, backwardCandidates, file, inputDecoder, phraseRegex, ct);
 
@@ -203,6 +206,14 @@ internal sealed class PreciseMarkRefiner
         {
             var forwardSteps = FixedStepCandidates(mark, span, forward: true);
             var backwardSteps = FixedStepCandidates(mark, span, forward: false);
+            // Announced before it starts rather than after: this is the one step that can run for
+            // minutes on a single mark (up to 2 x span/step transcriptions, and a mark left far
+            // from its announcement by a smeared Whisper timestamp really does walk most of that),
+            // and an unexplained silent wait is indistinguishable from a hang - which is exactly
+            // how it was first reported, on Stalker.m4b's "Zeittafel", 2026-07-29.
+            _log?.Invoke($"no VAD candidate confirmed near {FormatTimestamp(mark)} - " +
+                         $"sweeping +/-{span:0.#} s at {PreciseMarkFixedStepSeconds:0.##} s steps, " +
+                         $"up to {forwardSteps.Count() + backwardSteps.Count()} check(s)");
             confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
                 forwardSteps, backwardSteps, file, inputDecoder, phraseRegex, ct);
         }

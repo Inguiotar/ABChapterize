@@ -714,7 +714,9 @@ internal sealed class RegionProber
         // very first mark is front matter's, routinely far longer than any break between sections,
         // and adopting it alone would raise the threshold past every real candidate that follows.
         var teachesThreshold = _found.Count > 0 || _namedFound.Count > 0;
-        var (time, markSilence, markRegion) = ResolveNamedMark(match, candidate, start, trimmedAbs);
+        if (ResolveNamedMark(match, candidate, start, trimmedAbs) is not { } placement)
+            return;
+        var (time, markSilence, markRegion) = placement;
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
             _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs);
         time = await _env.Marks.PlaceAsync(
@@ -786,33 +788,19 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// The default-mode mark for a named match, resolved exactly as <see cref="ResolveProbeMark"/>
-    /// does for a numbered one - minus its rejection rules. Those exist to keep an in-text mention
-    /// of a chapter number out of the sequence, a concern no mark arriving here has: there is no
-    /// sequence for it to corrupt. So a named phrase deeper in the window than the timing rule
-    /// allows still gets a mark at the plain fixed offset rather than being dropped for want of a
-    /// qualifying anchor. Those rules only ever ran without VAD anyway - the default VAD path
-    /// places every match it is given - so this is one code path's behaviour, not two.
+    /// The default-mode mark for a named match - the same <see cref="ResolveAnnouncementMark"/> a
+    /// numbered one goes through, rejection rules included, since a prologue, an epilogue and a
+    /// <c>--custom</c> phrase are announcements in exactly the sense a chapter phrase is.
     /// </summary>
     /// <param name="match">The named match, in window-relative time.</param>
     /// <param name="candidate">The candidate whose window this probe decoded.</param>
     /// <param name="start">Absolute start of that window.</param>
     /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
-    private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion) ResolveNamedMark(
+    private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion)? ResolveNamedMark(
         NamedMatch match, ProbeCandidate candidate, double start, List<TranscriptSegment> trimmedAbs)
-    {
-        var phraseAbs = start + match.PhraseStartSeconds;
-        if (_env.Vad == null)
-            return (Math.Max(0, phraseAbs - MarkLead), candidate.Silence, null);
-
-        var (markSilence, markRegion) = ResolveJingleAnchor(
-            phraseAbs, start + match.PhraseEndSeconds, start, _ctx.AllSilences,
-            _ctx.NonSpeechRegions, candidateVadRegion: null, _ctx.SpeechSegments, trimmedAbs);
-        var time = RefineDefaultMark(
-            Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, _ctx.SpeechSegments) - MarkLead),
-            _ctx.SpeechSegments, MarkLead);
-        return (time, markSilence ?? candidate.Silence, markRegion);
-    }
+        => ResolveAnnouncementMark(
+            match.PhraseStartSeconds, match.PhraseEndSeconds, candidate, start, trimmedAbs,
+            $"{match.Phrase.Kind} \"{match.Title}\"");
 
     /// <summary>
     /// Whether a phrase match is rejected on its number alone, before any mark placement is
@@ -975,8 +963,41 @@ internal sealed class RegionProber
     /// anchor at all and must be rejected - see <see cref="RejectProbeMark"/>, which logs why.</returns>
     private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion)? ResolveProbeMark(
         PhraseMatch match, ProbeCandidate candidate, double start, List<TranscriptSegment> trimmedAbs)
+        => ResolveAnnouncementMark(
+            match.PhraseStartSeconds, match.PhraseEndSeconds, candidate, start, trimmedAbs,
+            $"chapter {match.Number}");
+
+    /// <summary>
+    /// Places a mark for any announcement, numbered or named, and applies the rejection rules that
+    /// separate a real announcement from an in-text mention of the same words.
+    /// </summary>
+    /// <remarks>
+    /// Named phrases (prologue, epilogue, <c>--custom</c>) used to skip the rejection rules, on the
+    /// grounds that they have no chapter-number sequence for a spurious mark to corrupt. That
+    /// reasoning covered the wrong risk: the rules exist to decide whether the words were
+    /// <em>announced</em> at all, which matters just as much for a mark nothing else depends on -
+    /// a book whose narration happens to mention "Zeittafel" mid-sentence should no more get a mark
+    /// there than one mentioning "chapter eight" should. Unified 2026-07-29 at the user's request:
+    /// a named phrase is an announcement or it is nothing.
+    /// <para>
+    /// Note what this does <em>not</em> reach: with a VAD pre-pass - the default - the rules below
+    /// never run for either kind, because the VAD path returns first and places every match it is
+    /// given. Unifying the two therefore changes behaviour only under <c>--max-jingle-length 0</c>.
+    /// </para>
+    /// </remarks>
+    /// <param name="phraseStartSeconds">Phrase start, relative to the window start.</param>
+    /// <param name="phraseEndSeconds">End of the segment the phrase was found in, same time base.</param>
+    /// <param name="candidate">The candidate whose window this probe decoded.</param>
+    /// <param name="start">Absolute start of that window.</param>
+    /// <param name="trimmedAbs">The window's transcript in absolute file time, for the VAD edge
+    /// adjustment inside <see cref="JingleGeometry.ResolveJingleAnchor"/>.</param>
+    /// <param name="what">How to name this announcement in a rejection log line, e.g.
+    /// <c>chapter 8</c> or <c>custom mark "Zeittafel"</c>.</param>
+    private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion)? ResolveAnnouncementMark(
+        double phraseStartSeconds, double phraseEndSeconds, ProbeCandidate candidate, double start,
+        List<TranscriptSegment> trimmedAbs, string what)
     {
-        var phraseAbs = start + match.PhraseStartSeconds;
+        var phraseAbs = start + phraseStartSeconds;
         if (_env.Vad != null)
         {
             var candidateRegion = candidate.VadRegion is { } cvr &&
@@ -984,7 +1005,7 @@ internal sealed class RegionProber
                 phraseAbs <= cvr.EndSeconds + JinglePhraseMatchToleranceSeconds
                 ? candidate.VadRegion : null;
             var (markSilence, markRegion) = ResolveJingleAnchor(
-                phraseAbs, start + match.PhraseEndSeconds, start, _ctx.AllSilences,
+                phraseAbs, start + phraseEndSeconds, start, _ctx.AllSilences,
                 _ctx.NonSpeechRegions, candidateRegion, _ctx.SpeechSegments, trimmedAbs);
             if (markSilence == null && markRegion == null)
                 markSilence = candidate.Silence;
@@ -994,36 +1015,36 @@ internal sealed class RegionProber
             return (time, markSilence, markRegion);
         }
 
-        if (match.PhraseStartSeconds <= PhraseLatestStart)
+        if (phraseStartSeconds <= PhraseLatestStart)
             return (Math.Max(0, phraseAbs - MarkLead), candidate.Silence, null);
 
         // Each of the three ways this can fail is named separately rather than folded into one
         // rejection: two of them point straight at a --min-silence-length that is too strict for
         // this book, which is exactly what someone chasing a missing chapter needs to be told.
         if (FindRealAnchorSilence(start, phraseAbs, _ctx.AllSilences) is not { } anchor)
-            return RejectProbeMark(match, phraseAbs, "no silence precedes it inside the probe window");
+            return RejectProbeMark(what, phraseAbs, "no silence precedes it inside the probe window");
         if (phraseAbs - anchor.EndSeconds > PhraseLatestStart)
-            return RejectProbeMark(match, phraseAbs,
+            return RejectProbeMark(what, phraseAbs,
                 $"the nearest silence ends {phraseAbs - anchor.EndSeconds:0.0} s before it, " +
                 $"more than the {PhraseLatestStart:0.#} s allowed");
         if (anchor.EndSeconds - anchor.StartSeconds < _env.Options.MinSilenceSeconds)
-            return RejectProbeMark(match, phraseAbs,
+            return RejectProbeMark(what, phraseAbs,
                 $"the silence before it is only {anchor.EndSeconds - anchor.StartSeconds:0.00} s long, " +
                 $"below --min-silence-length {_env.Options.MinSilenceSeconds:0.##} s");
         return (Math.Max(0, phraseAbs - MarkLead), anchor, null);
     }
 
-    /// <summary>Logs why <see cref="ResolveProbeMark"/> is dropping a chapter number the recognizer
-    /// did hear, and returns the null that stands for "no mark". A missing chapter is far easier to
-    /// chase when the log distinguishes "never heard" from "heard, but unanchorable, because
-    /// &lt;reason&gt;".</summary>
-    /// <param name="match">The rejected phrase match.</param>
+    /// <summary>Logs why <see cref="ResolveAnnouncementMark"/> is dropping an announcement the
+    /// recognizer did hear, and returns the null that stands for "no mark". A missing mark is far
+    /// easier to chase when the log distinguishes "never heard" from "heard, but unanchorable,
+    /// because &lt;reason&gt;".</summary>
+    /// <param name="what">The rejected announcement, as named for the log line.</param>
     /// <param name="phraseAbs">Absolute phrase start time, for the log line's timestamp.</param>
-    /// <param name="reason">Why no mark could be placed, phrased to follow "skipped chapter N at T - ".</param>
+    /// <param name="reason">Why no mark could be placed, phrased to follow "skipped X at T - ".</param>
     private (double Time, Silence? MarkSilence, NonSpeechRegion? MarkRegion)? RejectProbeMark(
-        PhraseMatch match, double phraseAbs, string reason)
+        string what, double phraseAbs, string reason)
     {
-        _env.Log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - {reason}");
+        _env.Log?.Invoke($"skipped {what} at {FormatTimestamp(phraseAbs)} - {reason}");
         return null;
     }
 

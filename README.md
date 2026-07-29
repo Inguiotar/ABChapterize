@@ -211,7 +211,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `/chapter/`, localized by `--lang`). |
 | `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `/prolog/`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
 | `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
-| `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched anywhere in the file as often as it occurs (up to 100 marks per file). Titles may reference the phrase's capturing groups as `$1`, `$2` or by name. Repeatable; never localized. |
+| `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched at any point in the file as often as it occurs (up to 100 marks per file), but must be announced just as a chapter phrase must. Titles may reference the phrase's capturing groups as `$1`, `$2` or by name. Repeatable; never localized. |
 | `-U`, `--custom-file <path>` | Read `--custom` mappings from a text file, one per line (blank and `#` lines ignored). |
 | `--ignore-chapter-numbers` | Detect chapter announcements as usual but form no opinion about their numbers: the spoken number still reaches the title, nothing checks the sequence. Passes 2.5 and 3 never run and nothing is ever tagged `.missing-marks`. Cannot combine with `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` or `--verify`. |
 | `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`, or `custom:<path>` for a GGML model file of your own (used as-is: not downloaded, not checksum-verified, ranked against the built-in models by file size). `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
@@ -375,8 +375,9 @@ use `.`, whatever the machine's locale says.
 
 `--custom "phrase:Title;..."` adds marks for anything else a book announces —
 an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` (with
-`$1`-style group references in the title), matches anywhere in the file and as
-often as it occurs.
+`$1`-style group references in the title), and is matched at any point in the
+file and as often as it occurs. It must be announced, though, exactly as a
+chapter phrase must: a passing mention in the narration gets no mark.
 
 `--ignore-chapter-numbers` keeps chapter detection running but stops it
 reasoning about the numbers — no sequence, no gaps, no missing chapters, with
