@@ -1147,6 +1147,13 @@ public sealed class ChapterDetector
                 await ScanGapRetriesAsync(file, info, chunkStart, chunkEnd, freshAbs, profile,
                     found, remaining, knownChapters, allSilences, nonSpeechRegions, speechSegments, work, ct);
 
+            // And the other failure mode, which the scan above cannot see because the audio was
+            // transcribed perfectly well: the phrase is right there and only its number is
+            // unreadable. Reported and re-framed rather than dropped in silence.
+            if (remaining is null or { Count: > 0 })
+                await ScanUnnumberedRetriesAsync(file, info, chunkStart, chunkEnd, matchSegments, profile,
+                    found, remaining, knownChapters, allSilences, nonSpeechRegions, speechSegments, work, ct);
+
             work.Advance((long)((chunkEnd - chunkStart) * bytesPerSecond));
 
             // Everything this gap was meant to recover is found, so stop and let the caller move
@@ -1168,6 +1175,84 @@ public sealed class ChapterDetector
             chunkStart = seam ?? chunkEnd - GapChunkOverlapSeconds;
         }
         return found;
+    }
+
+    /// <summary>
+    /// Second chance for a Pass 3 chunk that heard the chapter phrase but could not read a number
+    /// from it. Unlike <see cref="ScanGapRetriesAsync"/>, which chases audio Whisper skipped
+    /// outright, here the recognition succeeded and only the notation defeated the parser - so the
+    /// retry re-decodes a window <em>framed differently</em> around the phrase rather than a
+    /// shorter one over the same span. Which numeral form Whisper picks follows the framing (see
+    /// <see cref="DetectionTuning.UnnumberedRetryLeadSeconds"/> for the measurement behind that),
+    /// so a window that starts well before the announcement genuinely can read a number where the
+    /// chunk's own transcript could not.
+    /// <para>
+    /// Every unreadable announcement is logged whether or not its retry succeeds: the cases this
+    /// cannot fix - a word ordinal past a language's parser, a number above 999 - are exactly the
+    /// ones where knowing the phrase was heard and discarded saves the next investigation.
+    /// </para>
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="chunkStart">Absolute start of the chunk being retried.</param>
+    /// <param name="chunkEnd">Absolute end of that chunk.</param>
+    /// <param name="matchSegments">The chunk's transcript in absolute file time, as the phrase
+    /// matching saw it.</param>
+    /// <param name="profile">The language profile resolved for this file.</param>
+    /// <param name="found">Chapters found in this gap so far; appended to.</param>
+    /// <param name="remaining">Still-missing chapter numbers, or null for an open-ended region.</param>
+    /// <param name="knownChapters">Chapters already detected outside this gap.</param>
+    /// <param name="allSilences">Every silence Pass 1 stored, for anchor resolution.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions, for the jingle anchor resolution.</param>
+    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
+    /// <param name="work">The file's progress tracker.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ScanUnnumberedRetriesAsync(
+        string file, MediaInfo info, double chunkStart, double chunkEnd,
+        List<TranscriptSegment> matchSegments, LanguageProfile profile,
+        List<DetectedChapter> found, HashSet<int>? remaining, IReadOnlyList<DetectedChapter> knownChapters,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
+        WorkTracker work, CancellationToken ct)
+    {
+        var retries = 0;
+        foreach (var heard in FindUnnumberedAnnouncements(matchSegments, profile))
+        {
+            // A phrase carried in from the previous chunk's tail was already reported (and
+            // retried) there; only this chunk's own audio is news.
+            if (heard.PhraseStartSeconds < chunkStart)
+                continue;
+            _log?.Invoke(
+                $"heard the chapter phrase at {FormatTimestamp(heard.PhraseStartSeconds)} " +
+                $"but could not read a number from it: \"{heard.Text}\"");
+
+            if (remaining is { Count: 0 } || retries >= MaxUnnumberedRetriesPerChunk)
+                continue;
+            retries++;
+
+            var retryStart = Math.Max(0, heard.PhraseStartSeconds - UnnumberedRetryLeadSeconds);
+            var len = Math.Min(UnnumberedRetryWindowSeconds, info.DurationSeconds - retryStart);
+            if (len <= 0)
+                continue;
+
+            var samples = await _audio.DecodePcmAsync(file, retryStart, len, info.InputDecoder, ct);
+            var segments = await TranscribeCountingAsync(samples, ct, _pass3Transcriber);
+            LogTranscript($"unreadable-number retry {len:0.0}s@{FormatTimestamp(retryStart)}", segments);
+            var retryAbs = TrimLeadingNonSpeech(
+                ShiftSegments(segments, retryStart), allSilences, nonSpeechRegions, _vad != null);
+
+            foreach (var match in FindCappedPhraseMatches(retryAbs, profile))
+            {
+                var wanted = remaining is null
+                    ? IsAboveEveryKnownChapter(match.Number, knownChapters, found)
+                    : remaining.Contains(match.Number);
+                if (!wanted || knownChapters.Any(k => k.Number == match.Number))
+                    continue;
+                await RecordGapChapterMatch(match, retryAbs, retryStart + len, found, remaining, knownChapters,
+                    allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile, ct);
+                if (remaining is { Count: 0 })
+                    break;
+            }
+        }
     }
 
     /// <summary>

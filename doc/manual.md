@@ -127,6 +127,14 @@ against the chapter phrase (see `--chapter-phrase`), and the chapter number is
 parsed from digits, Roman numerals or number words
 (see [section 7](#7-languages-and-number-recognition)).
 
+If the phrase is heard but nothing following it can be read as a number,
+`--verbose` reports it and quotes what was transcribed there, and the spot is
+transcribed once more from a window framed differently — the wording a
+recognizer produces at a given place depends on where the window around it
+begins, so a second framing often reads cleanly. Only a stretch that yielded no
+chapter at all is reported this way, so a book's own mentions of the word stay
+out of the log.
+
 Where a chapter announcement is found, the mark is placed a fixed lead-in
 before it — 0.35 seconds by default, `--mark-lead` — no matter what precedes
 it: a silence, a jingle, or nothing at all. When a

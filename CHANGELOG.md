@@ -21,6 +21,14 @@ for you, not how it was built. The format follows
   wrote" is not read as chapter 1. Where a word could be either, the language's own
   number words win: French "dix" is ten, not 509.
 
+- **An announcement whose number cannot be read no longer passes in silence.**
+  When the chapter phrase is heard but no number can be made of what follows it,
+  `--verbose` now says so and quotes what was actually transcribed there — and
+  the spot is re-transcribed once more from a differently framed window, which is
+  often all it takes, since the wording a recognizer produces depends on where the
+  window around it starts. In-book mentions of the word "chapter" are not
+  reported; only a stretch of audio that yielded no chapter at all is.
+
 - **The progress bar and the `--summary` block are now in color** where the
   terminal supports it. In the bar: the fill and the file name in white,
   separators and brackets in dark grey, the percentage and the timer in cyan, the

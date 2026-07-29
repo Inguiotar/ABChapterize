@@ -84,6 +84,68 @@ internal static class PhraseMatching
     }
 
     /// <summary>
+    /// A chapter announcement whose phrase matched but whose number could not be read - what
+    /// <see cref="FindPhraseMatches"/> drops on the floor. Reported separately so a pass can say so
+    /// in the log instead of leaving "the phrase was never heard" and "the phrase was heard and
+    /// discarded" looking identical from outside.
+    /// </summary>
+    /// <param name="PhraseStartSeconds">Start of the segment the phrase was found in, in the
+    /// caller's time base.</param>
+    /// <param name="Text">The segment's text, trimmed to a length a log line can carry - the whole
+    /// point of the report is seeing <em>what</em> the recognizer wrote there.</param>
+    internal readonly record struct UnnumberedAnnouncement(double PhraseStartSeconds, string Text);
+
+    /// <summary>
+    /// The announcements <see cref="FindPhraseMatches"/> could not put a number to: the phrase
+    /// itself matched, but neither the following words nor the preceding ones yielded one.
+    /// <para>
+    /// This is a genuinely different situation from a mishearing, and one worth reporting: the
+    /// recognizer was right there and got the words, and only the notation defeated the parser.
+    /// It found chapter 13 of "I Shall Wear Midnight" transcribed as "CHAPTER XIII" (2026-07-30),
+    /// and it still covers what Roman-numeral support does not - a word ordinal past the range a
+    /// language's parser covers ("capítulo vigésimo quinto"), a number above 999, or an unsupported
+    /// language reached through a hand-written --chapter-phrase.
+    /// </para>
+    /// <para>
+    /// In-text mentions ("the next chapter was harder") match here too, so callers report these
+    /// only when the transcript yielded no numbered mark at all - see the call sites.
+    /// </para>
+    /// </summary>
+    /// <param name="segments">The window's transcript segments, in the caller's time base.</param>
+    /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
+    internal static IEnumerable<UnnumberedAnnouncement> FindUnnumberedAnnouncements(
+        List<TranscriptSegment> segments, LanguageProfile profile)
+    {
+        if (segments.Count == 0)
+            yield break;
+
+        var (text, segStartChar) = Flatten(segments);
+        foreach (Match m in profile.PhraseRegex.Matches(text))
+        {
+            if (TryParseAnnouncedNumber(text, m, profile, out _, out _, out _))
+                continue;
+            var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
+            yield return new UnnumberedAnnouncement(segment.StartSeconds, Snippet(segment.Text));
+        }
+    }
+
+    /// <summary>Shortens a transcript segment for a log line, keeping the head - which is where an
+    /// announcement's number would have been.</summary>
+    /// <param name="text">The segment text as the recognizer wrote it.</param>
+    private static string Snippet(string text)
+    {
+        var trimmed = text.Trim();
+        return trimmed.Length <= UnnumberedSnippetChars
+            ? trimmed
+            : trimmed[..UnnumberedSnippetChars] + "…";
+    }
+
+    /// <summary>How much of the offending segment an "unreadable number" log line carries. Long
+    /// enough for a chapter heading and its title ("CHAPTER XIII. THE SHAKING OF THE SHEETS" is
+    /// 39), short enough not to wrap a terminal when the segment is a whole sentence.</summary>
+    private const int UnnumberedSnippetChars = 60;
+
+    /// <summary>
     /// Reads the chapter number belonging to one phrase match, from the regexp's own capturing group
     /// if it has one, else from the words following the phrase ("Chapter Seven"), else from those
     /// preceding it ("Erstes Kapitel", "Birinci Bölüm"). The 80-character head/tail slices bound how

@@ -445,6 +445,30 @@ internal static class DetectionTuning
     /// phrase is not cut off if it starts or ends right at the boundary.</summary>
     internal const double GapRetryPaddingSeconds = 2.0;
 
+    /// <summary>
+    /// How far before the phrase a Pass 3 "heard it, could not number it" retry starts its decode.
+    /// The retry exists because the notation Whisper writes a number in follows the window framing
+    /// rather than the audio: chapter 13 of "I Shall Wear Midnight" came out "CHAPTER XIII" from
+    /// windows starting 0 s and 1.7 s before the phrase, and "Chapter 13" from one starting 4.8 s
+    /// before it (measured 2026-07-30). This sits comfortably past that observed flip - the run-up
+    /// is what has to be in the window, and a couple of seconds either way costs nothing.
+    /// </summary>
+    internal const double UnnumberedRetryLeadSeconds = 8.0;
+
+    /// <summary>Length of a Pass 3 "heard it, could not number it" retry decode, chosen to match
+    /// the framing that produced a readable number in the case above (48.8 s) rather than the
+    /// short sub-chunks <see cref="GapRetryChunkSeconds"/> uses - those recover audio Whisper
+    /// skipped, which is the opposite problem and wants the opposite window.</summary>
+    internal const double UnnumberedRetryWindowSeconds = 45.0;
+
+    /// <summary>
+    /// How many unreadable-number retries one Pass 3 chunk may run. In-text mentions ("the next
+    /// chapter was harder") reach the retry too, and each one costs a
+    /// <see cref="UnnumberedRetryWindowSeconds"/> decode, so a chunk of prose that happens to talk
+    /// about chapters cannot turn into an unbounded re-transcription of itself.
+    /// </summary>
+    internal const int MaxUnnumberedRetriesPerChunk = 3;
+
     /// <summary>Length of each sub-chunk a padded gap is scanned in, rather than re-transcribing
     /// it in one call. A single call spanning a long, mostly non-speech stretch risks the very
     /// failure it recovers from: Whisper can judge the whole call's audio non-speech on average

@@ -615,7 +615,44 @@ internal sealed class RegionProber
             marks.Add(mark);
             windowLast = mark.Number;
         }
+
+        if (marks.Count == 0)
+            NoteUnnumberedAnnouncements(candidate, start, segments);
         return marks;
+    }
+
+    /// <summary>
+    /// Reports the announcements this window heard but could not number, and queues the window for
+    /// the sequence-gap re-probe. Only ever called for a window that produced no mark of its own:
+    /// with one, a further bare "chapter" in the same transcript is prose, not a missed
+    /// announcement.
+    /// <para>
+    /// Queuing it is the recovery half, and it costs nothing until a gap actually appears. The
+    /// re-probe re-decodes at the full ceiling window (see <see cref="ReprobeSkippedAsync"/>),
+    /// which is a different framing of the same audio - and framing is exactly what decides the
+    /// notation Whisper writes a number in. Chapter 13 of "I Shall Wear Midnight" was read as
+    /// "CHAPTER XIII" from the 16.1 s window it was probed with and as "Chapter 13" from a 48.8 s
+    /// one over the same announcement; because the candidate had been probed rather than skipped,
+    /// nothing ever put it in front of the wider window, and the chapter was lost (2026-07-30).
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The candidate whose window this is.</param>
+    /// <param name="start">Absolute start of the window, for the log line's timestamp.</param>
+    /// <param name="segments">The window transcript, in window-relative time.</param>
+    private void NoteUnnumberedAnnouncements(
+        ProbeCandidate candidate, double start, List<TranscriptSegment> segments)
+    {
+        var queued = false;
+        foreach (var heard in FindUnnumberedAnnouncements(segments, Language.Profile!))
+        {
+            _env.Log?.Invoke(
+                $"heard the chapter phrase at {FormatTimestamp(start + heard.PhraseStartSeconds)} " +
+                $"but could not read a number from it: \"{heard.Text}\"");
+            if (queued)
+                continue;
+            _skippedSinceLastMark.Add(candidate);
+            queued = true;
+        }
     }
 
     /// <summary>
