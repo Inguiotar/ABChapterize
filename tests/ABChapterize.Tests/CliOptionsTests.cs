@@ -857,10 +857,14 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void RunFingerprint_IgnoresPresentationOnlyOptions()
+    public void RunFingerprint_IgnoresOptionsThatDoNotChangeTheMarks()
     {
         Assert.Equal(ParseFile()!.RunFingerprint,
             ParseFile("--quiet", "--verbose", "--no-bar", "--summary", "--jobs", "3", "--cpu-only")!.RunFingerprint);
+        // Separately, because --use-gpu and --cpu-only refuse to be combined: which device the
+        // recognizer runs on decides how long a run takes, never where its marks land.
+        Assert.Equal(ParseFile()!.RunFingerprint,
+            ParseFile("--use-gpu", "gtx")!.RunFingerprint);
     }
 
     [Fact]

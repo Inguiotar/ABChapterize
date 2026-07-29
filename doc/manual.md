@@ -940,8 +940,14 @@ The details worth knowing:
 - The record notes which options the run used. Change any option that affects
   the outcome and the stale record is discarded rather than misapplied;
   options that only change the output's appearance (`--quiet`, `--verbose`,
-  `--log-file`, `--no-bar`, `--summary`, `--jobs`, `--cpu-only`) do not count,
-  so those can be added or dropped when resuming.
+  `--verbose-transcripts`, `--log-file`, `--no-bar`, `--summary`) or how fast
+  the run gets there (`--jobs`, `--cpu-only`, `--use-gpu`) do not count, so
+  those can be added or dropped when resuming — including moving an
+  interrupted batch to a different machine or a different GPU.
+- Being interrupted twice is no different from being interrupted once: a
+  resumed run adds its own finished files to the record rather than starting
+  it over, so however often a batch is stopped and restarted, no file is
+  processed twice.
 - A file the run renamed (a `.missing-marks` tag added or dropped) is
   recognized under either name.
 - Deleting the file by hand is always safe; it only ever costs the resume.

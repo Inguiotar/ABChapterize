@@ -74,6 +74,26 @@ public sealed class BatchProgressTests : IDisposable
     }
 
     [Fact]
+    public void AResumedRun_InterruptedAgain_AddsToTheRecordRatherThanReplacingIt()
+    {
+        // Resuming is not a one-shot: the run that picks up an existing record must append to it,
+        // not start a fresh one, or the second interruption would silently discard everything the
+        // first run had finished and send the third run over those files again.
+        var first = Open();
+        first.Begin(3);
+        first.MarkDone(File("a.m4b"), null);
+
+        var second = Open();
+        second.Begin(2);
+        second.MarkDone(File("b.m4b"), null);
+
+        var third = Open();
+        Assert.True(third.IsDone(File("a.m4b")));
+        Assert.True(third.IsDone(File("b.m4b")));
+        Assert.False(third.IsDone(File("c.m4b")));
+    }
+
+    [Fact]
     public void ARenamedFile_IsRecognizedUnderEitherName()
     {
         var first = Open();

@@ -591,9 +591,18 @@ public sealed class CliOptions
     /// <summary>
     /// Short hash of every option that changes what a run does to a file - the language and
     /// phrase, the models, the detection tuning and safety nets, the file selection, the output
-    /// mode. Options that only change what the run <i>looks like</i> (--quiet, --verbose,
-    /// --log-file, --no-bar, --summary, --jobs, --cpu-only) are deliberately left out, so adding one of those
-    /// to an interrupted run's command line still resumes it.
+    /// mode. The list below is an allowlist, so an option is exempt by not being named in it:
+    /// everything that only changes what the run <i>looks like</i> (--quiet, --verbose,
+    /// --verbose-transcripts, --log-file, --no-bar, --summary) or how fast it gets there
+    /// (--jobs, --cpu-only, --use-gpu) stays out, so adding or dropping one of those on an
+    /// interrupted run's command line still resumes it.
+    /// <para>
+    /// The hardware options are the interesting case: a run on a different device may transcribe
+    /// with slightly different floating-point results, so the marks are not bit-identical in
+    /// principle. That is treated as noise, not as a different command - someone who moves a
+    /// stalled batch to another machine, or falls back to --cpu-only after a driver failure, wants
+    /// the remaining files done, not the finished ones redone.
+    /// </para>
     /// <para>
     /// <see cref="ABChapterize.Processing.BatchProgress"/> stores this alongside the files a run
     /// finished and refuses to resume progress recorded under a different fingerprint: those files
