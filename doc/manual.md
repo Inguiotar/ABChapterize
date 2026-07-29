@@ -1017,10 +1017,11 @@ of its own; see [Custom marks](#custom-marks).
   disabled automatically when the output is redirected.)
 
 `--color <mode>`
-: Whether the progress bar is drawn in color: `auto` (the default), `always`
-  or `never`. The bar is the only thing ever colored — log lines, per-file
-  result lines and the summary stay plain, so nothing that can end up in a
-  `--log-file` or a pipe carries color. `auto` turns color off when the output
+: Whether output is drawn in color: `auto` (the default), `always` or `never`.
+  Two things are colored, the progress bar and the closing
+  [`--summary`](#12-output-progress-and-logging) block; log lines and per-file
+  result lines stay plain, and a `--log-file` receives plain text whatever the
+  console gets. `auto` turns color off when the output
   is redirected and when the `NO_COLOR` environment variable is set to
   anything. On Unix it additionally wants `TERM` to name a 16-color terminal
   such as `xterm-256color`: a terminal that still calls itself plain `xterm` is
@@ -1634,9 +1635,14 @@ file name in white, the separators and brackets in dark grey, the percentage
 and the timer in cyan, the phase in a darker cyan, and the chapter count in
 dark green — grey while it is still `----`, and with the bracketed count of
 missing chapters in dark red, since that is the one part of the line reporting
-something outstanding. **`--color never`** turns all of it off, **`--color
-always`** forces it on where it was not detected. Nothing outside the bar is
-ever colored.
+something outstanding.
+
+The `--summary` block is colored on the same principle: prose in white,
+brackets in dark grey, and every measured value in cyan together with its unit,
+so `1.52 s` and `3.7%` each read as one figure. **`--color never`** turns all
+of it off, **`--color always`** forces it on where it was not detected. Log
+lines and per-file result lines are never colored, and a `--log-file` always
+receives plain text.
 
 **`--verbose`** additionally logs, with a `[HH:mm:ss]` timestamp and the file
 name, everything the pipeline does:

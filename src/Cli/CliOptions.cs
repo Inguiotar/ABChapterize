@@ -422,9 +422,9 @@ public sealed class CliOptions
     public bool NoBar { get; private set; }
 
     /// <summary>
-    /// Whether the progress bar is colorized (--color). Nothing else is: log lines, per-file
-    /// summaries and the banner stay plain, so the output that can end up in a log file or a pipe
-    /// never carries color at all.
+    /// Whether output is colorized (--color). This covers the progress bar and the closing
+    /// --summary block; log lines, per-file summaries and the banner stay plain, and a --log-file
+    /// receives plain text regardless.
     /// </summary>
     public ColorMode Color { get; private set; } = ColorMode.Auto;
 
@@ -1664,14 +1664,15 @@ public sealed class CliOptions
                                     existing file is appended to, never overwritten.
           -B, --no-bar              Do not display progress bars; per-file summary lines are
                                     printed in the same timestamped format as --verbose logs.
-              --color <mode>        Colorize the progress bar (and only that - log lines and
-                                    summaries always stay plain): "auto" (default), "always" or
-                                    "never". "auto" switches color off when the output is
-                                    redirected, when NO_COLOR is set, and on Unix unless TERM
-                                    names a 16-color terminal such as "xterm-256color". Use
-                                    "always" for a terminal it misjudges, such as Git Bash on
-                                    Windows, a CI log, or a modern terminal still calling
-                                    itself plain "xterm".
+              --color <mode>        Colorize the progress bar and the --summary block (nothing
+                                    else - log lines and per-file result lines always stay
+                                    plain, as does a --log-file's copy of anything): "auto"
+                                    (default), "always" or "never". "auto" switches color off
+                                    when the output is redirected, when NO_COLOR is set, and on
+                                    Unix unless TERM names a 16-color terminal such as
+                                    "xterm-256color". Use "always" for a terminal it misjudges,
+                                    such as Git Bash on Windows, a CI log, or a modern terminal
+                                    still calling itself plain "xterm".
           -s, --summary             Print a summary at the end: file counts, total and average
                                     processing time.
 

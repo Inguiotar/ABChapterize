@@ -153,9 +153,9 @@ public sealed class ProgressRenderer : IDisposable
     /// <param name="logFile">Opened <c>--log-file</c> destination, or null. It takes the log stream
     /// over entirely: with a log file the console shows its bar and summaries and nothing else,
     /// which is the point of asking for one.</param>
-    /// <param name="color">Whether the progress bar is colorized (--color). Only the bar is
-    /// affected: log lines, per-file summaries and the run banner stay plain, so anything that may
-    /// end up in a log file or a pipe never carries color in the first place.</param>
+    /// <param name="color">Whether output is colorized (--color). This reaches the progress bar
+    /// and the closing --summary block; log lines, per-file summaries and the run banner stay
+    /// plain, and a --log-file always receives plain text whatever the console gets.</param>
     public ProgressRenderer(bool quiet, bool verbose = false, bool noBar = false, LogFile? logFile = null,
         ColorMode color = ColorMode.Auto)
     {
@@ -167,7 +167,10 @@ public sealed class ProgressRenderer : IDisposable
         // switch formats: without a bar to replace, a summary is just another line of log.
         _logStyle = _logToConsole || noBar;
         _interactive = !quiet && !noBar && !Console.IsOutputRedirected;
-        _color = _interactive && ConsoleColors.ShouldColorize(color);
+        // Not gated on _interactive: --quiet and --no-bar suppress the bar but still print the
+        // closing --summary block, and neither of them means "and no color either" - that is what
+        // --color never is for. A redirected console is already excluded by ShouldColorize.
+        _color = ConsoleColors.ShouldColorize(color);
         if (_interactive)
         {
             // Hide the cursor for the whole interactive run: the block is erased and redrawn
@@ -239,13 +242,31 @@ public sealed class ProgressRenderer : IDisposable
     /// line is wanted at all.
     /// </summary>
     /// <param name="line">The line to print.</param>
-    public void Announce(string line)
+    public void Announce(string line) => WriteAnnouncement(line, highlight: false);
+
+    /// <summary>
+    /// Prints one line of the closing <c>--summary</c> block, colorized by
+    /// <see cref="SummaryHighlighter"/>. Same as <see cref="Announce(string)"/> in every other
+    /// respect, including that the <c>--log-file</c> copy stays plain text.
+    /// </summary>
+    /// <param name="line">The finished summary line.</param>
+    public void AnnounceSummary(string line) => WriteAnnouncement(line, highlight: true);
+
+    /// <summary>The shared body of <see cref="Announce"/> and <see cref="AnnounceSummary"/>.
+    /// Not an overload of either: a <c>cref</c> to an overloaded <c>Announce</c> would no longer
+    /// resolve to one method, which the documentation build reports as CS0419.</summary>
+    /// <param name="line">The line to print.</param>
+    /// <param name="highlight">Whether to colorize the line as a summary line.</param>
+    private void WriteAnnouncement(string line, bool highlight)
     {
         lock (_lock)
         {
             _logFile?.Write(line);
             ClearBlock();
-            Console.WriteLine(line);
+            if (highlight)
+                WriteSpans(SummaryHighlighter.Highlight(line));
+            else
+                Console.WriteLine(line);
         }
     }
 
@@ -295,7 +316,7 @@ public sealed class ProgressRenderer : IDisposable
 
             ClearBlock();
             foreach (var spans in lines)
-                WriteBarLine(spans);
+                WriteSpans(spans);
             _blockLineCount = rows;
             _lastLines = texts;
         }
@@ -386,20 +407,26 @@ public sealed class ProgressRenderer : IDisposable
         }
     }
 
+    /// <summary>Writes one line of spans, colorized when <see cref="_color"/> allows it and as the
+    /// plain text they render as otherwise.</summary>
+    /// <param name="spans">The line's colored sections.</param>
+    private void WriteSpans(IReadOnlyList<ColoredSpan> spans)
+    {
+        if (_color)
+            WriteColored(spans);
+        else
+            Console.WriteLine(ConsoleColors.PlainText(spans));
+    }
+
     /// <summary>
-    /// Writes one bar line, honoring <see cref="_color"/>. A console that refuses a color change
-    /// mid-line leaves that one line garbled, which self-heals on the next redraw since the whole
-    /// block is erased and rewritten anyway; colors are switched off from then on so it does not
-    /// keep happening.
+    /// Writes one line span by span, restoring the default color after each. A console that
+    /// refuses a color change mid-line leaves that one line garbled and switches colors off from
+    /// then on, so it does not keep happening; for a bar line that also self-heals, since the
+    /// whole block is erased and rewritten on the next redraw.
     /// </summary>
     /// <param name="spans">The line's colored sections.</param>
-    private void WriteBarLine(IReadOnlyList<ColoredSpan> spans)
+    private void WriteColored(IReadOnlyList<ColoredSpan> spans)
     {
-        if (!_color)
-        {
-            Console.WriteLine(ConsoleColors.PlainText(spans));
-            return;
-        }
         try
         {
             foreach (var span in spans)
@@ -485,9 +512,8 @@ public sealed class ProgressRenderer : IDisposable
     public void Dispose()
     {
         _timer?.Dispose();
-        if (!_interactive)
-            return;
-        TrySetCursorVisible(true);
+        if (_interactive)
+            TrySetCursorVisible(true);
         if (_color)
             try { Console.ResetColor(); } catch { /* cosmetic only */ }
     }

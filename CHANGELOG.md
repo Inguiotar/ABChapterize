@@ -9,12 +9,15 @@ for you, not how it was built. The format follows
 
 ### Added
 
-- **The progress bar is now in color** where the terminal supports it: the bar
-  fill and the file name in white, separators and brackets in dark grey, the
-  percentage and the timer in cyan, the phase in a darker cyan, and the chapter
-  count in dark green — grey while it is still `----`, and with the bracketed
-  count of missing chapters in dark red. Nothing else is ever colored, so a
-  `--log-file` or a piped run looks exactly as it did before. **`--color`** takes
+- **The progress bar and the `--summary` block are now in color** where the
+  terminal supports it. In the bar: the fill and the file name in white,
+  separators and brackets in dark grey, the percentage and the timer in cyan, the
+  phase in a darker cyan, and the chapter count in dark green — grey while it is
+  still `----`, and with the bracketed count of missing chapters in dark red. In
+  the summary: prose in white, brackets in dark grey, and every measured value in
+  cyan together with its unit, so `1.52 s` and `3.7%` each read as one figure.
+  Nothing else is ever colored and a `--log-file` always receives plain text, so
+  a logged or piped run looks exactly as it did before. **`--color`** takes
   `auto` (the default), `always` or `never`; `auto` stays quiet when the output
   is redirected, when `NO_COLOR` is set, and on Unix unless `TERM` names a
   16-color terminal. `--color always` overrides it for the

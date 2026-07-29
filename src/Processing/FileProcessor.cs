@@ -136,8 +136,8 @@ public sealed class FileProcessor
         }
         if (_options.Summary)
         {
-            _progress.Announce($"Summary: {backups.Count} backup(s) encountered, {backups.Count} reverted");
-            _progress.Announce($"Total time: {FormatTime(watch.Elapsed)}");
+            _progress.AnnounceSummary($"Summary: {backups.Count} backup(s) encountered, {backups.Count} reverted");
+            _progress.AnnounceSummary($"Total time: {FormatTime(watch.Elapsed)}");
         }
     }
 
@@ -452,15 +452,15 @@ public sealed class FileProcessor
     {
         var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
         var noChaptersNote = _noChaptersFound > 0 ? $", {_noChaptersFound} with no chapters found" : "";
-        _progress.Announce(
+        _progress.AnnounceSummary(
             $"Summary: {fileCount} file(s) encountered, {_processed} processed, " +
             $"{_skipped} skipped{warningNote}{noChaptersNote}");
         var average = _processed > 0
             ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
             : "";
-        _progress.Announce($"Total time: {FormatTime(elapsed)}{average}");
+        _progress.AnnounceSummary($"Total time: {FormatTime(elapsed)}{average}");
         foreach (var line in _runStats.FormatRunSummaryLines())
-            _progress.Announce(line);
+            _progress.AnnounceSummary(line);
     }
 
     /// <summary>
