@@ -5,6 +5,7 @@
 using System.Text.RegularExpressions;
 using Xunit;
 using ABChapterize.Cli;
+using ABChapterize.Errors;
 using ABChapterize.Language;
 using ABChapterize.Detection;
 

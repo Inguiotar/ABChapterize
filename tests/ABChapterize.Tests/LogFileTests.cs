@@ -3,7 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using Xunit;
-using ABChapterize.Audio;
+using ABChapterize.Errors;
 using ABChapterize.Ui;
 
 namespace ABChapterize.Tests;

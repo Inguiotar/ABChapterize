@@ -3,8 +3,8 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Security.Cryptography;
-using ABChapterize.Audio;
 using ABChapterize.Cli;
+using ABChapterize.Errors;
 
 namespace ABChapterize.Transcription;
 

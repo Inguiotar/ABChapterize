@@ -4,6 +4,7 @@
 
 using Xunit;
 using ABChapterize.Cli;
+using ABChapterize.Errors;
 
 namespace ABChapterize.Tests;
 

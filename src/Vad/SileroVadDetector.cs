@@ -7,6 +7,7 @@ using Microsoft.ML.OnnxRuntime;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using ABChapterize.Audio;
+using ABChapterize.Errors;
 
 namespace ABChapterize.Vad;
 

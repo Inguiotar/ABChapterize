@@ -5,6 +5,7 @@
 using Xunit;
 using ABChapterize.Audio;
 using ABChapterize.Detection;
+using ABChapterize.Errors;
 
 namespace ABChapterize.Tests;
 

@@ -10,6 +10,7 @@ using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Concurrency;
 using ABChapterize.Detection;
+using ABChapterize.Errors;
 using ABChapterize.Gpu;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;

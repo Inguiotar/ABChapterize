@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-using ABChapterize.Audio;
+using ABChapterize.Errors;
 using ABChapterize.Gpu;
 using ABChapterize.Processing;
 using ABChapterize.Ui;

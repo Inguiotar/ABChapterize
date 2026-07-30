@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Text;
+using ABChapterize.Errors;
 
 namespace ABChapterize.Cli;
 

@@ -9,22 +9,12 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ABChapterize.Concurrency;
 using ABChapterize.Detection;
+using ABChapterize.Errors;
 using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;
 
 namespace ABChapterize.Cli;
-
-/// <summary>
-/// Exception thrown for any command line syntax or validation error.
-/// The message describes the problem; the caller prints it together with the usage info.
-/// </summary>
-public sealed class CliError : Exception
-{
-    /// <summary>Creates a new command line error with the given description.</summary>
-    /// <param name="message">Human readable description of the problem.</param>
-    public CliError(string message) : base(message) { }
-}
 
 /// <summary>
 /// Parsed and validated command line options of the abchapterize tool.

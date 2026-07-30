@@ -4,6 +4,7 @@
 
 using ABChapterize.Audio;
 using ABChapterize.Cli;
+using ABChapterize.Errors;
 using ABChapterize.Formatting;
 
 namespace ABChapterize.Ui;

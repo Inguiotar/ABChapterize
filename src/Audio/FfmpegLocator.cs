@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Errors;
+
 namespace ABChapterize.Audio;
 
 /// <summary>
@@ -111,17 +113,5 @@ public static class FfmpegLocator
                 yield return Path.Combine(profile, ".local", "bin");
             }
         }
-
     }
-}
-
-/// <summary>
-/// Exception for fatal application errors that abort the whole run.
-/// The message is printed to stderr without a stack trace.
-/// </summary>
-public sealed class AppError : Exception
-{
-    /// <summary>Creates a new fatal application error.</summary>
-    /// <param name="message">Human readable description of the error.</param>
-    public AppError(string message) : base(message) { }
 }
