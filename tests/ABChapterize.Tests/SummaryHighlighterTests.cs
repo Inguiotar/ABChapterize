@@ -47,7 +47,7 @@ public class SummaryHighlighterTests
 
     [Theory]
     // A unit is part of the value it belongs to...
-    [InlineData("shortest silence before a chapter 1.52 s", "1.52 s")]
+    [InlineData("Shortest silence before a chapter 1.52 s", "1.52 s")]
     [InlineData("Whisper audio processed: 12:34 of 5:43:21 run length (3.7%)", "3.7%")]
     [InlineData("transcription speed 412% of real-time", "412%")]
     [InlineData("longest jingle before a chapter 940 ms", "940 ms")]
@@ -77,9 +77,9 @@ public class SummaryHighlighterTests
     public void Highlight_ColorsANestedValueWithoutItsBrackets()
     {
         // "(inter-chapter 1.84 s)": the brackets are structure, the value inside is still a value.
-        var spans = Spans("shortest silence before a chapter 1.52 s (inter-chapter 1.84 s)");
+        var spans = Spans("Shortest silence before a chapter 1.52 s (inter-chapter 1.84 s)");
         Assert.Equal(
-            [("shortest silence before a chapter ", ConsoleColor.White),
+            [("Shortest silence before a chapter ", ConsoleColor.White),
              ("1.52 s", ConsoleColor.Cyan),
              (" ", ConsoleColor.White),
              ("(", ConsoleColor.DarkGray),

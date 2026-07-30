@@ -160,7 +160,7 @@ internal sealed class RunStatistics
     {
         var extremes = new List<string>();
         if (!double.IsPositiveInfinity(_minPrecedingSilence))
-            extremes.Add($"shortest silence before a chapter {_minPrecedingSilence:0.00} s" +
+            extremes.Add($"Shortest silence before a chapter {_minPrecedingSilence:0.00} s" +
                          FormatInterChapter(double.IsPositiveInfinity(_minInterChapterSilence)
                              ? null : _minInterChapterSilence));
         if (!double.IsNegativeInfinity(_maxJingle))
