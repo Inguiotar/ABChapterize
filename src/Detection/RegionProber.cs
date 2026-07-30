@@ -218,14 +218,26 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Candidates passed over since the last accepted mark. A sequence gap re-probes all of them
-    /// unconditionally and folds the recovered marks' own anchor silences into
-    /// <see cref="_adaptedThresholdSeconds"/>, so gap-filling stays inside Pass 2 where possible
-    /// and the threshold can never again sit above a silence that has proven to precede a chapter.
-    /// Collects the windows the overlap-sequence skip passes over too - in every mode, not just
-    /// auto - so the same re-probe covers the unlikely case of a skipped sequence window having
-    /// hidden a second transition.
+    /// unconditionally (see <see cref="ReprobeGapCandidatesAsync"/>) and folds the recovered marks'
+    /// own anchor silences into <see cref="_adaptedThresholdSeconds"/>, so gap-filling stays inside
+    /// Pass 2 where possible and the threshold can never again sit above a silence that has proven
+    /// to precede a chapter. Collects the windows the overlap-sequence skip passes over too - in
+    /// every mode, not just auto - so the same re-probe covers the unlikely case of a skipped
+    /// sequence window having hidden a second transition.
     /// </summary>
     private readonly List<ProbeCandidate> _skippedSinceLastMark = [];
+
+    /// <summary>
+    /// Candidates actually probed since the last accepted mark, each with the window end it was
+    /// probed with. A sequence gap re-probes the subset whose window has since been narrowed by
+    /// --max-jingle-length auto (see <see cref="WiderWindowWouldReach"/>), because a window sized
+    /// off the jingles seen so far can end before an unusually late announcement and come back empty
+    /// from audio that does hold the missing chapter - the same suspicion the ceiling reset already
+    /// applied to <see cref="_skippedSinceLastMark"/>, which has no reason to stop at candidates
+    /// that were never probed. Recording the end each window really got (rather than recomputing it)
+    /// is what keeps the re-probe from re-running windows at a width they already had.
+    /// </summary>
+    private readonly List<(ProbeCandidate Candidate, double WindowEnd)> _probedSinceLastMark = [];
 
     /// <summary>The file's language resolution, as it stood on entry and as this region may have
     /// advanced it (a fresh run's very first full-window decode resolves --lang auto).</summary>
@@ -297,7 +309,10 @@ internal sealed class RegionProber
             if (foundNoneYet && IsBelowExpectedStart())
                 break;
 
+            // Recorded after the marks are applied, so it lands in the list that survives them: this
+            // window is history for whatever gap a *later* mark reveals, never for its own.
             await ApplyProbeMarksAsync(probeMarks, ct);
+            _probedSinceLastMark.Add((candidate, windowEnd));
             ci = SkipSettledWindows(candidates, ci, windowEnd, probeMarks);
         }
     }
@@ -628,7 +643,7 @@ internal sealed class RegionProber
     /// announcement.
     /// <para>
     /// Queuing it is the recovery half, and it costs nothing until a gap actually appears. The
-    /// re-probe re-decodes at the full ceiling window (see <see cref="ReprobeSkippedAsync"/>),
+    /// re-probe re-decodes at the full ceiling window (see <see cref="ReprobeGapCandidatesAsync"/>),
     /// which is a different framing of the same audio - and framing is exactly what decides the
     /// notation Whisper writes a number in. Chapter 13 of "I Shall Wear Midnight" was read as
     /// "CHAPTER XIII" from the 16.1 s window it was probed with and as "Chapter 13" from a 48.8 s
@@ -1111,47 +1126,100 @@ internal sealed class RegionProber
             // The gap re-probe runs regardless of --min-silence-length mode: with the
             // overlap-sequence skip, candidates can be skipped even with an explicit threshold, and
             // a sequence gap is the signal that one of them hid a chapter.
-            if (_lastNumber is { } previousNumber && mark.Number > previousNumber + 1 &&
-                _skippedSinceLastMark.Count > 0)
-                await ReprobeSkippedAsync(previousNumber, mark.Number, ct);
+            if (_lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
+                await HandleSequenceGapAsync(previousNumber, mark.Number, ct);
 
             if (_env.Options.AutoMinSilence)
                 TightenThreshold(mark);
             _skippedSinceLastMark.Clear();
+            _probedSinceLastMark.Clear();
             _lastNumber = mark.Number;
         }
     }
 
     /// <summary>
-    /// Re-probes, unconditionally and at the full ceiling window, every candidate skipped since the
-    /// last mark, because the chapter numbers just found leave a gap that one of them may have
-    /// hidden. The skipped candidates form their own little window sequence, each end computed on
-    /// the fly against its next skipped neighbor so adjacent re-probe windows get snapped shared
-    /// borders too; the window width cannot change mid-re-probe (see <see cref="_reprobing"/>), so
-    /// consecutive ends stay consistent for the whole sequence.
+    /// Reacts to the chapter numbers just found leaving a gap: everything Pass 2 has looked at since
+    /// the last mark gets a second, unconditional chance before the region moves on. Nothing to
+    /// re-probe is a routine outcome (all candidates were probed at the full window and simply held
+    /// no readable announcement) and is logged as such rather than passed over in silence - the log
+    /// then distinguishes "Pass 2 declined a candidate" from "Pass 2 never had one", which is the
+    /// first thing worth knowing when a chapter goes missing.
     /// </summary>
     /// <param name="previousNumber">The chapter number below the gap.</param>
     /// <param name="number">The chapter number above it, i.e. the mark that revealed the gap.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task ReprobeSkippedAsync(int previousNumber, int number, CancellationToken ct)
+    private async Task HandleSequenceGapAsync(int previousNumber, int number, CancellationToken ct)
     {
-        _env.Log?.Invoke($"sequence gap between chapter {previousNumber} and {number}, " +
-                         $"re-probing {_skippedSinceLastMark.Count} skipped candidate(s) unconditionally");
+        // A probed window that heard an unreadable announcement is already queued as skipped by
+        // NoteUnnumberedAnnouncements, so it sits in both lists; taking it once keeps the re-probe
+        // from transcribing the same audio twice and the count in the log honest.
+        var widened = _probedSinceLastMark
+            .Where(p => WiderWindowWouldReach(p.Candidate, p.WindowEnd) &&
+                        !_skippedSinceLastMark.Contains(p.Candidate))
+            .Select(p => p.Candidate)
+            .ToList();
+        var note = $"sequence gap between chapter {previousNumber} and {number}, ";
+        if (_skippedSinceLastMark.Count == 0 && widened.Count == 0)
+        {
+            _env.Log?.Invoke(note + "nothing to re-probe since the last mark - deferred to the gap scan");
+            return;
+        }
+
+        var candidates = _skippedSinceLastMark.Concat(widened).OrderBy(c => c.Start).ToList();
+        _env.Log?.Invoke(
+            note + $"re-probing {candidates.Count} candidate(s) unconditionally " +
+            $"({_skippedSinceLastMark.Count} skipped, {widened.Count} at a wider window)");
+        await ReprobeGapCandidatesAsync(candidates, previousNumber, number, ct);
+    }
+
+    /// <summary>
+    /// Whether a probe window at the ceiling would reach past what this candidate's window actually
+    /// covered, i.e. whether re-probing it can see audio its first probe could not. Compares natural
+    /// spans rather than planned ends: <see cref="GapPlanning.PlanWindowEnd"/>'s seam snapping shifts
+    /// an end by seconds in either direction depending on where the neighbors sit, and a candidate
+    /// whose ceiling window is genuinely wider must not be excluded because its original end happened
+    /// to be snapped forward. Only --max-jingle-length auto can narrow a window in the first place;
+    /// in every other mode <see cref="_probeSeconds"/> is fixed for the region's whole life and this
+    /// is always false, so the widened re-probe costs nothing where it cannot apply.
+    /// </summary>
+    /// <param name="candidate">The candidate that was probed.</param>
+    /// <param name="windowEnd">The end its window was probed with.</param>
+    private bool WiderWindowWouldReach(ProbeCandidate candidate, double windowEnd)
+        => _env.Vad != null && _env.Options.AutoMaxJingle &&
+           Math.Min(candidate.Start + _ctx.JingleCeilingSeconds, _region.ToSeconds) > windowEnd;
+
+    /// <summary>
+    /// Re-probes, unconditionally and at the full ceiling window, the candidates a sequence gap has
+    /// put back in question. They form their own little window sequence, each end computed on the fly
+    /// against its next neighbor in that sequence so adjacent re-probe windows get snapped shared
+    /// borders too; the window width cannot change mid-re-probe (see <see cref="_reprobing"/>), so
+    /// consecutive ends stay consistent for the whole sequence.
+    /// </summary>
+    /// <param name="candidates">The candidates to re-probe, in chronological order.</param>
+    /// <param name="previousNumber">The chapter number below the gap.</param>
+    /// <param name="number">The chapter number above it, i.e. the mark that revealed the gap.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ReprobeGapCandidatesAsync(
+        List<ProbeCandidate> candidates, int previousNumber, int number, CancellationToken ct)
+    {
         if (_env.Vad != null && _env.Options.AutoMaxJingle && _probeSeconds != _ctx.JingleCeilingSeconds)
         {
             _probeSeconds = _ctx.JingleCeilingSeconds;
             _env.Log?.Invoke($"jingle probe window reset to {_probeSeconds:0.#} s for the re-probe");
         }
         _reprobing = true;
-        for (var si = 0; si < _skippedSinceLastMark.Count; si++)
+        for (var si = 0; si < candidates.Count; si++)
         {
-            var gapMarks = await ProbeAsync(
-                _skippedSinceLastMark[si], WindowEndFor(_skippedSinceLastMark, si), ct);
+            var gapMarks = await ProbeAsync(candidates[si], WindowEndFor(candidates, si), ct);
             if (!_env.Options.AutoMinSilence)
                 continue;
-            // A gap mark's anchor silence was, by definition, short enough to have been skipped -
-            // fold it into the running minimum so the threshold can never again sit above it. Only
-            // genuine gap-fillers count; a duplicate or re-detection of this window's own mark
+            // A gap mark recovered from a *skipped* candidate has, by definition, an anchor silence
+            // short enough to have been skipped - fold it into the running minimum so the threshold
+            // can never again sit above a silence proven to precede a chapter. One recovered from a
+            // widened window instead cleared the threshold already, so its proposal cannot lower the
+            // running minimum and this is a no-op for it; both go through the same guard rather than
+            // the caller having to remember which list a candidate came from. Only genuine
+            // gap-fillers count either way; a duplicate or re-detection of this window's own mark
             // surfacing in a re-probe must not lower anything.
             foreach (var gapMark in gapMarks)
                 if (gapMark.Number > previousNumber && gapMark.Number < number)

@@ -239,6 +239,18 @@ for you, not how it was built. The format follows
   files used to be sorted character by character, so "Track 10.mp3" came before
   "Track 2.mp3". Digits are now compared as whole numbers, which also fixes the
   order files are reported in and what an interrupted run considers already done.
+- **A chapter hidden behind an unusually long jingle is now recovered without the
+  slow pass.** With `--max-jingle-length auto` (the default) the probe window
+  narrows to fit the jingles seen so far, and a chapter announced later than that
+  — a jingle well above the book's usual length, or a narrator pausing before the
+  announcement — fell outside the window and was heard by nothing. Only candidates
+  the tool had *skipped* were retried when a chapter turned up out of sequence, so
+  a window that ran and came back empty was never looked at again and the chapter
+  had to wait for the full-transcription pass, if it was found at all. Every
+  candidate since the previous chapter is now retried at the full window width,
+  and a jingle discovered that way sizes the window for the rest of the file.
+  Where there is nothing to retry, `--verbose` now says so instead of moving on
+  without comment.
 - **A misheard chapter number no longer costs a genuine chapter its mark.** When
   the final transcription pass went looking for, say, the chapter 2 missing
   between chapters 1 and 3, a "chapter seven" misheard somewhere in that stretch

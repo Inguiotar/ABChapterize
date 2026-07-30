@@ -334,6 +334,9 @@ use `.`, whatever the machine's locale says.
    starting from the second jingle mark found, it resizes to 1.25x the
    longest jingle actually observed so far, capped at the 45 s ceiling — an
    explicit `--max-jingle-length` value keeps the window fixed at it instead.
+   A sequence gap puts the window back at the ceiling and retries every
+   candidate since the last chapter at that width, including ones already
+   probed while it was narrower.
 2b. **Mark refinement (skip with `--quick-marks`/`-Q`):** for
    the mark that still lands on the wrong spot — usually a jingle whose
    music briefly fools the voice-activity detector into sounding like speech —

@@ -221,6 +221,14 @@ Giving `--max-jingle-length` an explicit numeric value (including `0`)
 disables this and keeps the window fixed at that value throughout. See the
 [`-X` reference](#detection-behaviour) for the knob itself.
 
+A chapter turning up out of sequence puts every candidate since the previous
+chapter back in question, not just the ones that were passed over: a window
+that was probed while the jingle window sat narrow can end before an unusually
+late announcement, so those are re-probed at the full ceiling width too. When
+there is nothing to retry — every candidate already had the full window and
+simply yielded no readable announcement — `--verbose` says so, and the gap goes
+straight to pass 3.
+
 ### Pass 2.5 — cheap gap re-probe (only with a heavier `--pass3-model`)
 
 A gap is often not a chapter the probing missed, but a number the pass-2 model
@@ -727,11 +735,12 @@ so that logs and reports stay comparable regardless of regional settings.
   narrows, VAD regions longer than it stop being probed too — the same
   speedup pass 2 already gets from tightened silence candidates — but a
   later sequence gap temporarily resets the window back to the ceiling,
-  retries everything skipped at that full width (exactly like
-  `--min-silence-length auto`'s own gap recovery), and then returns to the
-  adapted width, including whatever the recovered chapters' own jingles
-  just taught it. `auto` implies a nonzero ceiling, so it cannot mean "no
-  jingle expected."
+  retries every candidate since the last chapter at that full width — those
+  skipped, and those already probed while the window was narrower than the
+  ceiling, whose announcement may simply have sat past the end of it — and
+  then returns to the adapted width, including whatever the recovered
+  chapters' own jingles just taught it. `auto` implies a nonzero ceiling, so
+  it cannot mean "no jingle expected."
 
 ### Auto language detection
 
@@ -1639,7 +1648,7 @@ where every mark is an
 announcement without a number, the state shows the plain total instead:
 `mk 12`. Pass 2's percentage follows the probe position within the
 file's play time, so it can move nonlinearly — and, briefly, backwards,
-when a sequence gap makes the detector re-probe earlier skipped silences.
+when a sequence gap makes the detector re-probe earlier candidates.
 
 Once detection finishes, the bar switches to a final `Muxing...` phase while
 the chapter markings are written into the file — worth watching on a large

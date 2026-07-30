@@ -1602,6 +1602,63 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoMaxJingle_AfterAGap_ReprobesAProbedCandidateAtTheCeilingWindow()
+    {
+        // The narrowed-window hole: chapter 2's 3 s jingle sizes the probe window down to
+        // 1.25 x 3 + 5 = 8.75 s, but chapter 3's announcement sits 20 s after its silence, past
+        // that window's end - so the candidate at 900 is probed, hears nothing, and would once have
+        // been forgotten because only *skipped* candidates were remembered for a gap re-probe.
+        // Chapter 4 reveals the gap, and the re-probe must re-decode 900 at the full 50 s ceiling
+        // (--max-jingle-length's 45 s default plus the 5 s phrase margin), which does reach 920.
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--verbose"),
+            [new(595, 600), new(895, 900), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(3.0, " Chapter two."));
+                s.Add(900, Seg(20.0, " Chapter three."));
+                s.Add(1200, Seg(3.0, " Chapter four."));
+            },
+            // Continuous speech: the VAD pre-pass runs (it must, or the window never adapts) but
+            // contributes no non-speech region, so the candidates are the silences alone.
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        // The narrowed first probe and the widened re-probe of the very same candidate. The pair is
+        // what proves Pass 2 recovered the chapter: Pass 3 chunks the whole 600-1200 region and
+        // never decodes exactly 50 s from 900.
+        Assert.Contains((900.0, (double?)8.75), audio.DecodeWindows);
+        Assert.Contains((900.0, (double?)50.0), audio.DecodeWindows);
+        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
+                                  l.Contains("0 skipped, 1 at a wider window"));
+    }
+
+    [Fact]
+    public async Task AfterAGap_WithNothingSkippedOrNarrowed_SaysSoRatherThanReprobing()
+    {
+        // Every candidate was probed at the full window (--max-jingle-length 0 pins it, an explicit
+        // --min-silence-length skips nothing), so a gap leaves Pass 2 with nothing to retry. The log
+        // has to say that: without the note, this case and "a candidate was declined" look identical
+        // from the outside, which is the first thing worth knowing when a chapter goes missing.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--verbose", "--max-jingle-length", "0", "--min-silence-length", "1.5"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.True(result.GapRemains);
+        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
+                                  l.Contains("nothing to re-probe since the last mark"));
+        Assert.DoesNotContain(log, l => l.Contains("re-probing"));
+    }
+
+    [Fact]
     public async Task ExplicitMinSilenceLength_NeverSkipsAnyDetectedSilence()
     {
         // With an explicit numeric --min-silence-length, adaptive tightening is off: every
