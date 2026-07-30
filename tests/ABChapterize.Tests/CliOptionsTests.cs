@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using System.Text.RegularExpressions;
 using Xunit;
 using ABChapterize.Cli;
 using ABChapterize.Language;
@@ -361,6 +362,22 @@ public sealed class CliOptionsTests : IDisposable
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
     {
         Assert.Throws<CliError>(() => ParseFile([.. new[] { "--import" }, .. extra]));
+    }
+
+    [Theory]
+    [InlineData("--import", "--lang", "de")]
+    [InlineData("--ignore-chapter-numbers", "--verify")]
+    public void AnIncompatibilityMessage_NamesOnlyOptionsTheHelpAlsoLists(params string[] args)
+    {
+        // Each of these lists of mutually exclusive options exists three times over: the check
+        // itself, the error message naming them, and the matching --help entry. Message and help
+        // had already drifted apart once - --custom, --custom-file and --ignore-chapter-numbers
+        // were missing from --help's --import entry (found 2026-07-31) - which nothing noticed,
+        // since both spellings are prose. Anchoring the help text to the message at least keeps
+        // the two a user actually reads in agreement.
+        var message = Assert.Throws<CliError>(() => ParseFile(args)).Message;
+        foreach (Match named in Regex.Matches(message, "--[a-z0-9-]+"))
+            Assert.Contains(named.Value, CliOptions.UsageText);
     }
 
     [Fact]

@@ -1634,7 +1634,8 @@ public sealed class CliOptions
                                     exported sidecar file instead. Since nothing is detected,
                                     the detection options have no effect and are rejected:
                                     --lang, --chapter-phrase, --prologue-phrase,
-                                    --epilogue-phrase, --model, --pass3-model,
+                                    --epilogue-phrase, --custom, --custom-file,
+                                    --ignore-chapter-numbers, --model, --pass3-model,
                                     --mark-before-jingle, --quick-marks, --mark-lead,
                                     --max-jingle-length, --min-silence-length, --early-abort,
                                     --expected-start-chapter, --max-chapter-number,
@@ -1692,7 +1693,10 @@ public sealed class CliOptions
                                     such as Git Bash on Windows, a CI log, or a modern terminal
                                     still calling itself plain "xterm".
           -s, --summary             Print a summary at the end: file counts, total and average
-                                    processing time.
+                                    processing time, the confidence spread across every mark
+                                    written, the shortest silence and longest jingle seen before
+                                    a chapter, and how much audio Whisper was fed (with its
+                                    transcription speed).
 
         Performance:
           -J, --jobs <n|auto>       Number of files processed concurrently (default: auto -

@@ -52,7 +52,7 @@ for you, not how it was built. The format follows
   believed.** A German "chapter nineteen" heard as chapter 90 used to be accepted
   at face value, leaving 70 chapters "missing" and sending the gap re-probe after
   47 candidate spots for nothing. Now, when a number would either leave more than
-  three chapters missing at once or falls at or below the chapters already found,
+  three chapters missing at once or falls below the chapters already found,
   the spot is read again: first with `--pass3-model` when it names a better model
   than the probing one, then from two differently framed windows around the
   announcement. A re-reading is adopted only if it actually continues the chapter

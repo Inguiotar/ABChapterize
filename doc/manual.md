@@ -145,7 +145,7 @@ enough to stay inside a single chunk, and `--verbose` says so. This needs the
 pre-pass, so `--max-jingle-length 0` never does it.
 
 A number that *is* read but cannot plausibly be the next chapter — one that
-would leave more than three chapters missing in one go, or one at or below the
+would leave more than three chapters missing in one go, or one below the
 chapters already found — is not taken at face value either. It is read again:
 with `--pass3-model` first if that names a better model than the probing one,
 then from two differently framed windows around the announcement. The new
@@ -515,13 +515,14 @@ abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
 abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
 abchapterize --help | -?
 abchapterize --version
+abchapterize --list-gpus
 ```
 
 Options must precede the file/directory arguments, which must come last.
 Short options that take no parameter may be collapsed: `-rb` = `-r -b`.
-Short options that take a parameter (`-l`, `-c`, `-m`, `-M`, `-x`, `-N`, `-a`,
-`-e`, `-h`, `-F`, `-X`, `-n`, `-t`, `-i`, `-J`) cannot be collapsed with
-others.
+Short options that take a parameter — every one shown with a `<value>`
+placeholder in the reference below, e.g. `-l <code|auto>` — cannot be
+collapsed with others; each needs its own `-x value`.
 
 Options taking a decimal number accept either separator — `-n 2.5` and
 `-n 2,5` are the same thing — so you can type whatever your keyboard and
@@ -652,6 +653,17 @@ so that logs and reports stay comparable regardless of regional settings.
   runs on CPU regardless of this option, so it only affects Whisper. Useful
   to leave a GPU free for other work, or to sidestep a flaky/unsupported GPU
   backend.
+
+`--use-gpu <name>`
+: Run Whisper on the GPU whose name contains `<name>`, matched
+  case-insensitively against any part of it — `--use-gpu gtx`, `--use-gpu uhd`.
+  A single discrete GPU is preferred automatically, so this is only needed to
+  force the integrated card, or to choose between several discrete ones. A
+  request matching no GPU, or more than one, stops the run and lists what is
+  available. A bare number is taken as a device index if one exists, for the
+  machine with two identical cards. Vulkan only, and not combinable with
+  `--cpu-only`. See
+  [Picking a GPU on a multi-GPU machine](#picking-a-gpu-on-a-multi-gpu-machine).
 
 `-n`, `--min-silence-length <seconds|auto>`
 : Minimum silence duration (0.1–60, default: `auto`) that counts as a
@@ -1138,9 +1150,11 @@ touching Whisper at all.
   `--export`). If no sidecar file is found, the file is skipped with a
   message suggesting `--export`. Because there is nothing to detect,
   `--import` cannot be combined with any detection option — `--lang`,
-  `--chapter-phrase`, `--model`, `--pass3-model`, `--mark-before-jingle`,
+  `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--custom`,
+  `--custom-file`, `--ignore-chapter-numbers`, `--model`, `--pass3-model`,
+  `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
   `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
-  `--expected-start-chapter`, `--max-chapter-number`, `--quick-marks`,
+  `--expected-start-chapter`, `--max-chapter-number`,
   `--trailing-scan`, `--verify` — nor with `--export`, `--revert` or
   `--no-op`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
@@ -1242,6 +1256,12 @@ touching Whisper at all.
   build timestamp (e.g. `abchapterize 0.9.0 (build 42, built 2026-07-20
   14:33:12 UTC)`). Not shown anywhere else - `--help`'s banner only ever
   shows the plain version number.
+
+`--list-gpus`
+: List this machine's Vulkan GPUs by name, as `--use-gpu` matches them, then
+  exit. Needs neither a file nor a model, and a machine with no Vulkan GPU is
+  reported as such rather than treated as an error. See
+  [Picking a GPU on a multi-GPU machine](#picking-a-gpu-on-a-multi-gpu-machine).
 
 ## 7. Languages and number recognition
 
