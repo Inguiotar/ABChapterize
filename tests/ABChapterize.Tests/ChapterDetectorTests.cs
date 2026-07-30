@@ -1636,6 +1636,38 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AGapReprobe_StopsAtTheChapterThatClosesTheGap_WithoutRefindingIt()
+    {
+        // Three consecutive skipped candidates (2.0 s silences, below the 3.75 s threshold chapter
+        // 2's 5 s anchor sets), all within one probe window of each other, and chapter 3 announced
+        // right after the first of them. Chapter 4 opens the gap, the re-probe recovers chapter 3
+        // from candidate 700 - and must then stop: the windows at 705 and 710 overlap the same
+        // announcement and would each re-detect it, since the re-probe deliberately keeps accepting
+        // numbers above chapter 2. Observed on real audio as four identical marks for one chapter,
+        // each paying for its own mark refinement (BARDIOC.m4b, 2026-07-30).
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--verbose", "--max-jingle-length", "0"),
+            [new(595, 600), new(698, 700), new(703, 705), new(708, 710), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(700, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        // The first re-probe candidate ran; the two behind it never did.
+        Assert.Contains(700.0, audio.DecodeStarts);
+        Assert.DoesNotContain(705.0, audio.DecodeStarts);
+        Assert.DoesNotContain(710.0, audio.DecodeStarts);
+        Assert.Single(log, l => l.Contains("chapter 3 detected"));
+        Assert.Contains(log, l => l.Contains("gap before chapter 4 closed") &&
+                                  l.Contains("stopped after 1 of 3 candidate(s)"));
+    }
+
+    [Fact]
     public async Task AfterAGap_WithNothingSkippedOrNarrowed_SaysSoRatherThanReprobing()
     {
         // Every candidate was probed at the full window (--max-jingle-length 0 pins it, an explicit

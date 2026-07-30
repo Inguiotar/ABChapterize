@@ -1116,6 +1116,14 @@ internal sealed class RegionProber
     /// Applies everything one probe's marks change about the region's running state: a sequence gap
     /// triggers the re-probe of everything skipped since the last mark, each mark's anchor silence
     /// may tighten the --min-silence-length auto threshold, and the last accepted number advances.
+    /// <para>
+    /// The order matters and is the order Pass 2 resumes on: a gap re-probe runs first, so the
+    /// threshold this mark then adopts and the jingle window the re-probe restores both already
+    /// account for whatever the recovered chapters taught them. Where the candidate loop picks up
+    /// afterwards needs no arranging - the re-probe walks its own copy of the sequence and leaves the
+    /// loop index alone, so probing continues at the candidate after this mark's own window, past
+    /// every position the re-probe just revisited.
+    /// </para>
     /// </summary>
     /// <param name="probeMarks">The marks the probe produced, in window order.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -1194,6 +1202,23 @@ internal sealed class RegionProber
     /// against its next neighbor in that sequence so adjacent re-probe windows get snapped shared
     /// borders too; the window width cannot change mid-re-probe (see <see cref="_reprobing"/>), so
     /// consecutive ends stay consistent for the whole sequence.
+    /// <para>
+    /// Stops the moment the gap is closed rather than walking the rest of the sequence: the
+    /// candidates behind the recovered chapter cover the same audio and have nothing left to find,
+    /// and each of them would pay for a full mark placement (the refinement alone costs tens of
+    /// seconds) to arrive at a mark that is then dropped as a duplicate. Confirmed on BARDIOC.m4b
+    /// 2026-07-30, where the chapter 10 that closed the gap was re-found and re-refined by the three
+    /// following candidates - four identical marks at 5:14:48.15, about two minutes of pure waste.
+    /// </para>
+    /// <para>
+    /// Every accepted gap mark advances <see cref="_lastNumber"/>, which is what makes that
+    /// termination merely an optimisation rather than the fix: a later window overlapping the same
+    /// announcement must no longer accept it, and it cannot once the number is no longer above the
+    /// floor. The floor still starts at <paramref name="previousNumber"/> so the in-between numbers
+    /// are acceptable at all, and raising it as they are found costs nothing - candidates run in
+    /// chronological order and chapter numbers ascend with time, so no later window can hold a
+    /// number the raised floor now rejects.
+    /// </para>
     /// </summary>
     /// <param name="candidates">The candidates to re-probe, in chronological order.</param>
     /// <param name="previousNumber">The chapter number below the gap.</param>
@@ -1208,22 +1233,30 @@ internal sealed class RegionProber
             _env.Log?.Invoke($"jingle probe window reset to {_probeSeconds:0.#} s for the re-probe");
         }
         _reprobing = true;
+        var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
         for (var si = 0; si < candidates.Count; si++)
         {
             var gapMarks = await ProbeAsync(candidates[si], WindowEndFor(candidates, si), ct);
-            if (!_env.Options.AutoMinSilence)
-                continue;
-            // A gap mark recovered from a *skipped* candidate has, by definition, an anchor silence
-            // short enough to have been skipped - fold it into the running minimum so the threshold
-            // can never again sit above a silence proven to precede a chapter. One recovered from a
-            // widened window instead cleared the threshold already, so its proposal cannot lower the
-            // running minimum and this is a no-op for it; both go through the same guard rather than
-            // the caller having to remember which list a candidate came from. Only genuine
-            // gap-fillers count either way; a duplicate or re-detection of this window's own mark
-            // surfacing in a re-probe must not lower anything.
             foreach (var gapMark in gapMarks)
-                if (gapMark.Number > previousNumber && gapMark.Number < number)
+            {
+                _lastNumber = Math.Max(_lastNumber ?? 0, gapMark.Number);
+                // A gap mark recovered from a *skipped* candidate has, by definition, an anchor
+                // silence short enough to have been skipped - fold it into the running minimum so
+                // the threshold can never again sit above a silence proven to precede a chapter. One
+                // recovered from a widened window instead cleared the threshold already, so its
+                // proposal cannot lower the running minimum and this is a no-op for it; both go
+                // through the same guard rather than the caller having to remember which list a
+                // candidate came from. Only genuine gap-fillers count either way; a re-detection of
+                // a chapter outside this gap must not lower anything.
+                if (missing.Remove(gapMark.Number) && _env.Options.AutoMinSilence)
                     ProposeThreshold(gapMark.MarkSilence);
+            }
+            if (missing.Count > 0)
+                continue;
+            if (si + 1 < candidates.Count)
+                _env.Log?.Invoke($"gap before chapter {number} closed - re-probing stopped after " +
+                                 $"{si + 1} of {candidates.Count} candidate(s)");
+            break;
         }
         _reprobing = false;
         // Re-probing done: bring the jingle window back down from the ceiling to the adapted value,

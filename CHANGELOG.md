@@ -251,6 +251,15 @@ for you, not how it was built. The format follows
   and a jingle discovered that way sizes the window for the rest of the file.
   Where there is nothing to retry, `--verbose` now says so instead of moving on
   without comment.
+- **A chapter recovered from a sequence gap is no longer found several times over.**
+  The retry that closes a gap kept going through the candidates behind the recovered
+  chapter, and because they cover the same stretch of audio each one found that same
+  chapter again — placing, refining and then discarding an identical mark every time,
+  for minutes of needless work on a long book (four times over for one chapter of a
+  real audiobook). The retry now stops the moment the gap is closed, and an already
+  recovered chapter cannot be picked up a second time. Detection then carries on from
+  where it was, with the recovered chapters' own silences and jingles folded into the
+  two self-tightening settings first.
 - **A misheard chapter number no longer costs a genuine chapter its mark.** When
   the final transcription pass went looking for, say, the chapter 2 missing
   between chapters 1 and 3, a "chapter seven" misheard somewhere in that stretch
