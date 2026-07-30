@@ -273,10 +273,6 @@ for you, not how it was built. The format follows
   One recovery may widen the window by at most 25 %, so a single outlier chapter cannot
   leave every later probe running at the maximum window for hours; an extreme reach is
   granted over several recoveries instead.
-- **The retry after a sequence gap no longer re-listens to audio it has already heard.**
-  Where a candidate is retried at a wider window, only the part beyond the width it was
-  first probed at is transcribed again, so closing a gap costs less Whisper time. With
-  `--verbose`, such a probe is logged as extending the earlier one.
 - **A chapter recovered from a sequence gap is no longer found several times over.**
   The retry that closes a gap kept going through the candidates behind the recovered
   chapter, and because they cover the same stretch of audio each one found that same

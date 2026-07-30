@@ -351,41 +351,6 @@ internal static class DetectionTuning
     internal const double GapReachGrowthFactor = 1.25;
 
     /// <summary>
-    /// Whisper's fixed decode chunk. The encoder always runs on a 30-second mel spectrogram, zero-padding
-    /// anything shorter, so a decode's cost is roughly <c>ceil(length / 30)</c> encoder passes plus the
-    /// tokens it emits - <em>not</em> proportional to its length. A 12-second decode costs about what a
-    /// 30-second one does.
-    /// <para>
-    /// This is why <see cref="RegionProber.FindReusablePrefixEnd"/> gates transcript reuse on removing a
-    /// whole pass rather than on saving seconds: shaving a 50-second window down to 47 saves an encoder
-    /// pass exactly never, while adding a Whisper call and a second ffmpeg decode. It is also why the
-    /// "Whisper audio processed" figure in the summary overstates what short decodes cost - useful as a
-    /// coverage measure, misleading as a cost one.
-    /// </para>
-    /// </summary>
-    internal const double WhisperChunkSeconds = 30.0;
-
-    /// <summary>
-    /// How far before a probe window's end an earlier transcript stops being trusted for reuse, when that
-    /// end was <em>not</em> snapped to a silence or VAD region (see
-    /// <see cref="RegionProber.FindReusablePrefixEnd"/>). Whisper can drop speech that runs past the edge
-    /// of its input entirely rather than emitting a partial word - confirmed on BARDIOC.m4b (2026-07-30),
-    /// where four windows ended mid-announcement and the run's log carries not one "phrase heard but no
-    /// readable number" note for them: the truncated announcements produced no text at all, not even a
-    /// recognizable chapter phrase. Reusing right up to such an edge would therefore inherit a hole
-    /// rather than a partial phrase, and the re-probe that exists to find that very chapter would decode
-    /// from the middle of the announcement it is hunting.
-    /// <para>
-    /// <see cref="PhraseMarginSeconds"/> is the right size for it, not a coincidence: it is how much room
-    /// an announcement needs after its onset to be read in full. A reused prefix ending that far before
-    /// the edge was decoded with at least that much following context, so an announcement inside it would
-    /// have been transcribed <em>and</em> read - meaning a candidate that came back empty cannot be
-    /// hiding one there.
-    /// </para>
-    /// </summary>
-    internal const double PrefixReuseBackoffSeconds = PhraseMarginSeconds;
-
-    /// <summary>
     /// With --min-silence-length auto, the Pass 2 probing threshold is this factor times a mark's
     /// anchor silence length, i.e. a 25 % margin below the shortest observed inter-chapter break,
     /// mirroring <see cref="JingleObservationSafetyFactor"/>. Monotonic: the first qualifying mark
