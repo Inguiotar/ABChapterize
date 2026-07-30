@@ -2,7 +2,8 @@
 
 **Correct chapter marks for your audiobooks — by actually listening to them.**
 
-ABChapterize scans audiobook files (`.m4a`, `.m4b`, `.mp3`, `.opus`, `.mka`) for
+ABChapterize is a command-line tool that scans audiobook files
+(`.m4a`, `.m4b`, `.mp3`, `.opus`, `.mka`) for
 spoken chapter announcements ("Chapter Seven", "Kapitel 12", …) using
 [Whisper](https://github.com/ggerganov/whisper.cpp) speech recognition and
 writes proper chapter marks directly into the file.
@@ -427,6 +428,12 @@ keeps its exact position.
   the recognizer catching a single short phrase, and `tiny` in particular
   mishears or drops chapter announcements so often that it is supported
   mostly for completeness (quick experiments, toy examples).
+- **A faster pairing worth trying:** `-m small -M turbo` lets the small,
+  quick model do the many short probes and keeps `turbo` in reserve for the
+  chapters it couldn't resolve. In testing on English and German audiobooks
+  this came out meaningfully faster with the same chapter marks at the end —
+  worth a `--dry-run` comparison on your own books before adopting it, since
+  it does lean on a smaller model for most of the work.
 - **Memory:** a model needs somewhat more memory to run than its download size —
   whisper.cpp's own
   [figures](https://github.com/ggml-org/whisper.cpp#memory-usage) are ~852 MB

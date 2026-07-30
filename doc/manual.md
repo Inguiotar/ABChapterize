@@ -1404,6 +1404,19 @@ still error-prone, especially for non-English audio. For real audiobooks,
 use `small` or bigger; the default `turbo` is the best choice on almost
 any hardware that can run it.
 
+If you would rather trade some of that safety margin for speed, pair the two
+model options instead of lowering `--model` on its own: `-m small -M turbo`
+runs the many short probe transcriptions with the quick model and keeps
+`turbo` for the chapters `small` could not resolve — which, because `-M` then
+names the *heavier* model, also brings
+[pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model) and
+pass 2's second reading of an implausible chapter number into play. In testing
+on English and German audiobooks this was meaningfully faster than plain
+`turbo` and produced the same marks. It has not been checked across every
+supported language, and it does put a smaller model in charge of most of the
+listening, so compare a `--dry-run` against the default on one of your own
+books before making it a habit.
+
 ### Memory requirements
 
 A loaded model needs somewhat more memory than its file on disk. whisper.cpp,
