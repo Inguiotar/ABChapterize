@@ -2414,27 +2414,30 @@ public sealed class ChapterDetectorTests : IDisposable
         // TransientSpeechFloorSeconds, fooling RefineDefaultMark's VAD-duration heuristic into
         // stopping on it (656) instead of the real announcement (657) - both blips look identical
         // to that heuristic, which only ever looks at duration. precise marking catches what the
-        // heuristic cannot: its own first check (at 655.75, the heuristic's mark) fails, then
-        // every later VAD speech-segment start is checked in turn - 656 fails too (still the
-        // transient), 657 succeeds (the real phrase). That success is only a foothold; the edge
-        // walk then pins the onset at the last position still hearing the phrase first, which the
-        // scripted transcriber's own match tolerance puts 0.2 s later.
+        // heuristic cannot: it narrows in on the announcement from the heuristic's own mark
+        // (655.75) and finds the phrase surviving up to 656.85 but no later, so the transient is
+        // ruled out and the real onset at 656.9 is confirmed instead.
+        //
+        // The silence at 658.5 is what makes the shape expressible at all: the probe window's end
+        // snaps into the jingle's own non-speech gap (648.5) without it, which would leave the
+        // announcement outside the very window the phrase was detected in - something real
+        // Whisper cannot produce, since a segment cannot extend past its own input.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5"),
-            [new(610, 613)],
+            [new(610, 613), new(658.5, 662)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
                 s.Add(655.65, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 655.75 (RefineDefaultMark's mark) - the transient, not the phrase
-                s.Add(655.9, new TranscriptSegment(0, 0.6, " Music", 1.0));        // candidate @ 656 (the transient itself) - still not the phrase
-                s.Add(656.9, Seg(0, " Chapter two."));                            // candidate @ 657 - the real phrase
-                s.Add(659.9, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // candidate @ 660 - narration resumes, confirming 657
+                s.Add(655.9, new TranscriptSegment(0, 0.6, " Music", 1.0));        // the transient itself - still not the phrase
+                s.Add(656.9, Seg(0, " Chapter two."));                            // the real announcement onset
+                s.Add(659.9, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // narration resumes, bounding the announcement
             },
             new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(657, 658.2), new(660, 3600)] });
 
         Assert.False(result.GapRemains);
-        AssertChapters([new(1, 0.25), new(2, 656.75)], result.Chapters);
+        AssertChapters([new(1, 0.25), new(2, 656.65)], result.Chapters);
     }
 
     [Fact]
@@ -2442,11 +2445,10 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // If the phrase can never be confirmed anywhere - every check hears something else first -
         // precise marking must not guess: it leaves the mark exactly as RefineDefaultMark computed
-        // it, rather than looping forever or picking an arbitrary candidate. Round 1's VAD
-        // candidates all carry unrelated music, and round 2 does narrow in on the announcement at
-        // 619, but every foothold it then offers the ordinary check is beaten to the microphone by
-        // the transient scripted just in front of it - so nothing is ever confirmed and the mark
-        // stands where the heuristics left it.
+        // it, rather than looping forever or picking an arbitrary candidate. The search does narrow
+        // in on the announcement at 619, but every foothold it then offers the ordinary check is
+        // beaten to the microphone by the transient scripted just in front of it - so nothing is
+        // ever confirmed and the mark stands where the heuristics left it.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
             [new(610, 613)],
@@ -2467,12 +2469,11 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task PreciseMark_Round2_FindsAPhraseRound1sVadCandidatesNeverReached()
+    public async Task PreciseMark_FindsAnAnnouncementNoVadSegmentPointsAt()
     {
-        // Round 2's whole reason to exist: a phrase sitting where no VAD speech segment starts, so
-        // round 1 (limited entirely to VAD candidates) has no way to ever try checking it. Each VAD
-        // candidate round 1 does have (656, 657) carries unrelated music, so round 1 comes up
-        // empty; round 2 then narrows in on the real announcement at 645 without any help from VAD,
+        // Why the search takes no help at all from VAD: the announcement at 645 sits where no VAD
+        // speech segment starts, and the two segments VAD does offer (656, 657) carry unrelated
+        // music. Bracketing the matched segment and narrowing in on the phrase finds it anyway,
         // starting from a mark the smeared abs-638 transcript put 7 s early.
         var result = await DetectAsync(
             Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
@@ -2492,13 +2493,19 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task PreciseMark_Round2_WalksBackWhenTheMarkLandedPastTheAnnouncement()
+    public async Task PreciseMark_WalksBackWhenTheMarkLandedPastTheAnnouncement()
     {
-        // Round 2's other direction. Nothing is scripted at or after the mark, so the very first
-        // question - "does the phrase survive being cut off here?" - answers no, and the search
-        // gallops backward instead of forward: 0.1, 0.3, 0.7, 1.5, 3.1 and 6.3 s behind the mark,
-        // the last of which reaches past the announcement at 655.55 and hears it again. Bisecting
-        // that bracket pins the onset, and the mark follows 0.25 s in front of it.
+        // The search's other direction, and the failure shape that needs it (Perry Rhodan "Die
+        // Dritte Macht", chapters 8 and 20, 2026-07-24): when the announcement's own swallowed blip
+        // and an unrelated later one both fall inside a single over-merged non-speech region,
+        // ResolveDefaultPhraseOnset's "first blip of the *last* cluster" rule lands the mark on the
+        // wrong, later blip - seconds past the true announcement.
+        //
+        // Nothing is scripted at or after the mark, so the very first question - "does the phrase
+        // survive being cut off here?" - answers no, and the search gallops backward instead of
+        // forward: 0.1, 0.3, 0.7, 1.5, 3.1 and 6.3 s behind the mark, the last of which reaches
+        // past the announcement at 655.55 and hears it again. Bisecting that bracket pins the
+        // onset, and the mark follows 0.25 s in front of it.
         //
         // Driven through the refiner directly because the shape cannot be built through
         // DetectAsync: a mark that overshoots needs a detection whose timestamp is later than the
@@ -2510,47 +2517,10 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, [], 650, 662, 700, CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, 650, 662, 700, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(655.3, result.Mark, 3);
-    }
-
-    [Fact]
-    public async Task PreciseMark_CorrectsAMarkThatOvershotForward_BySearchingBackward()
-    {
-        // Reproduces the opposite failure shape from "ch19 disease" above (Perry Rhodan
-        // "Die Dritte Macht", chapters 8 and 20, 2026-07-24): here the announcement's own
-        // swallowed blip (656-656.6) and an unrelated later blip (658-658.6, standing in for the
-        // next sentence's leading fragment bleeding into the same over-merged jingle region) are
-        // far enough apart (1.4s, over MergeShortSpeechGapSeconds) to form two separate clusters,
-        // yet each blip is individually short enough that ComputeNonSpeechRegions' merge still
-        // swallows both into one region. ResolveDefaultPhraseOnset's "first blip of the *last*
-        // cluster" rule then lands the mark on the second, unrelated blip (657.75) - almost 2s
-        // past the true announcement. Its own check fails; round 1 then interleaves backward and
-        // forward candidates, testing backward first on every step (see
-        // WalkPreciseMarkCandidatesInterleavedAsync), so the announcement's own blip (656) is
-        // tried - and confirms - before either forward candidate (658, the same wrong blip; 660,
-        // narration) is ever checked. Those two forward entries are left scripted only to prove
-        // they'd fail if reached; any success ends the search, so they never are. The edge walk
-        // then runs forward from 656 to the last position still hearing the phrase (656.20, set by
-        // the scripted-entry match tolerance), giving 656.20 - 0.25 = 655.95.
-        var result = await DetectAsync(
-            Options("--min-silence-length", "1.5"),
-            [new(610, 613)],
-            s =>
-            {
-                s.Add(0, Seg(0.5, " Chapter one."));
-                s.Add(613, new TranscriptSegment(25, 45, " Chapter two.", 1.0)); // abs 638-658, smeared
-                s.Add(657.65, new TranscriptSegment(0, 1, " Music", 1.0));         // check @ 657.75 (the wrong, default mark) - fails
-                s.Add(657.9, new TranscriptSegment(0, 1.1, " Music", 1.0));        // forward candidate @ 658 (the wrong blip itself) - still fails
-                s.Add(659.9, new TranscriptSegment(0, 3, " Once upon a time.", 1.0)); // forward candidate @ 660 - narration, also fails
-                s.Add(655.9, Seg(0, " Chapter two."));                            // backward candidate @ 656 - the real phrase, confirms
-            },
-            new FakeVad { Speech = [new(0, 640), new(656, 656.6), new(658, 658.6), new(660, 3600)] });
-
-        Assert.False(result.GapRemains);
-        AssertChapters([new(1, 0.25), new(2, 655.75)], result.Chapters);
     }
 
     [Fact]
@@ -4421,8 +4391,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, [new(660, 3600)], 660, 663, 700,
-            CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, 660, 663, 700, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);
@@ -4437,8 +4406,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, [new(660, 3600)], 660, 663, 700,
-            CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, 660, 663, 700, CancellationToken.None);
 
         Assert.False(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);

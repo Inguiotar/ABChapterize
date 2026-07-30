@@ -23,8 +23,8 @@ namespace ABChapterize.Detection;
 /// rather than per file, since a run detects all three at once and a correction that re-transcribed
 /// a prologue while looking for "chapter" could only ever fail to confirm it.</param>
 /// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk.</param>
-/// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk, its
-/// verification search and precise marking's candidate positions.</param>
+/// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk and its
+/// verification search.</param>
 /// <param name="TranscriptAbs">The transcript this mark's phrase was found in, in absolute file
 /// time, so the backward walk can tell genuine preceding narration apart from a musical or vocal
 /// transient inside the jingle - see <see cref="JingleGeometry.IsGenuineSpeech"/>.</param>
@@ -32,7 +32,7 @@ namespace ABChapterize.Detection;
 /// transcribed from - the window's own planned end, not the last segment's timestamp, which is
 /// exactly the kind of figure precise marking exists because it cannot trust. Known to lie past the
 /// announcement, since the announcement was found inside it, which is the one thing
-/// <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>'s round 2 needs of it.</param>
+/// <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/> needs of it.</param>
 internal readonly record struct MarkContext(
     string File, string? InputDecoder, Regex PhraseRegex, List<Silence> AllSilences,
     List<SpeechSegment> SpeechSegments, List<TranscriptSegment> TranscriptAbs, double TranscriptEnd);
@@ -98,7 +98,7 @@ internal sealed class MarkPlacer
     /// <param name="phraseAbs">Absolute phrase start time, the clip point for the jingle length.</param>
     /// <param name="phraseEndAbs">Absolute end of the transcript segment(s) the phrase was matched
     /// in. Together with <paramref name="phraseAbs"/> this brackets where the announcement can
-    /// actually be - see <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>'s round 2.</param>
+    /// actually be - see <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/>.</param>
     /// <param name="statSilence">The silence the mark anchored to, or null when none.</param>
     /// <param name="statRegion">The jingle region preceding the phrase, or null (always null when
     /// the VAD pre-pass did not run).</param>
@@ -113,7 +113,7 @@ internal sealed class MarkPlacer
         var phraseHeard = false;
         if (_options.PreciseMark)
             (time, phraseHeard) = await _refiner.RefinePreciseMarkAsync(
-                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.SpeechSegments,
+                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex,
                 phraseAbs, phraseEndAbs, ctx.TranscriptEnd, ct);
         if (_options.MarkBeforeJingle)
             time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx, ct);

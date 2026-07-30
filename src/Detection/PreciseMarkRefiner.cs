@@ -124,41 +124,41 @@ internal sealed class PreciseMarkRefiner
     /// can tell the two apart.
     /// </para>
     /// <para>
-    /// Round 1 searches VAD speech-segment starts within a plausible jingle-plus-phrase span
-    /// (<see cref="CliOptions.MaxJingleSeconds"/> plus <see cref="PhraseMarginSeconds"/>) of
-    /// <paramref name="mark"/> - the same swallowed-blip candidates
-    /// <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> already reasons about, not a blind
-    /// blind scan - via <see cref="WalkPreciseMarkCandidatesInterleavedAsync"/>, which tries
-    /// the forward (later-than-mark) and backward (earlier-than-mark) candidates one at a time in
-    /// alternation rather than exhausting one direction before ever trying the other. Searching
-    /// backward at all is not symmetry for its own sake: <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/>'s
-    /// swallowed-blip clustering can promote a later, unrelated blip inside an over-merged jingle
-    /// region over the announcement's own earlier one, landing <paramref name="mark"/> generously
-    /// <em>past</em> the true onset instead of short of it - confirmed live on chapters whose true
-    /// onset sat mere seconds before what the heuristic reported (Perry Rhodan "Die Dritte Macht",
-    /// chapters 8 and 20, 2026-07-24). Both spans are bounded to the same jingle-plus-phrase
-    /// distance from <paramref name="mark"/>, so neither direction can wander into a neighbouring
-    /// chapter.
-    /// <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> itself is deliberately untouched:
-    /// default-mode marking is all --quick-marks leaves in place, and its heuristic accuracy alone
-    /// is what makes quick marks usable for jumping to a chapter.
+    /// <see cref="LocatePhraseByShrinkingWindowAsync"/> does the whole job: it searches the stretch
+    /// the phrase was matched in, which is what lets it recover a mark left far from its
+    /// announcement, and it bisects a monotone predicate rather than sampling guessed positions.
+    /// <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> is deliberately untouched by any of
+    /// this: default-mode marking is all --quick-marks leaves in place, and its heuristic accuracy
+    /// alone is what makes quick marks usable for jumping to a chapter.
     /// </para>
     /// <para>
-    /// If round 1 never confirms anything in either direction - it relies entirely on
-    /// VAD-reported speech-segment starts, so it can only find what VAD itself noticed - round 2
-    /// (<see cref="LocatePhraseByShrinkingWindowAsync"/>) goes looking without VAD's help, immune
-    /// to a jingle quiet enough, or short enough, that VAD reports no speech segment inside it at
-    /// all. It searches the stretch the phrase was matched in rather than a span around the mark,
-    /// which is what lets it recover a mark left far from its announcement, and it bisects rather
-    /// than scanning, so it costs a couple of dozen transcriptions at most where a blind
-    /// step-by-step sweep cost hundreds. It still only runs after round 1 has come up empty, since
-    /// its transcriptions are individually much larger.
+    /// There used to be a cheap first round ahead of it, sampling
+    /// <see cref="PreciseMarkPhraseFoundAsync"/> at VAD speech-segment starts within a
+    /// jingle-plus-phrase span of the mark, from the days when the search below was a fixed-step
+    /// sweep costing hundreds of transcriptions. Removed 2026-07-30 after the BARDIOC.m4b log
+    /// settled it: over 26 refinements it confirmed 3 times, spent 606 checks and 8.1 minutes doing
+    /// it, and the search below then closed all 23 of the remaining marks in 3.8 minutes. It could
+    /// not be repaired either, for a structural reason worth recording. Its window was fixed-width,
+    /// so shifting it moved both ends and "is the phrase heard here" was not a step function - it
+    /// could only ever be sampled at guessed positions, never searched. The one guess that mattered,
+    /// the announcement's own VAD speech start, lands <em>past</em> the onset by VAD's onset lag
+    /// (0.60 s measured on Perry Rhodan "Die Dritte Macht" chapter 4, true onset 4142.572 s vs. a
+    /// VAD start of 4143.168 s, 2026-07-30; ~0.4 s recorded earlier by <c>tools\vadprobe</c>'s
+    /// <c>precise</c> prototype), i.e. on the far side of the plateau edge where confirmation
+    /// depends on Whisper recovering a clipped first syllable. Nothing inside the plateau was ever a
+    /// candidate, because only segment starts were collected and never the pauses between them.
+    /// Widening its window would not have helped: the wider it got, the less "the phrase is the
+    /// first thing heard" implied "the phrase starts near here". Anchoring the window's <em>end</em>
+    /// instead, which is what makes the search below monotone and bisectable, is the only fix - and
+    /// that is the search below.
     /// </para>
     /// <para>
-    /// When neither round nor direction ever confirms a candidate, <paramref name="mark"/> itself
-    /// carries forward into the final step below rather than guessing - validated against a real
-    /// audiobook's full set of known good and previously-broken marks (see <c>tools\vadprobe</c>'s
-    /// <c>precise</c> prototype) before this was ported here.
+    /// When nothing can be confirmed, <paramref name="mark"/> itself carries forward into the final
+    /// step below rather than guessing - validated against a real audiobook's full set of known good
+    /// and previously-broken marks (see <c>tools\vadprobe</c>'s <c>precise</c> prototype) before
+    /// this was ported here. The default-mode heuristic it falls back to measured within 0.05-0.35 s
+    /// of the true onset for 25 of BARDIOC.m4b's 26 marks, so the fallback is a fraction of a second
+    /// of accuracy rather than a broken mark.
     /// </para>
     /// <para>
     /// Final cleanup step, applied to whichever mark the above produced (even one left exactly as
@@ -174,45 +174,23 @@ internal sealed class PreciseMarkRefiner
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
     /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
-    /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
-    /// empty when the VAD pre-pass did not run, which costs round 1 every candidate it would have
-    /// had and leaves round 2 to do the whole job.</param>
     /// <param name="phraseAbs">Absolute start of the transcript segment(s) the phrase was matched
-    /// in - round 2's search bracket, together with the two that follow.</param>
+    /// in - the search bracket, together with the two that follow.</param>
     /// <param name="phraseEndAbs">Absolute end of those segment(s).</param>
     /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in, capping
     /// that bracket - see <see cref="MarkContext.TranscriptEnd"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
-    /// left as given when no candidate could be confirmed), quiet-snapped as a final step, paired
+    /// left as given when nothing could be confirmed), quiet-snapped as a final step, paired
     /// with whether the phrase was ever actually heard - see <see cref="PreciseMarkResult"/>.</returns>
     internal async Task<PreciseMarkResult> RefinePreciseMarkAsync(
         double mark, string file, string? inputDecoder, Regex phraseRegex,
-        List<SpeechSegment> speechSegments, double phraseAbs, double phraseEndAbs,
-        double transcriptEnd, CancellationToken ct)
+        double phraseAbs, double phraseEndAbs, double transcriptEnd, CancellationToken ct)
     {
         double result;
         var heard = true;
-        var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
-        var forwardCandidates = speechSegments
-            .Where(s => s.StartSeconds > mark && s.StartSeconds <= mark + span)
-            .Select(s => s.StartSeconds)
-            .OrderBy(s => s);
-        var backwardCandidates = speechSegments
-            .Where(s => s.StartSeconds < mark && s.StartSeconds >= mark - span)
-            .Select(s => s.StartSeconds)
-            .OrderByDescending(s => s);
-        _log?.Invoke($"refining mark at {FormatTimestamp(mark)} - checking " +
-                     $"{forwardCandidates.Count() + backwardCandidates.Count()} VAD candidate(s) " +
-                     $"within {span:0.#} s");
-        var confirmed = await WalkPreciseMarkCandidatesInterleavedAsync(
-            forwardCandidates, backwardCandidates, file, inputDecoder, phraseRegex, ct);
-
-        if (confirmed is null)
-        {
-            confirmed = await LocatePhraseByShrinkingWindowAsync(
-                mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
-        }
+        var confirmed = await LocatePhraseByShrinkingWindowAsync(
+            mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
 
         if (confirmed is { } hit)
         {
@@ -265,8 +243,7 @@ internal sealed class PreciseMarkRefiner
     /// directly: if the phrase is <em>not</em> the first thing heard there, the walk reached clear
     /// of it and is trusted outright. If it <em>is</em>, the walk stopped too late, and
     /// <paramref name="walked"/> is corrected by searching backward from it - VAD speech-segment
-    /// starts within the same jingle-plus-margin span precise marking's own round 1 already
-    /// searches (see <see cref="RefinePreciseMarkAsync"/>), falling back to a blind fixed-step scan
+    /// starts within a jingle-plus-margin span of it, falling back to a blind fixed-step scan
     /// of its own (<see cref="FixedStepCandidates"/>) - for the first (nearest) candidate where the
     /// phrase is no longer the first thing heard.
     /// </para>
@@ -540,7 +517,7 @@ internal sealed class PreciseMarkRefiner
         => Math.Round(Math.Max(0, lastConfirmed - PreciseMarkLeadInSeconds), 6);
 
     /// <summary>
-    /// Precise marking's round 2 (see <see cref="RefinePreciseMarkAsync"/>): finds a position where
+    /// Precise marking's search (see <see cref="RefinePreciseMarkAsync"/>): finds a position where
     /// the announcement is the first thing heard, without any help from VAD, by asking a question
     /// that has a single answer rather than hunting for one that has many.
     /// <para>
@@ -567,8 +544,8 @@ internal sealed class PreciseMarkRefiner
     /// onset (see <see cref="PreciseMarkFootholdBackoffsSeconds"/>), whereas everything downstream
     /// is built on positions that err early. So the edge is only used to aim: a handful of
     /// backoffs behind it are offered to the ordinary check, and the first one it confirms is
-    /// returned as the foothold for <see cref="FindOnsetEdgeAsync"/>, exactly as round 1's
-    /// confirmations are. Returning null when none of them confirms is the honest outcome and not a
+    /// returned as the foothold for <see cref="FindOnsetEdgeAsync"/>. Returning null when none of
+    /// them confirms is the honest outcome and not a
     /// fallback worth adding: the edge came from the phrase appearing <em>somewhere</em> in a long
     /// window, which an unrelated mention in the narration can also produce.
     /// </para>
@@ -596,12 +573,11 @@ internal sealed class PreciseMarkRefiner
         if (ceiling - floor <= PreciseMarkFixedStepSeconds)
             return null;
 
-        // Announced before it starts rather than after: round 2 is the step that can keep a single
-        // mark busy for a while, and an unexplained silent wait is indistinguishable from a hang -
-        // which is exactly how its predecessor was first reported, on Stalker.m4b's "Zeittafel",
-        // 2026-07-29.
-        _log?.Invoke($"no VAD candidate confirmed near {FormatTimestamp(mark)} - narrowing in on " +
-                     $"the phrase between {FormatTimestamp(floor)} and {FormatTimestamp(ceiling)}");
+        // Announced before it starts rather than after: this step can keep a single mark busy for a
+        // while, and an unexplained silent wait is indistinguishable from a hang - which is exactly
+        // how its predecessor was first reported, on Stalker.m4b's "Zeittafel", 2026-07-29.
+        _log?.Invoke($"refining mark at {FormatTimestamp(mark)} - narrowing in on the phrase " +
+                     $"between {FormatTimestamp(floor)} and {FormatTimestamp(ceiling)}");
 
         if (await FindPhraseSurvivalEdgeAsync(
                 Math.Clamp(mark, floor, ceiling), floor, ceiling, file, inputDecoder, phraseRegex, ct)
@@ -795,58 +771,4 @@ internal sealed class PreciseMarkRefiner
         }
     }
 
-    /// <summary>
-    /// Interleaves <paramref name="forwardCandidates"/> and <paramref name="backwardCandidates"/>
-    /// one at a time - backward, then forward, then backward again, and so on - rather than
-    /// exhausting either direction before ever trying the other, so whichever direction the true
-    /// announcement actually lies in is typically found in about half the checks a fully
-    /// sequential search would need.
-    /// <para>
-    /// Any success in either direction ends the search: what it returns is a foothold, not an
-    /// answer. A confirmation locates the plateau, and <see cref="FindOnsetEdgeAsync"/> then walks
-    /// it to the onset - so nothing is gained by preferring one confirming position within the same
-    /// plateau over another, and the two directions need no asymmetric treatment. Candidates lie
-    /// within the caller's jingle-plus-phrase span of the mark, which is what keeps a foothold from
-    /// belonging to a neighbouring chapter's announcement.
-    /// </para>
-    /// </summary>
-    /// <param name="forwardCandidates">Positions later than the mark, in the order to try them.</param>
-    /// <param name="backwardCandidates">Positions earlier than the mark, in the order to try them.</param>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
-    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The confirmed candidate position, or null if neither direction ever confirmed one.</returns>
-    private async Task<double?> WalkPreciseMarkCandidatesInterleavedAsync(
-        IEnumerable<double> forwardCandidates, IEnumerable<double> backwardCandidates,
-        string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
-    {
-        using var forwardEnumerator = forwardCandidates.GetEnumerator();
-        using var backwardEnumerator = backwardCandidates.GetEnumerator();
-        var forwardHasMore = forwardEnumerator.MoveNext();
-        var backwardHasMore = backwardEnumerator.MoveNext();
-
-        while (backwardHasMore || forwardHasMore)
-        {
-            if (backwardHasMore)
-            {
-                var candidate = backwardEnumerator.Current;
-                ct.ThrowIfCancellationRequested();
-                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
-                    return candidate;
-                backwardHasMore = backwardEnumerator.MoveNext();
-            }
-
-            if (forwardHasMore)
-            {
-                var candidate = forwardEnumerator.Current;
-                ct.ThrowIfCancellationRequested();
-                if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
-                    return candidate;
-                forwardHasMore = forwardEnumerator.MoveNext();
-            }
-        }
-        return null;
-    }
 }

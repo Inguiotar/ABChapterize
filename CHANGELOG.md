@@ -163,6 +163,16 @@ for you, not how it was built. The format follows
 
 ### Changed
 
+- **Mark refinement is faster and no longer takes a running start.** It used to
+  begin by sampling positions near the mark that the voice-activity detector had
+  flagged as speech, and only fall back to searching the stretch the announcement
+  was heard in when none of them confirmed. On a 12-hour test book that first step
+  earned its keep 3 times out of 26 while spending 8 minutes on it — the search it
+  was meant to save then placed all the remaining marks in under 4. It has been
+  dropped, so every mark now goes straight to the search, with unchanged accuracy.
+  With `--verbose`, refinement announces itself once per mark
+  (`refining mark at … - narrowing in on the phrase between … and …`) instead of
+  reporting a candidate walk first.
 - **The progress bar leads with the percentage**, with the phase moved behind it
   into a separated section of its own — `[####----]  42% | Pass 2 | ch 6 | …`
   rather than `[####----] Pass 2  42% | ch 6 | …`.

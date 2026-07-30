@@ -153,27 +153,24 @@ jingle whose own music briefly resembles speech closely enough to fool the
 voice-activity detector, in either direction: short of the true announcement
 or generously past it. Every mark placed by default-mode probing — including
 the starting point `--mark-before-jingle` would otherwise walk backward
-from — is double-checked by
-transcribing short, isolated clips of the audio near it: candidate positions
-both before and after the mark are tried until one of them really does hear
-the chapter phrase first, and the announcement's own beginning is then
+from — is double-checked against the audio itself, by transcribing short,
+isolated clips of it: the stretch the chapter phrase was heard in is searched,
+closing in on the announcement a few checks at a time rather than combing
+through it, and the announcement's own beginning is then
 measured to within a tenth of a second. The mark is set `--mark-lead` seconds
 ahead of it. Hearing the phrase at the mark is not by itself taken as proof that the
 mark is right — a jingle is not transcribed at all, so a mark several seconds
-inside one hears the announcement just as clearly as a mark sitting on it. On
-the rare chapter where none of those nearby candidates confirm anything
-either — or where the mark was left far from the announcement to begin with —
-the whole stretch the phrase was heard in is searched instead, closing in on
-it a few checks at a time rather than combing through it. A mark that cannot be confirmed this way at all is left as
+inside one hears the announcement just as clearly as a mark sitting on it. A
+mark that cannot be confirmed this way at all is left as
 originally placed rather than guessed at. Finally, whatever mark results —
 confirmed, corrected, or left as is — is nudged up to 0.15 seconds earlier to
 the quietest point in that stretch, but only when doing so is a clear (at
 least 6 dB) improvement over the mark's own position; a mark is never moved
 later. This keeps a player from starting playback abruptly mid-sound (an
 audible "plop") without ever risking eating into the announcement itself.
-This costs one or more extra Whisper transcriptions per chapter on top of pass
-2's own probe — most of all for chapters preceded by a jingle with several
-false-positive candidates, or the rarer chapter needing that wider search. `--quick-marks`/`-Q` skips the whole layer when that time matters more
+This costs a handful of extra Whisper transcriptions per chapter on top of pass
+2's own probe — a mark that already sits close to its announcement is the
+cheapest case, one left seconds away from it the most expensive. `--quick-marks`/`-Q` skips the whole layer when that time matters more
 than the last few tenths of a second of accuracy (the machinery is documented
 in the source).
 
@@ -695,8 +692,8 @@ so that logs and reports stay comparable regardless of regional settings.
 : **Experimental.** Skip the mark refinement that normally runs, and take
   probing's own placement as final. By default every mark — including the
   starting point `--mark-before-jingle` walks backward from — is verified by
-  re-transcribing short clips of the audio near it, until one of them hears
-  the chapter phrase first; the announcement's beginning is then measured to
+  re-transcribing short clips of the audio it was heard in, until one of them
+  hears the chapter phrase first; the announcement's beginning is then measured to
   within a tenth of a second and the mark set `--mark-lead` seconds ahead of
   it. A mark
   that can never be confirmed this way is
@@ -705,8 +702,8 @@ so that logs and reports stay comparable regardless of regional settings.
   stretch, but only when that is a clear (at least 6 dB) improvement; a mark
   is never moved later, so a player never starts mid-word.
   `--quick-marks` skips all of it, which is markedly faster — the checks cost
-  one or more extra Whisper transcriptions per chapter, most of all for
-  chapters preceded by a jingle with several false-positive candidates (see
+  a handful of extra Whisper transcriptions per chapter, most of all for a mark
+  probing left seconds away from its announcement (see
   [Pass 2](#pass-2--probing)) — at the price of accuracy: the marks it leaves
   are usually usable for jumping to a chapter, but one can sit *after* the
   chapter phrase instead of before it, so playback starts a moment into the
