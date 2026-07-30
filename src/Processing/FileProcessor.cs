@@ -4,6 +4,7 @@
 
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
@@ -22,7 +23,7 @@ namespace ABChapterize.Processing;
 /// detection and writing (optionally several files at once, see
 /// <see cref="RunConcurrentlyAsync"/>), plus the one-line-per-file console reporting.
 /// </summary>
-public sealed class FileProcessor
+public sealed partial class FileProcessor
 {
     private readonly CliOptions _options;
     private readonly ProgressRenderer _progress;
@@ -210,7 +211,7 @@ public sealed class FileProcessor
                 continue;
             }
             var progress = BatchProgress.Open(
-                group.Target.Path, _options.RunFingerprint, _options.IgnoreProgress);
+                group.Target.Path, _options.RunFingerprint, _options.IgnoreProgress, _progress.Announce);
             var todo = group.Files.Where(f => !progress.IsDone(f)).ToList();
             resumed += group.Files.Count - todo.Count;
             progress.Begin(todo.Count);
@@ -637,7 +638,11 @@ public sealed class FileProcessor
     /// second one.</summary>
     /// <param name="stem">File name without directory or extension.</param>
     private static string StripMissingMarksTag(string stem)
-        => System.Text.RegularExpressions.Regex.Replace(stem, @"\.missing-marks(-[0-9-]+)?$", "");
+        => MissingMarksTagRegex().Replace(stem, "");
+
+    /// <summary>Matches a trailing ".missing-marks" tag in either form, numbered or bare.</summary>
+    [GeneratedRegex(@"\.missing-marks(-[0-9-]+)?$", RegexOptions.CultureInvariant)]
+    private static partial Regex MissingMarksTagRegex();
 
     /// <summary>True when a file name still carries a numbered ".missing-marks-&lt;n&gt;-..." tag
     /// (see <see cref="MissingMarksPath"/>) - i.e. a previous run left it with an unresolved
@@ -647,8 +652,11 @@ public sealed class FileProcessor
     /// testing.</summary>
     /// <param name="file">Path of the file being considered.</param>
     internal static bool HasMissingMarksTag(string file)
-        => System.Text.RegularExpressions.Regex.IsMatch(
-            Path.GetFileNameWithoutExtension(file), @"\.missing-marks-[0-9-]+$");
+        => NumberedMissingMarksTagRegex().IsMatch(Path.GetFileNameWithoutExtension(file));
+
+    /// <summary>Matches only the numbered form of the tag, the one an auto-resume can act on.</summary>
+    [GeneratedRegex(@"\.missing-marks-[0-9-]+$", RegexOptions.CultureInvariant)]
+    private static partial Regex NumberedMissingMarksTagRegex();
 
     /// <summary>The file's own original name, with any ".missing-marks-..." tag stripped - what a
     /// resumed file is renamed back to once every previously-missing chapter is found.</summary>

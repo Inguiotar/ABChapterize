@@ -65,6 +65,15 @@ public sealed class AdaptiveConcurrencyGate
     /// <summary>
     /// Waits for a free slot and returns a handle that releases it on <see cref="IDisposable.Dispose"/>.
     /// </summary>
+    /// <remarks>
+    /// Cancellation and admission race for the same waiter, and the list membership decides between
+    /// them: whichever side removes the waiter under the lock owns it, and the loser does nothing.
+    /// Cancelling a waiter a granter had already taken out of the list would leave that granter's
+    /// <c>SetResult</c> throwing on an already-completed source - on whatever thread happened to be
+    /// disposing a <see cref="Releaser"/> - while the slot it counted as handed out stays counted
+    /// forever. The cost is that a cancellation arriving in that instant is not honoured; the caller
+    /// gets the slot it asked for and its own <c>using</c> gives it straight back.
+    /// </remarks>
     public async Task<IDisposable> AcquireAsync(CancellationToken ct)
     {
         TaskCompletionSource? tcs = null;
@@ -80,8 +89,10 @@ public sealed class AdaptiveConcurrencyGate
         }
         await using (ct.Register(() =>
         {
-            lock (_lock) _waiters.Remove(tcs);
-            tcs.TrySetCanceled(ct);
+            bool stillWaiting;
+            lock (_lock) stillWaiting = _waiters.Remove(tcs);
+            if (stillWaiting)
+                tcs.TrySetCanceled(ct);
         }))
         {
             await tcs.Task;

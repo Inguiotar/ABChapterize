@@ -334,6 +334,26 @@ for you, not how it was built. The format follows
   search off by half a minute. Refinement now always listens to a few seconds,
   however little is nominally left, which fixed a `--custom` mark landing 30 seconds
   early in a real book.
+- **A batch run no longer garbles its progress bars when it cannot keep its resume
+  record.** The warning about an unwritable `.abchapterize-progress` file was printed
+  straight past the display, which then erased the wrong lines and left the bars
+  scattered across the screen for the rest of the run. It now goes through the same
+  channel as every other message, and reaches the `--log-file` as well.
+- **Interrupting a batch run with Ctrl+C no longer occasionally ends in a crash
+  report.** A file starting at the exact moment another finished could race the
+  cancellation and take the run down with an unhandled error instead of the ordinary
+  "Aborted by user."
+- **A file whose decoding provokes a flood of complaints from ffmpeg no longer hangs
+  the run.** Enough of them filled a buffer nothing was emptying, and the two sides
+  waited on each other indefinitely.
+
+### Changed
+
+- **`--import` now rejects the title options** — `--title`, `--intro-title`,
+  `--prologue-title` and `--epilogue-title` — instead of accepting them and doing
+  nothing. An imported mark carries the title its sidecar gives it and no intro mark
+  is prepended, so naming one was always a promise the run could not keep. Every other
+  option `--import` cannot act on was already refused this way.
 
 ## [0.9.0] — 2026-07-27
 

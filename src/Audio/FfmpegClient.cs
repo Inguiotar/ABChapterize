@@ -234,8 +234,14 @@ public sealed partial class FfmpegClient : IAudioSource
         using var reg = ct.Register(() => TryKill(proc));
 
         using var ms = new MemoryStream();
+        // Both pipes are drained concurrently, as everywhere else in this class: reading stdout to
+        // completion first deadlocks the moment ffmpeg fills the stderr pipe buffer, since it then
+        // blocks on the write and stops producing the stdout this side is waiting for. `-v error`
+        // makes that unlikely rather than impossible - a file that provokes a per-frame decoder
+        // complaint reaches the buffer's few kilobytes easily.
+        var stderrTask = proc.StandardError.ReadToEndAsync(ct);
         await proc.StandardOutput.BaseStream.CopyToAsync(ms, ct);
-        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        var stderr = await stderrTask;
         await proc.WaitForExitAsync(ct);
         ct.ThrowIfCancellationRequested();
         if (proc.ExitCode != 0)

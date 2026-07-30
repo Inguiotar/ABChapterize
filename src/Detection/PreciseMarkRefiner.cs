@@ -1,4 +1,4 @@
-﻿// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
@@ -311,7 +311,7 @@ internal sealed class PreciseMarkRefiner
             .Where(s => s.StartSeconds < walked && s.StartSeconds >= walked - span)
             .Select(s => s.StartSeconds)
             .OrderByDescending(s => s);
-        var candidates = vadCandidates.Concat(FixedStepCandidates(walked, span, forward: false));
+        var candidates = vadCandidates.Concat(FixedStepCandidates(walked, span));
 
         foreach (var candidate in candidates)
         {
@@ -785,29 +785,30 @@ internal sealed class PreciseMarkRefiner
     /// <summary>
     /// Generates the blind, fixed-step candidate positions
     /// <see cref="VerifyMarkBeforeJingleAsync"/> falls back on once its VAD candidates are
-    /// exhausted: <paramref name="mark"/> plus/minus <see cref="PreciseMarkFixedStepSeconds"/>,
-    /// 2x that, 3x that, and so on out to <paramref name="span"/>. Stepping is affordable there,
+    /// exhausted: <paramref name="mark"/> minus <see cref="PreciseMarkFixedStepSeconds"/>, 2x that,
+    /// 3x that, and so on out to <paramref name="span"/>. Stepping is affordable there,
     /// unlike in <see cref="LocatePhraseByShrinkingWindowAsync"/>, because that search stops at the
     /// first candidate where the announcement is <em>no longer</em> audible - and a check window
     /// only reaches <see cref="PreciseMarkCheckWindowSeconds"/> forward, so retreating past that
-    /// much silences it. Stops early, short of <paramref name="span"/>, if a backward step would
-    /// otherwise go negative - there is nothing before the start of the file to check.
+    /// much silences it. Stops early, short of <paramref name="span"/>, once a step would go
+    /// negative - there is nothing before the start of the file to check.
+    /// <para>
+    /// Backward only, matching its one caller: the observed failure always left the walk too late,
+    /// never too early, and --mark-before-jingle's whole purpose is landing before the jingle. A
+    /// direction flag existed here and was never passed anything but "backward".
+    /// </para>
     /// </summary>
-    /// <param name="mark">Position the steps count out from; never itself included.</param>
-    /// <param name="span">How far out from <paramref name="mark"/> to keep stepping.</param>
-    /// <param name="forward">True to step later than <paramref name="mark"/>, false to step earlier.</param>
-    private static IEnumerable<double> FixedStepCandidates(double mark, double span, bool forward)
+    /// <param name="mark">Position the steps count back from; never itself included.</param>
+    /// <param name="span">How far back from <paramref name="mark"/> to keep stepping.</param>
+    private static IEnumerable<double> FixedStepCandidates(double mark, double span)
     {
         var steps = (int)Math.Round(span / PreciseMarkFixedStepSeconds);
         for (var i = 1; i <= steps; i++)
         {
-            var candidate = forward
-                ? mark + i * PreciseMarkFixedStepSeconds
-                : mark - i * PreciseMarkFixedStepSeconds;
+            var candidate = mark - i * PreciseMarkFixedStepSeconds;
             if (candidate < 0)
                 yield break;
             yield return Math.Round(candidate, 6);
         }
     }
-
 }

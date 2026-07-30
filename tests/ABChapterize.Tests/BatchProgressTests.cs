@@ -31,9 +31,13 @@ public sealed class BatchProgressTests : IDisposable
     /// <summary>Full path of a file name inside the temp directory (nothing is created).</summary>
     private string File(string name) => Path.Combine(_dir, name);
 
-    /// <summary>Opens a checkpoint for the temp directory under the given options fingerprint.</summary>
+    /// <summary>Opens a checkpoint for the temp directory under the given options fingerprint.
+    /// Bookkeeping warnings are collected in <see cref="_warnings"/> rather than printed.</summary>
     private BatchProgress Open(string fingerprint = "abc123", bool ignoreExisting = false)
-        => BatchProgress.Open(_dir, fingerprint, ignoreExisting);
+        => BatchProgress.Open(_dir, fingerprint, ignoreExisting, _warnings.Add);
+
+    /// <summary>Whatever the checkpoint warned about while a test ran.</summary>
+    private readonly List<string> _warnings = [];
 
     [Fact]
     public void AnUnfinishedDirectory_KeepsItsProgressFile()

@@ -774,12 +774,17 @@ public sealed class CliOptions
         if (o.UseGpu != null && o.CpuOnly)
             throw new CliError("--use-gpu and --cpu-only contradict each other: one picks a GPU, the other refuses to use any.");
 
-        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify))
+        // The title options belong here for a slightly different reason than the rest: they are not
+        // detection settings, but an imported mark carries the title the sidecar wrote for it and no
+        // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
+        // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
+        if (o.Import && (o._langSet || o._phraseSet || o._prologuePhraseSet || o._epiloguePhraseSet || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify || o._titleSet || o._introSet || o._prologueTitleSet || o._epilogueTitleSet))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --mark-lead, --max-jingle-length, --min-silence-length, --early-abort, " +
-                "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify " +
+                "--expected-start-chapter, --max-chapter-number, --trailing-scan, --verify, --title, " +
+                "--intro-title, --prologue-title and --epilogue-title " +
                 "have no effect and cannot be combined with it.");
 
         // --ignore-chapter-numbers removes the chapter-number sequence detection is otherwise built

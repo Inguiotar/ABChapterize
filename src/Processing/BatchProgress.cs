@@ -43,6 +43,7 @@ internal sealed class BatchProgress
 
     private readonly string _path;
     private readonly string _directory;
+    private readonly Action<string> _warn;
     private readonly Lock _lock = new();
 
     /// <summary>Files still to be processed in this directory; the progress file is deleted when
@@ -57,11 +58,12 @@ internal sealed class BatchProgress
     /// directory - empty unless that run used the same options as this one.</summary>
     public IReadOnlySet<string> AlreadyDone { get; }
 
-    private BatchProgress(string directory, IReadOnlySet<string> alreadyDone)
+    private BatchProgress(string directory, IReadOnlySet<string> alreadyDone, Action<string> warn)
     {
         _directory = directory;
         _path = Path.Combine(directory, FileName);
         AlreadyDone = alreadyDone;
+        _warn = warn;
     }
 
     /// <summary>
@@ -72,12 +74,17 @@ internal sealed class BatchProgress
     /// <param name="directory">The directory given on the command line.</param>
     /// <param name="fingerprint">This run's <see cref="CliOptions.RunFingerprint"/>.</param>
     /// <param name="ignoreExisting">True for --ignore-progress: discard any existing record.</param>
+    /// <param name="warn">Where the one-off bookkeeping warning goes (see <see cref="Guarded"/>).
+    /// Never <see cref="Console"/> directly: this runs while the progress bars own the terminal,
+    /// and they erase by cursor arithmetic, so an unsynchronized write leaves the next redraw
+    /// clearing the wrong lines.</param>
     /// <returns>The checkpoint, with <see cref="AlreadyDone"/> filled in.</returns>
-    public static BatchProgress Open(string directory, string fingerprint, bool ignoreExisting)
+    public static BatchProgress Open(
+        string directory, string fingerprint, bool ignoreExisting, Action<string> warn)
     {
         var path = Path.Combine(directory, FileName);
         var done = ignoreExisting ? [] : ReadDoneFiles(path, fingerprint);
-        var progress = new BatchProgress(directory, done);
+        var progress = new BatchProgress(directory, done, warn);
         if (done.Count == 0)
             progress.WriteHeader(fingerprint);
         return progress;
@@ -216,9 +223,8 @@ internal sealed class BatchProgress
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _disabled = true;
-            Console.Error.WriteLine(
-                $"Warning: cannot maintain {Path.Combine(_directory, FileName)} ({ex.Message}); " +
-                "an interrupted run will not be resumable for this directory.");
+            _warn($"Warning: cannot maintain {Path.Combine(_directory, FileName)} ({ex.Message}); " +
+                  "an interrupted run will not be resumable for this directory.");
         }
     }
 }

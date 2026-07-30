@@ -1155,7 +1155,10 @@ touching Whisper at all.
   `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
   `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
   `--expected-start-chapter`, `--max-chapter-number`,
-  `--trailing-scan`, `--verify` — nor with `--export`, `--revert` or
+  `--trailing-scan`, `--verify` — nor with the title options `--title`,
+  `--intro-title`, `--prologue-title` and `--epilogue-title`, since an
+  imported mark carries the title the sidecar gives it and no intro mark is
+  prepended — nor with `--export`, `--revert` or
   `--no-op`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters

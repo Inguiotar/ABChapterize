@@ -359,6 +359,12 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--expected-start-chapter", "5")]
     [InlineData("--max-chapter-number", "50")]
     [InlineData("--verify")]
+    // The titles are not detection settings, but an imported mark carries the sidecar's own title
+    // and no intro mark is prepended, so they are equally inert and equally refused.
+    [InlineData("--title", "Chapter")]
+    [InlineData("--intro-title", "Intro")]
+    [InlineData("--prologue-title", "Prologue")]
+    [InlineData("--epilogue-title", "Epilogue")]
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
     {
         Assert.Throws<CliError>(() => ParseFile([.. new[] { "--import" }, .. extra]));
