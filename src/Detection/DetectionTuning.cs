@@ -295,6 +295,98 @@ internal static class DetectionTuning
     internal static readonly double[] PreciseMarkFootholdBackoffsSeconds = [0.0, 0.5, 1.5, 4.0];
 
     /// <summary>
+    /// The shortest stretch of audio <see cref="PreciseMarkRefiner.PhraseSurvivesFromAsync"/> will
+    /// put in front of Whisper, however little is left between the probe position and the search's
+    /// end anchor. Its answer is only a step function while it is also <em>reliable</em>, and
+    /// reliability collapses on a short clip: a probe of a stretch that a longer window transcribes
+    /// confidently comes back as a coin flip, and one flip in the wrong direction moves the bisection
+    /// into the half that does not hold the onset, where every further probe agrees with it.
+    /// <para>
+    /// Measured on Stalker.m4b's "Zeittafel" (true onset 52.7 s, end anchor 54.19 s - the detecting
+    /// window's own end, which left barely a second of the announcement inside the bracket,
+    /// 2026-07-30): the same phrase came back at p=0.84 from a 6.15 s clip, p=0.54 from 4.55 s and
+    /// p=0.49 from 2.95 s, and it was the 2.95 s one that failed on the run's GPU and sent the edge
+    /// back 4.7 s early - past which no foothold could be confirmed and the mark was left at its
+    /// (30 s early) default position. At 6 s the whole sweep from 46 s to 53.5 s is monotone across
+    /// the onset, and BARDIOC.m4b's chapter 21 bisects to the same edge either way.
+    /// </para>
+    /// <para>
+    /// Not larger, although "more audio, surer answer" is the obvious extrapolation: it is wrong on
+    /// the very audio this exists for. A jingle is music, Whisper writes music off as a single
+    /// "[Musik]" segment, and the more of it a window holds the likelier the announcement goes with
+    /// it - at 8 s the same Stalker probe from 48.04 s came back "[Musik]" where the unextended
+    /// 6.15 s window had read "Zeittafel" cleanly. The floor has to clear the coin-flip zone without
+    /// buying more music than it has to.
+    /// </para>
+    /// <para>
+    /// The extension reaches past the end anchor, i.e. into audio the detecting window never saw.
+    /// That is sound for the question being asked - "is the announcement still in front of me" - as
+    /// long as it cannot reach a <em>second</em> occurrence of the phrase, which at this length means
+    /// the announcement would have to be repeated within a few seconds of itself.
+    /// </para>
+    /// </summary>
+    internal const double PreciseMarkMinSurvivalSeconds = 6.0;
+
+    /// <summary>
+    /// How far before its end anchor <see cref="PreciseMarkRefiner.LocatePhraseByShrinkingWindowAsync"/>
+    /// will look for the announcement when the matched segment's own start timestamp does not reach
+    /// that far back on its own. The bracket is normally drawn one
+    /// <see cref="PhraseMarginSeconds"/> below that timestamp, which quietly assumes Whisper never
+    /// times a segment <em>later</em> than the words in it - and it does: chapter 21 of BARDIOC.m4b
+    /// was announced at 12:26:33.4 and its segment timestamped 12:26:38.6 (2026-07-30, a 5.2 s lag),
+    /// putting the whole bracket past the announcement so that no probe inside it could ever hear it.
+    /// The mark was left where default-mode placement had put it, 1.1 s into the spoken announcement.
+    /// <para>
+    /// Widening the floor cannot move the answer, only find it: the survival edge is the
+    /// <em>largest</em> position the phrase still survives from, which does not depend on how far
+    /// below it the search is allowed to reach - an earlier floor only gives the backward gallop
+    /// somewhere to land instead of running out of bracket. The cost is a handful of extra probes,
+    /// and only on a mark that was going to fail anyway.
+    /// </para>
+    /// <para>
+    /// It extends the search's reach only, never where the gallop sets out from: that first probe
+    /// spans the whole distance to the end anchor and is the longest window the search ever asks
+    /// about, so starting it a stretch further back buys nothing and risks the failure mode in
+    /// <see cref="PreciseMarkMinSurvivalSeconds"/>'s remarks - the same Stalker.m4b probe read
+    /// "Zeittafel" over 15.65 s from the segment bracket and "[Musik]" over 25 s from here.
+    /// </para>
+    /// <para>
+    /// Sized to one <see cref="WhisperChunkSeconds"/> less a phrase margin of headroom. Past a chunk
+    /// a window re-segments differently for a shift of a few hundred milliseconds, which is what
+    /// makes the predicate stop being a step function - see
+    /// <see cref="PreciseMarkRefiner.FindPhraseSurvivalEdgeAsync"/>'s remarks on the two measurements
+    /// that established it.
+    /// </para>
+    /// </summary>
+    internal const double PreciseMarkMaxBracketSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
+
+    /// <summary>
+    /// The stride whisper.cpp decodes in: it converts audio to a mel spectrogram of exactly this
+    /// length at a time, so a window at or above it is transcribed as several passes whose results
+    /// are stitched together, while a shorter one is a single pass over the whole thing.
+    /// <para>
+    /// This is not an implementation detail that stays inside the recognizer, which is why it has a
+    /// name here: an announcement is one or two words against minutes of narration, and crossing the
+    /// boundary is enough to lose it. Gruelfin.m4b's prologue (2026-07-30) is the case on record -
+    /// the identical decode starting at 0:03:16.18 yields "Prolog. Die Jahre des Versteckspiels..."
+    /// at 17.5 s and at 23.5 s, and at 30.0 s and 50.0 s yields the narration alone with the word
+    /// gone. It was a 50 s window that probed it live, because --max-jingle-length auto had not yet
+    /// seen a jingle to narrow the window with, and the prologue was simply never heard.
+    /// </para>
+    /// </summary>
+    internal const double WhisperChunkSeconds = 30.0;
+
+    /// <summary>
+    /// Length of the second, deliberately short look <see cref="RegionProber.RereadJingleSpeechAsync"/>
+    /// takes at a probe window that heard no announcement although VAD heard speech inside its
+    /// jingle. Sized like <see cref="PreciseMarkMaxBracketSeconds"/> and for the same reason: the
+    /// whole point of the re-read is to get the announcement into a single-pass decode, so it has to
+    /// stay clear of <see cref="WhisperChunkSeconds"/>, with a phrase margin of headroom in case the
+    /// window ends up anchored a little later than planned.
+    /// </summary>
+    internal const double JingleRereadWindowSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
+
+    /// <summary>
     /// How far <em>before</em> a confirmed or left-as-is mark
     /// <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> may search for a quieter point to
     /// move it to. Backward-only, so a one-sided lookback rather than a window centered on the

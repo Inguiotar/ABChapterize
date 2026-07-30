@@ -341,7 +341,10 @@ use `.`, whatever the machine's locale says.
    already found — is read again before it's believed: with `--pass3-model` if
    that's the better model, then from two differently framed windows. The new
    reading only counts if it continues the sequence, so a book that genuinely
-   skips numbers keeps its own.
+   skips numbers keeps its own. A stretch that yields nothing while VAD did
+   hear someone speak inside its jingle is read once more from a shorter
+   window: Whisper reads audio in 30-second chunks, and a lone announcement
+   can drop out of a window that crosses one.
 2b. **Mark refinement (skip with `--quick-marks`/`-Q`):** for
    the mark that still lands on the wrong spot — usually a jingle whose
    music briefly fools the voice-activity detector into sounding like speech —

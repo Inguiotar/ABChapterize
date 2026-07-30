@@ -135,6 +135,15 @@ begins, so a second framing often reads cleanly. Only a stretch that yielded no
 chapter at all is reported this way, so a book's own mentions of the word stay
 out of the log.
 
+A window that yields nothing at all gets a second look when the VAD pre-pass
+contradicts it — that is, when someone was heard speaking inside the jingle the
+window covered and the transcript has no words for that spot. Whisper reads
+audio in 30-second chunks, and a lone word inside a jingle can drop out of a
+window that crosses one while being transcribed cleanly from a shorter window
+over the same audio. The spot is therefore read once more from a window short
+enough to stay inside a single chunk, and `--verbose` says so. This needs the
+pre-pass, so `--max-jingle-length 0` never does it.
+
 A number that *is* read but cannot plausibly be the next chapter — one that
 would leave more than three chapters missing in one go, or one at or below the
 chapters already found — is not taken at face value either. It is read again:

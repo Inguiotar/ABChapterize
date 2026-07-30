@@ -500,9 +500,115 @@ internal sealed class RegionProber
             windowSegmentsAbs, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
         var segments = ShiftSegments(trimmedAbs, -start);
 
-        return await ScanWindowForMarksAsync(
+        var namedBefore = _namedFound.Count;
+        var marks = await ScanWindowForMarksAsync(
             candidate, start, windowEnd, segments, trimmedAbs, mergeBoundarySegIndex, ct);
+
+        // A window that yielded nothing at all - no chapter, no prologue, no --custom mark - is the
+        // only one worth a second look; one that produced a mark has already told this candidate's
+        // story.
+        if (marks.Count == 0 && _namedFound.Count == namedBefore)
+            marks = await RereadJingleSpeechAsync(candidate, start, windowEnd, trimmedAbs, ct);
+        if (marks.Count == 0)
+            NoteUnnumberedAnnouncements(candidate, start, segments);
+        return marks;
     }
+
+    /// <summary>
+    /// Second, short look at a probe window that heard no announcement while VAD insists there was
+    /// speech inside its jingle - the one shape in which "nothing here" is contradicted by evidence
+    /// the tool already holds. By this codebase's own working assumption the only speech inside a
+    /// jingle <em>is</em> the announcement (see
+    /// <see cref="JingleGeometry.RefineDefaultMark"/>'s remarks), so a VAD speech blip there that no
+    /// transcript segment has any words for means the recognizer lost it rather than that it is not
+    /// there.
+    /// <para>
+    /// Losing it is a framing artifact, not a limit of the model: crossing
+    /// <see cref="WhisperChunkSeconds"/> is what does it (see that constant for Gruelfin.m4b's
+    /// prologue, the case on record), so the re-read simply asks the same recognizer for the same
+    /// announcement inside a single-pass window. Confined to windows that actually crossed the
+    /// boundary, since below it the second decode would be the same framing as the first and could
+    /// only produce the same answer.
+    /// </para>
+    /// <para>
+    /// The re-read window ends a phrase margin past the blip - far enough for the number after
+    /// "Kapitel" and no further, because everything beyond it is narration competing for the decode -
+    /// and reaches back to the candidate, or one <see cref="JingleRereadWindowSeconds"/>, whichever
+    /// is shorter. Its transcript then goes through the ordinary window scan, so every acceptance
+    /// rule (anchoring, sequence, named-phrase scope, dedupe) applies to a re-read mark exactly as it
+    /// would to a first-pass one.
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The candidate whose window came back empty.</param>
+    /// <param name="start">Absolute start of that window.</param>
+    /// <param name="windowEnd">Absolute planned end of that window.</param>
+    /// <param name="trimmedAbs">Its transcript in absolute file time, already corrected for leading
+    /// non-speech - which is what makes "no words for this blip" answerable at all, since an
+    /// untrimmed segment routinely claims to start back at the window's own beginning.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The marks the re-read produced, or an empty list when it did not run or found
+    /// nothing.</returns>
+    private async Task<List<ProbeMark>> RereadJingleSpeechAsync(
+        ProbeCandidate candidate, double start, double windowEnd,
+        List<TranscriptSegment> trimmedAbs, CancellationToken ct)
+    {
+        if (_env.Vad == null || windowEnd - start <= WhisperChunkSeconds)
+            return [];
+        if (FindUnheardJingleSpeech(start, windowEnd, trimmedAbs) is not { } blip)
+            return [];
+
+        var to = Math.Min(windowEnd, blip.EndSeconds + PhraseMarginSeconds);
+        var from = Math.Max(start, to - JingleRereadWindowSeconds);
+        if (to - from <= PhraseMarginSeconds)
+            return [];
+
+        _env.Log?.Invoke(
+            $"nothing heard in the window at {FormatTimestamp(start)}, but VAD hears speech at " +
+            $"{FormatTimestamp(blip.StartSeconds)} inside its jingle - re-reading it in a shorter window");
+
+        var samples = await _env.Audio.DecodePcmAsync(
+            _ctx.File, from, to - from, _ctx.Info.InputDecoder, ct);
+        var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
+        _env.LogTranscript($"jingle re-read {to - from:0.0}s@{FormatTimestamp(from)}", fresh);
+
+        var freshAbs = TrimLeadingNonSpeech(
+            ShiftSegments(fresh, from), _ctx.AllSilences, _ctx.NonSpeechRegions, true);
+        return await ScanWindowForMarksAsync(
+            candidate, from, to, ShiftSegments(freshAbs, -from), freshAbs, null, ct);
+    }
+
+    /// <summary>
+    /// The first VAD speech segment inside the window that sits within one of its jingle regions and
+    /// that the transcript covers with no segment at all - <see cref="RereadJingleSpeechAsync"/>'s
+    /// trigger. Blips below <see cref="TransientSpeechFloorSeconds"/> are passed over for the same
+    /// reason <see cref="JingleGeometry.AdvancePastNonSpeech"/> passes over them: a jingle's musical
+    /// transients cross VAD's threshold too, and too short to be a spoken word is the one thing that
+    /// tells them apart.
+    /// <para>
+    /// Known limit of "no segment covers it", accepted rather than fixed: Whisper routinely stretches
+    /// a window's last segment's end timestamp far past the words in it, and such a segment then
+    /// covers a jingle it has no words for. Observed on a BARDIOC.m4b clip around chapter 21
+    /// (2026-07-30), where a 56 s window lost "Kapitel 21" exactly as Gruelfin's did while a 25 s one
+    /// read it cleanly, but a segment reading "können." claimed 41.08-54.76 and so vetoed the
+    /// re-read. Loosening this to "no segment <em>starts</em> inside the region" would catch it, at
+    /// the price of firing on most empty long windows in the file - the stretch is that common - so
+    /// the cheap, strict test stays until something measures that trade honestly.
+    /// </para>
+    /// </summary>
+    /// <param name="start">Absolute start of the probe window.</param>
+    /// <param name="windowEnd">Absolute planned end of the probe window.</param>
+    /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
+    private SpeechSegment? FindUnheardJingleSpeech(
+        double start, double windowEnd, List<TranscriptSegment> trimmedAbs)
+        => _ctx.SpeechSegments
+            .Where(b => b.StartSeconds >= start && b.EndSeconds <= windowEnd &&
+                        b.EndSeconds - b.StartSeconds >= TransientSpeechFloorSeconds)
+            .Where(b => _ctx.NonSpeechRegions.Any(
+                r => r.StartSeconds < b.StartSeconds && r.EndSeconds > b.EndSeconds))
+            .Where(b => !trimmedAbs.Any(
+                s => s.StartSeconds < b.EndSeconds && s.EndSeconds > b.StartSeconds))
+            .Cast<SpeechSegment?>()
+            .FirstOrDefault();
 
     /// <summary>
     /// Produces the probe window's full transcript in absolute file time, assembled from the
@@ -665,8 +771,6 @@ internal sealed class RegionProber
             windowLast = mark.Number;
         }
 
-        if (marks.Count == 0)
-            NoteUnnumberedAnnouncements(candidate, start, segments);
         return marks;
     }
 
@@ -686,9 +790,14 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Reports the announcements this window heard but could not number, and queues the window for
-    /// the sequence-gap re-probe. Only ever called for a window that produced no mark of its own:
-    /// with one, a further bare "chapter" in the same transcript is prose, not a missed
-    /// announcement.
+    /// the sequence-gap re-probe. Only ever called for a window that produced no mark of its own -
+    /// counting <see cref="RereadJingleSpeechAsync"/>'s second look as this window's own, since a
+    /// window it rescued was never a window that heard nothing. With a mark, a further bare "chapter"
+    /// in the same transcript is prose, not a missed announcement.
+    /// <para>
+    /// Says nothing under --ignore-chapter-numbers, where an announcement without a number is the
+    /// normal case and has already been marked as a named one.
+    /// </para>
     /// <para>
     /// Queuing it is the recovery half, and it costs nothing until a gap actually appears. The
     /// re-probe re-decodes at the full ceiling window (see <see cref="ReprobeGapCandidatesAsync"/>),
@@ -705,6 +814,9 @@ internal sealed class RegionProber
     private void NoteUnnumberedAnnouncements(
         ProbeCandidate candidate, double start, List<TranscriptSegment> segments)
     {
+        if (_env.Options.IgnoreChapterNumbers)
+            return;
+
         var queued = false;
         foreach (var heard in FindUnnumberedAnnouncements(segments, Language.Profile!))
         {

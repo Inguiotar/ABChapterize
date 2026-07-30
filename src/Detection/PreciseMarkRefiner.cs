@@ -568,8 +568,16 @@ internal sealed class PreciseMarkRefiner
         // The bracket the announcement has to lie in: the segment(s) it was matched in, a phrase
         // margin either side for a timestamp that reported them slightly narrow, and never past the
         // end of the audio it was heard in.
-        var floor = Math.Max(0, phraseAbs - PhraseMarginSeconds);
         var ceiling = Math.Min(phraseEndAbs + PhraseMarginSeconds, transcriptEnd);
+        var segmentFloor = Math.Max(0, phraseAbs - PhraseMarginSeconds);
+        // How far the backward gallop may run below that, for the case the segment's own timestamps
+        // do not describe: one that Whisper timed *later* than the words in it, leaving the whole
+        // segment bracket past the announcement (see PreciseMarkMaxBracketSeconds). Only the search's
+        // reach is extended, not where it starts - the gallop still sets out from the segment, whose
+        // first probe is the one long window in the whole search and therefore the one that most
+        // wants to stay short (Stalker.m4b, 2026-07-30: 15.65 s from the segment floor reads
+        // "Zeittafel", 25 s from a stretched floor reads "[Musik]" and nothing else).
+        var floor = Math.Max(0, Math.Min(segmentFloor, ceiling - PreciseMarkMaxBracketSeconds));
         if (ceiling - floor <= PreciseMarkFixedStepSeconds)
             return null;
 
@@ -579,8 +587,9 @@ internal sealed class PreciseMarkRefiner
         _log?.Invoke($"refining mark at {FormatTimestamp(mark)} - narrowing in on the phrase " +
                      $"between {FormatTimestamp(floor)} and {FormatTimestamp(ceiling)}");
 
+        var origin = Math.Clamp(mark, Math.Min(segmentFloor, ceiling), ceiling);
         if (await FindPhraseSurvivalEdgeAsync(
-                Math.Clamp(mark, floor, ceiling), floor, ceiling, file, inputDecoder, phraseRegex, ct)
+                origin, floor, ceiling, file, inputDecoder, phraseRegex, ct)
             is not { } edge)
             return null;
 
@@ -634,7 +643,11 @@ internal sealed class PreciseMarkRefiner
     /// the phrase ends before that position plus a phrase's length. That matters for a Pass 3 gap
     /// chunk, whose matched segment can be far longer than Pass 2's whole window. It cannot
     /// invalidate an earlier answer - each new anchor still sits a full phrase margin past the
-    /// onset, so anything that survived under the old one survives under the new one too.
+    /// onset, so anything that survived under the old one survives under the new one too. Near the
+    /// failing position itself the anchor stops being what the decode obeys, since
+    /// <see cref="PhraseSurvivesFromAsync"/> never transcribes less than
+    /// <see cref="PreciseMarkMinSurvivalSeconds"/>; that is the point of the floor, and the anchor's
+    /// real work is bounding the probes further back.
     /// </para>
     /// </summary>
     /// <param name="origin">Position the gallop starts from; inside the bracket.</param>
@@ -722,9 +735,16 @@ internal sealed class PreciseMarkRefiner
     /// segment: what is being tested is whether the phrase is still <em>there</em>, not whether it
     /// comes first, and a window this long will normally have plenty of narration before it.
     /// </para>
+    /// <para>
+    /// The decode is never shorter than <see cref="PreciseMarkMinSurvivalSeconds"/>, whatever
+    /// <paramref name="until"/> says, because below that Whisper's answer stops being reliable enough
+    /// to bisect on; <paramref name="until"/> still decides whether there is a question to ask at all,
+    /// so a window the caller has narrowed to nothing is answered "no" rather than reopened.
+    /// </para>
     /// </summary>
     /// <param name="from">Absolute position to start decoding at.</param>
-    /// <param name="until">Absolute position to stop decoding at.</param>
+    /// <param name="until">Absolute position the searched span ends at - a lower bound on how far
+    /// the decode reaches, not a cap on it.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="phraseRegex">The announcement to look for.</param>
@@ -735,9 +755,9 @@ internal sealed class PreciseMarkRefiner
         CancellationToken ct)
     {
         from = Math.Round(Math.Max(0, from), 6);
-        var length = Math.Round(until - from, 6);
-        if (length <= 0)
+        if (until - from <= 0)
             return false;
+        var length = Math.Round(Math.Max(until - from, PreciseMarkMinSurvivalSeconds), 6);
         var samples = await _audio.DecodePcmAsync(file, from, length, inputDecoder, ct);
         var transcript = await _transcribeCounting(samples, ct);
         return transcript.Any(s => s.Text != null && phraseRegex.IsMatch(s.Text));

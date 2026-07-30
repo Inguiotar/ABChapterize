@@ -301,6 +301,30 @@ for you, not how it was built. The format follows
   was accepted as a find — and chapter 3, now out of sequence behind it, was
   dropped from the results. Only numbers that could actually be missing from the
   stretch being searched are considered.
+- **An announcement the recognizer dropped from a long window is now heard on a
+  second, shorter look.** Whisper reads audio in 30-second chunks, and a lone word
+  spoken inside a jingle — a bare "Prolog", say — can vanish from the transcript
+  entirely once the stretch being read crosses that length, while the very same
+  audio is transcribed perfectly from a shorter one. When a stretch yields no mark
+  at all and yet the voice-activity pre-pass heard someone speak inside its jingle,
+  that spot is now read once more from a window short enough to survive, which
+  recovers the announcement. Needs the pre-pass, so it does not apply with
+  `--max-jingle-length 0`.
+- **A mark no longer stops just short of the announcement it belongs to.** Where the
+  recognizer timestamped the announcement several seconds later than it was actually
+  spoken, mark refinement searched a stretch that began *after* the words, found
+  nothing, and left the mark where the first estimate had put it — in one real case
+  a second *into* the spoken "Chapter 21", which is exactly where a listener notices.
+  The search now reaches far enough behind a suspect timestamp to cover the words it
+  was meant to describe.
+- **A mark near the end of the stretch it was found in is no longer placed at
+  random.** Deciding whether the announcement is still audible from a given point
+  means asking the recognizer about the audio after it, and when the mark sat close
+  to the end of the transcribed stretch there was barely a second of it left to ask
+  about — at which length the answer is a coin flip, and one wrong answer sent the
+  search off by half a minute. Refinement now always listens to a few seconds,
+  however little is nominally left, which fixed a `--custom` mark landing 30 seconds
+  early in a real book.
 
 ## [0.9.0] — 2026-07-27
 

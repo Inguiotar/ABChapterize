@@ -130,7 +130,7 @@ public sealed class ChapterDetectorTests : IDisposable
     private sealed class ScriptedTranscriber : ITranscriber
     {
         private readonly FakeAudioSource _audio;
-        private readonly List<(double Start, List<TranscriptSegment> Segments)> _script = [];
+        private readonly List<(double Start, double MaxWindowSeconds, List<TranscriptSegment> Segments)> _script = [];
 
         /// <summary>Creates a transcriber that follows the decode requests of <paramref name="audio"/>.</summary>
         public ScriptedTranscriber(FakeAudioSource audio) => _audio = audio;
@@ -150,7 +150,23 @@ public sealed class ChapterDetectorTests : IDisposable
         /// <param name="start">Absolute time the segment offsets are measured from.</param>
         /// <param name="segments">The scripted speech, in window-relative time.</param>
         public void Add(double start, params TranscriptSegment[] segments)
-            => _script.Add((start, [.. segments]));
+            => _script.Add((start, double.PositiveInfinity, [.. segments]));
+
+        /// <summary>
+        /// Scripts speech the recognizer only hears when the decode is at most
+        /// <paramref name="maxWindowSeconds"/> long - real Whisper's one framing artifact that
+        /// nothing else in this class can express. A window past its 30 s decode chunk re-frames the
+        /// audio and can drop a lone word inside a jingle entirely, which is what loses an
+        /// announcement no shorter window has any trouble with (Gruelfin.m4b's prologue, 2026-07-30:
+        /// heard from the same position over 17.5 s and 23.5 s, gone over 30.0 s and 50.0 s).
+        /// Scripted per entry rather than as a property of the whole transcriber, so a test can put
+        /// one chunk-sensitive announcement in a file whose other chapters are heard normally.
+        /// </summary>
+        /// <param name="maxWindowSeconds">Longest decode that still hears this speech.</param>
+        /// <param name="start">Absolute time the segment offsets are measured from.</param>
+        /// <param name="segments">The scripted speech, in window-relative time.</param>
+        public void AddWithin(double maxWindowSeconds, double start, params TranscriptSegment[] segments)
+            => _script.Add((start, maxWindowSeconds, [.. segments]));
 
         /// <summary>Called at the start of every <see cref="TranscribeAsync"/>, so a test can
         /// sample detector-external state (progress, say) at the exact moments this transcriber
@@ -185,6 +201,7 @@ public sealed class ChapterDetectorTests : IDisposable
             // to sit exactly on one lands a rounding error either side of it.
             const double epsilon = 1e-9;
             var segments = _script
+                .Where(entry => end - start <= entry.MaxWindowSeconds + epsilon)
                 .SelectMany(entry => entry.Segments.Select(seg => (Absolute: entry.Start + seg.StartSeconds,
                                                                    End: entry.Start + seg.EndSeconds, seg)))
                 .Where(x => x.Absolute >= start - epsilon && x.Absolute < end)
@@ -2180,6 +2197,51 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AnnouncementLostInALongWindow_IsRecoveredByTheJingleReread()
+    {
+        // Real-world failure (Gruelfin.m4b, "Prolog" at 0:03:28, 2026-07-30): the announcement sits
+        // alone inside a jingle and the candidate's window runs the full 50 s ceiling, past Whisper's
+        // 30 s decode chunk - at which point the lone word is dropped from the transcript entirely
+        // while the same audio from the same position is transcribed correctly over 17.5 s or 23.5 s.
+        // VAD does see it (blip 654.8-655.3, strictly inside the merged jingle region 640-660), and
+        // speech inside a jingle that no transcript segment has words for is the tool's own evidence
+        // that the recognizer, not the audiobook, lost the announcement. Geometry otherwise identical
+        // to LateSilenceDeepInsideAJingleRegion_... above, so the mark must land in the same place.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks", "--mark-before-jingle"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.AddWithin(30, 655, Seg(0, " Chapter two.")); // window [613, ...] is 50 s and misses it
+            },
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(654.8, 655.3), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("re-reading it in a shorter window"));
+    }
+
+    [Fact]
+    public async Task LongWindowWithNoUnheardJingleSpeech_IsNotReread()
+    {
+        // The gate on the re-read above: without a VAD speech blip inside the jingle there is nothing
+        // to contradict the empty transcript, and an empty window is simply an empty window. Same
+        // file shape, same 50 s window, VAD silent across the whole jingle - no second decode.
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks", "--mark-before-jingle"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.AddWithin(30, 655, Seg(0, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(660, 3600)] });
+
+        Assert.DoesNotContain(log, l => l.Contains("re-reading it in a shorter window"));
+    }
+
+    [Fact]
     public async Task TrailingNarrationSwallowedIntoTheRegionHead_IsTrimmedOff_MarkAtTrueJingleStart()
     {
         // Real-world failure (Perry Rhodan "Die Dritte Macht", chapters 18/21, 2026-07-22): the
@@ -2588,6 +2650,68 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(655.3, result.Mark, 3);
+    }
+
+    [Fact]
+    public async Task PreciseMark_ReachesAnAnnouncementTheSegmentTimestampSitsSecondsBehind()
+    {
+        // Real-world failure (BARDIOC.m4b chapter 21, 2026-07-30): Whisper timestamped the segment
+        // holding "Kapitel 21" 5.2 s *later* than the words were spoken (announced at 12:26:33.4,
+        // segment start 12:26:38.6), so a bracket drawn one phrase margin below the segment start
+        // began after the announcement and no probe inside it could ever hear it. The refinement
+        // gave up and the mark stayed where the default heuristics had put it - 1.06 s *into* the
+        // spoken announcement, which is precisely what the listener complains about.
+        //
+        // Modelled at 1/1 scale here: the announcement is at 640, the segment claims 645.2, and the
+        // incoming mark sits 1.06 s past the onset. Reaching it needs the backward gallop to be
+        // allowed below the segment bracket, out to PreciseMarkMaxBracketSeconds behind the end
+        // anchor. Driven through the refiner directly for the reason MakeVerifier documents.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(640, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            641.06, _file, null, profile.PhraseRegex, 645.2, 647.2, 651.7, CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        AssertMarkTime("chapter two", 639.75, result.Mark);
+    }
+
+    [Fact]
+    public async Task PreciseMark_KeepsProbingLongEnoughToBeHeard_WhenTheAnchorSitsRightAfterTheOnset()
+    {
+        // Real-world failure (Stalker.m4b's "Zeittafel", true onset 52.7 s, 2026-07-29/30): the end
+        // anchor is the detecting window's own end, which here sits barely 1.5 s past the
+        // announcement, so the probes nearest the onset asked Whisper about 2-3 s of audio. That is
+        // below what the recognizer answers reliably - measured p=0.84 over 6.15 s, 0.54 over 4.55 s
+        // and 0.49 over 2.95 s - and one wrong answer sends the bisection into the wrong half. The
+        // mark was then left at the default-mode position, 30 s before the announcement.
+        //
+        // PhraseSurvivesFromAsync's floor is what fixes it: no probe decodes less than
+        // PreciseMarkMinSurvivalSeconds, whatever the anchor says. A scripted recognizer cannot model
+        // a coin flip, so what is asserted is the invariant rather than the symptom - every decode is
+        // a phrase check, a quiet snap, or a survival probe of at least the floor's length. Without
+        // the floor the probes nearest the onset here run 1.3-1.6 s.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(52.7, new TranscriptSegment(0, 1.5, " Chapter two.", 1.0));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        // Anchor 54.19: one phrase margin past the segment end would be 59.2, but the transcript
+        // ends first - the clamp that produced the too-short probes.
+        var result = await refiner.RefinePreciseMarkAsync(
+            52.9, _file, null, profile.PhraseRegex, 52.7, 54.2, 54.19, CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        AssertMarkTime("Zeittafel", 52.45, result.Mark);
+
+        const double checkWindow =
+            DetectionTuning.PreciseMarkCheckWindowSeconds + DetectionTuning.PreciseMarkLeadInSeconds;
+        Assert.All(transcriber.Audio.DecodeWindows, w => Assert.True(
+            w.Duration is not { } d ||
+            d < 1.0 ||                              // the quiet snap, its radius rounded up to whole samples
+            Math.Abs(d - checkWindow) < 1e-9 ||     // a phrase check
+            d >= DetectionTuning.PreciseMarkMinSurvivalSeconds - 1e-9,
+            $"decode at {w.Start} ran {w.Duration} s - too short to be a reliable survival probe"));
     }
 
     [Fact]
