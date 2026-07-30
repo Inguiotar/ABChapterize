@@ -13,6 +13,16 @@ only the chapter metadata is rewritten.
 If you have ever bought an audiobook whose chapter marks were missing, misplaced,
 or pure fantasy (looking at you, Audible), this tool is for you.
 
+Finding the chapters is only half the job. ABChapterize's mission is getting each
+mark to land in the *right place* — something most other tools treat as an
+afterthought, dropping the mark wherever the nearest silence happened to be, or
+a fixed handful of seconds off. Here, a found chapter is re-listened to in order
+to pin down where the announcement actually begins, jingles are located with a
+voice-activity model rather than guessed at from the waveform, and the mark is
+placed relative to what the narrator is doing rather than to the file's byte
+positions. Skipping ahead should land you on the chapter announcement, not two
+sentences into the previous chapter's ending.
+
 Prebuilt binaries for Windows and Linux are available on the
 [Releases](../../releases) page — no build tools required.
 
