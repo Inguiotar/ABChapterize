@@ -260,6 +260,9 @@ for you, not how it was built. The format follows
   retry pass. A chapter recovered from a gap now also reports how far into its window the
   announcement actually ended, and the window widens to cover that for the rest of the
   file — so the same shape of chapter is found the first time instead of after the fact.
+  One recovery may widen the window by at most 25 %, so a single outlier chapter cannot
+  leave every later probe running at the maximum window for hours; an extreme reach is
+  granted over several recoveries instead.
 - **A chapter recovered from a sequence gap is no longer found several times over.**
   The retry that closes a gap kept going through the candidates behind the recovered
   chapter, and because they cover the same stretch of audio each one found that same

@@ -1338,6 +1338,10 @@ internal sealed class RegionProber
     /// before the announcement. A gap-recovered mark is the one case where the offset is trustworthy:
     /// the candidate is corroborated by a chapter that nothing else in the run found, so the reach is
     /// a measured fact about what this book's windows must span, not a guess off a false trigger.
+    /// Trustworthy is not the same as affordable, though, so a single recovery may lift the window by
+    /// at most <see cref="GapReachGrowthFactor"/>; an outlier reach is honoured over several
+    /// recoveries rather than in one jump that would pin the window near the ceiling for the rest of
+    /// the book.
     /// <para>
     /// The gap this closes was real, not theoretical. Measured on BARDIOC.m4b (2026-07-30, 15 h 39
     /// min, German): chapters 9, 12 and 10 were each missed with their announcement's *onset* already
@@ -1362,12 +1366,18 @@ internal sealed class RegionProber
         // No safety factor on top: unlike a jingle length, which stands in for jingles not yet seen
         // and may legitimately be exceeded, this is the exact width one real announcement needed. The
         // phrase margin is what carries the headroom, and the ceiling caps it either way.
-        var proposed = Math.Min(_ctx.JingleCeilingSeconds, reachSeconds + PhraseMarginSeconds);
-        if (proposed <= (_adaptedWindowSeconds ?? 0))
+        var wanted = Math.Min(_ctx.JingleCeilingSeconds, reachSeconds + PhraseMarginSeconds);
+        // A null adapted window means nothing has ever narrowed the ceiling, so the window in effect
+        // *is* the ceiling and any proposal below it would narrow rather than widen - the restore at
+        // the end of the re-probe would then hand the main loop a window smaller than the one it had.
+        var current = _adaptedWindowSeconds ?? _ctx.JingleCeilingSeconds;
+        if (wanted <= current)
             return;
+        var proposed = Math.Min(wanted, current * GapReachGrowthFactor);
         _adaptedWindowSeconds = proposed;
+        var capped = proposed < wanted ? $" (capped from {wanted:0.#} s)" : "";
         _env.Log?.Invoke($"chapter {number} needed {reachSeconds:0.#} s of probe window - " +
-                         $"jingle probe window widened to {proposed:0.#} s");
+                         $"jingle probe window widened to {proposed:0.#} s{capped}");
     }
 
     /// <summary>

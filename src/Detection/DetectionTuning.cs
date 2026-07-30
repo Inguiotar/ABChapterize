@@ -330,6 +330,27 @@ internal static class DetectionTuning
     internal const double JingleObservationSafetyFactor = 1.25;
 
     /// <summary>
+    /// Ceiling on how far a single gap-recovered chapter may widen the --max-jingle-length auto window
+    /// (see <see cref="RegionProber.ProposeJingleWindow"/>): at most this factor times the window in
+    /// effect, so a reach far above it takes several recoveries to be honoured in full instead of one
+    /// jump. Deliberately the same 1.25 as <see cref="JingleObservationSafetyFactor"/> - both answer
+    /// the same question, how far a single observation may move a running maximum.
+    /// <para>
+    /// The cap exists because the window's cost is superlinear in a way the reach figure alone does not
+    /// reveal. Measured on BARDIOC.m4b (2026-07-30, 15 h 39 min, 1575 silences, so ~36 s average
+    /// spacing): at the ~24 s window the run actually used, most candidate windows do not touch each
+    /// other and Pass 2 decoded 593 minutes of audio in 1659 probes (434 in the main loop, 158 inside
+    /// the four gap re-probes). Chapter 10's reach was ~38.5 s, which uncapped proposes ~43.5 s - and
+    /// at that width nearly every candidate overlaps its neighbour, so decoding approaches covering the
+    /// whole file once, ~939 minutes. Because the adapted window is a monotonic maximum, one outlier
+    /// chapter would hold that width for the remaining ~10 hours of the book: several hundred minutes
+    /// added to save the ~85 the re-probes cost. Capped, that same chapter lifts 24 s to 30 s, which
+    /// still covers the 19-25 s reaches the other three recoveries needed.
+    /// </para>
+    /// </summary>
+    internal const double GapReachGrowthFactor = 1.25;
+
+    /// <summary>
     /// With --min-silence-length auto, the Pass 2 probing threshold is this factor times a mark's
     /// anchor silence length, i.e. a 25 % margin below the shortest observed inter-chapter break,
     /// mirroring <see cref="JingleObservationSafetyFactor"/>. Monotonic: the first qualifying mark

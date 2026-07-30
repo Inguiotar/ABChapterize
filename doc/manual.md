@@ -236,7 +236,11 @@ candidate is trusted rather than the jingle length: the candidate is vouched
 for by a chapter nothing else in the run found. It matters for books whose real
 chapter breaks are too short to be probed on their own, where the window has to
 reach the announcement from the previous candidate — without it, the same shape
-of chapter is missed again a few chapters later.
+of chapter is missed again a few chapters later. One recovery can widen the
+window by no more than a quarter of its current width, though: a wide window
+makes probes overlap and so costs time on every remaining candidate, and a
+single unusual chapter should not decide that for the rest of a long book. A
+reach beyond that is granted over several recoveries.
 
 ### Pass 2.5 — cheap gap re-probe (only with a heavier `--pass3-model`)
 
@@ -748,7 +752,9 @@ so that logs and reports stay comparable regardless of regional settings.
   skipped, and those already probed while the window was narrower than the
   ceiling, whose announcement may simply have sat past the end of it — and
   then returns to the adapted width, including whatever the recovered
-  chapters' own jingles just taught it. `auto` implies a nonzero ceiling, so
+  chapters' own jingles just taught it — and how far into its window a
+  recovered chapter's announcement reached, which may widen the window by up
+  to a quarter of its current width per recovery. `auto` implies a nonzero ceiling, so
   it cannot mean "no jingle expected."
 
 ### Auto language detection

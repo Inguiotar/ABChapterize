@@ -1668,16 +1668,18 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task AGapRecoveredChapter_WidensTheJingleWindowToTheReachItNeeded()
+    public async Task AGapRecoveredChapter_WidensTheJingleWindow_ByAtMostTheGrowthCap()
     {
         // Chapter 2's 3 s jingle narrows the window to 8.75 s. Chapter 3's announcement sits 20 s
         // after its silence, so the narrowed window misses it and only the ceiling re-probe finds it.
         // The 1 s silence at 919 is what makes this the BARDIOC.m4b shape rather than a case the
         // existing machinery already handles: the mark anchors to *that* silence, so the jingle
         // observation measures ~0 s, falls under its 2 s floor and is discarded - the reach is the
-        // only thing left to learn from. Chapter 5's announcement, 15 s after its own silence, is the
-        // proof it was learned: unreachable at 8.75 s, reachable at the widened width, and being the
-        // last mark nothing could recover it if it were missed.
+        // only thing left to learn from. The reach it reports (27 s) is far above what one recovery may
+        // apply, so the growth cap holds the window to 1.25 x 8.75 = 10.9 s. Chapter 5's announcement,
+        // 9.5 s after its own silence, is the proof something was learned all the same: out of reach at
+        // 8.75 s, inside the capped width, and being the last mark nothing could recover it if it were
+        // missed.
         var (result, log, _) = await DetectWithLogAsync(
             Options("--verbose"),
             [new(595, 600), new(895, 900), new(919, 920), new(1195, 1200), new(1495, 1500)],
@@ -1687,7 +1689,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(3.0, " Chapter two."));
                 s.Add(900, Seg(20.0, " Chapter three."));
                 s.Add(1200, Seg(3.0, " Chapter four."));
-                s.Add(1500, Seg(15.0, " Chapter five."));
+                s.Add(1500, Seg(9.5, " Chapter five."));
             },
             new FakeVad { Speech = [new(0, 3600)] });
 
@@ -1695,8 +1697,34 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([1, 2, 3, 4, 5], result.Chapters.Select(c => c.Number));
         // 22 s of reach (the phrase ends 2 s after its 20 s onset) plus the 5 s phrase margin.
         Assert.Contains(log, l => l.Contains("chapter 3 needed 22 s of probe window") &&
-                                  l.Contains("widened to 27 s"));
-        Assert.Contains(log, l => l.Contains("jingle probe window restored to 27 s"));
+                                  l.Contains("widened to 10.9 s (capped from 27 s)"));
+        Assert.Contains(log, l => l.Contains("jingle probe window restored to 10.9 s"));
+    }
+
+    [Fact]
+    public async Task AGapRecoveredChapter_WithinTheGrowthCap_GetsItsFullReach()
+    {
+        // The counterpart to the capped case: chapter 2's 20 s jingle puts the window at 30 s, so
+        // chapter 3's 32.2 s reach asks for 37.2 s - under the 37.5 s one recovery may grant, and
+        // therefore honoured in full and without the "capped from" note. Reaches only fit under the cap
+        // once the window is past 20 s (4 x the phrase margin); below that a miss is always further out
+        // than one step of growth can follow, which is what the capped test covers.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--verbose"),
+            [new(595, 600), new(895, 900), new(929, 930), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(20.0, " Chapter two."));
+                s.Add(900, Seg(30.2, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            },
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("chapter 3 needed 32.2 s of probe window") &&
+                                  l.Contains("widened to 37.2 s") && !l.Contains("capped"));
     }
 
     [Fact]
