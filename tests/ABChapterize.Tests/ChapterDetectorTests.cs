@@ -1668,6 +1668,38 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AGapRecoveredChapter_WidensTheJingleWindowToTheReachItNeeded()
+    {
+        // Chapter 2's 3 s jingle narrows the window to 8.75 s. Chapter 3's announcement sits 20 s
+        // after its silence, so the narrowed window misses it and only the ceiling re-probe finds it.
+        // The 1 s silence at 919 is what makes this the BARDIOC.m4b shape rather than a case the
+        // existing machinery already handles: the mark anchors to *that* silence, so the jingle
+        // observation measures ~0 s, falls under its 2 s floor and is discarded - the reach is the
+        // only thing left to learn from. Chapter 5's announcement, 15 s after its own silence, is the
+        // proof it was learned: unreachable at 8.75 s, reachable at the widened width, and being the
+        // last mark nothing could recover it if it were missed.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--verbose"),
+            [new(595, 600), new(895, 900), new(919, 920), new(1195, 1200), new(1495, 1500)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(3.0, " Chapter two."));
+                s.Add(900, Seg(20.0, " Chapter three."));
+                s.Add(1200, Seg(3.0, " Chapter four."));
+                s.Add(1500, Seg(15.0, " Chapter five."));
+            },
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4, 5], result.Chapters.Select(c => c.Number));
+        // 22 s of reach (the phrase ends 2 s after its 20 s onset) plus the 5 s phrase margin.
+        Assert.Contains(log, l => l.Contains("chapter 3 needed 22 s of probe window") &&
+                                  l.Contains("widened to 27 s"));
+        Assert.Contains(log, l => l.Contains("jingle probe window restored to 27 s"));
+    }
+
+    [Fact]
     public async Task AfterAGap_WithNothingSkippedOrNarrowed_SaysSoRatherThanReprobing()
     {
         // Every candidate was probed at the full window (--max-jingle-length 0 pins it, an explicit

@@ -251,6 +251,15 @@ for you, not how it was built. The format follows
   and a jingle discovered that way sizes the window for the rest of the file.
   Where there is nothing to retry, `--verbose` now says so instead of moving on
   without comment.
+- **Recovering a chapter now teaches the probe window how far it has to reach.** With
+  `--max-jingle-length auto` the window narrows to fit the jingles seen so far, and it
+  was sized purely from how long each jingle ran. A chapter whose announcement sits far
+  from the nearest silence therefore kept being missed even after an identical case had
+  just been recovered from a gap, because that recovery taught the window nothing: on one
+  15½-hour German audiobook, four chapters were lost the same way and each cost its own
+  retry pass. A chapter recovered from a gap now also reports how far into its window the
+  announcement actually ended, and the window widens to cover that for the rest of the
+  file — so the same shape of chapter is found the first time instead of after the fact.
 - **A chapter recovered from a sequence gap is no longer found several times over.**
   The retry that closes a gap kept going through the candidates behind the recovered
   chapter, and because they cover the same stretch of audio each one found that same

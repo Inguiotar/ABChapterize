@@ -224,10 +224,19 @@ disables this and keeps the window fixed at that value throughout. See the
 A chapter turning up out of sequence puts every candidate since the previous
 chapter back in question, not just the ones that were passed over: a window
 that was probed while the jingle window sat narrow can end before an unusually
-late announcement, so those are re-probed at the full ceiling width too. When
-there is nothing to retry — every candidate already had the full window and
-simply yielded no readable announcement — `--verbose` says so, and the gap goes
-straight to pass 3.
+late announcement, so those are re-probed at the full ceiling width too. The
+retry stops as soon as the gap is closed. When there is nothing to retry —
+every candidate already had the full window and simply yielded no readable
+announcement — `--verbose` says so, and the gap goes straight to pass 3.
+
+A chapter recovered that way also reports how far into its window its
+announcement ended, and the window widens to cover at least that much for the
+rest of the file. This is the one case where the plain distance from the
+candidate is trusted rather than the jingle length: the candidate is vouched
+for by a chapter nothing else in the run found. It matters for books whose real
+chapter breaks are too short to be probed on their own, where the window has to
+reach the announcement from the previous candidate — without it, the same shape
+of chapter is missed again a few chapters later.
 
 ### Pass 2.5 — cheap gap re-probe (only with a heavier `--pass3-model`)
 

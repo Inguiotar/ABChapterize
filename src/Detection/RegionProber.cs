@@ -107,7 +107,15 @@ internal readonly record struct ProbeCandidate(
 /// (or on nothing at all) - the input to the --min-silence-length auto tightening.</param>
 /// <param name="Confidence">Whisper's confidence for the segment the phrase was found in, which
 /// decides whether this mark settles its whole overlapping window sequence.</param>
-internal readonly record struct ProbeMark(int Number, Silence? MarkSilence, double Confidence);
+/// <param name="ReachSeconds">How far into its window the announcement <em>ended</em>, i.e. the
+/// window width this mark actually required. Distinct from the jingle length
+/// <see cref="RegionProber.ObserveJingleLength"/> measures: that one is anchored to the silence or
+/// region the mark fell into and says how long this book's jingles run, while this is measured from
+/// the candidate the window started at and says how far a window from that candidate has to reach
+/// before the phrase is complete. The two diverge exactly when the mark's anchor is not the
+/// candidate that triggered the probe.</param>
+internal readonly record struct ProbeMark(
+    int Number, Silence? MarkSilence, double Confidence, double ReachSeconds);
 
 /// <summary>
 /// Runs Pass 2 candidate probing for a single <see cref="DetectionRegion"/>, appending every
@@ -939,7 +947,10 @@ internal sealed class RegionProber
                          MissingNote(missingNumbers));
 
         ObserveJingleLength(phraseAbs, start, markSilence, markRegion);
-        return new ProbeMark(match.Number, markSilence, match.Confidence);
+        // start is the candidate's own position (see ProbeAsync), so the window-relative phrase end
+        // is already the reach measured from the candidate.
+        return new ProbeMark(
+            match.Number, markSilence, match.Confidence, match.PhraseEndSeconds);
     }
 
     /// <summary>
@@ -1248,8 +1259,11 @@ internal sealed class RegionProber
                 // through the same guard rather than the caller having to remember which list a
                 // candidate came from. Only genuine gap-fillers count either way; a re-detection of
                 // a chapter outside this gap must not lower anything.
-                if (missing.Remove(gapMark.Number) && _env.Options.AutoMinSilence)
+                if (!missing.Remove(gapMark.Number))
+                    continue;
+                if (_env.Options.AutoMinSilence)
                     ProposeThreshold(gapMark.MarkSilence);
+                ProposeJingleWindow(gapMark.Number, gapMark.ReachSeconds);
             }
             if (missing.Count > 0)
                 continue;
@@ -1312,6 +1326,48 @@ internal sealed class RegionProber
         var proposed = Math.Max(_env.Options.MinSilenceSeconds,
             AdaptiveTightenFactor * (silence.EndSeconds - silence.StartSeconds));
         _adaptedThresholdSeconds = Math.Min(_adaptedThresholdSeconds ?? proposed, proposed);
+    }
+
+    /// <summary>
+    /// Widens the --max-jingle-length auto window to whatever a gap-recovered chapter actually needed
+    /// (see <see cref="ProbeMark.ReachSeconds"/>), plus the usual phrase margin. Only gap-recovered
+    /// marks get this: the adapted window is otherwise sized from observed jingle *lengths*, anchored
+    /// to the silence or region each mark fell into rather than to the candidate that triggered the
+    /// probe, and the anti-inflation reason for that is sound - a window sized off every mark's raw
+    /// offset would ratchet up on any book where probes routinely trigger on in-text pauses well
+    /// before the announcement. A gap-recovered mark is the one case where the offset is trustworthy:
+    /// the candidate is corroborated by a chapter that nothing else in the run found, so the reach is
+    /// a measured fact about what this book's windows must span, not a guess off a false trigger.
+    /// <para>
+    /// The gap this closes was real, not theoretical. Measured on BARDIOC.m4b (2026-07-30, 15 h 39
+    /// min, German): chapters 9, 12 and 10 were each missed with their announcement's *onset* already
+    /// inside the window and only ~1.5 s of slack behind it - enough for "Kapitel" and not for the
+    /// number, so the phrase was truncated and no number could be read. The marks anchored to short
+    /// silences immediately before each announcement, so
+    /// <see cref="ObserveJingleLength"/> measured ~1 s, below its 2 s floor, and discarded the
+    /// observation: the window stayed at 23.1 s across both recoveries. The --min-silence-length half
+    /// of the recovery could not compensate either, having already been pinned at its 1.5 s floor
+    /// since chapter 8, which also means the near-anchor silences could never become candidates of
+    /// their own. So neither adaptive mechanism learned anything from recovering chapters 9 and 10,
+    /// and chapter 12 was then lost the same way and cost a second full re-probe. Chapter 9's reach
+    /// would have set the window to ~28 s, which covers chapter 12's ~28.5 s requirement.
+    /// </para>
+    /// </summary>
+    /// <param name="number">The recovered chapter, for the log line.</param>
+    /// <param name="reachSeconds">How far into its window that chapter's announcement ended.</param>
+    private void ProposeJingleWindow(int number, double reachSeconds)
+    {
+        if (_env.Vad == null || !_env.Options.AutoMaxJingle)
+            return;
+        // No safety factor on top: unlike a jingle length, which stands in for jingles not yet seen
+        // and may legitimately be exceeded, this is the exact width one real announcement needed. The
+        // phrase margin is what carries the headroom, and the ceiling caps it either way.
+        var proposed = Math.Min(_ctx.JingleCeilingSeconds, reachSeconds + PhraseMarginSeconds);
+        if (proposed <= (_adaptedWindowSeconds ?? 0))
+            return;
+        _adaptedWindowSeconds = proposed;
+        _env.Log?.Invoke($"chapter {number} needed {reachSeconds:0.#} s of probe window - " +
+                         $"jingle probe window widened to {proposed:0.#} s");
     }
 
     /// <summary>
