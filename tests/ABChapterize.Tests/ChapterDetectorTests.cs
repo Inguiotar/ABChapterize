@@ -1702,6 +1702,36 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AGapReprobe_ExtendsTheCandidatesOwnEarlierTranscript_InsteadOfRedecodingIt()
+    {
+        // Chapter 2's 16 s jingle narrows the window to 25 s, so chapter 3's window is [900, 925] -
+        // ending exactly on the mid-point of the 1 s silence at [924.5, 925.5], which is under the 1.5 s
+        // candidate threshold but retained as a seam target. Chapter 3's announcement sits at 932, past
+        // that end, so it is missed and chapter 4 reveals the gap.
+        //
+        // The re-probe of candidate 900 then runs at the 50 s ceiling. Because the earlier window ended
+        // on a real seam, its transcript is trusted to that seam and only [925, 950] is decoded - one
+        // Whisper encoder pass instead of the two a 50 s decode costs. The fresh tail is what hears the
+        // announcement, so a reuse boundary that swallowed it would show up as a missing chapter 3.
+        var (result, _, audio) = await DetectWithLogAsync(
+            Options("--verbose"),
+            [new(595, 600), new(895, 900), new(924.5, 925.5), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(16.0, " Chapter two."));
+                s.Add(900, Seg(32.0, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            },
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains((925.0, (double?)25.0), audio.DecodeWindows);
+        Assert.DoesNotContain((900.0, (double?)50.0), audio.DecodeWindows);
+    }
+
+    [Fact]
     public async Task AGapRecoveredChapter_WithinTheGrowthCap_GetsItsFullReach()
     {
         // The counterpart to the capped case: chapter 2's 20 s jingle puts the window at 30 s, so

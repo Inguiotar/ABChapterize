@@ -101,6 +101,21 @@ internal readonly record struct LanguageState(
 internal readonly record struct ProbeCandidate(
     double Start, Silence? Silence, NonSpeechRegion? VadRegion);
 
+/// <summary>
+/// One window Pass 2 has already probed since the last accepted mark, kept so a sequence-gap re-probe
+/// of the same candidate can extend that transcript instead of re-decoding audio Whisper has already
+/// read (see <see cref="RegionProber.DecodeBeyondReusablePrefixAsync"/>). Text only, no audio: a whole
+/// stretch between two marks is a few hundred kilobytes even on the 243-candidate stretches BARDIOC.m4b
+/// produced.
+/// </summary>
+/// <param name="Candidate">The candidate probed, which a re-probe matches against by value.</param>
+/// <param name="WindowEnd">The end its window was probed with - both the re-probe's "is a wider window
+/// worth it" test and the reuse boundary search need the end this window really got, not one recomputed
+/// from a probe width that has moved since.</param>
+/// <param name="SegmentsAbs">Its full window transcript in absolute file time.</param>
+internal sealed record ProbedWindow(
+    ProbeCandidate Candidate, double WindowEnd, List<TranscriptSegment> SegmentsAbs);
+
 /// <summary>One chapter mark a probe window produced.</summary>
 /// <param name="Number">The detected chapter number.</param>
 /// <param name="MarkSilence">The silence the mark falls into, or null when it sits on a VAD region
@@ -244,8 +259,26 @@ internal sealed class RegionProber
     /// applied to <see cref="_skippedSinceLastMark"/>, which has no reason to stop at candidates
     /// that were never probed. Recording the end each window really got (rather than recomputing it)
     /// is what keeps the re-probe from re-running windows at a width they already had.
+    /// <para>
+    /// Each entry carries its window's transcript too, so a re-probed candidate only pays Whisper for
+    /// the audio beyond what it already heard. Cleared on every accepted mark, which is also what keeps
+    /// a transcript from ever crossing into a pass that decodes with a different model: pass 2.5 runs on
+    /// its own <see cref="RegionProber"/> per gap region (see
+    /// <see cref="ChapterDetector.RunPass25Async"/>), so it starts with this list empty and
+    /// <see cref="_cacheTo"/> at negative infinity, and cannot inherit a pass-2 reading of the very
+    /// number it was started to re-read. Keep it that way - a prober must never be reused across
+    /// passes.
+    /// </para>
     /// </summary>
-    private readonly List<(ProbeCandidate Candidate, double WindowEnd)> _probedSinceLastMark = [];
+    private readonly List<ProbedWindow> _probedSinceLastMark = [];
+
+    /// <summary>The absolute-time transcript of the window <see cref="ProbeAsync"/> assembled last.
+    /// Stashed here rather than returned because <see cref="RunAsync"/> must record it only
+    /// <em>after</em> the probe's marks have been applied - a window is history for whatever gap a
+    /// later mark reveals, never for its own - by which point the return value is long consumed.
+    /// Not the same as <see cref="_cacheSegmentsAbs"/>, which for a window fully contained in its
+    /// predecessor still holds that larger predecessor.</summary>
+    private List<TranscriptSegment> _lastProbeTranscriptAbs = [];
 
     /// <summary>The file's language resolution, as it stood on entry and as this region may have
     /// advanced it (a fresh run's very first full-window decode resolves --lang auto).</summary>
@@ -320,7 +353,7 @@ internal sealed class RegionProber
             // Recorded after the marks are applied, so it lands in the list that survives them: this
             // window is history for whatever gap a *later* mark reveals, never for its own.
             await ApplyProbeMarksAsync(probeMarks, ct);
-            _probedSinceLastMark.Add((candidate, windowEnd));
+            _probedSinceLastMark.Add(new(candidate, windowEnd, _lastProbeTranscriptAbs));
             ci = SkipSettledWindows(candidates, ci, windowEnd, probeMarks);
         }
     }
@@ -463,9 +496,12 @@ internal sealed class RegionProber
     /// <param name="windowEnd">The window's <em>planned</em> end (see <see cref="WindowEndFor"/>),
     /// possibly snapped away from the natural start plus <see cref="_probeSeconds"/>.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <param name="reusable">This same candidate's earlier, narrower window from before the sequence
+    /// gap, whose transcript the re-probe may extend rather than re-decode; null in the main loop, which
+    /// has no earlier probe of the candidate it is looking at.</param>
     /// <returns>The accepted marks in window order.</returns>
     private async Task<List<ProbeMark>> ProbeAsync(
-        ProbeCandidate candidate, double windowEnd, CancellationToken ct)
+        ProbeCandidate candidate, double windowEnd, CancellationToken ct, ProbedWindow? reusable = null)
     {
         var start = candidate.Start;
         ct.ThrowIfCancellationRequested();
@@ -474,7 +510,8 @@ internal sealed class RegionProber
         ReportProgress(start);
 
         var (windowSegmentsAbs, mergeBoundarySegIndex) =
-            await AssembleWindowTranscriptAsync(start, windowEnd, ct);
+            await AssembleWindowTranscriptAsync(start, windowEnd, ct, reusable);
+        _lastProbeTranscriptAbs = windowSegmentsAbs;
 
         // Correct segment starts Whisper timestamped from a leading silence/jingle before shifting
         // to window-relative time (the cache keeps the raw absolute timings its reuse math needs).
@@ -504,16 +541,22 @@ internal sealed class RegionProber
     /// <param name="start">Absolute start of the window.</param>
     /// <param name="windowEnd">Absolute planned end of the window.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <param name="reusable">The same candidate's earlier window from before a sequence gap, if any -
+    /// consulted only when the rolling cache has nothing, since the previous window at the re-probe's
+    /// ceiling width normally reaches further than the narrow window this candidate first got.</param>
     /// <returns>The window transcript, plus - for a partial-overlap assembly - the index of its
     /// first fresh segment, so a detection drawing on text from both sides of the cache/fresh
     /// boundary can be flagged (see <see cref="PhraseMatch.SpansMerge"/>); null when the window is
     /// entirely one or the other.</returns>
     private async Task<(List<TranscriptSegment> Segments, int? MergeBoundarySegIndex)>
-        AssembleWindowTranscriptAsync(double start, double windowEnd, CancellationToken ct)
+        AssembleWindowTranscriptAsync(
+            double start, double windowEnd, CancellationToken ct, ProbedWindow? reusable = null)
     {
         // A window whose start falls outside the cached span has no usable overlap.
         if (start < _cacheFrom || start >= _cacheTo)
-            return (await DecodeFullWindowAsync(start, windowEnd, ct), null);
+            return reusable == null
+                ? (await DecodeFullWindowAsync(start, windowEnd, ct), null)
+                : await DecodeBeyondReusablePrefixAsync(start, windowEnd, reusable, ct);
 
         if (windowEnd <= _cacheTo)
             // Fully contained in the previous window: reuse its transcript wholesale, no Whisper at
@@ -579,6 +622,95 @@ internal sealed class RegionProber
         var assembled = CacheWindow(
             [.. reused, .. ShiftSegments(fresh, splitPoint)], start, windowEnd);
         return (assembled, reused.Count);
+    }
+
+    /// <summary>
+    /// Extends this candidate's own earlier, narrower transcript instead of decoding its whole ceiling
+    /// window again: everything up to a word-safe reuse boundary comes from that probe, and Whisper only
+    /// sees the audio beyond it. The re-probe walks candidates in the same ascending order the main loop
+    /// does, so consecutive re-probe windows already stitch through the rolling cache; this covers the
+    /// ones the rolling cache cannot reach - candidates whose neighbours sit more than a ceiling window
+    /// away, which on BARDIOC.m4b (2026-07-30) were 81 of the 343 re-probe decodes and 68 of their 158
+    /// minutes of audio, every one of them a full ~50 s decode of a stretch its first probe had already
+    /// read two thirds of.
+    /// <para>
+    /// Falls back to the full decode whenever <see cref="FindReusablePrefixEnd"/> finds no boundary it
+    /// can vouch for or the saving would not pay for the extra Whisper call, so the worst case is the
+    /// behaviour this replaces.
+    /// </para>
+    /// </summary>
+    /// <param name="start">Absolute start of the window, i.e. the candidate's own position.</param>
+    /// <param name="windowEnd">Absolute planned end of the (wider) re-probe window.</param>
+    /// <param name="reusable">This candidate's earlier window.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<(List<TranscriptSegment> Segments, int? MergeBoundarySegIndex)>
+        DecodeBeyondReusablePrefixAsync(
+            double start, double windowEnd, ProbedWindow reusable, CancellationToken ct)
+    {
+        if (FindReusablePrefixEnd(reusable, windowEnd) is not { } splitPoint)
+            return (await DecodeFullWindowAsync(start, windowEnd, ct), null);
+
+        var samples = await _env.Audio.DecodePcmAsync(
+            _ctx.File, splitPoint, windowEnd - splitPoint, _ctx.Info.InputDecoder, ct);
+        var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
+        var reused = reusable.SegmentsAbs
+            .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint).ToList();
+        _env.LogTranscript(
+            $"probe {windowEnd - splitPoint:0.0}s@{FormatTimestamp(splitPoint)} (extends earlier probe)", fresh);
+        var assembled = CacheWindow(
+            [.. reused, .. ShiftSegments(fresh, splitPoint)], start, windowEnd);
+        return (assembled, reused.Count);
+    }
+
+    /// <summary>
+    /// Where an earlier probe's transcript stops being safe to reuse: the last silence (or, with the VAD
+    /// pre-pass, non-speech region) mid-point inside that window, so the seam falls in a pause rather
+    /// than mid-word - the same word-safety rule the adjacent-window stitching in
+    /// <see cref="GapPlanning.FindOverlapSplitPoint"/> follows, applied to a window that has already been
+    /// decoded. A boundary this far inside the window is if anything safer than one of those seams: the
+    /// text left of it was transcribed with the rest of the window still following it as context.
+    /// <para>
+    /// The search stops <see cref="PrefixReuseBackoffSeconds"/> short of the window end unless the end
+    /// itself is such a mid-point - i.e. unless the window was decoded to a planned seam and its trailing
+    /// edge therefore sits in a pause with no speech to lose. See
+    /// <see cref="PrefixReuseBackoffSeconds"/> for why an unsnapped edge cannot be trusted at all.
+    /// </para>
+    /// <para>
+    /// Returns null when reuse would not pay: Whisper's cost is
+    /// <see cref="WhisperChunkSeconds"/>-quantized, so a prefix that leaves the fresh decode in the same
+    /// number of encoder passes as the whole window buys nothing and adds a Whisper call and an ffmpeg
+    /// decode. Internal for unit testing.
+    /// </para>
+    /// </summary>
+    /// <param name="probed">The earlier window whose transcript is on offer.</param>
+    /// <param name="windowEnd">Absolute planned end of the new, wider window.</param>
+    internal double? FindReusablePrefixEnd(ProbedWindow probed, double windowEnd)
+    {
+        var start = probed.Candidate.Start;
+        IEnumerable<(double From, double To)> seams =
+            _ctx.AllSilences.Select(s => (s.StartSeconds, s.EndSeconds));
+        if (_env.Vad != null)
+            seams = seams.Concat(_ctx.NonSpeechRegions.Select(r => (r.StartSeconds, r.EndSeconds)));
+
+        double? snappedEnd = null, backedOff = null;
+        var backoffLimit = probed.WindowEnd - PrefixReuseBackoffSeconds;
+        foreach (var (from, to) in seams)
+        {
+            var mid = (from + to) / 2;
+            if (mid <= start)
+                continue;
+            if (Math.Abs(mid - probed.WindowEnd) < 1e-9)
+                snappedEnd = mid;
+            else if (mid <= backoffLimit && mid > (backedOff ?? double.NegativeInfinity))
+                backedOff = mid;
+        }
+
+        var splitPoint = snappedEnd ?? backedOff;
+        if (splitPoint is not { } split)
+            return null;
+        return EncoderPasses(windowEnd - split) < EncoderPasses(windowEnd - start) ? split : null;
+
+        static int EncoderPasses(double seconds) => (int)Math.Ceiling(seconds / WhisperChunkSeconds);
     }
 
     /// <summary>Makes a freshly assembled window transcript the overlap cache, and returns it
@@ -1188,7 +1320,13 @@ internal sealed class RegionProber
         _env.Log?.Invoke(
             note + $"re-probing {candidates.Count} candidate(s) unconditionally " +
             $"({_skippedSinceLastMark.Count} skipped, {widened.Count} at a wider window)");
-        await ReprobeGapCandidatesAsync(candidates, previousNumber, number, ct);
+        // Only the widened ones have a transcript to extend - a skipped candidate was never decoded.
+        // Grouped rather than keyed directly: a candidate probed twice since the last mark would
+        // otherwise throw, and the later window is the one worth keeping.
+        var prefixes = _probedSinceLastMark
+            .GroupBy(p => p.Candidate)
+            .ToDictionary(g => g.Key, g => g.Last());
+        await ReprobeGapCandidatesAsync(candidates, prefixes, previousNumber, number, ct);
     }
 
     /// <summary>
@@ -1232,22 +1370,34 @@ internal sealed class RegionProber
     /// </para>
     /// </summary>
     /// <param name="candidates">The candidates to re-probe, in chronological order.</param>
+    /// <param name="prefixes">Each candidate's earlier window, for the ones that have one, whose
+    /// transcript the re-probe extends instead of re-decoding (see
+    /// <see cref="DecodeBeyondReusablePrefixAsync"/>).</param>
     /// <param name="previousNumber">The chapter number below the gap.</param>
     /// <param name="number">The chapter number above it, i.e. the mark that revealed the gap.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ReprobeGapCandidatesAsync(
-        List<ProbeCandidate> candidates, int previousNumber, int number, CancellationToken ct)
+        List<ProbeCandidate> candidates, Dictionary<ProbeCandidate, ProbedWindow> prefixes,
+        int previousNumber, int number, CancellationToken ct)
     {
         if (_env.Vad != null && _env.Options.AutoMaxJingle && _probeSeconds != _ctx.JingleCeilingSeconds)
         {
             _probeSeconds = _ctx.JingleCeilingSeconds;
             _env.Log?.Invoke($"jingle probe window reset to {_probeSeconds:0.#} s for the re-probe");
         }
+        // The re-probe walks backwards over audio the main loop has passed, so its own windows would
+        // leave the rolling cache holding a span behind where Pass 2 resumes - and the next main-loop
+        // probe, whose window plan counts on stitching onto the window before it at distance zero, would
+        // pay for a full decode instead. Handing the cache back untouched keeps the re-probe free of
+        // side effects on the main sequence.
+        var (keepSegments, keepFrom, keepTo) = (_cacheSegmentsAbs, _cacheFrom, _cacheTo);
         _reprobing = true;
         var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
         for (var si = 0; si < candidates.Count; si++)
         {
-            var gapMarks = await ProbeAsync(candidates[si], WindowEndFor(candidates, si), ct);
+            var gapMarks = await ProbeAsync(
+                candidates[si], WindowEndFor(candidates, si), ct,
+                prefixes.GetValueOrDefault(candidates[si]));
             foreach (var gapMark in gapMarks)
             {
                 _lastNumber = Math.Max(_lastNumber ?? 0, gapMark.Number);
@@ -1273,6 +1423,7 @@ internal sealed class RegionProber
             break;
         }
         _reprobing = false;
+        (_cacheSegmentsAbs, _cacheFrom, _cacheTo) = (keepSegments, keepFrom, keepTo);
         // Re-probing done: bring the jingle window back down from the ceiling to the adapted value,
         // including anything the re-probed marks just taught us.
         if (_env.Vad != null && _env.Options.AutoMaxJingle &&
