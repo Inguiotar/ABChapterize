@@ -1619,13 +1619,25 @@ done:
 My Audiobook.m4b: 23 chapter(s) written (1-23) + intro
 ```
 
-The chapter state reads `----` until the first chapter is confirmed (all
+The chapter state reads `----` until the first mark is confirmed (all
 of pass 1, where nothing can change anyway), then shows the highest
-chapter number found so far — `ch 6` — with any lower chapter that is
-still unconfirmed (the gaps pass 3 would have to chase during detection,
-or a mark that failed its check during `--verify`) as a bracketed negative
-count: `ch 6(-2)` means chapter 6 is marked but two below it are still
-outstanding. Pass 2's percentage follows the probe position within the
+chapter number found so far — `ch 6` — followed by a bracket holding two
+counts, either of which is left out when it is zero:
+
+- a negative count of lower chapters that are still unconfirmed (the gaps
+  pass 3 would have to chase during detection, or a mark that failed its
+  check during `--verify`);
+- a positive count of the extra marks found — prologue, epilogue and
+  [`--custom`](#custom-marks) marks. The intro mark is not among them; it is
+  added when the file is written, not detected.
+
+So `ch 6(-2+1)` means chapter 6 is marked, two chapters below it are still
+outstanding, and one extra mark has been found. An extra mark found before
+the first chapter reads `ch 0(+1)`, and under
+[`--ignore-chapter-numbers`](#detecting-chapters-without-believing-their-numbers),
+where every mark is an
+announcement without a number, the state shows the plain total instead:
+`mk 12`. Pass 2's percentage follows the probe position within the
 file's play time, so it can move nonlinearly — and, briefly, backwards,
 when a sequence gap makes the detector re-probe earlier skipped silences.
 

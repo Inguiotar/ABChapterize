@@ -38,11 +38,16 @@ public sealed class WorkTracker
     /// undetected (gaps that Pass 3 will chase); rendered as "(-N)" after the chapter number.</summary>
     public int MissingChapters { get; set; }
 
-    /// <summary>How many non-numbered marks (prologue, epilogue, <c>--custom</c>) have been found
-    /// so far. Shown only in place of the chapter number, i.e. while none has been found - which is
-    /// the whole run with <c>--ignore-chapter-numbers</c>, where the slot would otherwise sit at
-    /// "----" from start to finish however much the file is yielding.</summary>
+    /// <summary>How many named marks of every kind - including the chapter announcements that
+    /// <c>--ignore-chapter-numbers</c> files here rather than under a number - have been found so
+    /// far. Shown as "mk N" in place of the chapter number in that mode alone, where the slot would
+    /// otherwise sit at "----" from start to finish however much the file is yielding.</summary>
     public int NamedMarks { get; set; }
+
+    /// <summary>How many of <see cref="NamedMarks"/> are extra marks rather than chapters
+    /// (prologue, epilogue, <c>--custom</c>); rendered as "(+N)" after the chapter number. The
+    /// intro mark is not among them: it is synthesized at write time, not detected.</summary>
+    public int ExtraMarks { get; set; }
 
     /// <summary>Starts a new phase: resets the bar to 0 % and sets its label and total work.</summary>
     /// <param name="label">Phase name shown after the bar.</param>
@@ -115,6 +120,11 @@ public sealed class ProgressRenderer : IDisposable
 
         /// <summary>The chapter/mark count - the run's actual yield.</summary>
         public const ConsoleColor Chapters = ConsoleColor.DarkGreen;
+
+        /// <summary>The count of extra marks found alongside the chapters, sharing
+        /// <see cref="Chapters"/>' green because it is the same kind of news: yield, not a
+        /// problem. Only the sign tells the two bracketed counts apart at a glance.</summary>
+        public const ConsoleColor Extras = ConsoleColor.DarkGreen;
 
         /// <summary>The chapter placeholder before anything has been found, deliberately as
         /// muted as the separators: there is nothing to read there yet.</summary>
@@ -352,7 +362,7 @@ public sealed class ProgressRenderer : IDisposable
         // separate phase label after the bar since that would just repeat the same word.
         var muxing = slot.Tracker.PhaseLabel == "Muxing";
 
-        var spans = new List<ColoredSpan>(13)
+        var spans = new List<ColoredSpan>(14)
         {
             new("[", Palette.Structure),
             new(bar, Palette.Bar),
@@ -377,34 +387,45 @@ public sealed class ProgressRenderer : IDisposable
     }
 
     /// <summary>
-    /// Appends the bar's chapter section: "----" until the first chapter is found (nothing can
-    /// change during Pass 1 anyway); then the highest detected chapter number, with the count of
-    /// still-missing earlier chapters - the ones Pass 3 would have to chase - as e.g. "ch 6(-2)".
-    /// The missing count is split off into its own span so the number alone carries the warning
-    /// color while its brackets stay structural.
+    /// Appends the bar's chapter section: "----" until anything at all is found (nothing can
+    /// change during Pass 1 anyway); then the highest detected chapter number, followed by one
+    /// bracket holding the count of still-missing earlier chapters - the ones Pass 3 would have to
+    /// chase - and the count of extra marks found, as e.g. "ch 6(-2+1)". Each count is split off
+    /// into its own span so the numbers alone carry their colors while the brackets stay
+    /// structural. An extra mark found before the first chapter shows as "ch 0(+1)": the zero is
+    /// worth printing there because the bracket next to it is not empty.
     /// </summary>
     /// <param name="spans">The line being built, appended to in place.</param>
     /// <param name="tracker">The file's work tracker.</param>
     private static void AddChapterSpans(List<ColoredSpan> spans, WorkTracker tracker)
     {
-        if (tracker.HighestChapter is var highest and > 0)
+        var highest = tracker.HighestChapter;
+        var missing = tracker.MissingChapters;
+        var extra = tracker.ExtraMarks;
+
+        // --ignore-chapter-numbers is the one mode where chapters land among the named marks, so
+        // it is the one mode where the extra count alone would understate the yield by everything
+        // the run is actually finding - it keeps the plain total instead.
+        if (highest == 0 && tracker.NamedMarks > extra)
         {
-            spans.Add(new($"ch {highest}", Palette.Chapters));
-            if (tracker.MissingChapters is var missing and > 0)
-            {
-                spans.Add(new("(", Palette.Structure));
-                spans.Add(new($"-{missing}", Palette.Missing));
-                spans.Add(new(")", Palette.Structure));
-            }
+            spans.Add(new($"mk {tracker.NamedMarks}", Palette.Chapters));
+            return;
         }
-        else if (tracker.NamedMarks is var named and > 0)
-        {
-            spans.Add(new($"mk {named}", Palette.Chapters));
-        }
-        else
+        if (highest == 0 && extra == 0)
         {
             spans.Add(new("----", Palette.NoChapters));
+            return;
         }
+
+        spans.Add(new($"ch {highest}", Palette.Chapters));
+        if (missing == 0 && extra == 0)
+            return;
+        spans.Add(new("(", Palette.Structure));
+        if (missing > 0)
+            spans.Add(new($"-{missing}", Palette.Missing));
+        if (extra > 0)
+            spans.Add(new($"+{extra}", Palette.Extras));
+        spans.Add(new(")", Palette.Structure));
     }
 
     /// <summary>Writes one line of spans, colorized when <see cref="_color"/> allows it and as the

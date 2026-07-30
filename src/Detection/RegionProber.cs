@@ -789,6 +789,7 @@ internal sealed class RegionProber
         _namedFound.Add(new DetectedMark(
             match.Phrase.Kind, match.Title, time, match.Confidence, phraseAbs, match.Phrase.Repeatable));
         _ctx.Work.NamedMarks = _namedFound.Count;
+        _ctx.Work.ExtraMarks = _namedFound.Count(m => m.Kind != ChapterKind);
         _env.Log?.Invoke($"{match.Phrase.Kind} detected (\"{match.Title}\"), mark placed at " +
                          $"{FormatTimestamp(time)} (confidence {match.Confidence:0.00}" +
                          await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +

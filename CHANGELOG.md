@@ -39,11 +39,18 @@ for you, not how it was built. The format follows
   window around it starts. In-book mentions of the word "chapter" are not
   reported; only a stretch of audio that yielded no chapter at all is.
 
+- **The progress bar now counts the extra marks it finds**, alongside the
+  chapters: `ch 5(-1+1)` means chapter 5 is marked, one chapter below it is
+  still outstanding, and one prologue, epilogue or `--custom` mark has been
+  found. Extra marks turning up before the first chapter show as `ch 0(+1)`
+  rather than waiting for a chapter to have something to hang off.
+
 - **The progress bar and the `--summary` block are now in color** where the
   terminal supports it. In the bar: the fill and the file name in white,
   separators and brackets in dark grey, the percentage and the timer in cyan, the
   phase in a darker cyan, and the chapter count in dark green — grey while it is
-  still `----`, and with the bracketed count of missing chapters in dark red. In
+  still `----`, with the bracketed count of missing chapters in dark red and
+  the count of extra marks in the chapter count's own green. In
   the summary: prose in white, brackets in dark grey, and every measured value in
   cyan together with its unit, so `1.52 s` and `3.7%` each read as one figure.
   Nothing else is ever colored and a `--log-file` always receives plain text, so

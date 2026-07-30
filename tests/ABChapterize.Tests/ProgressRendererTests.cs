@@ -19,14 +19,25 @@ public class ProgressRendererTests
     /// <summary>Builds a slot whose tracker sits at <paramref name="done"/>/<paramref
     /// name="total"/> progress with the given chapter state, ready for <see
     /// cref="ProgressRenderer.BuildLine"/>.</summary>
+    /// <param name="done">Work booked in the current phase.</param>
+    /// <param name="total">The phase's total work.</param>
+    /// <param name="highestChapter">Highest chapter number found so far.</param>
+    /// <param name="missingChapters">Chapters below it still outstanding.</param>
+    /// <param name="extraMarks">Prologue/epilogue/--custom marks found so far.</param>
+    /// <param name="namedMarks">All named marks including chapter announcements; defaults to
+    /// <paramref name="extraMarks"/>, which is what every mode but --ignore-chapter-numbers
+    /// reports.</param>
     private static (WorkTracker Tracker, string Label) Slot(
-        long done, long total, int highestChapter = 0, int missingChapters = 0)
+        long done, long total, int highestChapter = 0, int missingChapters = 0,
+        int extraMarks = 0, int? namedMarks = null)
     {
         var t = new WorkTracker();
         t.BeginPhase("Pass 1", total);
         t.SetPhaseProgress(done);
         t.HighestChapter = highestChapter;
         t.MissingChapters = missingChapters;
+        t.ExtraMarks = extraMarks;
+        t.NamedMarks = namedMarks ?? extraMarks;
         return (t, "book.m4b");
     }
 
@@ -76,6 +87,44 @@ public class ProgressRendererTests
         Assert.Contains("| ch 6(-2) |", withMissing);
         Assert.Contains("| ch 6 |", complete);
         Assert.NotEqual(withMissing, complete);
+    }
+
+    [Fact]
+    public void BuildLine_ShowsExtraMarks_AsAPositiveCount()
+    {
+        var withExtras = ProgressRenderer.BuildLine(Slot(50, 100, highestChapter: 5, extraMarks: 1));
+        var plain = ProgressRenderer.BuildLine(Slot(50, 100, highestChapter: 5));
+
+        Assert.Contains("| ch 5(+1) |", withExtras);
+        Assert.Contains("| ch 5 |", plain);
+        Assert.NotEqual(withExtras, plain);
+    }
+
+    [Fact]
+    public void BuildLine_ShowsMissingChaptersBeforeExtraMarks_InOneBracket()
+    {
+        // Both counts share a single bracket pair, outstanding work first: "ch 5(-1+1)".
+        var line = ProgressRenderer.BuildLine(
+            Slot(50, 100, highestChapter: 5, missingChapters: 1, extraMarks: 1));
+        Assert.Contains("| ch 5(-1+1) |", line);
+    }
+
+    [Fact]
+    public void BuildLine_ShowsChapterZero_WhenOnlyExtraMarksAreFound()
+    {
+        // A prologue routinely arrives before chapter 1, and "----" would deny it exists. The
+        // zero is worth printing here precisely because the bracket beside it is not empty.
+        var line = ProgressRenderer.BuildLine(Slot(50, 100, extraMarks: 1));
+        Assert.Contains("| ch 0(+1) |", line);
+    }
+
+    [Fact]
+    public void BuildLine_KeepsThePlainMarkTotal_WhenChapterNumbersAreIgnored()
+    {
+        // --ignore-chapter-numbers files chapter announcements among the named marks, so the
+        // extra count alone (here: one prologue) would understate a yield of twelve marks.
+        var line = ProgressRenderer.BuildLine(Slot(50, 100, extraMarks: 1, namedMarks: 12));
+        Assert.Contains("| mk 12 |", line);
     }
 
     [Fact]
@@ -194,6 +243,21 @@ public class ProgressRendererTests
 
         Assert.Equal([("ch 6", ConsoleColor.DarkGreen), ("(", ConsoleColor.DarkGray),
                       ("-2", ConsoleColor.DarkRed), (")", ConsoleColor.DarkGray)],
+            tail.Select(s => (s.Text, s.Color)));
+    }
+
+    [Fact]
+    public void BuildSpans_ColorTheExtraMarkCount_LikeTheChapterCount()
+    {
+        // Extra marks are yield, not a problem, so they share the chapter count's green and only
+        // the sign sets them apart from the missing count sitting right next to them.
+        var spans = ProgressRenderer.BuildSpans(
+            Slot(50, 100, highestChapter: 6, missingChapters: 2, extraMarks: 3));
+        var tail = spans.SkipWhile(s => s.Text != "ch 6").Take(5).ToList();
+
+        Assert.Equal([("ch 6", ConsoleColor.DarkGreen), ("(", ConsoleColor.DarkGray),
+                      ("-2", ConsoleColor.DarkRed), ("+3", ConsoleColor.DarkGreen),
+                      (")", ConsoleColor.DarkGray)],
             tail.Select(s => (s.Text, s.Color)));
     }
 
