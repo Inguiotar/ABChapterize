@@ -39,6 +39,19 @@ for you, not how it was built. The format follows
   window around it starts. In-book mentions of the word "chapter" are not
   reported; only a stretch of audio that yielded no chapter at all is.
 
+- **A chapter number that cannot be right is now questioned before it is
+  believed.** A German "chapter nineteen" heard as chapter 90 used to be accepted
+  at face value, leaving 70 chapters "missing" and sending the gap re-probe after
+  47 candidate spots for nothing. Now, when a number would either leave more than
+  three chapters missing at once or falls at or below the chapters already found,
+  the spot is read again: first with `--pass3-model` when it names a better model
+  than the probing one, then from two differently framed windows around the
+  announcement. A re-reading is adopted only if it actually continues the chapter
+  sequence, so a genuine jump in a book's numbering is left alone. `--verbose`
+  reports each attempt and what came of it. A number below the sequence used to be
+  discarded unheard; now it is discarded only once re-reading has failed to make
+  sense of it — which turns some of those into the chapter they always were.
+
 - **The progress bar now counts the extra marks it finds**, alongside the
   chapters: `ch 5(-1+1)` means chapter 5 is marked, one chapter below it is
   still outstanding, and one prologue, epilogue or `--custom` mark has been

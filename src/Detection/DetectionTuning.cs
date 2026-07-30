@@ -360,6 +360,42 @@ internal static class DetectionTuning
     /// </summary>
     internal const double AdaptiveTightenFactor = 0.75;
 
+    /// <summary>
+    /// How many chapters a single announcement may leave missing before its number is treated as
+    /// suspect and re-read (<see cref="SuspectNumberMender"/>). Above this, a misheard number is by
+    /// far the likelier explanation than that many consecutive announcements going unheard: the
+    /// numbers that sound alike are exactly the ones that are far apart, since the confusion is in
+    /// the word, not the value. Observed on BARDIOC.m4b (2026-07-30) where "neunzehn" (19) came back
+    /// as 90, and every earlier gap on that book was one or two chapters wide.
+    /// <para>
+    /// Set at three because that is where the two costs cross. Gaps of one to three are the ordinary
+    /// kind - a chapter with no jingle, an unreadable number, an announcement the narrator rushed -
+    /// and the re-probe plus Pass 2.5/3 close them at a cost proportional to the gap. A gap of dozens
+    /// costs a full transcription of hours of audio, and the mark it eventually produces still carries
+    /// the wrong number, so paying a handful of transcriptions to question it is a bargain that only
+    /// gets better the wider the gap.
+    /// </para>
+    /// </summary>
+    internal const int SuspectGapMinMissing = 3;
+
+    /// <summary>
+    /// The re-framings <see cref="SuspectNumberMender"/> tries on a suspect announcement with the
+    /// pass-2 model, as (seconds of lead before the announcement, total window length). Whisper's
+    /// output for a given stretch of audio depends on the window it arrives in, so a second look at
+    /// the same announcement through differently sized windows is a genuinely different reading and
+    /// not a re-roll of the same dice - the same property <see cref="RegionProber"/>'s gap re-probe
+    /// relies on.
+    /// <para>
+    /// The two widths straddle the case that first demonstrated it: chapter 13 of "I Shall Wear
+    /// Midnight" came back as "CHAPTER XIII" from a 16.1 s window and as "Chapter 13" from a 48.8 s
+    /// one over the same announcement (2026-07-30). The leads differ as well as the widths, so the
+    /// announcement's offset inside Whisper's fixed 30 s mel frame moves too rather than only the
+    /// amount of context around it.
+    /// </para>
+    /// </summary>
+    internal static readonly (double LeadSeconds, double LengthSeconds)[] SuspectGapReframes =
+        [(2.0, 15.0), (12.0, 45.0)];
+
     /// <summary>Chunk length in seconds for full transcription of gap regions.</summary>
     internal const double GapChunkSeconds = 600;
 

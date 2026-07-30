@@ -336,7 +336,12 @@ use `.`, whatever the machine's locale says.
    explicit `--max-jingle-length` value keeps the window fixed at it instead.
    A sequence gap puts the window back at the ceiling and retries every
    candidate since the last chapter at that width, including ones already
-   probed while it was narrower.
+   probed while it was narrower. A number that can't be right — one leaving
+   more than three chapters missing at once, or one at or below the chapters
+   already found — is read again before it's believed: with `--pass3-model` if
+   that's the better model, then from two differently framed windows. The new
+   reading only counts if it continues the sequence, so a book that genuinely
+   skips numbers keeps its own.
 2b. **Mark refinement (skip with `--quick-marks`/`-Q`):** for
    the mark that still lands on the wrong spot — usually a jingle whose
    music briefly fools the voice-activity detector into sounding like speech —

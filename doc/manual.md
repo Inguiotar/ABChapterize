@@ -135,6 +135,17 @@ begins, so a second framing often reads cleanly. Only a stretch that yielded no
 chapter at all is reported this way, so a book's own mentions of the word stay
 out of the log.
 
+A number that *is* read but cannot plausibly be the next chapter — one that
+would leave more than three chapters missing in one go, or one at or below the
+chapters already found — is not taken at face value either. It is read again:
+with `--pass3-model` first if that names a better model than the probing one,
+then from two differently framed windows around the announcement. The new
+reading is adopted only if it continues the chapter sequence, so a book that
+genuinely skips numbers keeps its own numbering; where nothing sensible can be
+read, the original number stands (and, if it was below the sequence, is skipped
+as before). The mark itself never moves — only the number changes.
+`--verbose` reports every attempt and its outcome.
+
 Where a chapter announcement is found, the mark is placed a fixed lead-in
 before it — 0.35 seconds by default, `--mark-lead` — no matter what precedes
 it: a silence, a jingle, or nothing at all. When a
@@ -619,10 +630,11 @@ so that logs and reports stay comparable regardless of regional settings.
   one last, best-effort attempt at the chapters the main model missed. Naming a
   *bigger* model here than `--model`'s also enables
   [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
-  which often closes the gap far quicker than pass 3 would. The pass-3 model is
-  downloaded and loaded lazily — only if and when a file actually reaches
-  pass 2.5 or pass 3 — so naming a model here costs nothing on files that never
-  need it.
+  which often closes the gap far quicker than pass 3 would, and lets
+  [pass 2](#pass-2--probing) ask it for a second reading of a chapter number
+  that cannot be right. The pass-3 model is downloaded and loaded lazily — only
+  if and when a file actually needs it — so naming a model here costs nothing on
+  a clean run.
 
 `-C`, `--cpu-only`
 : Forces Whisper onto the CPU backend instead of the fastest available

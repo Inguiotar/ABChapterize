@@ -1244,6 +1244,103 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task ANumberLeavingALargeGap_IsReReadWithThePass3Model()
+    {
+        // BARDIOC.m4b, 2026-07-30: "neunzehn" (19) came back as 90 right after chapter 18, declaring
+        // seventy chapters missing. Here the pass-2 transcriber hears 90 where chapter 2 is, and only
+        // the pass-3 model reads it correctly - so the corrected number can only have come from the
+        // re-read, and the mark keeps the position the original reading gave it.
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0",
+                    "--quick-marks"),
+            [new(595, 600)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(600, Seg(0.5, " Chapter ninety."));
+            },
+            pass3 => pass3.Add(600, Seg(0.5, " Chapter two.")));
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 600.25)], result.Chapters);
+        // The re-read went through the pass-3 model with the file's own language applied.
+        Assert.Contains("en", pass3.LanguageChanges);
+    }
+
+    [Fact]
+    public async Task ANumberLeavingALargeGap_IsReReadFromAWiderWindow_WithNoPass3Model()
+    {
+        // Without --pass3-model there is no better recognizer to consult, so the same audio is asked
+        // again through differently sized windows - which is a real second reading, since what Whisper
+        // writes depends on the window a stretch arrives in. Chapter 2's announcement is scripted 3 s
+        // before the probe window starts, so only the 45 s re-framing (which leads the announcement by
+        // 12 s) ever sees it: the probe window itself starts at 600 and the 15 s re-framing at 600.5,
+        // both past it.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--quick-marks"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(2.5, " Chapter ninety."));  // the probe's own reading, phrase at 602.5
+                s.Add(599.5, Seg(0, " Chapter two."));     // 3 s ahead of it, outside the probe window
+            });
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 602.25)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("chapter 90 at 0:10:02.50 does not continue the sequence") &&
+                                  l.Contains("would leave 88 missing"));
+        Assert.Contains(log, l => l.Contains("a 45 s window read it as 2 instead of 90"));
+    }
+
+    [Fact]
+    public async Task ANumberBelowTheSequence_IsReReadInsteadOfDiscarded()
+    {
+        // The mirror mishearing, and the more damaging one: a number heard *below* the sequence is
+        // indistinguishable from an in-text mention of an earlier chapter, so it used to be dropped
+        // without appeal and the chapter went missing. Re-reading first recovers it.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--quick-marks"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter five."));
+                s.Add(1200, Seg(2.5, " Chapter two."));   // heard below chapter 5, phrase at 1202.5
+                s.Add(1199.5, Seg(0, " Chapter six."));   // what the wider re-framing hears there
+            },
+            null);
+
+        AssertChapters([new(5, 0.25), new(6, 1202.25)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("chapter 2 at 0:20:02.50 does not continue the sequence") &&
+                                  l.Contains("it is not above it"));
+        Assert.Contains(log, l => l.Contains("a 45 s window read it as 6 instead of 2"));
+    }
+
+    [Fact]
+    public async Task AnOrdinaryGap_AndARepeatedAnnouncement_AreNotReRead()
+    {
+        // The two cases that must stay cheap. A gap of two chapters is the ordinary kind the re-probe
+        // and pass 2.5/3 exist for, and a number equal to the last accepted one is an overlapping
+        // window re-hearing a mark already placed - questioning either would spend transcriptions with
+        // nothing to gain (and, for the repeat, could only "improve" by inventing the next number).
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--quick-marks"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.5, " Chapter four."));   // leaves 2 and 3 missing: ordinary
+                s.Add(1200, Seg(0.5, " Chapter four."));  // the same number again
+            });
+
+        Assert.True(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(4, 600.25)], result.Chapters);
+        Assert.DoesNotContain(log, l => l.Contains("does not continue the sequence"));
+        Assert.Contains(log, l => l.Contains("skipped chapter 4") &&
+                                  l.Contains("not above the last accepted chapter 4"));
+    }
+
+    [Fact]
     public async Task Pass3_UsesTheSeparatePass3Transcriber_WhenOneIsGiven()
     {
         // Pass 2 finds only chapters 1 and 3 (its transcriber never hears chapter 2), leaving a

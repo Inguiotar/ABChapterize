@@ -379,7 +379,33 @@ public sealed class ChapterDetector
             ResolveLanguageAsync,
             language => _transcriber.ChangeLanguage(language),
             LogTranscript,
-            (segments, profile, mergeBoundary) => FindCappedPhraseMatches(segments, profile, mergeBoundary));
+            (segments, profile, mergeBoundary) => FindCappedPhraseMatches(segments, profile, mergeBoundary),
+            _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
+                ? SecondOpinionAsync
+                : null);
+
+    /// <summary>
+    /// Re-transcribes samples with the <c>--pass3-model</c> recognizer for
+    /// <see cref="SuspectNumberMender"/>, in the file's own language. Routed through
+    /// <see cref="TranscribeCountingAsync"/> like every other recognition, so the extra work shows up
+    /// in the file's Whisper statistics rather than vanishing.
+    /// <para>
+    /// This is the one place the heavier model can be reached before a gap has been declared, which
+    /// means a run that would otherwise never have loaded it may now do so (it is loaded lazily, on
+    /// first use - see <see cref="Transcription.SharedPass3Transcriber"/>). That is the trade the
+    /// check is: one model load against a Pass 3 over hours of audio that a misheard number would
+    /// otherwise mandate.
+    /// </para>
+    /// </summary>
+    /// <param name="samples">16 kHz mono PCM of the window to re-read.</param>
+    /// <param name="language">The file's resolved language.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private Task<List<TranscriptSegment>> SecondOpinionAsync(
+        float[] samples, string language, CancellationToken ct)
+    {
+        _pass3Transcriber.ChangeLanguage(language);
+        return TranscribeCountingAsync(samples, ct, _pass3Transcriber);
+    }
 
     /// <summary>
     /// Pass 3 (only when needed): resolves sequence gaps by fully transcribing the regions between
@@ -574,7 +600,7 @@ public sealed class ChapterDetector
         var ctx = new Pass2Context(
             file, info, work, bytesPerSecond, jingleCeilingSeconds,
             allSilences, silences, nonSpeechRegions, speechSegments,
-            double.PositiveInfinity, null, _pass3Transcriber);
+            double.PositiveInfinity, null, _pass3Transcriber, SecondGuessNumbers: false);
 
         // Seeded with what is already known, exactly as DetectCoreAsync seeds Pass 2 proper:
         // RegionProber reports per-mark progress and "still missing" notes off this list, and gates

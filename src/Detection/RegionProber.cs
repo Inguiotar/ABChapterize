@@ -39,6 +39,10 @@ namespace ABChapterize.Detection;
 /// to the file, not to whichever recognizer a given pass borrowed.</param>
 /// <param name="LogTranscript">Logs a decoded window's transcript under --verbose.</param>
 /// <param name="FindCappedPhraseMatches">The detector's --max-chapter-number-capped phrase matcher.</param>
+/// <param name="SecondOpinion">Transcribes samples with the heavier <c>--pass3-model</c> in a given
+/// language, for <see cref="SuspectNumberMender"/>'s re-read of an implausible chapter number. Null
+/// when no upgrade model was chosen, and null for a pass 2.5 re-probe, which already decodes every
+/// window through that model and so has no better opinion left to ask.</param>
 internal sealed record ProbeEnvironment(
     CliOptions Options,
     IAudioSource Audio,
@@ -49,7 +53,8 @@ internal sealed record ProbeEnvironment(
     Func<float[], CancellationToken, Task<(LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)>> ResolveLanguage,
     Action<string> ChangeLanguage,
     Action<string, List<TranscriptSegment>> LogTranscript,
-    Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> FindCappedPhraseMatches);
+    Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> FindCappedPhraseMatches,
+    Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? SecondOpinion = null);
 
 /// <summary>
 /// Region-loop-invariant Pass 2 inputs, gathered here instead of threading each field through
@@ -76,11 +81,16 @@ internal sealed record ProbeEnvironment(
 /// transcriber for Pass 2 proper, the pass-3 one for a pass 2.5 re-probe (see
 /// <see cref="ChapterDetector.RunPass25Async"/>). Only the probe transcriptions follow it; mark
 /// placement keeps refining on the pass-2 model either way, exactly as Pass 3 already does.</param>
+/// <param name="SecondGuessNumbers">Whether an implausible chapter number is re-read before being
+/// acted on (<see cref="SuspectNumberMender"/>). False for a pass 2.5 re-probe: its windows already go
+/// through the heavier model, and its whole purpose is to re-read the numbers a gap is missing, so
+/// questioning its readings against the very sequence it is repairing would be circular. Pass 3 never
+/// probes and so never asks.</param>
 internal readonly record struct Pass2Context(
     string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond, double JingleCeilingSeconds,
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
     List<SpeechSegment> SpeechSegments, double EarlyAbortSeconds, int? ExpectedStartChapter,
-    ITranscriber Transcriber);
+    ITranscriber Transcriber, bool SecondGuessNumbers = true);
 
 /// <summary>The file's language resolution as it stands. A null <paramref name="Profile"/> means
 /// --lang auto has not resolved the language yet, which the next full-window decode does; an
@@ -135,6 +145,11 @@ internal sealed class RegionProber
     private readonly ProbeEnvironment _env;
     private readonly Pass2Context _ctx;
     private readonly DetectionRegion _region;
+
+    /// <summary>Second-guesses a chapter number the sequence cannot continue with, before it is acted
+    /// on; null where <see cref="Pass2Context.SecondGuessNumbers"/> switches that off. Region-scoped
+    /// like the prober itself, since the windows it re-frames are clipped to the region's bounds.</summary>
+    private readonly SuspectNumberMender? _mender;
 
     /// <summary>Accumulator of confirmed chapters across all regions of the file; mutated in place
     /// as marks are accepted, so the sequence Pass 3 later inspects is one seamless list regardless
@@ -279,6 +294,7 @@ internal sealed class RegionProber
         _env = env;
         _ctx = ctx;
         _region = region;
+        _mender = ctx.SecondGuessNumbers ? new SuspectNumberMender(env, ctx, region) : null;
         _found = found;
         _namedFound = namedFound;
         Language = language;
@@ -627,9 +643,19 @@ internal sealed class RegionProber
 
         // Language.Profile is resolved on the first probe, which is always a full decode (the cache
         // is empty then), so it is non-null by the time any transcript-reuse branch can run.
-        foreach (var match in _env.FindCappedPhraseMatches(segments, Language.Profile!, mergeBoundarySegIndex))
+        foreach (var heard in _env.FindCappedPhraseMatches(segments, Language.Profile!, mergeBoundarySegIndex))
         {
+            var match = heard;
             var phraseAbs = start + match.PhraseStartSeconds;
+            // Ahead of the sequence check rather than after it, because a number that fails that check
+            // is exactly one of the two shapes worth questioning: a mishearing downwards is
+            // indistinguishable from an in-text mention until the audio is asked again. A mend that
+            // finds nothing leaves the reading untouched, so the check below then does what it always
+            // did - including rejecting it.
+            if (_mender != null && !_reprobing &&
+                await _mender.MendAsync(
+                    match, Language.Profile!, start, windowEnd, SequenceFloor(windowLast), ct) is { } mended)
+                match = match with { Number = mended };
             if (IsOutOfSequence(match, phraseAbs, windowLast))
                 continue;
             if (await AcceptMatchAsync(match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct)
@@ -643,6 +669,20 @@ internal sealed class RegionProber
             NoteUnnumberedAnnouncements(candidate, start, segments);
         return marks;
     }
+
+    /// <summary>
+    /// The chapter number a fresh announcement is measured against when judging how big a hole it
+    /// would leave (<see cref="SuspectNumberMender"/>). Normally the last one accepted; before this
+    /// region has one, the sequence is expected to begin at --expected-start-chapter (or chapter 1),
+    /// so the number below that expectation plays the same role. Without this, the one mishearing that
+    /// costs the most - the file's <em>first</em> chapter read as some large number, which declares
+    /// everything before it missing and sends Pass 3 across the whole book - would be the one case
+    /// never questioned.
+    /// </summary>
+    /// <param name="windowLast">The highest number accepted so far in this window's sequence, or 0
+    /// when there is none.</param>
+    private int SequenceFloor(int windowLast)
+        => windowLast > 0 ? windowLast : (_env.Options.ExpectedStartChapter ?? 1) - 1;
 
     /// <summary>
     /// Reports the announcements this window heard but could not number, and queues the window for
