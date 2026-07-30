@@ -437,11 +437,25 @@ public sealed class CliOptions
     /// </summary>
     public string? LogFilePath { get; private set; }
 
+    /// <summary>
+    /// Write a per-file troubleshooting log next to each processed file (--debug): everything the
+    /// ordinary log stream carries, plus the raw material behind it - the full silence list, the VAD
+    /// pre-pass's speech segments and non-speech regions, and every Whisper transcript segment by
+    /// segment, including the mark-refinement probes nothing else ever shows.
+    /// <para>
+    /// Deliberately absent from --help and the README, and documented in the manual and the sources
+    /// only. It is the option one is <em>told</em> to use when a mark comes out wrong, not one to
+    /// pick off a list: it writes a file per audiobook, sizeable on a long one, and its output is
+    /// meaningful only to someone reading this code.
+    /// </para>
+    /// </summary>
+    public bool Debug { get; private set; }
+
     /// <summary>True when log lines are produced at all, for whichever destination
-    /// (<see cref="Verbose"/> or <see cref="LogFilePath"/>) asked for them. Call sites that only
-    /// build a log message when someone is listening test this rather than
+    /// (<see cref="Verbose"/>, <see cref="LogFilePath"/> or <see cref="Debug"/>) asked for them.
+    /// Call sites that only build a log message when someone is listening test this rather than
     /// <see cref="Verbose"/>.</summary>
-    public bool LoggingEnabled => Verbose || LogFilePath != null;
+    public bool LoggingEnabled => Verbose || LogFilePath != null || Debug;
 
     /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
     public bool Summary { get; private set; }
@@ -601,7 +615,7 @@ public sealed class CliOptions
     /// phrase, the models, the detection tuning and safety nets, the file selection, the output
     /// mode. The list below is an allowlist, so an option is exempt by not being named in it:
     /// everything that only changes what the run <i>looks like</i> (--quiet, --verbose,
-    /// --verbose-transcripts, --log-file, --no-bar, --color, --summary) or how fast it gets there
+    /// --verbose-transcripts, --log-file, --debug, --no-bar, --color, --summary) or how fast it gets there
     /// (--jobs, --cpu-only, --use-gpu) stays out, so adding or dropping one of those on an
     /// interrupted run's command line still resumes it.
     /// <para>
@@ -920,6 +934,9 @@ public sealed class CliOptions
             case "--quiet": Quiet = true; return true;
             case "--verbose": Verbose = true; return true;
             case "--verbose-transcripts": VerboseTranscripts = Verbose = true; return true;
+            // Undocumented on purpose (see CliOptions.Debug); it has no short form for the same
+            // reason - the single letters belong to options people choose for themselves.
+            case "--debug": Debug = true; return true;
             case "--no-bar": NoBar = true; return true;
             case "--summary": Summary = true; return true;
             case "--dry-run": DryRun = true; return true;

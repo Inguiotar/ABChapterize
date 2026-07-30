@@ -685,12 +685,13 @@ public sealed class FileProcessor
     /// <param name="File">Full path of the file being processed.</param>
     /// <param name="Name">Its bare file name, which every console line for it is prefixed with.</param>
     /// <param name="Work">Its progress tracker.</param>
-    /// <param name="Log">Its --verbose log sink, or null when not verbose.</param>
+    /// <param name="Logs">Its log sinks - the ordinary stream and, with --debug, the file's own
+    /// troubleshooting log.</param>
     /// <param name="Info">Its probe result, with the input decoder already resolved (see
     /// <see cref="ResolveXheAacDecoderAsync"/>).</param>
     /// <param name="Ffmpeg">The run's shared ffmpeg client.</param>
     private readonly record struct FileContext(
-        string File, string Name, WorkTracker Work, Action<string>? Log, MediaInfo Info, FfmpegClient Ffmpeg);
+        string File, string Name, WorkTracker Work, DetectionLog Logs, MediaInfo Info, FfmpegClient Ffmpeg);
 
     /// <summary>
     /// Processes a single audiobook file, prints its summary line and - once it is finished for
@@ -742,12 +743,18 @@ public sealed class FileProcessor
         CancellationToken ct)
     {
         var watch = Stopwatch.StartNew();
-        // --verbose log sink; every message is prefixed with the file name.
+        // The ordinary log sink; every message is prefixed with the file name.
         var log = _options.LoggingEnabled ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
+        // The --debug file can only be opened once the probe has run, since its header describes
+        // what the probe found - so the probe and the decoder resolution log to the ordinary sink
+        // alone. Nothing is lost by that: the header restates everything those two lines carry.
         var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
-        if (await ResolveXheAacDecoderAsync(new FileContext(file, name, work, log, info, ffmpeg), ct)
-            is not { } ctx)
+        if (await ResolveXheAacDecoderAsync(
+                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), ct)
+            is not { } probed)
             return null;
+        using var debug = _options.Debug ? DebugLog.Open(file, _options, probed.Info) : null;
+        var ctx = probed with { Logs = new DetectionLog(log, debug != null ? debug.Write : null) };
 
         // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
         // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed markings
@@ -765,7 +772,7 @@ public sealed class FileProcessor
 
         RecordProcessed(watch);
         _runStats.AccumulateStats(result.Stats, ctx.Info.DurationSeconds);
-        log?.Invoke(FormatFileStats(result.Stats, ctx.Info.DurationSeconds));
+        ctx.Logs.Write(FormatFileStats(result.Stats, ctx.Info.DurationSeconds));
 
         if (result.GapRemains)
             return await ReportUnresolvedGapAsync(ctx, result, ct);
@@ -780,7 +787,7 @@ public sealed class FileProcessor
     /// Shared by the detection and --import paths, which open identically.</summary>
     /// <param name="file">Path of the file to probe.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
-    /// <param name="log">The file's --verbose log sink, or null when not verbose.</param>
+    /// <param name="log">The file's ordinary log sink, or null when nothing is listening.</param>
     /// <param name="ct">Cancellation token.</param>
     private static async Task<MediaInfo> ProbeAndLogAsync(
         string file, FfmpegClient ffmpeg, Action<string>? log, CancellationToken ct)
@@ -811,7 +818,7 @@ public sealed class FileProcessor
         // handle the file regardless of the decoder list.
         if (ctx.Info.DurationSeconds > 0 && await ctx.Ffmpeg.SupportsLibFdkAacAsync(ct))
         {
-            ctx.Log?.Invoke("xHE-AAC audio: decoding with libfdk_aac");
+            ctx.Logs.Write("xHE-AAC audio: decoding with libfdk_aac");
             return ctx with { Info = ctx.Info with { InputDecoder = "libfdk_aac" } };
         }
         lock (_statsLock) _warnings++;
@@ -833,10 +840,10 @@ public sealed class FileProcessor
     private async Task<string?> ProcessResumeAsync(
         FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
     {
-        var resumed = await detector.ResumeMissingMarksAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct);
+        var resumed = await detector.ResumeMissingMarksAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
         RecordProcessed(watch);
         _runStats.AccumulateStats(resumed.Stats, ctx.Info.DurationSeconds);
-        ctx.Log?.Invoke(FormatFileStats(resumed.Stats, ctx.Info.DurationSeconds));
+        ctx.Logs.Write(FormatFileStats(resumed.Stats, ctx.Info.DurationSeconds));
         _runStats.AccumulateConfidence(resumed.Chapters);
         var (chapters, introNote) = BuildChapters(resumed);
 
@@ -923,7 +930,7 @@ public sealed class FileProcessor
     {
         var (skip, discardNote) = EvaluateExistingChapters(ctx.Info);
         if (!skip)
-            return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct), discardNote);
+            return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), discardNote);
         if (_options.Verify)
             return await VerifyThenDetectAsync(ctx, detector, ct);
 
@@ -948,7 +955,7 @@ public sealed class FileProcessor
     private async Task<(DetectionResult Result, string DiscardNote)?> VerifyThenDetectAsync(
         FileContext ctx, ChapterDetector detector, CancellationToken ct)
     {
-        var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct);
+        var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
         if (verify.Checked == 0 || verify.Passed)
         {
             lock (_statsLock) _skipped++;
@@ -967,7 +974,7 @@ public sealed class FileProcessor
             // else in the file is left exactly as --verify found it.
             var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
                               $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
-            return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, verify, ct), trustedNote);
+            return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct), trustedNote);
         }
 
         var thresholdNote = thresholdExceeded
@@ -975,7 +982,7 @@ public sealed class FileProcessor
             : "";
         var discardNote = $", {ctx.Info.ChapterCount} existing marking(s) discarded " +
                           $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed{thresholdNote})";
-        return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Log, ct), discardNote);
+        return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), discardNote);
     }
 
     /// <summary>
@@ -1272,7 +1279,7 @@ public sealed class FileProcessor
         }
 
         var backupNote = await CommitChaptersAsync(
-            new FileContext(file, name, work, log, info, ffmpeg), chapters, null, ct);
+            new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), chapters, null, ct);
         _progress.FinishWithSummary(work,
             $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
             $"{discardNote}{backupNote}");

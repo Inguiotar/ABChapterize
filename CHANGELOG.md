@@ -9,6 +9,15 @@ for you, not how it was built. The format follows
 
 ### Added
 
+- **`--debug` writes a full troubleshooting log beside each processed file.** It
+  records everything the ordinary log carries plus the raw material behind it —
+  the settings in force, every silence found including the ones the threshold
+  rejects, the voice-activity segments and non-speech regions, every Whisper
+  transcript segment by segment, and the mark-refinement probes that appear
+  nowhere else. Meant for reporting a mark that landed somewhere inexplicable,
+  where the alternative was re-running an hour of decoding by hand. See the
+  manual's logging section; it is not on the `--help` list.
+
 - **Chapter numbers announced as Roman numerals are now recognized**, in every
   language, alongside digits and spelled-out words. This is not about books that
   print their chapters that way — it is about Whisper, which transcribes a spoken

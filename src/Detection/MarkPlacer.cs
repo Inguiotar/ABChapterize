@@ -72,14 +72,14 @@ internal sealed class MarkPlacer
     /// <summary>Creates a placer for one file.</summary>
     /// <param name="audio">Audio source for the corrections' own decodes.</param>
     /// <param name="options">Validated command line options.</param>
-    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="transcribeCounting">The detector's statistics-counting transcribe wrapper.</param>
-    internal MarkPlacer(IAudioSource audio, CliOptions options, Action<string>? log,
+    internal MarkPlacer(IAudioSource audio, CliOptions options, DetectionLog log,
         Func<float[], CancellationToken, Task<List<TranscriptSegment>>> transcribeCounting)
     {
         _audio = audio;
         _options = options;
-        _log = log;
+        _log = log.Fanout();
         _refiner = new PreciseMarkRefiner(audio, options, log, transcribeCounting);
     }
 

@@ -990,7 +990,7 @@ The details worth knowing:
 - The record notes which options the run used. Change any option that affects
   the outcome and the stale record is discarded rather than misapplied;
   options that only change the output's appearance (`--quiet`, `--verbose`,
-  `--verbose-transcripts`, `--log-file`, `--no-bar`, `--color`, `--summary`) or how fast
+  `--verbose-transcripts`, `--log-file`, `--debug`, `--no-bar`, `--color`, `--summary`) or how fast
   the run gets there (`--jobs`, `--cpu-only`, `--use-gpu`) do not count, so
   those can be added or dropped when resuming — including moving an
   interrupted batch to a different machine or a different GPU.
@@ -1770,6 +1770,23 @@ kept for later. Timestamps in the file carry the date as well, and each run
 appends a header and a footer line rather than replacing what is already
 there, so one log can collect a whole library's worth of runs.
 
+**`--debug`** writes a separate log for *each* processed file, named after it
+(`book.m4b.debug.log`), holding everything the ordinary log carries plus the
+raw material behind it: the settings and probe result the run worked from,
+every silence found (including the short ones `--min-silence-length` rejects),
+every voice-activity segment and non-speech region, every Whisper transcript
+segment by segment, and the mark-refinement probes that appear nowhere else.
+It switches logging on by itself and leaves the console alone, so
+`--debug` on its own gives you a quiet run and a full file. Expect a few MB
+per audiobook.
+
+This is the option to reach for when a single mark landed somewhere
+inexplicable and `-T` has not settled why — everything needed to reconstruct
+the decision after the fact is in there, which is otherwise a matter of
+re-running the same hour of decoding by hand. It is meant for reporting a
+problem rather than for daily use, and the file it produces is written for
+whoever reads the source.
+
 **Confidence flagging** — every chapter mark carries Whisper's own confidence
 (the average token probability of the segment the number was parsed from).
 When a written mark's confidence is below 0.5, the file's result line notes
@@ -1847,3 +1864,10 @@ repository serving something unexpected.
 the quickest fix is setting `FFMPEG_DIR`.
 
 **File skipped as xHE-AAC** — see [section 11](#11-xhe-aac-usac-files).
+
+**A single mark landed somewhere inexplicable** — the one case `--verbose`
+and `-T` usually cannot settle on their own, because the reasoning behind a
+mark's exact position draws on silences, voice activity and short probe
+transcriptions that the ordinary log does not carry. Rerun that one file with
+`--debug` and attach the `.debug.log` it leaves beside it
+([section 12](#12-output-progress-and-logging)).

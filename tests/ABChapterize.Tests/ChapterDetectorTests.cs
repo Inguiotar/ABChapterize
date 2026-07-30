@@ -342,7 +342,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var transcriber = new ScriptedTranscriber(audio);
         script(transcriber);
         var detector = new ChapterDetector(options, audio, transcriber, vad);
-        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), null, CancellationToken.None);
+        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), default, CancellationToken.None);
         return (result, transcriber, audio);
     }
 
@@ -362,7 +362,7 @@ public sealed class ChapterDetectorTests : IDisposable
         pass2Script(pass2);
         pass3Script(pass3);
         var detector = new ChapterDetector(options, audio, pass2, vad: null, pass3Transcriber: pass3);
-        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), null, CancellationToken.None);
+        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), default, CancellationToken.None);
         return (result, pass2, pass3);
     }
 
@@ -377,8 +377,27 @@ public sealed class ChapterDetectorTests : IDisposable
         script(transcriber);
         var log = new List<string>();
         var detector = new ChapterDetector(options, audio, transcriber, vad);
-        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), log.Add, CancellationToken.None);
+        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), new DetectionLog(log.Add, null), CancellationToken.None);
         return (result, log, audio);
+    }
+
+    /// <summary>Runs the detector with the --debug sink captured separately from the ordinary one,
+    /// for assertions on what only the debug file receives.</summary>
+    /// <param name="options">The run's options.</param>
+    /// <param name="silences">The fake audio source's silences.</param>
+    /// <param name="script">Scripts the transcriber.</param>
+    /// <param name="vad">Scripted VAD, or null for no pre-pass.</param>
+    private async Task<List<string>> DetectWithDebugAsync(
+        CliOptions options, List<Silence> silences, Action<ScriptedTranscriber> script, FakeVad? vad = null)
+    {
+        var audio = new FakeAudioSource { Silences = silences };
+        var transcriber = new ScriptedTranscriber(audio);
+        script(transcriber);
+        var debug = new List<string>();
+        var detector = new ChapterDetector(options, audio, transcriber, vad);
+        await detector.DetectAsync(
+            _file, Info, new WorkTracker(), new DetectionLog(_ => { }, debug.Add), CancellationToken.None);
+        return debug;
     }
 
     [Fact]
@@ -742,7 +761,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var log = new List<string>();
         var detector = new ChapterDetector(Options("--max-jingle-length", "0"), audio, transcriber);
 
-        await detector.DetectAsync(_file, Info, new WorkTracker(), log.Add, CancellationToken.None);
+        await detector.DetectAsync(_file, Info, new WorkTracker(), new DetectionLog(log.Add, null), CancellationToken.None);
 
         // "." regardless of the machine's locale - see NumberCulture.
         Assert.Contains(log, l => l.Contains("chapter 2 detected") && l.Contains("-6.0 dBFS"));
@@ -1495,7 +1514,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var detector = new ChapterDetector(
             Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0", "--quick-marks"),
             audio, pass2, vad: null, pass3Transcriber: pass3);
-        var result = await detector.DetectAsync(_file, Info, tracker, null, CancellationToken.None);
+        var result = await detector.DetectAsync(_file, Info, tracker, default, CancellationToken.None);
 
         // Pass 2.5 really ran and closed the gap (so the samples below are not an empty list).
         Assert.False(result.GapRemains);
@@ -4056,7 +4075,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var info = new MediaInfo(Duration, (long)Duration, existingChapters.Count,
             ExistingChapterList: existingChapters);
         var tracker = new WorkTracker();
-        var result = await detector.VerifyExistingChaptersAsync(_file, info, tracker, null, CancellationToken.None);
+        var result = await detector.VerifyExistingChaptersAsync(_file, info, tracker, default, CancellationToken.None);
         return (result, transcriber, tracker);
     }
 
@@ -4326,7 +4345,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var transcriber = new ScriptedTranscriber(audio);
         script(transcriber);
         var detector = new ChapterDetector(options, audio, transcriber);
-        var result = await detector.DetectGapsAsync(_file, Info, new WorkTracker(), null, verify, CancellationToken.None);
+        var result = await detector.DetectGapsAsync(_file, Info, new WorkTracker(), default, verify, CancellationToken.None);
         return (result, audio);
     }
 
@@ -4412,7 +4431,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var detector = new ChapterDetector(options, audio, transcriber);
         var info = new MediaInfo(Duration, (long)Duration, existingChapters.Count,
             ExistingChapterList: existingChapters);
-        var result = await detector.ResumeMissingMarksAsync(_file, info, new WorkTracker(), null, CancellationToken.None);
+        var result = await detector.ResumeMissingMarksAsync(_file, info, new WorkTracker(), default, CancellationToken.None);
         return (result, audio, transcriber);
     }
 
@@ -4492,7 +4511,7 @@ public sealed class ChapterDetectorTests : IDisposable
     /// at all (confirmed while designing these tests). Testing the method directly sidesteps that
     /// entirely.</summary>
     private (PreciseMarkRefiner Refiner, LanguageProfile Profile) MakeVerifier(ScriptedTranscriber transcriber)
-        => (new PreciseMarkRefiner(transcriber.Audio, Options(), null, transcriber.TranscribeAsync),
+        => (new PreciseMarkRefiner(transcriber.Audio, Options(), default, transcriber.TranscribeAsync),
             Options().ResolveProfile("en"));
 
     [Fact]
@@ -4601,5 +4620,80 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);
+    }
+
+    [Fact]
+    public async Task Debug_RecordsEverySilence_IncludingThoseBelowTheThreshold()
+    {
+        // The point of the dump: --min-silence-length decides which silences Pass 2 works from, and
+        // "why was there no candidate here" is answerable only if the rejected ones are in the file
+        // too - flagged, so the working subset stays readable.
+        var debug = await DetectWithDebugAsync(
+            Options("--debug", "--max-jingle-length", "0", "--min-silence-length", "3"),
+            [new(595, 600), new(1199, 1200)],
+            s => s.Add(0, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(debug, l => l.Contains("silence 0:09:55.00-0:10:00.00") && l.EndsWith("*"));
+        Assert.Contains(debug, l => l.Contains("silence 0:19:59.00-0:20:00.00") && !l.EndsWith("*"));
+    }
+
+    [Fact]
+    public async Task Debug_RecordsTheVadSpeechSegmentsAndNonSpeechRegions()
+    {
+        var debug = await DetectWithDebugAsync(
+            Options("--debug", "--mark-before-jingle"),
+            [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 640), new(651, 3600)] });
+
+        Assert.Contains(debug, l => l.Contains("speech 0:00:00.00-0:10:40.00"));
+        Assert.Contains(debug, l => l.Contains("non-speech 0:10:40.00-0:10:51.00"));
+    }
+
+    [Fact]
+    public async Task Debug_RecordsWholeTranscripts_WithoutVerboseTranscripts()
+    {
+        // --verbose-transcripts exists because the segment dump drowns the ordinary log; the debug
+        // file has no such constraint, and a transcript nobody kept is the one thing a
+        // troubleshooting log cannot reconstruct afterwards.
+        var debug = await DetectWithDebugAsync(
+            Options("--debug", "--max-jingle-length", "0"),
+            [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(debug, l => l.Contains("probe") && l.Contains("\"Chapter one.\""));
+        // Once, not twice: the bare header the ordinary log gets must not precede it here. Every
+        // probe line in the debug file carries its transcript (or says there was none).
+        Assert.DoesNotContain(debug, l => l.StartsWith("probe ") && !l.Contains(": "));
+    }
+
+    [Fact]
+    public async Task Debug_AlsoReceivesEveryOrdinaryLogLine()
+    {
+        // The debug file is meant to be the union of both streams, so nobody has to read two files
+        // side by side to reconstruct one run.
+        var debug = await DetectWithDebugAsync(
+            Options("--debug", "--max-jingle-length", "0"),
+            [new(595, 600)],
+            s => s.Add(0, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(debug, l => l.Contains("chapter 1 detected"));
+    }
+
+    [Fact]
+    public async Task Debug_RecordsTheMarkRefinementProbes_WhichNothingElseShows()
+    {
+        // These decodes only ever hand a yes/no answer upwards, so before --debug they could be
+        // reconstructed only by re-running them by hand in a throwaway harness.
+        var debug = await DetectWithDebugAsync(
+            Options("--debug", "--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(600.25, Seg(0.3, " Chapter one."));
+            });
+
+        Assert.Contains(debug, l => l.Contains("onset probe") && l.Contains("-> phrase"));
     }
 }

@@ -38,23 +38,25 @@ internal sealed class PreciseMarkRefiner
     private readonly IAudioSource _audio;
     private readonly CliOptions _options;
     private readonly Action<string>? _log;
+    private readonly Action<string>? _debug;
     private readonly Func<float[], CancellationToken, Task<List<TranscriptSegment>>> _transcribeCounting;
 
     /// <summary>Creates a refiner bound to the given tools and options.</summary>
     /// <param name="audio">Audio source used for PCM decoding.</param>
     /// <param name="options">Validated command line options.</param>
-    /// <param name="log">Per-file --verbose log sink, or null when not verbose.</param>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="transcribeCounting">Delegate onto <see cref="ChapterDetector"/>'s own
     /// transcribe-with-stat-counting helper, so this class's transcriptions are tallied into the
     /// same per-file Whisper audio/time statistics as every other detection-path recognition,
     /// without duplicating that accumulation logic here.</param>
     internal PreciseMarkRefiner(
-        IAudioSource audio, CliOptions options, Action<string>? log,
+        IAudioSource audio, CliOptions options, DetectionLog log,
         Func<float[], CancellationToken, Task<List<TranscriptSegment>>> transcribeCounting)
     {
         _audio = audio;
         _options = options;
-        _log = log;
+        _log = log.Fanout();
+        _debug = log.Debug;
         _transcribeCounting = transcribeCounting;
     }
 
@@ -93,8 +95,22 @@ internal sealed class PreciseMarkRefiner
         // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
         // *non-blank* segment is what actually starts at or after the checked position.
         var first = transcript.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Text));
-        return first.Text != null && phraseRegex.IsMatch(first.Text);
+        var found = first.Text != null && phraseRegex.IsMatch(first.Text);
+        LogProbe($"onset probe {length:0.00}s@{FormatTimestamp(decodeStart)} " +
+                 $"(checking {FormatTimestamp(start)}) -> {(found ? "phrase" : "no")}", transcript);
+        return found;
     }
+
+    /// <summary>
+    /// Records one of this class's own probe decodes in the --debug file. These transcriptions are
+    /// invisible everywhere else - the search only ever passes their yes/no answer upwards - and a
+    /// misplaced mark is almost always a probe that answered wrong, so reconstructing one after the
+    /// fact previously meant re-running the same decodes by hand in a throwaway harness.
+    /// </summary>
+    /// <param name="context">Description of the decode and what it concluded.</param>
+    /// <param name="transcript">What Whisper returned, times relative to the decode.</param>
+    private void LogProbe(string context, List<TranscriptSegment> transcript)
+        => _debug?.Invoke(FormatTranscript(context, transcript));
 
     /// <summary>
     /// Verifies (and if necessary, corrects) a default-mode mark by directly asking Whisper
@@ -760,7 +776,10 @@ internal sealed class PreciseMarkRefiner
         var length = Math.Round(Math.Max(until - from, PreciseMarkMinSurvivalSeconds), 6);
         var samples = await _audio.DecodePcmAsync(file, from, length, inputDecoder, ct);
         var transcript = await _transcribeCounting(samples, ct);
-        return transcript.Any(s => s.Text != null && phraseRegex.IsMatch(s.Text));
+        var survives = transcript.Any(s => s.Text != null && phraseRegex.IsMatch(s.Text));
+        LogProbe($"survival probe {length:0.00}s@{FormatTimestamp(from)} " +
+                 $"(until {FormatTimestamp(until)}) -> {(survives ? "phrase" : "no")}", transcript);
+        return survives;
     }
 
     /// <summary>

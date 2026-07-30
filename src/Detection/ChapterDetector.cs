@@ -48,8 +48,17 @@ public sealed class ChapterDetector
     /// count toward the same per-file statistics - which also resets those measurements.</summary>
     private MarkPlacer? _marks;
 
-    /// <summary>Per-file --verbose log sink set by <see cref="DetectAsync"/>; null when not verbose.</summary>
+    /// <summary>Per-file log sink set by <see cref="SetLog"/>, reaching every destination there is;
+    /// null when nothing is listening. What a detection line is normally written to.</summary>
     private Action<string>? _log;
+
+    /// <summary>Per-file <c>--debug</c> sink alone, for the bulk detail that would drown
+    /// <see cref="_log"/> - see <see cref="DetectionLog"/>. Null unless <c>--debug</c> was given.</summary>
+    private Action<string>? _debug;
+
+    /// <summary>Per-file ordinary sink alone (console and <c>--log-file</c>), for the one line that
+    /// reaches the debug file in a fuller form - see <see cref="LogTranscript"/>.</summary>
+    private Action<string>? _plainLog;
 
     /// <summary>Total seconds of audio actually decoded and handed to Whisper during the current
     /// file's detection (every probe window and gap chunk, counted each time it is transcribed -
@@ -89,15 +98,17 @@ public sealed class ChapterDetector
         _vad = vad;
     }
 
-    /// <summary>Sets the per-file --verbose log sink and rebuilds <see cref="_marks"/> around it, so
-    /// its mark-placement log lines land in the same sink as the rest of this file's detection log
-    /// and its per-chapter measurements start empty for the new file.</summary>
-    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
-    private void SetLog(Action<string>? log)
+    /// <summary>Sets the per-file log sinks and rebuilds <see cref="_marks"/> around them, so its
+    /// mark-placement log lines land in the same sinks as the rest of this file's detection log and
+    /// its per-chapter measurements start empty for the new file.</summary>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
+    private void SetLog(DetectionLog log)
     {
-        _log = log;
+        _log = log.Fanout();
+        _plainLog = log.Plain;
+        _debug = log.Debug;
         _marks = new MarkPlacer(
-            _audio, _options, _log, (samples, ct) => TranscribeCountingAsync(samples, ct));
+            _audio, _options, log, (samples, ct) => TranscribeCountingAsync(samples, ct));
     }
 
     /// <summary>
@@ -108,10 +119,10 @@ public sealed class ChapterDetector
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
     /// <param name="work">Progress tracker fed with processed bytes.</param>
-    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="ct">Cancellation token.</param>
     public Task<DetectionResult> DetectAsync(
-        string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
+        string file, MediaInfo info, WorkTracker work, DetectionLog log, CancellationToken ct)
         => DetectCoreAsync(file, info, work, log, [], [],
             [new DetectionRegion(0, info.DurationSeconds, 0, null)], null, null, ct);
 
@@ -124,7 +135,7 @@ public sealed class ChapterDetector
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
     /// <param name="work">Progress tracker fed with processed bytes.</param>
-    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="verify">The --verify run's own result: <see cref="VerifyResult.ConfirmedChapters"/>
     /// seeds the result directly, <see cref="VerifyResult.Markings"/> is grouped into regions, and
     /// <see cref="VerifyResult.Profile"/>/<see cref="VerifyResult.DetectedLanguage"/>/<see
@@ -132,7 +143,7 @@ public sealed class ChapterDetector
     /// the language.</param>
     /// <param name="ct">Cancellation token.</param>
     internal Task<DetectionResult> DetectGapsAsync(
-        string file, MediaInfo info, WorkTracker work, Action<string>? log, VerifyResult verify, CancellationToken ct)
+        string file, MediaInfo info, WorkTracker work, DetectionLog log, VerifyResult verify, CancellationToken ct)
     {
         var plan = BuildGapRegions(verify.Markings, info.DurationSeconds);
         return DetectCoreAsync(file, info, work, log, verify.ConfirmedChapters,
@@ -157,10 +168,10 @@ public sealed class ChapterDetector
     /// <param name="file">Path of the audio file (still carrying its ".missing-marks-..." tag).</param>
     /// <param name="info">Probe result of the file, including its committed chapter markings.</param>
     /// <param name="work">Progress tracker fed with processed bytes.</param>
-    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="ct">Cancellation token.</param>
     public async Task<DetectionResult> ResumeMissingMarksAsync(
-        string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
+        string file, MediaInfo info, WorkTracker work, DetectionLog log, CancellationToken ct)
     {
         SetLog(log);
         var (profile, detectedLanguage, detectedProbability) =
@@ -251,7 +262,7 @@ public sealed class ChapterDetector
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">The file's probed media info (duration, size, decoder).</param>
     /// <param name="work">Progress tracker for the phase/byte accounting.</param>
-    /// <param name="log">Receives --verbose log lines, or null when logging is off.</param>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="confirmedSeed">Chapters trusted verbatim, with no Whisper re-check of their
     /// own - empty for a fresh <see cref="DetectAsync"/> run.</param>
     /// <param name="namedSeed">Prologue/epilogue marks carried over from the file's existing
@@ -267,7 +278,7 @@ public sealed class ChapterDetector
     /// null otherwise (including for a fresh <see cref="DetectAsync"/> run).</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<DetectionResult> DetectCoreAsync(
-        string file, MediaInfo info, WorkTracker work, Action<string>? log,
+        string file, MediaInfo info, WorkTracker work, DetectionLog log,
         IReadOnlyList<DetectedChapter> confirmedSeed, IReadOnlyList<DetectedMark> namedSeed,
         IReadOnlyList<DetectionRegion> regions,
         (LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)? known,
@@ -782,8 +793,47 @@ public sealed class ChapterDetector
             // The speech-segment count carries no extra information (a non-speech region is just
             // the gap between two consecutive speech segments), so only the regions are logged.
             _log?.Invoke($"Pass 1: {nonSpeechRegions.Count} non-speech region(s) found");
+        DumpPass1Signals(allSilences, nonSpeechRegions, speechSegments);
 
         return new Pass1Result(allSilences, silences, nonSpeechRegions, speechSegments);
+    }
+
+    /// <summary>
+    /// Writes Pass 1's raw findings to the --debug file: every silence, every VAD speech segment,
+    /// every merged non-speech region. This is the material every later "why there?" question comes
+    /// back to - which silence a mark anchored to, whether VAD saw the jingle at all, where its
+    /// edges really were - and it cannot be recovered afterwards without re-decoding the whole file,
+    /// which for a 13-hour audiobook is the better part of an hour.
+    /// <para>
+    /// Debug-only, and this is the reason the sink is separate: the counts here run to several
+    /// thousand silences and tens of thousands of speech segments on a full book, so in the ordinary
+    /// log they would bury every other line. Each entry is one line, so the file stays greppable by
+    /// timestamp.
+    /// </para>
+    /// </summary>
+    /// <param name="allSilences">Every silence found, including those below --min-silence-length,
+    /// which are flagged so the subset Pass 2 actually works from stays visible.</param>
+    /// <param name="nonSpeechRegions">The merged non-speech regions, empty without the VAD pre-pass.</param>
+    /// <param name="speechSegments">The raw VAD speech segments, empty without the VAD pre-pass.</param>
+    private void DumpPass1Signals(
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
+        List<SpeechSegment> speechSegments)
+    {
+        if (_debug is not { } debug)
+            return;
+
+        debug($"Pass 1 detail: {allSilences.Count} silence(s), {speechSegments.Count} VAD speech " +
+              $"segment(s), {nonSpeechRegions.Count} non-speech region(s)");
+        foreach (var s in allSilences)
+            debug($"  silence {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +
+                  $"({s.EndSeconds - s.StartSeconds:0.00} s)" +
+                  (s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds ? " *" : ""));
+        foreach (var s in speechSegments)
+            debug($"  speech {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +
+                  $"({s.EndSeconds - s.StartSeconds:0.00} s)");
+        foreach (var r in nonSpeechRegions)
+            debug($"  non-speech {FormatTimestamp(r.StartSeconds)}-{FormatTimestamp(r.EndSeconds)} " +
+                  $"({r.EndSeconds - r.StartSeconds:0.00} s)");
     }
 
     /// <summary>
@@ -799,10 +849,10 @@ public sealed class ChapterDetector
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
     /// <param name="work">Progress tracker, advanced once per marking (checked or skipped).</param>
-    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="ct">Cancellation token.</param>
     public async Task<VerifyResult> VerifyExistingChaptersAsync(
-        string file, MediaInfo info, WorkTracker work, Action<string>? log, CancellationToken ct)
+        string file, MediaInfo info, WorkTracker work, DetectionLog log, CancellationToken ct)
     {
         SetLog(log);
         var (profile, detectedLanguage, detectedProbability) =
@@ -1478,22 +1528,25 @@ public sealed class ChapterDetector
     /// Logs a Whisper transcript's header line and, only with --verbose-transcripts, the segments
     /// themselves (each with its start/end time relative to the decoded window). Under plain
     /// --verbose just the header - the "&lt;length&gt;@&lt;timestamp&gt;" context - is printed, so
-    /// the log stays readable without the full recognizer output. Does nothing when not verbose.
+    /// the log stays readable without the full recognizer output.
+    /// <para>
+    /// The --debug file always gets the full transcript, and only that: this is the one place where
+    /// the two streams carry the same event at different lengths, so the header goes to the ordinary
+    /// sink alone rather than preceding every transcript in the file people go on to grep with a
+    /// redundant copy of its own first field.
+    /// </para>
     /// </summary>
     /// <param name="context">Description of the decoded window, e.g. "probe 50s@0:12:34.00".</param>
     /// <param name="segments">The transcribed segments.</param>
     private void LogTranscript(string context, List<TranscriptSegment> segments)
     {
-        if (!_options.VerboseTranscripts)
+        if (_options.VerboseTranscripts)
         {
-            _log?.Invoke(context);
+            _log?.Invoke(FormatTranscript(context, segments));
             return;
         }
-        _log?.Invoke(segments.Count == 0
-            ? $"{context}: (no speech recognized)"
-            : $"{context}: " + string.Join(" | ",
-                segments.Select(s =>
-                    $"{s.StartSeconds:0.0}-{s.EndSeconds:0.0} (p={s.Probability:0.00}) \"{s.Text.Trim()}\"")));
+        _plainLog?.Invoke(context);
+        _debug?.Invoke(FormatTranscript(context, segments));
     }
 
     /// <summary>
