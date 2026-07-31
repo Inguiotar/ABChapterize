@@ -91,9 +91,17 @@ internal static class PhraseMatching
     /// </summary>
     /// <param name="PhraseStartSeconds">Start of the segment the phrase was found in, in the
     /// caller's time base.</param>
+    /// <param name="PhraseEndSeconds">End of that segment, in the same time base. Carried for the
+    /// same reason <see cref="PhraseMatch.PhraseEndSeconds"/> is: it is what a mark placed on this
+    /// announcement anchors against once a re-read supplies the missing number
+    /// (<see cref="SuspectNumberMender.ReadUnnumberedAsync"/>).</param>
+    /// <param name="Confidence">Whisper's probability for that segment, so a recovered mark reports
+    /// the confidence of the reading it was actually found in rather than of the re-read that only
+    /// contributed the number.</param>
     /// <param name="Text">The segment's text, trimmed to a length a log line can carry - the whole
     /// point of the report is seeing <em>what</em> the recognizer wrote there.</param>
-    internal readonly record struct UnnumberedAnnouncement(double PhraseStartSeconds, string Text);
+    internal readonly record struct UnnumberedAnnouncement(
+        double PhraseStartSeconds, double PhraseEndSeconds, double Confidence, string Text);
 
     /// <summary>
     /// The announcements <see cref="FindPhraseMatches"/> could not put a number to: the phrase
@@ -125,7 +133,8 @@ internal static class PhraseMatching
             if (TryParseAnnouncedNumber(text, m, profile, out _, out _, out _))
                 continue;
             var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
-            yield return new UnnumberedAnnouncement(segment.StartSeconds, Snippet(segment.Text));
+            yield return new UnnumberedAnnouncement(
+                segment.StartSeconds, segment.EndSeconds, segment.Probability, Snippet(segment.Text));
         }
     }
 

@@ -546,6 +546,12 @@ public sealed class ChapterDetector
     /// have read the number correctly. Retrying just those windows can close the gap without
     /// transcribing the region at all.
     /// <para>
+    /// A gap that survives that gets a second, differently aimed attempt before Pass 3 is called in:
+    /// the sub-floor silence sweep (<see cref="SweepSubFloorSilencesAsync"/>), which answers the
+    /// other half of "why was the announcement not found" - not "the model misread it" but "nothing
+    /// ever probed there".
+    /// </para>
+    /// <para>
     /// The cost is <em>not</em> guaranteed to be small, and scales with the gap's candidate count
     /// rather than its length: a region dense in qualifying silences can decode about as much audio
     /// as the full transcription it is avoiding, and when it finds nothing Pass 3 still runs after
@@ -613,6 +619,10 @@ public sealed class ChapterDetector
             allSilences, silences, nonSpeechRegions, speechSegments,
             double.PositiveInfinity, null, _pass3Transcriber, SecondGuessNumbers: false);
 
+        // No second opinion to ask: every window below already decodes through the upgrade model, so
+        // re-reading one with it would be the same recognizer on the same audio in the same framing.
+        // What is left for an unreadable number here is the re-framing half (see SuspectNumberMender).
+        var env = BuildProbeEnvironment() with { SecondOpinion = null };
         // Seeded with what is already known, exactly as DetectCoreAsync seeds Pass 2 proper:
         // RegionProber reports per-mark progress and "still missing" notes off this list, and gates
         // the --max-jingle-length auto observation on it not being the file's very first mark - all
@@ -630,11 +640,14 @@ public sealed class ChapterDetector
                 $"for chapter{(missing.Count > 1 ? "s" : "")} {string.Join(", ", missing)} with the pass 3 model");
             var region = new DetectionRegion(gap.FromSeconds, gap.ToSeconds, missing[0] - 1, missing[^1] + 1);
             var prober = new RegionProber(
-                BuildProbeEnvironment(), ctx, region, found, namedFound,
+                env, ctx, region, found, namedFound,
                 new LanguageState(profile, null, 0),
                 gapSecondsDone - gap.FromSeconds);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
+            await SweepSubFloorSilencesAsync(
+                env, ctx, gap, missing, found, namedFound, profile, allSilences,
+                gapSecondsDone - gap.FromSeconds, ct);
             gapSecondsDone += gap.ToSeconds - gap.FromSeconds;
             work.SetPhaseProgress((long)(gapSecondsDone * bytesPerSecond));
         }
@@ -649,6 +662,133 @@ public sealed class ChapterDetector
             : "Pass 2.5 finished - nothing recovered, falling through to pass 3");
         return chapters;
     }
+
+    /// <summary>
+    /// Pass 2.5's second half, for a gap its ordinary re-probe left open: sweeps the silences that
+    /// sit just <em>below</em> --min-silence-length, one narrow band at a time and longest first,
+    /// stopping the moment the gap's last missing chapter turns up. Silences that short are the one
+    /// thing Pass 2 structurally cannot reach - Pass 1 filters its candidate list at the floor, and
+    /// the adaptive threshold only ever moves upwards from there - yet Pass 1 stored them all
+    /// (<see cref="DetectionTuning.MinStoredSilenceSeconds"/>), so the material is already in hand
+    /// and each band costs a handful of probe windows.
+    /// <para>
+    /// The case this exists for is a narrator whose chapter break simply lands on the floor. On
+    /// "Paula Monti" (2026-07-31, French, 4 h 34 min) all five chapters Pass 2 missed were preceded
+    /// by a pause of 1.39-1.49 s against a 1.5 s floor; four were eventually recovered by Pass 3
+    /// transcribing whole gaps, and the fifth was lost outright because Whisper's long-form decode
+    /// swallowed the announcement - a 601 s chunk produced a contiguous transcript with the words
+    /// "Première partie, chapitre 14, première loge numéro 7" simply absent from it, reproducibly,
+    /// while any short window aimed at the same audio read them cleanly. A targeted probe is not
+    /// merely the cheaper way to find such a chapter, it is sometimes the only way.
+    /// </para>
+    /// <para>
+    /// What that came to on the same file, re-run 2026-07-31 with the sweeps in place: all five gaps
+    /// closed here, one probe each (two candidates only for chapter 19's band), Pass 3 never ran at
+    /// all, and the run transcribed 1:00:43 of audio instead of 1:49:57 - 45 % less - while finding
+    /// two chapters more than before. Chapters 3, 12 and 16 came back on the exact marks Pass 3's
+    /// full transcription had produced.
+    /// </para>
+    /// <para>
+    /// Band by band rather than one sweep down to the bottom, because the yield is concentrated at
+    /// the top: a book whose breaks fall just under the floor has all of them within a band or two,
+    /// while each further step down roughly doubles the candidate count for a steadily smaller
+    /// chance of a real break. Stopping at the first band that closes the gap is what keeps the
+    /// common case to one cheap sweep.
+    /// </para>
+    /// <para>
+    /// Bounded by what it is avoiding: probing more windows than the gap could hold end to end costs
+    /// more than the full transcription Pass 3 would do anyway, so a band that would push the run
+    /// past that many probes ends the sweep instead of starting. Without it a long gap dense in
+    /// short pauses could spend more than Pass 3 and still find nothing - the shape the pass's own
+    /// remarks already record from a 56-minute gap that re-probed for 40 minutes to no effect.
+    /// </para>
+    /// </summary>
+    /// <param name="env">The probe environment the gap's ordinary re-probe used.</param>
+    /// <param name="ctx">The pass 2.5 probe context, whose silence list each band replaces.</param>
+    /// <param name="gap">The gap being recovered.</param>
+    /// <param name="missing">The chapter numbers that gap was expected to yield.</param>
+    /// <param name="found">Accumulator of chapters, holding whatever the ordinary re-probe added.</param>
+    /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
+    /// <param name="profile">The language profile resolved for this file.</param>
+    /// <param name="allSilences">Every silence Pass 1 retained, which is where the bands come from.</param>
+    /// <param name="progressOffsetSeconds">The same offset the gap's ordinary re-probe reported
+    /// against, so a sweep re-walks that gap's own stretch of the bar rather than inventing a new one.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task SweepSubFloorSilencesAsync(
+        ProbeEnvironment env, Pass2Context ctx, GapRegion gap, List<int> missing, List<DetectedChapter> found,
+        List<DetectedMark> namedFound, LanguageProfile profile, List<Silence> allSilences,
+        double progressOffsetSeconds, CancellationToken ct)
+    {
+        var stillMissing = StillMissing(missing, found);
+        if (stillMissing.Count == 0)
+            return;
+
+        // The same width the prober will probe at, so "how many windows fit in this gap" is asked in
+        // the units the sweep actually spends.
+        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
+        var budget = (int)((gap.ToSeconds - gap.FromSeconds) / probeSeconds);
+        var spent = 0;
+
+        foreach (var (min, max) in SubFloorSweepBands(
+                     _options.MinSilenceSeconds, Math.Min(_options.MinSilenceSeconds, MinStoredSilenceSeconds)))
+        {
+            var band = SilencesInBand(allSilences, gap, min, max);
+            if (band.Count == 0)
+                continue;
+            if (spent + band.Count > budget)
+            {
+                _log?.Invoke(
+                    $"pass 2.5: stopping the sub-floor sweep before the {min:0.0#}-{max:0.0#} s band - " +
+                    $"{spent + band.Count} probe(s) would cost more than transcribing the gap");
+                return;
+            }
+            spent += band.Count;
+
+            _log?.Invoke(
+                $"pass 2.5: sweeping {band.Count} silence(s) of {min:0.0#}-{max:0.0#} s for " +
+                $"chapter{(stillMissing.Count > 1 ? "s" : "")} {string.Join(", ", stillMissing)}");
+            var region = new DetectionRegion(
+                gap.FromSeconds, gap.ToSeconds, stillMissing[0] - 1, stillMissing[^1] + 1);
+            var prober = new RegionProber(
+                env, ctx with { Silences = band }, region, found, namedFound,
+                new LanguageState(profile, null, 0), progressOffsetSeconds,
+                sweepingSubFloorSilences: true);
+            await prober.RunAsync(ct);
+            _customLimitHit |= prober.CustomLimitHit;
+
+            stillMissing = StillMissing(stillMissing, found);
+            if (stillMissing.Count == 0)
+            {
+                _log?.Invoke($"pass 2.5: sub-floor sweep closed the gap at {min:0.0#}-{max:0.0#} s");
+                return;
+            }
+        }
+    }
+
+    /// <summary>Which of <paramref name="expected"/> the accumulator still has no chapter for.</summary>
+    /// <param name="expected">The chapter numbers a gap was expected to yield.</param>
+    /// <param name="found">Chapters known so far.</param>
+    private static List<int> StillMissing(List<int> expected, List<DetectedChapter> found)
+        => expected.Where(n => !found.Any(c => c.Number == n)).ToList();
+
+    /// <summary>
+    /// One sweep band's candidate silences: those inside <paramref name="gap"/> whose length falls
+    /// in [<paramref name="minSeconds"/>, <paramref name="maxSeconds"/>). The one-second margin at
+    /// the gap end mirrors <see cref="RegionProber"/>'s own candidate filter, so a silence ending
+    /// against the bounding chapter's mark is not counted against the sweep's budget only to be
+    /// dropped when the prober builds its list.
+    /// </summary>
+    /// <param name="allSilences">Every silence Pass 1 retained.</param>
+    /// <param name="gap">The gap being swept.</param>
+    /// <param name="minSeconds">Inclusive lower bound on silence length.</param>
+    /// <param name="maxSeconds">Exclusive upper bound on silence length.</param>
+    private static List<Silence> SilencesInBand(
+        List<Silence> allSilences, GapRegion gap, double minSeconds, double maxSeconds)
+        => allSilences
+            .Where(s => s.EndSeconds >= gap.FromSeconds && s.EndSeconds < gap.ToSeconds - 1)
+            .Where(s => s.EndSeconds - s.StartSeconds >= minSeconds &&
+                        s.EndSeconds - s.StartSeconds < maxSeconds)
+            .ToList();
 
     /// <summary>
     /// Assembles the final <see cref="DetectionResult"/> once Pass 2 and Pass 3 are done: the

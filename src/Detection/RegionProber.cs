@@ -70,7 +70,9 @@ internal sealed record ProbeEnvironment(
 /// <see cref="PhraseMarginSeconds"/>, never exceeded even while the window self-tightens.</param>
 /// <param name="AllSilences">Every silence Pass 1 retained, down to
 /// <see cref="MinStoredSilenceSeconds"/> - seam snapping and mark anchoring, not candidates.</param>
-/// <param name="Silences">The subset at or above --min-silence-length: the probe candidates.</param>
+/// <param name="Silences">The silences that become probe candidates: the subset at or above
+/// --min-silence-length, or - for one of Pass 2.5's sub-floor sweeps - a single band below it
+/// (see <see cref="RegionProber"/>'s sweep remarks).</param>
 /// <param name="NonSpeechRegions">The VAD pre-pass's non-speech regions, empty when it did not run.</param>
 /// <param name="SpeechSegments">The VAD pre-pass's speech segments, empty when it did not run.</param>
 /// <param name="EarlyAbortSeconds">Play time that may be probed without a single find before
@@ -146,10 +148,15 @@ internal sealed class RegionProber
     private readonly Pass2Context _ctx;
     private readonly DetectionRegion _region;
 
-    /// <summary>Second-guesses a chapter number the sequence cannot continue with, before it is acted
-    /// on; null where <see cref="Pass2Context.SecondGuessNumbers"/> switches that off. Region-scoped
-    /// like the prober itself, since the windows it re-frames are clipped to the region's bounds.</summary>
-    private readonly SuspectNumberMender? _mender;
+    /// <summary>Re-reads a chapter number from the audio when the one in hand cannot be used: a
+    /// number the sequence cannot continue with (gated by <see cref="Pass2Context.SecondGuessNumbers"/>
+    /// at the call site) or no readable number at all. Region-scoped like the prober itself, since the
+    /// windows it re-frames are clipped to the region's bounds.</summary>
+    private readonly SuspectNumberMender _mender;
+
+    /// <summary>How many unreadable-number re-reads this region has spent, against
+    /// <see cref="MaxUnnumberedMendsPerRegion"/>.</summary>
+    private int _unnumberedMends;
 
     /// <summary>Accumulator of confirmed chapters across all regions of the file; mutated in place
     /// as marks are accepted, so the sequence Pass 3 later inspects is one seamless list regardless
@@ -278,6 +285,20 @@ internal sealed class RegionProber
     /// region and further --custom matches were therefore dropped.</summary>
     internal bool CustomLimitHit { get; private set; }
 
+    /// <summary>
+    /// Whether this prober is one of Pass 2.5's sub-floor silence sweeps
+    /// (<see cref="ChapterDetector.SweepSubFloorSilencesAsync"/>) rather than an ordinary region
+    /// probe. A sweep's <see cref="Pass2Context.Silences"/> is a single band of silences that all
+    /// sit <em>below</em> --min-silence-length, which changes three things and nothing else: every
+    /// one of them is probed (the threshold that excluded them is exactly what the sweep is
+    /// suspending, so consulting it again would skip the entire band), the adaptive threshold is
+    /// left alone (it can never drop below the floor, so a sweep could only ever tighten itself out
+    /// of its own band), and neither the region-start candidate nor the VAD jingle regions are
+    /// probed again - the ordinary attempt on this gap already covered both, and a sweep re-running
+    /// them would pay a full window decode per band for audio it has read once.
+    /// </summary>
+    private readonly bool _sweeping;
+
     /// <summary>Creates a prober for one region.</summary>
     /// <param name="env">The detector-owned tools and callbacks to probe with.</param>
     /// <param name="ctx">Region-loop-invariant Pass 2 inputs.</param>
@@ -287,18 +308,21 @@ internal sealed class RegionProber
     /// <param name="language">The language resolution so far.</param>
     /// <param name="progressOffsetSeconds">Offset onto the enclosing phase's time base; see
     /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
+    /// <param name="sweepingSubFloorSilences">Whether this is a Pass 2.5 sub-floor sweep; see
+    /// <see cref="_sweeping"/>.</param>
     internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
-        double progressOffsetSeconds = 0)
+        double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false)
     {
         _env = env;
         _ctx = ctx;
         _region = region;
-        _mender = ctx.SecondGuessNumbers ? new SuspectNumberMender(env, ctx, region) : null;
+        _mender = new SuspectNumberMender(env, ctx, region);
         _found = found;
         _namedFound = namedFound;
         Language = language;
         _progressOffsetSeconds = progressOffsetSeconds;
+        _sweeping = sweepingSubFloorSilences;
         _probeSeconds = env.Options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
@@ -361,14 +385,19 @@ internal sealed class RegionProber
     /// enough containment - no extra check is needed here for that. VAD regions only qualify when
     /// they start at their own jingle start (i.e. nothing else leads them) and are long enough to be
     /// worth observing yet short enough to still be this book's jingle.
+    /// <para>
+    /// A sub-floor sweep takes the silences and nothing else - see <see cref="_sweeping"/>.
+    /// </para>
     /// </summary>
     private List<ProbeCandidate> BuildCandidates()
     {
-        var candidates = new List<ProbeCandidate> { new(_region.FromSeconds, null, null) };
+        var candidates = _sweeping
+            ? []
+            : new List<ProbeCandidate> { new(_region.FromSeconds, null, null) };
         candidates.AddRange(_ctx.Silences
             .Where(s => s.EndSeconds >= _region.FromSeconds && s.EndSeconds < _region.ToSeconds - 1)
             .Select(s => new ProbeCandidate(s.EndSeconds, s, null)));
-        if (_env.Vad == null)
+        if (_env.Vad == null || _sweeping)
             return candidates;
 
         foreach (var vadRegion in _ctx.NonSpeechRegions)
@@ -434,10 +463,16 @@ internal sealed class RegionProber
     /// here keeps probing skipping regions too long to be this book's jingle, same as the
     /// merge-time filter intends after the baseline exists. Either way the candidate is remembered
     /// for a possible sequence-gap re-probe.
+    /// <para>
+    /// A sub-floor sweep skips nothing: its candidate list <em>is</em> the set it means to probe
+    /// (see <see cref="_sweeping"/>).
+    /// </para>
     /// </summary>
     /// <param name="candidate">The candidate to judge.</param>
     private bool ShouldSkipCandidate(ProbeCandidate candidate)
     {
+        if (_sweeping)
+            return false;
         var belowThreshold = _env.Options.AutoMinSilence && candidate.Silence is { } silence &&
                              silence.EndSeconds - silence.StartSeconds < _threshold;
         var vadTooLong = candidate.VadRegion is { } vadRegion &&
@@ -510,7 +545,8 @@ internal sealed class RegionProber
         if (marks.Count == 0 && _namedFound.Count == namedBefore)
             marks = await RereadJingleSpeechAsync(candidate, start, windowEnd, trimmedAbs, ct);
         if (marks.Count == 0)
-            NoteUnnumberedAnnouncements(candidate, start, segments);
+            marks = await RecoverUnnumberedAnnouncementsAsync(
+                candidate, start, windowEnd, segments, trimmedAbs, ct);
         return marks;
     }
 
@@ -758,7 +794,7 @@ internal sealed class RegionProber
             // indistinguishable from an in-text mention until the audio is asked again. A mend that
             // finds nothing leaves the reading untouched, so the check below then does what it always
             // did - including rejecting it.
-            if (_mender != null && !_reprobing &&
+            if (_ctx.SecondGuessNumbers && !_reprobing &&
                 await _mender.MendAsync(
                     match, Language.Profile!, start, windowEnd, SequenceFloor(windowLast), ct) is { } mended)
                 match = match with { Number = mended };
@@ -789,45 +825,84 @@ internal sealed class RegionProber
         => windowLast > 0 ? windowLast : (_env.Options.ExpectedStartChapter ?? 1) - 1;
 
     /// <summary>
-    /// Reports the announcements this window heard but could not number, and queues the window for
-    /// the sequence-gap re-probe. Only ever called for a window that produced no mark of its own -
-    /// counting <see cref="RereadJingleSpeechAsync"/>'s second look as this window's own, since a
-    /// window it rescued was never a window that heard nothing. With a mark, a further bare "chapter"
-    /// in the same transcript is prose, not a missed announcement.
+    /// Reports the announcements this window heard but could not number, queues the window for the
+    /// sequence-gap re-probe, and asks <see cref="SuspectNumberMender.ReadUnnumberedAsync"/> to read
+    /// the number out of differently framed audio - turning the announcement into an ordinary mark
+    /// when it succeeds. Only ever called for a window that produced no mark of its own - counting
+    /// <see cref="RereadJingleSpeechAsync"/>'s second look as this window's own, since a window it
+    /// rescued was never a window that heard nothing. With a mark, a further bare "chapter" in the
+    /// same transcript is prose, not a missed announcement.
     /// <para>
-    /// Says nothing under --ignore-chapter-numbers, where an announcement without a number is the
+    /// Does nothing under --ignore-chapter-numbers, where an announcement without a number is the
     /// normal case and has already been marked as a named one.
     /// </para>
     /// <para>
-    /// Queuing it is the recovery half, and it costs nothing until a gap actually appears. The
-    /// re-probe re-decodes at the full ceiling window (see <see cref="ReprobeGapCandidatesAsync"/>),
-    /// which is a different framing of the same audio - and framing is exactly what decides the
-    /// notation Whisper writes a number in. Chapter 13 of "I Shall Wear Midnight" was read as
-    /// "CHAPTER XIII" from the 16.1 s window it was probed with and as "Chapter 13" from a 48.8 s
-    /// one over the same announcement; because the candidate had been probed rather than skipped,
-    /// nothing ever put it in front of the wider window, and the chapter was lost (2026-07-30).
+    /// Every unreadable announcement is logged whether or not its re-read succeeds, and the window
+    /// is queued regardless: the queue costs nothing until a gap actually appears, and the cases the
+    /// re-read cannot fix - a word ordinal past a language's parser, a number above 999 - are
+    /// exactly the ones where knowing the phrase was heard and discarded saves the next
+    /// investigation. The re-probe that queue feeds re-decodes at the full ceiling window (see
+    /// <see cref="ReprobeGapCandidatesAsync"/>), which is a different framing again, so the two
+    /// recoveries overlap without duplicating: chapter 13 of "I Shall Wear Midnight" was read as
+    /// "CHAPTER XIII" from the 16.1 s window it was probed with and as "Chapter 13" from a 48.8 s one
+    /// over the same announcement (2026-07-30), and either route now reaches that.
+    /// </para>
+    /// <para>
+    /// A mark the re-read produces goes through <see cref="AcceptMatchAsync"/> like any other, at the
+    /// position and confidence of the reading that first heard it - the re-read contributes the
+    /// number and nothing else. Bounded by <see cref="MaxUnnumberedMendsPerRegion"/>; the logging and
+    /// queuing continue past that cap, only the decodes stop.
     /// </para>
     /// </summary>
     /// <param name="candidate">The candidate whose window this is.</param>
-    /// <param name="start">Absolute start of the window, for the log line's timestamp.</param>
+    /// <param name="start">Absolute start of the window.</param>
+    /// <param name="windowEnd">Absolute planned end of the window - what the upgrade-model re-read
+    /// re-decodes, and what precise marking anchors its search against.</param>
     /// <param name="segments">The window transcript, in window-relative time.</param>
-    private void NoteUnnumberedAnnouncements(
-        ProbeCandidate candidate, double start, List<TranscriptSegment> segments)
+    /// <param name="trimmedAbs">The same transcript in absolute file time, for the jingle anchor.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The marks the re-reads produced, empty when none did.</returns>
+    private async Task<List<ProbeMark>> RecoverUnnumberedAnnouncementsAsync(
+        ProbeCandidate candidate, double start, double windowEnd, List<TranscriptSegment> segments,
+        List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
+        var marks = new List<ProbeMark>();
         if (_env.Options.IgnoreChapterNumbers)
-            return;
+            return marks;
 
         var queued = false;
+        var windowLast = _lastNumber ?? 0;
         foreach (var heard in FindUnnumberedAnnouncements(segments, Language.Profile!))
         {
+            var phraseAbs = start + heard.PhraseStartSeconds;
             _env.Log?.Invoke(
-                $"heard the chapter phrase at {FormatTimestamp(start + heard.PhraseStartSeconds)} " +
+                $"heard the chapter phrase at {FormatTimestamp(phraseAbs)} " +
                 $"but could not read a number from it: \"{heard.Text}\"");
-            if (queued)
+            if (!queued)
+            {
+                _skippedSinceLastMark.Add(candidate);
+                queued = true;
+            }
+
+            if (_unnumberedMends >= MaxUnnumberedMendsPerRegion)
                 continue;
-            _skippedSinceLastMark.Add(candidate);
-            queued = true;
+            _unnumberedMends++;
+            if (await _mender.ReadUnnumberedAsync(
+                    heard, Language.Profile!, start, windowEnd, SequenceFloor(windowLast), ct)
+                is not { } number)
+                continue;
+
+            var match = new PhraseMatch(
+                number, heard.PhraseStartSeconds, heard.PhraseEndSeconds, heard.Confidence);
+            if (IsOutOfSequence(match, phraseAbs, windowLast))
+                continue;
+            if (await AcceptMatchAsync(match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct)
+                is not { } mark)
+                continue;
+            marks.Add(mark);
+            windowLast = mark.Number;
         }
+        return marks;
     }
 
     /// <summary>
@@ -1300,7 +1375,7 @@ internal sealed class RegionProber
             if (_lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
                 await HandleSequenceGapAsync(previousNumber, mark.Number, ct);
 
-            if (_env.Options.AutoMinSilence)
+            if (_env.Options.AutoMinSilence && !_sweeping)
                 TightenThreshold(mark);
             _skippedSinceLastMark.Clear();
             _probedSinceLastMark.Clear();

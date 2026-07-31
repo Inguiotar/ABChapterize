@@ -12,8 +12,12 @@ using static ABChapterize.Detection.PhraseMatching;
 namespace ABChapterize.Detection;
 
 /// <summary>
-/// Second-guesses a chapter number the sequence cannot plausibly continue with, before
-/// <see cref="RegionProber"/> acts on it - too far above the last accepted chapter (leaving more than
+/// Asks the audio again for a chapter number <see cref="RegionProber"/> cannot use as heard. Two
+/// shapes reach it, sharing every mechanism below and differing only in what triggers them:
+/// a number the sequence cannot plausibly continue with (<see cref="MendAsync"/>) and an
+/// announcement whose number could not be read at all (<see cref="ReadUnnumberedAsync"/>).
+/// <para>
+/// The first is a number too far above the last accepted chapter (leaving more than
 /// <see cref="SuspectGapMinMissing"/> missing) or at or below it. A misheard number is cheap to
 /// correct here and ruinously expensive to live with: the numbers Whisper confuses are the ones that
 /// sound alike rather than the ones that are close in value, so a single slip - "neunzehn" read as 90
@@ -22,6 +26,7 @@ namespace ABChapterize.Detection;
 /// with a mark that still carries the wrong number. The mirror slip costs a chapter outright: a number
 /// misheard <em>downwards</em> reads as an in-text mention of a chapter already passed and the
 /// announcement is discarded.
+/// </para>
 /// <para>
 /// Two ways to ask again, tried in that order and stopping at the first answer that helps:
 /// the heavier <c>--pass3-model</c> where one was chosen (a better recognizer on the same audio and
@@ -46,7 +51,9 @@ namespace ABChapterize.Detection;
 /// </para>
 /// <para>
 /// Nothing but the number changes: the mark's position comes from the original window's transcript
-/// either way, so a correction never moves a mark.
+/// either way, so a correction never moves a mark - and an unnumbered announcement that a re-read
+/// rescues is marked exactly where the original reading heard it, not where the re-framed window
+/// happened to time it.
 /// </para>
 /// </summary>
 internal sealed class SuspectNumberMender
@@ -95,21 +102,94 @@ internal sealed class SuspectNumberMender
                 : $"after chapter {below} - it is not above it") +
             ", re-reading its number");
 
+        var reread = await ReReadNumberAsync(
+            profile, start, windowEnd, phraseAbs, match.PhraseEndSeconds - match.PhraseStartSeconds,
+            below, match.Number, ct);
+        if (reread == null)
+            _env.Log?.Invoke(
+                $"no number continuing the sequence could be read there - leaving it at {match.Number}");
+        return reread;
+    }
+
+    /// <summary>
+    /// Reads a number for an announcement whose phrase was heard but whose number the parser could
+    /// not make out at all - the same machinery <see cref="MendAsync"/> uses, aimed at the shape
+    /// where there is no reading to disagree with rather than a wrong one.
+    /// <para>
+    /// Worth the decodes for the same reason the Pass 3 counterpart
+    /// (<see cref="ChapterDetector.ScanUnnumberedRetriesAsync"/>) is: the recognizer was right there
+    /// and got the words, and only the notation defeated the parser - "CHAPTER XIII" instead of
+    /// "Chapter 13", "chapitre ban 5" for a slurred "vingt-cinq". Which of those a given stretch of
+    /// audio comes out as follows the window framing, so re-framing it is a genuinely different
+    /// question and not a re-roll. Bringing it to Pass 2 closes the one hole the Pass 3 version
+    /// cannot reach: an announcement past the last detected chapter is in no gap at all, so without
+    /// <c>--trailing-scan</c> nothing ever transcribes it again. That is how the final chapter of
+    /// "Paula Monti" was lost on 2026-07-31 - heard as "1ère partie, chapitre ban 5, douleur" at
+    /// 4:23:03 and never looked at again. Re-running that file with this in place, the upgrade model
+    /// read the same window as chapter 25 on the first attempt, before either re-framing was needed.
+    /// </para>
+    /// <para>
+    /// Adoption is the same <see cref="ContinuesSequence"/> rule, which is what keeps this from
+    /// planting marks on prose: an in-text "the next chapter was harder" reaches here too, and so
+    /// does a window re-hearing an announcement already marked (observed as "CHAPTER X" over an
+    /// already-found chapter 10 on "I Shall Wear Midnight", 2026-07-31). Neither can produce a
+    /// number that continues the sequence, so neither can produce a mark.
+    /// </para>
+    /// </summary>
+    /// <param name="heard">The unreadable announcement, in window-relative time.</param>
+    /// <param name="profile">The resolved language profile, for re-matching the phrase.</param>
+    /// <param name="start">Absolute start of the probe window it was heard in.</param>
+    /// <param name="windowEnd">Absolute end of that window; the upgrade model re-reads exactly it.</param>
+    /// <param name="below">The chapter number the sequence stands at.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The chapter number to mark this announcement with, or null when none could be read.</returns>
+    internal async Task<int?> ReadUnnumberedAsync(
+        UnnumberedAnnouncement heard, LanguageProfile profile, double start, double windowEnd,
+        int below, CancellationToken ct)
+    {
+        var phraseAbs = start + heard.PhraseStartSeconds;
+        _env.Log?.Invoke($"re-reading the unnumbered announcement at {FormatTimestamp(phraseAbs)}");
+
+        var reread = await ReReadNumberAsync(
+            profile, start, windowEnd, phraseAbs, heard.PhraseEndSeconds - heard.PhraseStartSeconds,
+            below, null, ct);
+        if (reread == null)
+            _env.Log?.Invoke("no number continuing the sequence could be read there either - " +
+                             "leaving the announcement unmarked");
+        return reread;
+    }
+
+    /// <summary>
+    /// The two ways of asking the audio again, tried in order and stopping at the first answer that
+    /// <see cref="Adopt"/> accepts. Shared by both entry points because the question is identical
+    /// once it is asked - only what prompted it differs.
+    /// </summary>
+    /// <param name="profile">The resolved language profile.</param>
+    /// <param name="start">Absolute start of the probe window the announcement came from.</param>
+    /// <param name="windowEnd">Absolute end of that window.</param>
+    /// <param name="phraseAbs">Absolute position of the announcement.</param>
+    /// <param name="phraseLengthSeconds">How long the announcement's own segment ran, which bounds
+    /// how short a re-framed window may usefully be.</param>
+    /// <param name="below">The chapter number the sequence stands at.</param>
+    /// <param name="suspect">The number originally heard, or null when none could be read.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<int?> ReReadNumberAsync(
+        LanguageProfile profile, double start, double windowEnd, double phraseAbs,
+        double phraseLengthSeconds, int below, int? suspect, CancellationToken ct)
+    {
         if (_env.SecondOpinion != null &&
             await ReadWithUpgradeAsync(profile, start, windowEnd, phraseAbs, below, ct) is { } upgraded &&
-            Adopt(upgraded, below, match.Number, "the pass 3 model") is { } fromUpgrade)
+            Adopt(upgraded, below, suspect, "the pass 3 model") is { } fromUpgrade)
             return fromUpgrade;
 
         foreach (var (lead, length) in SuspectGapReframes)
         {
             ct.ThrowIfCancellationRequested();
-            if (await ReadReframedAsync(profile, phraseAbs, match, lead, length, below, ct) is { } reframed &&
-                Adopt(reframed, below, match.Number, $"a {length:0.#} s window") is { } fromReframe)
+            if (await ReadReframedAsync(
+                    profile, phraseAbs, phraseLengthSeconds, lead, length, below, ct) is { } reframed &&
+                Adopt(reframed, below, suspect, $"a {length:0.#} s window") is { } fromReframe)
                 return fromReframe;
         }
-
-        _env.Log?.Invoke(
-            $"no number continuing the sequence could be read there - leaving it at {match.Number}");
         return null;
     }
 
@@ -146,18 +226,25 @@ internal sealed class SuspectNumberMender
     /// </summary>
     /// <param name="reread">The number the re-read produced.</param>
     /// <param name="below">The chapter number the sequence stands at.</param>
-    /// <param name="suspect">The number originally heard.</param>
+    /// <param name="suspect">The number originally heard, or null when none could be read - the
+    /// only difference the two entry points make once an answer is in hand, and one the log lines
+    /// have to carry because "corrected 90 to 19" and "read a number where there was none" are
+    /// different events to whoever is chasing a mark.</param>
     /// <param name="source">How the re-read was obtained, for the log line.</param>
     /// <returns><paramref name="reread"/> when it qualifies, else null.</returns>
-    private int? Adopt(int reread, int below, int suspect, string source)
+    private int? Adopt(int reread, int below, int? suspect, string source)
     {
         if (!ContinuesSequence(reread, below))
         {
-            _env.Log?.Invoke($"{source} read it as {reread} - no improvement on {suspect}");
+            _env.Log?.Invoke($"{source} read it as {reread} - " + (suspect is { } no
+                ? $"no improvement on {no}"
+                : $"which does not continue the sequence after chapter {below}"));
             return null;
         }
-        _env.Log?.Invoke($"{source} read it as {reread} instead of {suspect} - " +
-                         $"correcting the number, the mark stays where it is");
+        _env.Log?.Invoke(suspect is { } previous
+            ? $"{source} read it as {reread} instead of {previous} - " +
+              "correcting the number, the mark stays where it is"
+            : $"{source} read it as chapter {reread} - marking the announcement after all");
         return reread;
     }
 
@@ -191,19 +278,19 @@ internal sealed class SuspectNumberMender
     /// </summary>
     /// <param name="profile">The resolved language profile.</param>
     /// <param name="phraseAbs">Absolute position of the announcement being re-read.</param>
-    /// <param name="match">The original match, whose phrase end bounds the minimum useful frame.</param>
+    /// <param name="phraseLengthSeconds">How long the announcement's own segment ran, which bounds
+    /// the minimum useful frame.</param>
     /// <param name="lead">Seconds of the frame that precede the announcement.</param>
     /// <param name="length">Total frame length in seconds.</param>
     /// <param name="below">The chapter number the sequence stands at.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<int?> ReadReframedAsync(
-        LanguageProfile profile, double phraseAbs, PhraseMatch match, double lead, double length,
-        int below, CancellationToken ct)
+        LanguageProfile profile, double phraseAbs, double phraseLengthSeconds, double lead,
+        double length, int below, CancellationToken ct)
     {
-        var phraseLength = match.PhraseEndSeconds - match.PhraseStartSeconds;
         var from = Math.Max(_region.FromSeconds, phraseAbs - lead);
         var to = Math.Min(_region.ToSeconds, from + length);
-        if (to - from < phraseAbs - from + phraseLength)
+        if (to - from < phraseAbs - from + phraseLengthSeconds)
             return null;
 
         var samples = await _env.Audio.DecodePcmAsync(

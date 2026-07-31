@@ -353,7 +353,11 @@ use `.`, whatever the machine's locale says.
    already found — is read again before it's believed: with `--pass3-model` if
    that's the better model, then from two differently framed windows. The new
    reading only counts if it continues the sequence, so a book that genuinely
-   skips numbers keeps its own. A stretch that yields nothing while VAD did
+   skips numbers keeps its own. An announcement heard with *no* readable number
+   at all goes down the same road, with the same rule deciding what may be
+   believed — which is the only thing that can rescue one sitting past the last
+   chapter found, where there's no gap for a later pass to notice. A stretch
+   that yields nothing while VAD did
    hear someone speak inside its jingle is read once more from a shorter
    window: Whisper reads audio in 30-second chunks, and a lone announcement
    can drop out of a window that crosses one.
@@ -374,9 +378,14 @@ use `.`, whatever the machine's locale says.
    transcribing the region at all. Not a free bet, though: the probing cost
    grows with how many candidate silences the gap holds, so on a dense region it
    can approach the cost of the full transcription it's trying to avoid — and if
-   it finds nothing, pass 3 still runs afterward. Only ever happens when
-   `--pass3-model` names a *better* model than pass 2's, so it stays something
-   you opt into.
+   it finds nothing, pass 3 still runs afterward. A gap that survives that gets
+   one more try aimed at the other explanation, that nothing ever probed there:
+   the pauses just short of `--min-silence-length` are swept a tenth of a second
+   at a time, longest first, down to half a second under the setting, stopping as
+   soon as the missing chapters turn up — which is what saves a book whose
+   narrator's chapter break happens to land right on the limit. Only ever happens
+   when `--pass3-model` names a *better* model than pass 2's, so it stays
+   something you opt into.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in chunks whose borders snap to

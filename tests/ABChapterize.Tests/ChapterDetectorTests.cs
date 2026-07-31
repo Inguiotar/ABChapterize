@@ -352,9 +352,16 @@ public sealed class ChapterDetectorTests : IDisposable
     /// keyed off the same fake audio source. Returns the result plus both transcribers, so a test
     /// can prove that a gap was filled by the pass-3 transcriber rather than the pass-2 one.
     /// </summary>
+    /// <param name="options">The run's options.</param>
+    /// <param name="silences">The fake audio source's silences.</param>
+    /// <param name="pass2Script">Scripts the pass-2 transcriber.</param>
+    /// <param name="pass3Script">Scripts the pass-3 transcriber.</param>
+    /// <param name="log">Collects the --verbose lines, for tests that assert on which recovery
+    /// route a chapter came back through; null to run without logging.</param>
     private async Task<(DetectionResult Result, ScriptedTranscriber Pass2, ScriptedTranscriber Pass3)> DetectWithPass3TranscriberAsync(
         CliOptions options, List<Silence> silences,
-        Action<ScriptedTranscriber> pass2Script, Action<ScriptedTranscriber> pass3Script)
+        Action<ScriptedTranscriber> pass2Script, Action<ScriptedTranscriber> pass3Script,
+        List<string>? log = null)
     {
         var audio = new FakeAudioSource { Silences = silences };
         var pass2 = new ScriptedTranscriber(audio);
@@ -362,7 +369,9 @@ public sealed class ChapterDetectorTests : IDisposable
         pass2Script(pass2);
         pass3Script(pass3);
         var detector = new ChapterDetector(options, audio, pass2, vad: null, pass3Transcriber: pass3);
-        var result = await detector.DetectAsync(_file, Info, new WorkTracker(), default, CancellationToken.None);
+        var result = await detector.DetectAsync(
+            _file, Info, new WorkTracker(),
+            log is null ? default : new DetectionLog(log.Add, null), CancellationToken.None);
         return (result, pass2, pass3);
     }
 
@@ -1526,6 +1535,230 @@ public sealed class ChapterDetectorTests : IDisposable
         // a phase afterwards, since pass 3 found no gap left to fill.
         Assert.Equal("Pass 2.5", tracker.PhaseLabel);
         Assert.Equal(1.0, tracker.Fraction, 6);
+    }
+
+    [Fact]
+    public async Task Pass25_SweepsTheSilencesJustBelowTheFloor_WhenItsOwnReProbeLeavesTheGapOpen()
+    {
+        // The Paula Monti shape (2026-07-31): the chapter's announcement is preceded by a 1.4 s
+        // pause against the 1.5 s floor, so pass 1 never offered it as a candidate and no probe of
+        // pass 2 or of pass 2.5's ordinary re-probe ever pointed at it. Only the sub-floor sweep
+        // can reach it - and it has to, because pass 3's own long-form decode of the gap is the
+        // very thing that lost the announcement on the real file.
+        var log = new List<string>();
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(898.55, 900), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(900, Seg(0.5, " Chapter two.")),
+            log);
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 900.25), new(3, 1199.95)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.4-1.5 s for chapter 2"));
+        // Every decode stayed probe-sized, so pass 3 proper never transcribed the gap - the same
+        // saving pass 2.5's ordinary re-probe exists for, on a candidate it cannot see.
+        Assert.All(pass3.Audio.DecodeWindows, w => Assert.True(w.Duration is null or <= 60));
+    }
+
+    [Fact]
+    public async Task Pass25_StopsSweeping_AsSoonAsTheGapsLastMissingChapterIsFound()
+    {
+        // Bands run longest-first and the sweep ends the moment nothing is missing, so the 1.05 s
+        // silence at 1000 - which would be swept by the bottom band - is never probed at all.
+        // Scripting a second, duplicate announcement there makes the omission provable rather than
+        // merely plausible: if the bottom band ran, that decode would show up.
+        var log = new List<string>();
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(898.55, 900), new(998.95, 1000), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 =>
+            {
+                pass3.Add(900, Seg(0.5, " Chapter two."));
+                pass3.Add(1000, Seg(0.5, " Chapter two."));
+            },
+            log);
+
+        AssertChapters([new(1, 0.25), new(2, 900.25), new(3, 1199.95)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("sub-floor sweep closed the gap at 1.4-1.5 s"));
+        Assert.DoesNotContain(log, l => l.Contains("1.0-1.1 s"));
+        Assert.DoesNotContain(pass3.Audio.DecodeStarts, d => Math.Abs(d - 1000) < 1e-6);
+    }
+
+    [Fact]
+    public async Task Pass25_KeepsSweepingDownTheBands_WhenTheLongerOnesHoldNothing()
+    {
+        // The gap's only sub-floor silence is 1.05 s, four empty bands below where the sweep starts.
+        // Empty bands cost nothing, so walking down to it is the whole point of sweeping in steps
+        // rather than stopping at the first band that comes back empty.
+        var log = new List<string>();
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(1098.95, 1100), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(1100, Seg(0.5, " Chapter two.")),
+            log);
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 1100.25), new(3, 1199.95)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.0-1.1 s for chapter 2"));
+    }
+
+    [Fact]
+    public async Task Pass25_DoesNotSweep_WhenItsOwnReProbeAlreadyClosedTheGap()
+    {
+        // The sweep is the fallback, not a second helping: with the gap closed by the ordinary
+        // re-probe at 600, the 1.4 s silence at 900 stays untouched even though it is in range.
+        var log = new List<string>();
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(898.55, 900), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(600, Seg(0.5, " Chapter two.")),
+            log);
+
+        AssertChapters([new(1, 0.25), new(2, 600.25), new(3, 1199.95)], result.Chapters);
+        Assert.DoesNotContain(log, l => l.Contains("sweeping"));
+        Assert.DoesNotContain(pass3.Audio.DecodeStarts, d => Math.Abs(d - 900) < 1e-6);
+    }
+
+    [Fact]
+    public async Task Pass25_AbandonsTheSweep_WhenABandWouldCostMoreThanTranscribingTheGap()
+    {
+        // A 59.7 s gap holds at most four 12 s probe windows, so a band of five candidates is
+        // already the worse bet than the full transcription pass 3 will do anyway. The sweep must
+        // stop before that band rather than pay for it - and chapter 2 stays missing here, which is
+        // exactly the trade being made.
+        var log = new List<string>();
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [
+                new(595, 600), new(608.55, 610), new(613.55, 615), new(618.55, 620),
+                new(623.55, 625), new(628.55, 630), new(655, 660),
+            ],
+            pass2 =>
+            {
+                pass2.Add(600, Seg(0.5, " Chapter one."));
+                pass2.Add(660, Seg(0.2, " Chapter three."));
+            },
+            pass3 => { },
+            log);
+
+        Assert.True(result.GapRemains);
+        Assert.Contains(log, l => l.Contains("stopping the sub-floor sweep before the 1.4-1.5 s band") &&
+                                  l.Contains("5 probe(s)"));
+    }
+
+    [Theory]
+    // The default floor: exactly the five bands from just under it down to half a second below.
+    [InlineData(1.5, 0.5, 5, 1.4, 1.5, 1.0, 1.1)]
+    // A floor set low enough that pass 1 stored nothing below the third band's minimum.
+    [InlineData(0.8, 0.5, 3, 0.7, 0.8, 0.5, 0.6)]
+    public void SubFloorSweepBands_RunFromJustUnderTheFloorDownwards_AndStopAtWhatPass1Stored(
+        double floor, double storedFloor, int count,
+        double firstMin, double firstMax, double lastMin, double lastMax)
+    {
+        var bands = GapPlanning.SubFloorSweepBands(floor, storedFloor);
+
+        Assert.Equal(count, bands.Count);
+        Assert.Equal(firstMin, bands[0].MinSeconds, 9);
+        Assert.Equal(firstMax, bands[0].MaxSeconds, 9);
+        Assert.Equal(lastMin, bands[^1].MinSeconds, 9);
+        Assert.Equal(lastMax, bands[^1].MaxSeconds, 9);
+    }
+
+    [Fact]
+    public void SubFloorSweepBands_AreEmpty_WhenTheFloorIsAlreadyAtWhatPass1Stored()
+        => Assert.Empty(GapPlanning.SubFloorSweepBands(0.5, 0.5));
+
+    [Fact]
+    public async Task AnUnreadableChapterNumber_IsReReadWithThePass3Model_AndMarkedWhereItWasHeard()
+    {
+        // "Paula Monti"'s last chapter, 2026-07-31: heard as "1ère partie, chapitre ban 5" and
+        // discarded for want of a number. It sat past the last detected chapter, so no gap ever
+        // formed around it and neither the gap re-probe nor pass 3 was ever pointed at it - the
+        // re-read in pass 2 is the only thing that can reach an announcement in that position.
+        var log = new List<string>();
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(600, Seg(2.5, " CHAPTER XIIII. THE SHAKING OF THE SHEETS"));
+            },
+            pass3 => pass3.Add(600, Seg(2.5, " Chapter two.")),
+            log);
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 602.25)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("heard the chapter phrase at 0:10:02.50 " +
+                                             "but could not read a number from it"));
+        Assert.Contains(log, l => l.Contains("the pass 3 model read it as chapter 2"));
+    }
+
+    [Fact]
+    public async Task AnUnreadableChapterNumber_KeepsThePositionAndConfidenceOfTheReadingThatHeardIt()
+    {
+        // The re-read contributes the number and nothing else. Here it reads the number two and a
+        // half seconds away from where the original announcement sits and with a far higher
+        // confidence; the mark must still land on the original phrase (602.5 minus the 0.25 s lead)
+        // and carry the original 0.42, or a recovered chapter would report a confidence measured on
+        // audio it was not found in.
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0", "--quick-marks"),
+            [new(595, 600)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(600, Seg(2.5, " CHAPTER XIIII. THE SHAKING OF THE SHEETS", 0.42));
+            },
+            pass3 => pass3.Add(600, Seg(5.0, " Chapter two.", 0.99)));
+
+        AssertChapters([new(1, 0.25, 1.0), new(2, 602.25, 0.42)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task AnUnreadableChapterNumber_IsLeftUnmarked_WhenTheReReadDoesNotContinueTheSequence()
+    {
+        // The guard that keeps this from planting marks on prose. "I Shall Wear Midnight",
+        // 2026-07-31: a window re-heard the already-marked chapter 10 as "CHAPTER X", and a re-read
+        // of it can only ever produce that same 10 - which does not continue the sequence, so no
+        // mark comes of it. An in-text mention behaves identically.
+        var log = new List<string>();
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0", "--quick-marks"),
+            [new(595, 600)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(600, Seg(2.5, " CHAPTER XIIII. THE SHAKING OF THE SHEETS"));
+            },
+            pass3 => pass3.Add(600, Seg(2.5, " Chapter one.")),
+            log);
+
+        AssertChapters([new(1, 0.25)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("the pass 3 model read it as 1 - " +
+                                             "which does not continue the sequence after chapter 1"));
+        Assert.Contains(log, l => l.Contains("no number continuing the sequence could be read " +
+                                             "there either - leaving the announcement unmarked"));
     }
 
     [Fact]
@@ -3445,13 +3678,18 @@ public sealed class ChapterDetectorTests : IDisposable
         // "one." only exists in window 2's freshly decoded tail (from the 608.3 split point).
         // Extracting the chapter number therefore has to reach across the cache/fresh boundary -
         // FindPhraseMatches must flag that detection, and DetectAsync must log it.
+        //
+        // The number is scripted as audible only in a short decode, which is what leaves the merge
+        // as the sole route to it: window 1 hears a bare "Chapter", and the unnumbered re-read that
+        // triggers re-frames it at 15 s and 45 s - both too wide here, so they come back with the
+        // same unreadable announcement and the merge still has to do the work.
         var (result, log, _) = await DetectWithLogAsync(
             Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
             s =>
             {
-                s.Add(600, Seg(6.5, " Chapter")); // abs 606.5 - reused by window 2
-                s.Add(608.3, Seg(0, " one."));     // abs 608.3 - fresh tail of window 2
+                s.Add(600, Seg(6.5, " Chapter"));        // abs 606.5 - reused by window 2
+                s.AddWithin(11, 608.3, Seg(0, " one.")); // abs 608.3 - fresh tail of window 2
             });
 
         AssertChapters([new DetectedChapter(1, 606.25)], result.Chapters);

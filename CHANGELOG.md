@@ -357,6 +357,29 @@ for you, not how it was built. The format follows
   silence ending, the mark skipped past the silence entirely and came to rest on the
   previous chapter's closing words — a second or two of the old chapter left playing
   before the new one. The mark now lands where the music begins, as intended.
+- **A chapter whose pause falls just short of `--min-silence-length` is now found.**
+  Where a narrator's chapter break is right at the limit — no jingle, just a breath's
+  pause — every chapter of the book can sit a tenth of a second under it, and the tool
+  looked at none of them. With `--pass3-model` naming a better model, a gap that the
+  cheap retry cannot close is now swept for shorter pauses first, in steps of a tenth
+  of a second down to half a second under the setting, stopping as soon as the missing
+  chapter turns up. That is both faster than transcribing the whole gap and, on the
+  French audiobook this came from, the only thing that worked: five chapters were
+  preceded by pauses of 1.39–1.49 s against the default 1.5 s, four were eventually
+  recovered by the slow pass, and the fifth was lost outright because the recognizer
+  simply dropped the announcement from its reading of the long stretch. A short probe
+  aimed at the spot read it without trouble. The sweep stops early on a long gap where
+  it would end up costing more than the full transcription it is trying to avoid.
+- **An announcement whose number cannot be read is now re-read during the ordinary
+  scan**, not only during the full-transcription pass. This matters most for the one
+  place the later pass can never reach: an announcement past the last chapter found is
+  inside no gap, so without `--trailing-scan` nothing ever looked at it again — which
+  is how the closing chapter of a French audiobook went missing after being heard as
+  "chapitre ban 5". The spot is now read again straight away, first with
+  `--pass3-model` where it names a better model and then from two differently framed
+  windows, and a reading is only believed if it continues the chapter sequence, so an
+  in-book mention of the word "chapter" still cannot produce a mark. The recovered
+  chapter is marked exactly where it was first heard.
 
 ### Changed
 

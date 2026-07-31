@@ -9,8 +9,9 @@ using static ABChapterize.Detection.DetectionTuning;
 namespace ABChapterize.Detection;
 
 /// <summary>Sequence bookkeeping for chapter detection: finding gaps in a detected chapter
-/// sequence, the regions a --verify re-detection run needs to re-probe, normalizing a raw
-/// detection list, and snapping Pass 2/Pass 3 window/chunk borders to word-safe seams.</summary>
+/// sequence, the regions a --verify re-detection run needs to re-probe, the silence bands Pass 2.5
+/// sweeps a still-open gap with, normalizing a raw detection list, and snapping Pass 2/Pass 3
+/// window/chunk borders to word-safe seams.</summary>
 internal static class GapPlanning
 {
     /// <summary>A time region suspected to contain undetected chapter starts.</summary>
@@ -114,6 +115,47 @@ internal static class GapPlanning
         for (var n = lower + 1; n < upper; n++)
             missing.Add(n);
         return missing;
+    }
+
+    /// <summary>
+    /// The silence-length bands Pass 2.5 sweeps a still-open gap with, longest first: one band per
+    /// <see cref="DetectionTuning.SubFloorSweepBandCount"/>, each
+    /// <see cref="DetectionTuning.SubFloorSweepBandSeconds"/> wide, the first ending exactly at
+    /// <paramref name="floorSeconds"/> so no silence Pass 2 already probed is swept again.
+    /// <para>
+    /// Anchoring the bands to the effective <c>--min-silence-length</c> rather than to fixed
+    /// absolute lengths is what makes them mean the same thing on every run: the sweeps ask "how
+    /// far below what this run demanded is a break still plausible", a question whose answer moves
+    /// with the demand. A book run at <c>-n 3</c> gets bands under 3 s, not under 1.5 s.
+    /// </para>
+    /// <para>
+    /// Bands below <paramref name="storedFloorSeconds"/> are dropped rather than returned empty:
+    /// Pass 1 never kept silences that short, so sweeping them would report "nothing found" about
+    /// audio nothing ever looked at. Internal for unit testing.
+    /// </para>
+    /// </summary>
+    /// <param name="floorSeconds">The run's effective --min-silence-length, i.e. the shortest
+    /// silence Pass 2 was willing to probe.</param>
+    /// <param name="storedFloorSeconds">The shortest silence Pass 1 retained at all
+    /// (<see cref="DetectionTuning.MinStoredSilenceSeconds"/>, or the floor when that is lower).</param>
+    /// <returns>The bands as half-open [min, max) intervals, longest first; empty when the floor
+    /// already sits at or below what Pass 1 stored.</returns>
+    internal static List<(double MinSeconds, double MaxSeconds)> SubFloorSweepBands(
+        double floorSeconds, double storedFloorSeconds)
+    {
+        var bands = new List<(double, double)>();
+        for (var i = 0; i < SubFloorSweepBandCount; i++)
+        {
+            // Both bounds measured from the floor rather than the band above, so a band's own width
+            // never accumulates rounding: at the default floor the last band's minimum is exactly
+            // 1.0, not 1.0000000000000002, and a real 1.00 s silence still falls inside it.
+            var max = floorSeconds - i * SubFloorSweepBandSeconds;
+            var min = floorSeconds - (i + 1) * SubFloorSweepBandSeconds;
+            if (min < storedFloorSeconds)
+                break;
+            bands.Add((min, max));
+        }
+        return bands;
     }
 
     /// <summary>

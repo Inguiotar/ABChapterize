@@ -129,11 +129,14 @@ parsed from digits, Roman numerals or number words
 
 If the phrase is heard but nothing following it can be read as a number,
 `--verbose` reports it and quotes what was transcribed there, and the spot is
-transcribed once more from a window framed differently — the wording a
+read again: with `--pass3-model` first if that names a better model than the
+probing one, then from two differently framed windows — the wording a
 recognizer produces at a given place depends on where the window around it
-begins, so a second framing often reads cleanly. Only a stretch that yielded no
-chapter at all is reported this way, so a book's own mentions of the word stay
-out of the log.
+begins, so a second framing often reads cleanly. A number found that way is
+believed only if it continues the chapter sequence, so a book's own mentions of
+the word "chapter" cannot turn into a mark; the recovered chapter is marked
+exactly where it was first heard. Only a stretch that yielded no chapter at all
+is treated this way, so those mentions stay out of the log as well.
 
 A window that yields nothing at all gets a second look when the VAD pre-pass
 contradicts it — that is, when someone was heard speaking inside the jingle the
@@ -268,7 +271,18 @@ first re-probed exactly as pass 2 probes, but with that better model. When it
 finds the missing chapters, pass 3 never has to run for them at all; anything it
 does not find falls through to pass 3 immediately afterward.
 
-Whether that pays off depends on the gap: the re-probe's cost grows with the
+A gap that survives the re-probe gets one more, differently aimed attempt first.
+The other reason an announcement goes unfound is that nothing ever looked at it:
+`--min-silence-length` decides which pauses are worth probing, and a narrator
+whose chapter break lands just under the setting has every chapter of the book
+below it. So the gap is swept for the pauses just short of that setting — a tenth
+of a second at a time, longest first, down to half a second under it — and the
+sweep stops the moment the missing chapters are accounted for. Where the gap is
+long enough that this would end up costing more than transcribing it outright,
+the sweep is abandoned and pass 3 takes over. `--verbose` reports each band it
+sweeps.
+
+Whether pass 2.5 pays off depends on the gap: the re-probe's cost grows with the
 number of candidate silences inside it, not with its length, so a region dense
 in candidates can spend about as long probing as pass 3 would have spent
 transcribing it outright — and then pass 3 still follows. Expect it to help most
@@ -678,7 +692,10 @@ so that logs and reports stay comparable regardless of regional settings.
   instead; this is still the main manual speed knob if `auto`'s heuristic
   doesn't suit a particular audiobook: if the pauses are unusually generous
   and consistent, `-n 2.5` can cut the number of probes further still, but
-  chapters go missing if it's set too high.
+  chapters go missing if it's set too high. Set it a little too high and a
+  heavier `--pass3-model` will usually rescue the run anyway: a gap it leaves
+  behind is swept for pauses down to half a second under whatever this says
+  (see [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model)).
 
 `-j`, `--mark-before-jingle`
 : Anchor the chapter mark to the end of the previous
@@ -1863,9 +1880,10 @@ without a preceding pause, pass 3 usually catches them automatically. If a
 gap remains, the partial marks are written and the file is renamed with a
 `.missing-marks-…` tag (see the warning); simply running the tool again over
 such a file resumes it automatically, re-probing only the still-tagged
-gap(s). If that still doesn't find them, try a lower `--min-silence-length`,
-a better `--model`, or a heavier `--pass3-model` (e.g. `large`) before
-resuming again.
+gap(s). If that still doesn't find them, try a heavier `--pass3-model` (e.g.
+`large`) — which also lets pass 2.5 sweep the gap for pauses shorter than
+`--min-silence-length` allows — a better `--model`, or a lower
+`--min-silence-length` before resuming again.
 
 **A "chapter" was detected that isn't one** — in-text mentions are filtered
 by the ordering heuristics, but a phrase like "chapter twelve" right after a

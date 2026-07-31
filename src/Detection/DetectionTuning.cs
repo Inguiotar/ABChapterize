@@ -488,6 +488,48 @@ internal static class DetectionTuning
     internal static readonly (double LeadSeconds, double LengthSeconds)[] SuspectGapReframes =
         [(2.0, 15.0), (12.0, 45.0)];
 
+    /// <summary>
+    /// How many unreadable-number re-reads (<see cref="SuspectNumberMender.ReadUnnumberedAsync"/>)
+    /// one <see cref="RegionProber"/> region may run. The same guard
+    /// <see cref="MaxUnnumberedRetriesPerChunk"/> puts on Pass 3, for the same reason: an in-text
+    /// mention reaches the re-read too, and each one costs up to three decodes.
+    /// <para>
+    /// Set well above what real books need rather than tightly, because the event is rare and the
+    /// cases it does fire on are the ones worth paying for. Counted over the seven-book test run of
+    /// 2026-07-31 (4.5-15.6 h each, "chapter phrase heard, no number readable, window produced no
+    /// mark"): zero occurrences on five of them, exactly one on "I Shall Wear Midnight" ("CHAPTER X"
+    /// re-hearing an already-marked chapter 10) and one on "Paula Monti" ("chapitre ban 5", the
+    /// genuine chapter 25 that the run lost). A per-region cap therefore only ever bites on a book
+    /// whose prose talks about chapters constantly, which is exactly the book where it should.
+    /// </para>
+    /// </summary>
+    internal const int MaxUnnumberedMendsPerRegion = 8;
+
+    /// <summary>
+    /// How many sub-floor silence bands Pass 2.5 sweeps through before giving a gap up to Pass 3,
+    /// and how wide each band is (see <see cref="GapPlanning.SubFloorSweepBands"/>). Five bands of
+    /// 0.1 s reach from just under <c>--min-silence-length</c> down to 0.5 s below it - at the
+    /// default floor, [1.4, 1.5) down to [1.0, 1.1).
+    /// <para>
+    /// The range is measured, not guessed. On "Paula Monti" (2026-07-31, 4 h 34 min, French) every
+    /// one of the five chapters Pass 2 missed was preceded by a pause just under the floor: chapter
+    /// 3 by 1.46 s, 12 by 1.49 s, 14 by 1.39 s, 16 by 1.41 s and 19 by 1.41 s. That narrator's
+    /// non-jingle chapter break simply sits on the 1.5 s line, and a book whose breaks are that
+    /// short will have all of them in the top band or two - which is why the sweeps run longest-first
+    /// and stop the moment the gap closes, instead of one wide sweep down to 1.0 s.
+    /// </para>
+    /// <para>
+    /// Stopping at 0.5 s below the floor is where the yield dies. Band populations on that same
+    /// file, top to bottom: 5, 6, 13, 36, 123 silences - roughly geometric growth downwards, so each
+    /// further step buys several times as much probing as the one before it while the chance of a
+    /// real chapter break hiding there keeps falling.
+    /// </para>
+    /// </summary>
+    internal const int SubFloorSweepBandCount = 5;
+
+    /// <summary>Width of one <see cref="SubFloorSweepBandCount"/> band, in seconds.</summary>
+    internal const double SubFloorSweepBandSeconds = 0.1;
+
     /// <summary>Chunk length in seconds for full transcription of gap regions.</summary>
     internal const double GapChunkSeconds = 600;
 
