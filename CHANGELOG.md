@@ -5,7 +5,7 @@ for you, not how it was built. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.1] — unreleased
+## [0.9.1] — 2026-07-31
 
 ### Added
 
@@ -103,8 +103,11 @@ for you, not how it was built. The format follows
 - **`--mark-lead <seconds>`** (`-k`) sets how far in front of the announcement a
   mark is placed. Marks are located just as precisely whatever it is; all it
   decides is how much lead-in you hear before the narrator starts, which is a
-  matter of taste. `0` marks the measured onset itself, and `--mark-before-jingle`
-  ignores it, taking its position from the jingle instead.
+  matter of taste. `0` marks the measured onset itself. It applies under
+  `--mark-before-jingle` too: in full for a chapter with no jingle in front of it,
+  and as a back-off into the pause before the jingle where there is one, capped at
+  that pause's own length so the mark can never reach back into the previous
+  chapter's narration.
 - **Marks for anything else the narrator announces.** `--custom` takes
   `phrase:title` mappings, several of them separated by semicolons:
 
@@ -185,15 +188,6 @@ for you, not how it was built. The format follows
 
 ### Changed
 
-- **`--mark-lead` is no longer ignored under `--mark-before-jingle`.** It never
-  really was for the chapters that carry no jingle — plenty of audiobooks play one
-  in front of some chapters and not others, and those have always been marked the
-  ordinary way, lead-in and all — but a mark walked back to the pause in front of a
-  jingle used to land exactly where that pause ends, hard against the jingle's
-  first note. Such a mark now backs into the pause by `--mark-lead` seconds, or
-  sits at the pause's own beginning where the pause is the shorter of the two, so
-  it can never reach back into the previous chapter's narration. With the default
-  lead this moves affected marks 0.35 seconds earlier.
 - **Mark refinement is faster and no longer takes a running start.** It used to
   begin by sampling positions near the mark that the voice-activity detector had
   flagged as speech, and only fall back to searching the stretch the announcement
@@ -267,6 +261,12 @@ for you, not how it was built. The format follows
   works. Each mark logs the candidates it is about to check, and — for the rare
   mark whose announcement none of them confirm — the stretch it is about to
   search and where in it the announcement turned out to be.
+
+- **`--import` now rejects the title options** — `--title`, `--intro-title`,
+  `--prologue-title` and `--epilogue-title` — instead of accepting them and doing
+  nothing. An imported mark carries the title its sidecar gives it and no intro mark
+  is prepended, so naming one was always a promise the run could not keep. Every other
+  option `--import` cannot act on was already refused this way.
 
 ### Fixed
 
@@ -406,14 +406,6 @@ for you, not how it was built. The format follows
   windows, and a reading is only believed if it continues the chapter sequence, so an
   in-book mention of the word "chapter" still cannot produce a mark. The recovered
   chapter is marked exactly where it was first heard.
-
-### Changed
-
-- **`--import` now rejects the title options** — `--title`, `--intro-title`,
-  `--prologue-title` and `--epilogue-title` — instead of accepting them and doing
-  nothing. An imported mark carries the title its sidecar gives it and no intro mark
-  is prepended, so naming one was always a promise the run could not keep. Every other
-  option `--import` cannot act on was already refused this way.
 
 ## [0.9.0] — 2026-07-27
 
