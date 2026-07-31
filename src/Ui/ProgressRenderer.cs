@@ -87,13 +87,17 @@ public sealed class WorkTracker
 }
 
 /// <summary>
-/// Renders one progress bar line per file currently being processed, periodically refreshed
-/// and capped to the terminal's height (re-checked on every redraw, so a terminal resize is
-/// picked up automatically). Each finished file's bar is replaced by a one-line summary that
-/// scrolls up normally, while the remaining active bars keep redrawing below it. With a
-/// single file in flight (the common case without --jobs > 1) this degenerates to exactly
-/// the single-line behavior of earlier versions. Degrades gracefully when output is redirected.
+/// Renders the progress bar of the file currently being processed - one line, periodically
+/// refreshed and truncated to the terminal's width (re-checked on every redraw, so a resize is
+/// picked up automatically). When the file is finished the bar is replaced by a one-line summary
+/// that scrolls up normally. Degrades gracefully when output is redirected.
 /// </summary>
+/// <remarks>
+/// One bar, because the run processes one file at a time (see
+/// <see cref="ABChapterize.Processing.FileProcessor"/>). Log lines and summaries interleave with the
+/// bar by erasing it first and letting the next timer tick redraw it below - which is the only
+/// reason this class needs to track what is currently on screen at all.
+/// </remarks>
 public sealed class ProgressRenderer : IDisposable
 {
     /// <summary>
@@ -148,12 +152,18 @@ public sealed class ProgressRenderer : IDisposable
     private readonly LogFile? _logFile;
     private readonly bool _logStyle;
     private readonly Timer? _timer;
-    private readonly List<(WorkTracker Tracker, string Label)> _slots = [];
-    private int _blockLineCount;
-    /// <summary>The exact lines last drawn on screen, so a timer tick that would redraw an
-    /// identical block can be skipped entirely (see <see cref="Render"/>). Empty whenever no
-    /// block is currently drawn - including right after <see cref="ClearBlock"/> erased it.</summary>
-    private List<string> _lastLines = [];
+
+    /// <summary>The file currently being processed and its label, or null between files.</summary>
+    private (WorkTracker Tracker, string Label)? _slot;
+
+    /// <summary>Whether a bar is currently on screen and therefore has to be erased before
+    /// anything else is written.</summary>
+    private bool _barDrawn;
+
+    /// <summary>The exact line last drawn on screen, so a timer tick that would redraw an identical
+    /// bar can be skipped entirely (see <see cref="Render"/>). Null whenever no bar is currently
+    /// drawn - including right after <see cref="ClearBar"/> erased it.</summary>
+    private string? _lastLine;
     private readonly Lock _lock = new();
 
     /// <summary>Creates the renderer; when the console is redirected no bar is drawn.</summary>
@@ -183,29 +193,28 @@ public sealed class ProgressRenderer : IDisposable
         _color = ConsoleColors.ShouldColorize(color);
         if (_interactive)
         {
-            // Hide the cursor for the whole interactive run: the block is erased and redrawn
-            // every timer tick, and a visible cursor would flicker between the top of the bar
-            // block (where ClearBlock parks it) and the empty line below the last bar (where the
-            // final WriteLine leaves it) on every redraw. Restored in Dispose.
+            // Hide the cursor for the whole interactive run: the bar is erased and redrawn every
+            // timer tick, and a visible cursor would flicker between the start of the bar's line
+            // (where ClearBar parks it) and the empty line below it (where the final WriteLine
+            // leaves it) on every redraw. Restored in Dispose.
             TrySetCursorVisible(false);
             _timer = new Timer(_ => Render(), null, Timeout.Infinite, Timeout.Infinite);
         }
     }
 
-    /// <summary>Starts displaying progress for one file, in addition to any already in flight.</summary>
+    /// <summary>Starts displaying progress for a file.</summary>
     /// <param name="label">Short label shown behind the bar, typically the file name.</param>
     /// <param name="tracker">The work tracker to visualize.</param>
     public void Start(string label, WorkTracker tracker)
     {
         lock (_lock)
-            _slots.Add((tracker, label));
+            _slot = (tracker, label);
         _timer?.Change(0, 250);
     }
 
     /// <summary>
-    /// Stops displaying progress for one file and replaces its bar with a final summary
-    /// line. Any other files' bars keep redrawing below it. In quiet mode the line is only
-    /// printed when it is marked important.
+    /// Stops displaying progress for a file and replaces its bar with a final summary line. In quiet
+    /// mode the line is only printed when it is marked important.
     /// </summary>
     /// <param name="tracker">The same tracker instance passed to <see cref="Start"/> for this file.</param>
     /// <param name="summary">Summary text describing what was (not) done.</param>
@@ -214,23 +223,24 @@ public sealed class ProgressRenderer : IDisposable
     {
         lock (_lock)
         {
-            _slots.RemoveAll(s => ReferenceEquals(s.Tracker, tracker));
-            ClearBlock();
+            if (_slot is { } slot && ReferenceEquals(slot.Tracker, tracker))
+                _slot = null;
+            ClearBar();
             // A summary is the one line worth having in both places: --quiet may hold it back from
             // the console, but a log file exists to be complete.
             _logFile?.Write(summary);
             if (!_quiet || important)
                 Console.WriteLine(_logStyle ? FormatLog(summary) : summary);
-            if (_slots.Count == 0)
+            if (_slot == null)
                 _timer?.Change(Timeout.Infinite, Timeout.Infinite);
         }
     }
 
     /// <summary>
-    /// Records a log line, on the console (--verbose) or in the --log-file. On the console all
-    /// active progress bars are erased first (under the same lock the bar renderer uses) so they
-    /// are never left behind above the log output; the next timer tick simply redraws them below.
-    /// No-op when neither destination is active.
+    /// Records a log line, on the console (--verbose) or in the --log-file. On the console the
+    /// progress bar is erased first (under the same lock the bar renderer uses) so it is never left
+    /// behind above the log output; the next timer tick simply redraws it below. No-op when neither
+    /// destination is active.
     /// </summary>
     /// <param name="message">The log message (without timestamp).</param>
     public void Log(string message)
@@ -240,7 +250,7 @@ public sealed class ProgressRenderer : IDisposable
             _logFile?.Write(message);
             if (!_logToConsole)
                 return;
-            ClearBlock();
+            ClearBar();
             Console.WriteLine(FormatLog(message));
         }
     }
@@ -272,7 +282,7 @@ public sealed class ProgressRenderer : IDisposable
         lock (_lock)
         {
             _logFile?.Write(line);
-            ClearBlock();
+            ClearBar();
             if (highlight)
                 WriteSpans(SummaryHighlighter.Highlight(line));
             else
@@ -285,50 +295,40 @@ public sealed class ProgressRenderer : IDisposable
     private static string FormatLog(string message) => $"[{DateTime.Now:HH:mm:ss}] {message}";
 
     /// <summary>
-    /// Redraws every active file's progress bar, capped to the terminal height - but only when
-    /// the resulting block actually differs from what is already on screen. Each visible line is
-    /// quantized (integer percent, a fixed-width bar, a chapter count), so it changes far less
-    /// often than the timer ticks; skipping the erase-and-redraw for an unchanged block keeps the
-    /// bar from flickering on every tick while nothing is moving.
+    /// Redraws the active file's progress bar - but only when it actually differs from what is
+    /// already on screen. The visible line is quantized (integer percent, a fixed-width bar, a
+    /// chapter count), so it changes far less often than the timer ticks; skipping the
+    /// erase-and-redraw for an unchanged line keeps the bar from flickering on every tick while
+    /// nothing is moving.
     /// </summary>
     private void Render()
     {
         lock (_lock)
         {
-            if (_slots.Count == 0)
+            if (_slot is not { } slot)
                 return;
 
-            var maxRows = Math.Max(1, SafeWindowHeight() - 1);
-            var rows = Math.Min(_slots.Count, maxRows);
             var width = SafeWindowWidth() - 1;
-            var lines = new List<List<ColoredSpan>>(rows);
-            var texts = new List<string>(rows);
-            for (var i = 0; i < rows; i++)
+            var spans = BuildSpans(slot);
+            var line = ConsoleColors.PlainText(spans);
+            if (width > 10 && line.Length > width)
             {
-                var spans = BuildSpans(_slots[i]);
-                var line = ConsoleColors.PlainText(spans);
-                if (width > 10 && line.Length > width)
-                {
-                    spans = ConsoleColors.Truncate(spans, width);
-                    line = line[..width];
-                }
-                lines.Add(spans);
-                texts.Add(line);
+                spans = ConsoleColors.Truncate(spans, width);
+                line = line[..width];
             }
 
-            // Nothing to do when the identical block is already drawn. The comparison runs on the
+            // Nothing to do when the identical line is already drawn. The comparison runs on the
             // plain text, which is the whole reason colors are applied at write time: it stays a
-            // comparison of what the user actually sees. When the block was erased by an
-            // interleaved log/summary line, _blockLineCount is 0, so this never wrongly skips the
-            // redraw needed to put the bar back.
-            if (_blockLineCount > 0 && texts.SequenceEqual(_lastLines))
+            // comparison of what the user actually sees. When the bar was erased by an interleaved
+            // log/summary line, _barDrawn is false, so this never wrongly skips the redraw needed
+            // to put the bar back.
+            if (_barDrawn && line == _lastLine)
                 return;
 
-            ClearBlock();
-            foreach (var spans in lines)
-                WriteSpans(spans);
-            _blockLineCount = rows;
-            _lastLines = texts;
+            ClearBar();
+            WriteSpans(spans);
+            _barDrawn = true;
+            _lastLine = line;
         }
     }
 
@@ -485,22 +485,21 @@ public sealed class ProgressRenderer : IDisposable
     }
 
     /// <summary>
-    /// Erases every line of the currently drawn block (if any), leaving the cursor at its
-    /// top-left corner ready for the next redraw or for an interleaved log/summary line. Also
-    /// drops the <see cref="_lastLines"/> cache so <see cref="Render"/> treats the block as gone
-    /// and redraws it, rather than skipping on a stale content match.
+    /// Erases the currently drawn bar (if any), leaving the cursor on its line ready for the next
+    /// redraw or for an interleaved log/summary line. Also drops the <see cref="_lastLine"/> cache
+    /// so <see cref="Render"/> treats the bar as gone and redraws it, rather than skipping on a
+    /// stale content match.
     /// </summary>
-    private void ClearBlock()
+    private void ClearBar()
     {
-        if (!_interactive || _blockLineCount == 0)
+        if (!_interactive || !_barDrawn)
             return;
         var width = SafeWindowWidth() - 1;
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - _blockLineCount));
-        for (var i = 0; i < _blockLineCount; i++)
-            Console.WriteLine(new string(' ', Math.Max(0, width)));
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - _blockLineCount));
-        _blockLineCount = 0;
-        _lastLines = [];
+        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - 1));
+        Console.WriteLine(new string(' ', Math.Max(0, width)));
+        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - 1));
+        _barDrawn = false;
+        _lastLine = null;
     }
 
     /// <summary>
@@ -519,12 +518,6 @@ public sealed class ProgressRenderer : IDisposable
     private static int SafeWindowWidth()
     {
         try { return Console.WindowWidth; } catch { return 120; }
-    }
-
-    /// <summary>Returns the console height, tolerating consoles that do not report one.</summary>
-    private static int SafeWindowHeight()
-    {
-        try { return Console.WindowHeight; } catch { return 24; }
     }
 
     /// <summary>Stops the refresh timer and restores the cursor hidden for the interactive run.

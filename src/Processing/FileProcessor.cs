@@ -5,7 +5,6 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Channels;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Concurrency;
@@ -20,15 +19,24 @@ using static ABChapterize.Processing.RunStatistics;
 namespace ABChapterize.Processing;
 
 /// <summary>
-/// Orchestrates the whole run: file enumeration, revert handling, per-file chapter
-/// detection and writing (optionally several files at once, see
-/// <see cref="RunConcurrentlyAsync"/>), plus the one-line-per-file console reporting.
+/// Orchestrates the whole run: file enumeration, revert handling, per-file chapter detection and
+/// writing, plus the one-line-per-file console reporting.
 /// </summary>
+/// <remarks>
+/// Files are processed strictly one at a time, and everything below is single-threaded because of
+/// it - no locks around the counters, one transcriber, one detector, one progress bar. The
+/// parallelism that used to live here (several files at once, throttled to live CPU load) was given
+/// up so that the whole machine goes into one file: the GPU backends already ran one file at a time
+/// for VRAM safety, and on the CPU backend concurrent files only ever divided one fixed thread
+/// budget between them rather than adding to it. What that buys is the voice-activity pre-pass,
+/// which now spreads a single file's audio across every core (see
+/// <see cref="ABChapterize.Vad.SileroVadDetector"/>) instead of competing with three other files
+/// for one.
+/// </remarks>
 public sealed partial class FileProcessor
 {
     private readonly CliOptions _options;
     private readonly ProgressRenderer _progress;
-    private readonly Lock _statsLock = new();
 
     /// <summary>Number of files for which processing was aborted with a warning.</summary>
     private int _warnings;
@@ -47,13 +55,12 @@ public sealed partial class FileProcessor
     private TimeSpan _processingTime;
 
     /// <summary>Run-wide detection/confidence statistics and formatting for --verbose and
-    /// --summary reporting; thread-safe, so every concurrently-processed file shares one
-    /// instance.</summary>
+    /// --summary reporting, accumulated across every file of the run.</summary>
     private readonly RunStatistics _runStats = new();
 
     /// <summary>Creates a processor for the given validated options.</summary>
     /// <param name="options">Validated command line options.</param>
-    /// <param name="progress">Renderer for progress bars and summary lines.</param>
+    /// <param name="progress">Renderer for the progress bar and the summary lines.</param>
     public FileProcessor(CliOptions options, ProgressRenderer progress)
     {
         _options = options;
@@ -226,24 +233,24 @@ public sealed partial class FileProcessor
     /// <summary>
     /// The --import pipeline: chapters come from a sidecar file, so Whisper is skipped entirely -
     /// there is nothing to detect and no model to load. Each file is just an ffprobe plus a direct
-    /// write, so concurrency can scale further than detection's own hardware cap allows.
+    /// write.
     /// </summary>
     /// <param name="files">The files to import chapters for.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     private async Task RunImportAsync(List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
     {
-        var hardCap = ResolveConcurrency(files.Count, Math.Clamp(Environment.ProcessorCount, 1, 8));
-        if (!_options.Quiet && hardCap > 1)
-            _progress.Announce($"Importing chapters for {files.Count} file(s), up to {hardCap} at a time.");
-        await RunConcurrentlyAsync(files, hardCap, ct,
-            (file, token) => ProcessOneImportAsync(file, ffmpeg, token));
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            await ProcessOneImportAsync(file, ffmpeg, ct);
+        }
     }
 
     /// <summary>
-    /// The normal pipeline: load the Whisper model(s), size the transcriber pool to the resolved
-    /// concurrency, and run <see cref="ProcessOneAsync"/> for every file. Everything created here
-    /// is disposed before returning, including after a failure or a Ctrl+C.
+    /// The normal pipeline: load the Whisper model(s), build the one detector the run needs, and put
+    /// every file through <see cref="ProcessOneAsync"/> in turn. Everything created here is disposed
+    /// before returning, including after a failure or a Ctrl+C.
     /// </summary>
     /// <param name="files">The files to detect chapters in.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
@@ -256,98 +263,58 @@ public sealed partial class FileProcessor
         // the actual language to use (the fixed --lang, or a fresh auto-detection).
         var initialLanguage = _options.AutoLanguage ? "en" : _options.Language;
         var gpu = ResolveGpu();
-        var first = new WhisperTranscriber(modelPath, initialLanguage, forceCpu: _options.CpuOnly,
-            gpuDevice: gpu.Selected?.Index);
-        var hardCap = ResolveDetectionConcurrency(first, files.Count);
+        var transcriber = new WhisperTranscriber(modelPath, initialLanguage, _options.EffectiveWhisperThreads,
+            _options.CpuOnly, gpu.Selected?.Index);
 
-        // A different --pass3-model gets one shared, lazily-loaded instance for the whole run (see
-        // SharedPass3Transcriber). Only gap work (pass 2.5 and 3) uses it, so serializing it there
-        // costs little and beats loading a second model per concurrent file. The same model as
-        // --model means no separate instance at all - gap work reuses each file's transcriber.
-        var pass3Shared = _options.Pass3Model != _options.Model
-            ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage, _options.CpuOnly, gpu.Selected?.Index)
-            : null;
-
-        if (!_options.Quiet)
-            PrintModelBanner(first.RuntimeName, files.Count, hardCap, pass3Shared != null, gpu);
-
-        var pool = await BuildTranscriberPoolAsync(first, hardCap, modelPath, initialLanguage, gpu.Selected?.Index);
-
-        // Shared like ffmpeg above - one instance for the whole run, safe for concurrent use (see
-        // SileroVadDetector's threading remarks) - and only needed for the VAD pre-pass.
-        using var vad = _options.RunVadPrePass ? new SileroVadDetector() : null;
-
+        // Everything from here on is inside the try, so that a failure while setting the rest of the
+        // run up - loading the VAD model, say - still releases the Whisper context that is already
+        // holding a model in memory or in VRAM.
+        SharedPass3Transcriber? pass3Shared = null;
         try
         {
-            var detectors = Channel.CreateUnbounded<ChapterDetector>();
-            foreach (var w in pool)
-            {
-                // Each detector gets its own proxy onto the one shared pass-3 model, so every
-                // concurrent file's pass 3 applies its own language against it (see the proxy).
-                var pass3 = pass3Shared != null ? new Pass3TranscriberProxy(pass3Shared, initialLanguage) : null;
-                detectors.Writer.TryWrite(new ChapterDetector(_options, ffmpeg, w, vad, pass3));
-            }
+            // A different --pass3-model gets one shared, lazily-loaded instance for the whole run
+            // (see SharedPass3Transcriber). Only gap work (pass 2.5 and 3) uses it, so a book that
+            // never opens a gap never pays for the second model at all. The same model as --model
+            // means no separate instance either way - gap work reuses the run's own transcriber.
+            pass3Shared = _options.Pass3Model != _options.Model
+                ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage,
+                    _options.EffectiveWhisperThreads, _options.CpuOnly, gpu.Selected?.Index)
+                : null;
 
-            await RunConcurrentlyAsync(files, hardCap, ct, async (file, token) =>
+            if (!_options.Quiet)
+                PrintModelBanner(transcriber.RuntimeName, files.Count, pass3Shared != null, gpu);
+
+            // Only needed for the VAD pre-pass, and the one thing in the run that uses more than one
+            // thread of its own accord.
+            using var vad = _options.RunVadPrePass ? new SileroVadDetector(_options.EffectiveVadThreads) : null;
+            LogThreadBudget(vad);
+
+            var pass3 = pass3Shared != null ? new Pass3TranscriberProxy(pass3Shared, initialLanguage) : null;
+            var detector = new ChapterDetector(_options, ffmpeg, transcriber, vad, pass3);
+            foreach (var file in files)
             {
-                var detector = await detectors.Reader.ReadAsync(token);
-                try
-                {
-                    await ProcessOneAsync(file, ffmpeg, detector, token);
-                }
-                finally
-                {
-                    await detectors.Writer.WriteAsync(detector, CancellationToken.None);
-                }
-            });
+                ct.ThrowIfCancellationRequested();
+                await ProcessOneAsync(file, ffmpeg, detector, ct);
+            }
         }
         finally
         {
-            foreach (var w in pool)
-                await w.DisposeAsync();
+            await transcriber.DisposeAsync();
             if (pass3Shared != null)
                 await pass3Shared.DisposeAsync();
         }
     }
 
     /// <summary>
-    /// Resolves how many files detection may process at once. GPU backends are capped at one: a
-    /// GPU context is not proven safe for concurrent inference, and loading the model into VRAM
-    /// again per concurrent instance risks exhausting it. CPU backends scale with core count
-    /// instead, since each pooled instance can be given a correspondingly smaller thread budget.
-    /// Either way --jobs, when given, overrides the hardware-derived ceiling entirely.
+    /// Records what the run was given to work with, for the log alone: a run that turns out slower
+    /// than expected is usually a thread-count question, and the answer is otherwise nowhere.
     /// </summary>
-    /// <param name="probe">The first loaded transcriber, consulted only for which native backend
-    /// actually got loaded.</param>
-    /// <param name="fileCount">Number of files in the run.</param>
-    private int ResolveDetectionConcurrency(WhisperTranscriber probe, int fileCount)
-        => probe.RuntimeName is "Cuda" or "Vulkan"
-            ? ResolveConcurrency(fileCount, 1)
-            : ResolveConcurrency(fileCount, Math.Clamp(Environment.ProcessorCount / 4, 1, 4));
-
-    /// <summary>
-    /// Builds the run's transcriber pool. At a concurrency of one the already-loaded
-    /// <paramref name="probe"/> is the pool, so the model is never loaded twice; above that it is
-    /// disposed and replaced by <paramref name="hardCap"/> instances that each get a fraction of
-    /// the cores, so their combined thread budget still roughly matches the machine.
-    /// </summary>
-    /// <param name="probe">The transcriber loaded to determine the backend.</param>
-    /// <param name="hardCap">Resolved concurrency, i.e. the pool size.</param>
-    /// <param name="modelPath">Path of the GGML model to load.</param>
-    /// <param name="initialLanguage">Placeholder language every instance starts with.</param>
-    /// <param name="gpuDevice">Resolved --use-gpu device index, so every pool instance lands on the
-    /// same GPU as the probe did.</param>
-    private async Task<List<WhisperTranscriber>> BuildTranscriberPoolAsync(
-        WhisperTranscriber probe, int hardCap, string modelPath, string initialLanguage, int? gpuDevice)
-    {
-        if (hardCap == 1)
-            return [probe];
-        await probe.DisposeAsync();
-        var threadsPerInstance = Math.Max(2, Environment.ProcessorCount / hardCap);
-        return [.. Enumerable.Range(0, hardCap)
-            .Select(_ => new WhisperTranscriber(modelPath, initialLanguage, threadsPerInstance, _options.CpuOnly,
-                gpuDevice))];
-    }
+    /// <param name="vad">The run's voice-activity detector, or null when the pre-pass is off.</param>
+    private void LogThreadBudget(SileroVadDetector? vad)
+        => _progress.Log($"threads: Whisper {_options.EffectiveWhisperThreads}" +
+                         (vad != null ? $", voice-activity pre-pass {vad.Workers}" : ", no voice-activity pre-pass") +
+                         $" ({ProcessorTopology.PhysicalCoreCount} physical core(s), " +
+                         $"{Environment.ProcessorCount} logical)");
 
     /// <summary>
     /// Resolves which GPU this run should use, from <c>--use-gpu</c> or the automatic preference
@@ -402,7 +369,6 @@ public sealed partial class FileProcessor
     /// <summary>Prints the one-off "model loaded" line that opens a detection run.</summary>
     /// <param name="runtimeName">Native backend Whisper.net actually loaded.</param>
     /// <param name="fileCount">Number of files in the run.</param>
-    /// <param name="hardCap">Resolved concurrency.</param>
     /// <param name="separatePass3Model">Whether --pass3-model asked for a second model.</param>
     /// <param name="gpu">What this run decided about GPUs.</param>
     /// <remarks>
@@ -411,15 +377,13 @@ public sealed partial class FileProcessor
     /// integrated one at a fraction of the speed, or on a software rasterizer. Only named on the
     /// Vulkan backend, since that is where the enumeration the name comes from applies.
     /// </remarks>
-    private void PrintModelBanner(string runtimeName, int fileCount, int hardCap, bool separatePass3Model,
-        GpuChoice gpu)
+    private void PrintModelBanner(string runtimeName, int fileCount, bool separatePass3Model, GpuChoice gpu)
         => _progress.Announce($"Whisper model \"{_options.Model}\" loaded ({runtimeName} backend" +
                              DescribeGpu(runtimeName, gpu) +
                              (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
                              (separatePass3Model
                                  ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +
-                             $"{fileCount} file(s) to process" +
-                             (hardCap > 1 ? $", up to {hardCap} at a time." : "."));
+                             $"{fileCount} file(s) to process.");
 
     /// <summary>
     /// The GPU clause of the startup banner: which device, and - when an environment variable rather
@@ -463,80 +427,6 @@ public sealed partial class FileProcessor
         _progress.AnnounceSummary($"Total time: {FormatTime(elapsed)}{average}");
         foreach (var line in _runStats.FormatRunSummaryLines())
             _progress.AnnounceSummary(line);
-    }
-
-    /// <summary>
-    /// Resolves the effective degree of parallelism for a run: an explicit --jobs value
-    /// always wins; otherwise the given hardware-derived ceiling applies. Either way it is
-    /// never more than the number of files there actually are.
-    /// </summary>
-    /// <param name="fileCount">Number of files to process.</param>
-    /// <param name="autoHardCap">Ceiling used when --jobs was not given.</param>
-    private int ResolveConcurrency(int fileCount, int autoHardCap)
-        => Math.Max(1, Math.Min(fileCount, _options.Jobs ?? autoHardCap));
-
-    /// <summary>
-    /// Runs <paramref name="processOne"/> for every file, at most <paramref name="hardCap"/>
-    /// at a time. The effective limit is additionally throttled downward (never upward
-    /// beyond <paramref name="hardCap"/>) by live CPU load via <see cref="ConcurrencyMonitor"/>.
-    /// If any file's processing throws, admission of further files stops on a best-effort
-    /// basis (a file or two already admitted concurrently with the failing one may still
-    /// start - stopping instantly would require serializing admission, defeating the point
-    /// of concurrency); already-running files are always left to finish normally. The first
-    /// such exception is re-thrown once all started files have completed, so the run's
-    /// overall outcome - stop and report the error - matches sequential processing even
-    /// though a couple of extra files may have been attempted first.
-    /// </summary>
-    /// <param name="files">Files to process.</param>
-    /// <param name="hardCap">Absolute ceiling on concurrent files (already resolved from --jobs/hardware).</param>
-    /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
-    /// <param name="processOne">Processes one file.</param>
-    private async Task RunConcurrentlyAsync(
-        List<PendingFile> files, int hardCap, CancellationToken ct,
-        Func<PendingFile, CancellationToken, Task> processOne)
-    {
-        var gate = new AdaptiveConcurrencyGate(hardCap, initialSoftLimit: 1);
-        using var monitor = new ConcurrencyMonitor(gate, TimeSpan.FromSeconds(2),
-            _options.LoggingEnabled ? msg => _progress.Log(msg) : null);
-
-        var tasks = new List<Task>();
-        Exception? firstError = null;
-        foreach (var file in files)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (Volatile.Read(ref firstError) != null)
-                break;
-
-            var slot = await gate.AcquireAsync(ct);
-            tasks.Add(Task.Run(async () =>
-            {
-                try
-                {
-                    await processOne(file, ct);
-                }
-                catch (Exception ex)
-                {
-                    Interlocked.CompareExchange(ref firstError, ex, null);
-                    throw;
-                }
-                finally
-                {
-                    slot.Dispose();
-                }
-            }, CancellationToken.None));
-        }
-
-        try
-        {
-            await Task.WhenAll(tasks);
-        }
-        catch (Exception) when (firstError != null)
-        {
-            // Task.WhenAll surfaces whichever faulted task it observes first, not necessarily the
-            // one that failed first; re-throw the tracked one so callers see the same failure a
-            // sequential run would report.
-            throw firstError;
-        }
     }
 
     /// <summary>
@@ -830,7 +720,7 @@ public sealed partial class FileProcessor
             ctx.Logs.Write("xHE-AAC audio: decoding with libfdk_aac");
             return ctx with { Info = ctx.Info with { InputDecoder = "libfdk_aac" } };
         }
-        lock (_statsLock) _warnings++;
+        _warnings++;
         _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: WARNING - {XheAacHint}", important: true);
         return null;
     }
@@ -873,7 +763,7 @@ public sealed partial class FileProcessor
     private async Task<string?> ReportIncompleteResumeAsync(
         FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
     {
-        lock (_statsLock) _warnings++;
+        _warnings++;
         var retarget = MissingMarksPath(ctx.File, resumed.MissingNumbers);
         var stillMissing = FormatMissingList(resumed.MissingNumbers);
         if (_options.DryRun)
@@ -943,7 +833,7 @@ public sealed partial class FileProcessor
         if (_options.Verify)
             return await VerifyThenDetectAsync(ctx, detector, ct);
 
-        lock (_statsLock) _skipped++;
+        _skipped++;
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: skipped - has {ctx.Info.ChapterCount} chapter marking(s) (use --force to redo)");
         return null;
@@ -967,7 +857,7 @@ public sealed partial class FileProcessor
         var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
         if (verify.Checked == 0 || verify.Passed)
         {
-            lock (_statsLock) _skipped++;
+            _skipped++;
             var verifyNote = verify.Checked > 0
                 ? $"{verify.Checked} pre-existing chapter marking(s) verified correct"
                 : $"has {ctx.Info.ChapterCount} chapter marking(s) (none had a checkable number)";
@@ -1007,7 +897,7 @@ public sealed partial class FileProcessor
     private async Task<string?> ReportUnresolvedGapAsync(
         FileContext ctx, DetectionResult result, CancellationToken ct)
     {
-        lock (_statsLock) _warnings++;
+        _warnings++;
         _runStats.AccumulateConfidence(result.Chapters);
         var (chapters, introNote) = BuildChapters(result);
         var target = MissingMarksPath(ctx.File, result.MissingNumbers);
@@ -1035,7 +925,7 @@ public sealed partial class FileProcessor
     /// <param name="result">The file's detection result.</param>
     private void ReportNoChaptersFound(FileContext ctx, DetectionResult result)
     {
-        lock (_statsLock) _noChaptersFound++;
+        _noChaptersFound++;
         var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
         var summary = result.EarlyAborted
             ? $"{ctx.Name}: early-abort - no chapter found within the first " +
@@ -1176,15 +1066,12 @@ public sealed partial class FileProcessor
             chapters.Select(c => $"  {FormatTimestamp(c.StartSeconds)}  {c.Title}"));
 
     /// <summary>Counts one more file as processed and folds its elapsed time into the run's
-    /// per-file average. Thread-safe.</summary>
+    /// per-file average.</summary>
     /// <param name="watch">The file's running stopwatch.</param>
     private void RecordProcessed(Stopwatch watch)
     {
-        lock (_statsLock)
-        {
-            _processed++;
-            _processingTime += watch.Elapsed;
-        }
+        _processed++;
+        _processingTime += watch.Elapsed;
     }
 
     /// <summary>
@@ -1266,7 +1153,7 @@ public sealed partial class FileProcessor
         var (skip, discardNote) = EvaluateExistingChapters(info);
         if (skip)
         {
-            lock (_statsLock) _skipped++;
+            _skipped++;
             _progress.FinishWithSummary(work,
                 $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
             return;

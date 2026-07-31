@@ -41,7 +41,7 @@ public interface ITranscriber
     /// <summary>
     /// Switches the language used for subsequent <see cref="TranscribeAsync"/> calls. Used to
     /// apply the outcome of <see cref="DetectLanguageWithProbability"/> (or an explicit --lang,
-    /// re-asserted defensively for transcriber instances reused across files with --jobs).
+    /// re-asserted defensively because one instance serves every file of the run).
     /// </summary>
     /// <param name="language">Two-letter language code to switch to.</param>
     void ChangeLanguage(string language);

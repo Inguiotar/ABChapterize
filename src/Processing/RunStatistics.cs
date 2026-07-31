@@ -10,13 +10,10 @@ namespace ABChapterize.Processing;
 
 /// <summary>Formats per-file and run-wide detection/confidence statistics for --verbose and
 /// --summary reporting, and accumulates the run-wide totals across every file <see
-/// cref="FileProcessor"/> processes. <see cref="AccumulateStats"/> and
-/// <see cref="AccumulateConfidence"/> are both thread-safe, since --jobs lets several files
-/// process concurrently.</summary>
+/// cref="FileProcessor"/> processes - one file at a time, which is why nothing here is
+/// synchronized.</summary>
 internal sealed class RunStatistics
 {
-    private readonly Lock _lock = new();
-
     /// <summary>Confidence stats (for --summary) across every chapter mark actually written,
     /// run-wide - not every probe attempted, only the ones that produced a mark.</summary>
     private double _confidenceMin = double.PositiveInfinity;
@@ -100,25 +97,22 @@ internal sealed class RunStatistics
     }
 
     /// <summary>Folds one processed file's detection statistics into the run-wide totals for the
-    /// --summary report. Thread-safe.</summary>
+    /// --summary report.</summary>
     /// <param name="stats">The file's detection statistics.</param>
     /// <param name="runLengthSeconds">The file's run length, summed toward the run-wide share.</param>
     internal void AccumulateStats(DetectionStats stats, double runLengthSeconds)
     {
-        lock (_lock)
-        {
-            if (stats.MinPrecedingSilenceSeconds is { } silence)
-                _minPrecedingSilence = Math.Min(_minPrecedingSilence, silence);
-            if (stats.MinInterChapterSilenceSeconds is { } interSilence)
-                _minInterChapterSilence = Math.Min(_minInterChapterSilence, interSilence);
-            if (stats.MaxJingleLengthSeconds is { } jingle)
-                _maxJingle = Math.Max(_maxJingle, jingle);
-            if (stats.MaxInterChapterJingleSeconds is { } interJingle)
-                _maxInterChapterJingle = Math.Max(_maxInterChapterJingle, interJingle);
-            _whisperAudioSecondsTotal += stats.WhisperAudioSeconds;
-            _whisperTranscribeSecondsTotal += stats.WhisperTranscribeSeconds;
-            _runLengthSecondsTotal += runLengthSeconds;
-        }
+        if (stats.MinPrecedingSilenceSeconds is { } silence)
+            _minPrecedingSilence = Math.Min(_minPrecedingSilence, silence);
+        if (stats.MinInterChapterSilenceSeconds is { } interSilence)
+            _minInterChapterSilence = Math.Min(_minInterChapterSilence, interSilence);
+        if (stats.MaxJingleLengthSeconds is { } jingle)
+            _maxJingle = Math.Max(_maxJingle, jingle);
+        if (stats.MaxInterChapterJingleSeconds is { } interJingle)
+            _maxInterChapterJingle = Math.Max(_maxInterChapterJingle, interJingle);
+        _whisperAudioSecondsTotal += stats.WhisperAudioSeconds;
+        _whisperTranscribeSecondsTotal += stats.WhisperTranscribeSeconds;
+        _runLengthSecondsTotal += runLengthSeconds;
     }
 
     /// <summary>
@@ -128,34 +122,30 @@ internal sealed class RunStatistics
     /// processed. Each of the three is omitted when nothing contributed to it, so a run that
     /// only skipped files reports none of them. The file counts and the total elapsed time are
     /// <see cref="FileProcessor"/>'s own to print - they are not this class's statistics.
-    /// Takes <see cref="_lock"/>, so the whole report is one consistent snapshot.
     /// </summary>
     internal List<string> FormatRunSummaryLines()
     {
-        lock (_lock)
-        {
-            var lines = new List<string>();
-            if (_confidenceCount > 0)
-                lines.Add($"Confidence of written chapter marks: min {_confidenceMin:0.00}, " +
-                          $"max {_confidenceMax:0.00}, avg {_confidenceSum / _confidenceCount:0.00}");
-            if (_runLengthSecondsTotal <= 0)
-                return lines;
-
-            if (FormatExtremes() is { Length: > 0 } extremes)
-                lines.Add(extremes);
-            var speed = FormatSpeed(_whisperAudioSecondsTotal, _whisperTranscribeSecondsTotal);
-            lines.Add(
-                $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_whisperAudioSecondsTotal))} " +
-                $"of {FormatTime(TimeSpan.FromSeconds(_runLengthSecondsTotal))} run length " +
-                $"({100 * _whisperAudioSecondsTotal / _runLengthSecondsTotal:0.0}%)" +
-                (speed.Length > 0 ? $", {speed}" : ""));
+        var lines = new List<string>();
+        if (_confidenceCount > 0)
+            lines.Add($"Confidence of written chapter marks: min {_confidenceMin:0.00}, " +
+                      $"max {_confidenceMax:0.00}, avg {_confidenceSum / _confidenceCount:0.00}");
+        if (_runLengthSecondsTotal <= 0)
             return lines;
-        }
+
+        if (FormatExtremes() is { Length: > 0 } extremes)
+            lines.Add(extremes);
+        var speed = FormatSpeed(_whisperAudioSecondsTotal, _whisperTranscribeSecondsTotal);
+        lines.Add(
+            $"Whisper audio processed: {FormatTime(TimeSpan.FromSeconds(_whisperAudioSecondsTotal))} " +
+            $"of {FormatTime(TimeSpan.FromSeconds(_runLengthSecondsTotal))} run length " +
+            $"({100 * _whisperAudioSecondsTotal / _runLengthSecondsTotal:0.0}%)" +
+            (speed.Length > 0 ? $", {speed}" : ""));
+        return lines;
     }
 
     /// <summary>Formats the run-wide silence/jingle extremes as one comma-separated line, or an
     /// empty string when no processed file contributed either of them (the extremes then still
-    /// sit at their infinities). Caller holds <see cref="_lock"/>.</summary>
+    /// sit at their infinities).</summary>
     private string FormatExtremes()
     {
         var extremes = new List<string>();
@@ -171,17 +161,16 @@ internal sealed class RunStatistics
     }
 
     /// <summary>Folds a set of written chapter marks into the run-wide confidence stats
-    /// (for --summary). Takes <see cref="_lock"/> itself.</summary>
+    /// (for --summary).</summary>
     /// <param name="chapters">The chapters whose confidences were actually written.</param>
     internal void AccumulateConfidence(IEnumerable<DetectedChapter> chapters)
     {
-        lock (_lock)
-            foreach (var c in chapters)
-            {
-                _confidenceSum += c.Confidence;
-                _confidenceCount++;
-                _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
-                _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
-            }
+        foreach (var c in chapters)
+        {
+            _confidenceSum += c.Confidence;
+            _confidenceCount++;
+            _confidenceMin = Math.Min(_confidenceMin, c.Confidence);
+            _confidenceMax = Math.Max(_confidenceMax, c.Confidence);
+        }
     }
 }

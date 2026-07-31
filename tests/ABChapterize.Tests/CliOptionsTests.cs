@@ -68,7 +68,8 @@ public sealed class CliOptionsTests : IDisposable
         Assert.True(o.PreciseMark);
         Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.QuickMarks | o.TrailingScan | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
-        Assert.Null(o.Jobs);
+        Assert.Null(o.VadThreads);
+        Assert.Null(o.WhisperThreads);
     }
 
     [Theory]
@@ -282,34 +283,65 @@ public sealed class CliOptionsTests : IDisposable
             ParseFile("--custom", "a:A")!.RunFingerprint,
             ParseFile("--custom", "b:B")!.RunFingerprint);
 
-    [Theory]
-    [InlineData("--jobs", "1")]
-    [InlineData("-J", "4")]
-    public void Jobs_IsParsed_LongAndShort(string opt, string value)
-    {
-        Assert.Equal(int.Parse(value), ParseFile(opt, value)!.Jobs);
-    }
-
     [Fact]
-    public void Jobs_Auto_ParsesAsNull()
+    public void ThreadCounts_AreParsed()
     {
-        Assert.Null(ParseFile("--jobs", "auto")!.Jobs);
-        Assert.Null(ParseFile("--jobs", "AUTO")!.Jobs);
+        Assert.Equal(3, ParseFile("--vad-threads", "3")!.VadThreads);
+        Assert.Equal(7, ParseFile("--whisper-threads", "7")!.WhisperThreads);
     }
 
     [Theory]
-    [InlineData("0")]
-    [InlineData("-1")]
-    [InlineData("many")]
-    public void InvalidJobs_AreRejected(string value)
+    [InlineData("auto")]
+    [InlineData("AUTO")]
+    public void ThreadCounts_Auto_ParseAsNull(string value)
     {
-        Assert.Throws<CliError>(() => ParseFile("--jobs", value));
+        Assert.Null(ParseFile("--vad-threads", value)!.VadThreads);
+        Assert.Null(ParseFile("--whisper-threads", value)!.WhisperThreads);
+    }
+
+    /// <summary>"auto" is not a value of its own to the rest of the tool: it resolves to the
+    /// machine's physical core count, which is what every caller actually reads.</summary>
+    [Fact]
+    public void ThreadCounts_ResolveAutoToAPlausibleCoreCount()
+    {
+        var auto = ParseFile("--vad-threads", "auto")!;
+        Assert.InRange(auto.EffectiveVadThreads, 1, Environment.ProcessorCount);
+        Assert.InRange(auto.EffectiveWhisperThreads, 1, Environment.ProcessorCount);
+
+        var explicitly = ParseFile("--vad-threads", "2", "--whisper-threads", "5")!;
+        Assert.Equal(2, explicitly.EffectiveVadThreads);
+        Assert.Equal(5, explicitly.EffectiveWhisperThreads);
+    }
+
+    [Theory]
+    [InlineData("--vad-threads", "0")]
+    [InlineData("--vad-threads", "-1")]
+    [InlineData("--vad-threads", "many")]
+    [InlineData("--whisper-threads", "0")]
+    [InlineData("--whisper-threads", "-1")]
+    [InlineData("--whisper-threads", "many")]
+    public void InvalidThreadCounts_AreRejected(string option, string value)
+    {
+        Assert.Throws<CliError>(() => ParseFile(option, value));
     }
 
     [Fact]
-    public void JobsWithRevert_IsAnError()
+    public void ThreadCountsWithRevert_AreAnError()
     {
-        Assert.Throws<CliError>(() => ParseDir("--revert", "--jobs", "2"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--vad-threads", "2"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--whisper-threads", "2"));
+    }
+
+    /// <summary>--jobs was removed in 0.10.0 but is still recognized, purely so a script that
+    /// carries it is told what replaced it rather than only that it is unknown.</summary>
+    [Fact]
+    public void RemovedJobsOption_IsRejectedByName()
+    {
+        var error = Assert.Throws<CliError>(() => ParseFile("--jobs", "4"));
+        Assert.Contains("--vad-threads", error.Message);
+        Assert.Contains("--whisper-threads", error.Message);
+        // The short form is gone outright, so the letter is free again.
+        Assert.Throws<CliError>(() => ParseFile("-J", "4"));
     }
 
     [Fact]
@@ -908,7 +940,8 @@ public sealed class CliOptionsTests : IDisposable
     public void RunFingerprint_IgnoresOptionsThatDoNotChangeTheMarks()
     {
         Assert.Equal(ParseFile()!.RunFingerprint,
-            ParseFile("--quiet", "--verbose", "--no-bar", "--summary", "--jobs", "3", "--cpu-only")!.RunFingerprint);
+            ParseFile("--quiet", "--verbose", "--no-bar", "--summary",
+                "--vad-threads", "3", "--whisper-threads", "3", "--cpu-only")!.RunFingerprint);
         // Separately, because --use-gpu and --cpu-only refuse to be combined: which device the
         // recognizer runs on decides how long a run takes, never where its marks land.
         Assert.Equal(ParseFile()!.RunFingerprint,
@@ -1077,7 +1110,8 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--force"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--lang", "de"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--dry-run"));
-        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--jobs", "2"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--vad-threads", "2"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--whisper-threads", "2"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--expected-start-chapter", "5"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--max-chapter-number", "50"));

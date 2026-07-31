@@ -57,9 +57,11 @@ Prebuilt binaries for Windows and Linux are available on the
   well grab the integrated one — measured 8.6x slower on a test machine), and
   the GPU in use is named in the startup line. Override with
   `--use-gpu <name>`; `--list-gpus` shows the names.
-- **Processes batches in parallel** — multiple files at once, auto-throttled to
-  live CPU load (and capped at 1 concurrent file on GPU backends by default,
-  for VRAM/context safety); override with `--jobs`.
+- **One file at a time, with the whole machine behind it** — the scan that opens
+  every run spreads a single book across all your cores: on a 12-core machine an
+  8.5-hour audiobook's first pass went from about 200 seconds to about 50, and
+  found exactly the same speech. Thread counts default to your physical core
+  count; `--vad-threads` and `--whisper-threads` override them.
 - **Batches survive being interrupted** — name as many files and folders as you
   like in one command; each folder quietly keeps track of what is already done
   while it is being worked on, so a run stopped by Ctrl+C, a crash or a power
@@ -193,10 +195,9 @@ abchapterize --export "My Audiobook.m4b"
 # without re-running Whisper:
 abchapterize --import --force "My Audiobook.m4b"
 
-# Processing several files at once, auto-throttled to CPU load, is already the
-# default for any multi-file run - no flag needed. Force a fixed number of
-# concurrent files instead of the automatic ceiling:
-abchapterize --recurse --jobs 4 "D:\Audiobooks"
+# Files are processed one at a time, each with the whole machine. Leave a few
+# cores free for whatever else the machine is doing:
+abchapterize --recurse --vad-threads 6 --whisper-threads 6 "D:\Audiobooks"
 ```
 
 ## Options
@@ -286,11 +287,12 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `--color <mode>` | Colorize the progress bar and the `--summary` block: `auto` (default), `always` or `never`. Nothing else is ever colored, and a `--log-file` always gets plain text. |
 | `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics. |
 
-**Performance**
+**Performance** — files are always processed one at a time, so each gets the whole machine.
 
 | Option | What it does |
 | --- | --- |
-| `-J`, `--jobs <n\|auto>` | Number of files processed concurrently (default: `auto` — adjusted between 1 and a hardware-derived ceiling based on live CPU load). `-J 1` forces strictly sequential processing. |
+| `--vad-threads <n\|auto>` | Threads for the voice-activity pre-pass of pass 1 (default: `auto` — one per physical CPU core). Each thread holds about 11 minutes of decoded audio while it works, so more of them also means more memory. `1` runs the pre-pass as a single uninterrupted stream. |
+| `--whisper-threads <n\|auto>` | Threads for Whisper transcription (default: `auto` — one per physical CPU core). Mostly a CPU-backend concern; on a GPU backend the recognition itself runs on the GPU. |
 
 **Info**
 
@@ -473,9 +475,10 @@ keeps its exact position.
   `turbo` landing around 2.2 GB. (Figures quoted for OpenAI's Python
   implementation are two to three times higher; they do not apply here.) It
   comes out of video memory on a GPU backend and out of system RAM on a CPU
-  backend, where concurrent files each load their own copy (`--jobs 1` keeps it
-  to one). Nothing is checked up front; if the memory isn't there you'll hear it
-  from the model loader, not from ABChapterize. See
+  backend, and only ever one copy of it: files are processed one at a time. The
+  voice-activity pre-pass wants some of its own on top, growing with
+  `--vad-threads`. Nothing is checked up front; if the memory isn't there you'll
+  hear it from the model loader, not from ABChapterize. See
   [memory requirements](doc/manual.md#memory-requirements) for the details.
 - **Absurd chapter numbers:** if a run reports a chapter number far beyond
   anything the book has (and then a long list of "missing" ones below it),

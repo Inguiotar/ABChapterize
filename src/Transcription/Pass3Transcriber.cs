@@ -11,17 +11,22 @@ namespace ABChapterize.Transcription;
 /// <summary>
 /// A single Whisper model shared by every file's pass 3, loaded (and downloaded) lazily on the
 /// first gap that actually needs it and never before. Used only when <c>--pass3-model</c> selects
-/// a model different from <c>--model</c>: pass 2 keeps its own per-file transcriber(s), while pass
-/// 3 routes through this one so a heavier (or lighter) model can take the last shot at the missing
-/// chapters. Because a Whisper context is not safe for concurrent inference (the same reason the
-/// pass-2 pool gives each concurrent file its own instance), transcriptions here are serialized
-/// through a gate; pass 3 is the exception rather than the rule, so the occasional wait is cheap.
+/// a model different from <c>--model</c>: pass 2 keeps the run's own transcriber, while pass 3
+/// routes through this one so a heavier (or lighter) model can take the last shot at the missing
+/// chapters. Lazily, because most books never open a gap at all, and a second model loaded up front
+/// would cost every run the memory and the download for something few of them use.
 /// One instance is created for the whole run and disposed by <see cref="FileProcessor"/>.
 /// </summary>
+/// <remarks>
+/// Transcriptions are serialized through a gate. Files are processed one at a time, so nothing
+/// contends for it today; it stays because a Whisper context is not safe for concurrent inference
+/// and this is the one object in the run that more than one caller could plausibly reach.
+/// </remarks>
 public sealed class SharedPass3Transcriber : IAsyncDisposable
 {
     private readonly string _model;
     private readonly string _initialLanguage;
+    private readonly int _threads;
     private readonly bool _forceCpu;
     private readonly int? _gpuDevice;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -31,15 +36,20 @@ public sealed class SharedPass3Transcriber : IAsyncDisposable
     /// <param name="model">Validated pass-3 model selector (see <see cref="CliOptions.Pass3Model"/>).</param>
     /// <param name="initialLanguage">Placeholder language the model is loaded with; every
     /// transcription re-asserts the caller's real language before running (see
-    /// <see cref="TranscribeAsync"/>), exactly as the pass-2 transcribers do.</param>
+    /// <see cref="TranscribeAsync"/>), exactly as the pass-2 transcriber does.</param>
+    /// <param name="threads">CPU threads for this model, the same budget pass 2 gets
+    /// (--whisper-threads, see <see cref="CliOptions.EffectiveWhisperThreads"/>): the two never run
+    /// at the same time, so there is nothing to divide between them.</param>
     /// <param name="forceCpu">Forwarded to the lazily-created <see cref="WhisperTranscriber"/>
     /// (--cpu-only, see <see cref="CliOptions.CpuOnly"/>).</param>
     /// <param name="gpuDevice">Forwarded likewise, so pass 3 lands on the same GPU the rest of the
     /// run chose (--use-gpu, see <see cref="CliOptions.UseGpu"/>).</param>
-    public SharedPass3Transcriber(string model, string initialLanguage, bool forceCpu = false, int? gpuDevice = null)
+    public SharedPass3Transcriber(string model, string initialLanguage, int threads, bool forceCpu = false,
+        int? gpuDevice = null)
     {
         _model = model;
         _initialLanguage = initialLanguage;
+        _threads = threads;
         _forceCpu = forceCpu;
         _gpuDevice = gpuDevice;
     }
@@ -47,8 +57,7 @@ public sealed class SharedPass3Transcriber : IAsyncDisposable
     /// <summary>
     /// Transcribes one gap chunk in the given language under exclusive access, loading (and, on the
     /// very first call, downloading) the pass-3 model if it has not been needed yet. The language is
-    /// applied inside the gate so concurrent files, each with its own language, never race over the
-    /// shared context's current language setting.
+    /// applied inside the gate, so it is always the one this transcription asked for.
     /// </summary>
     /// <param name="language">Two-letter language for this file's pass 3.</param>
     /// <param name="samples">16 kHz mono PCM of one gap chunk.</param>
@@ -61,8 +70,7 @@ public sealed class SharedPass3Transcriber : IAsyncDisposable
             if (_inner == null)
             {
                 var path = await ModelCatalog.EnsureModelAsync(_model, ct);
-                // Serialized, so this one instance may use the full CPU budget (threads: null).
-                _inner = new WhisperTranscriber(path, _initialLanguage, forceCpu: _forceCpu, gpuDevice: _gpuDevice);
+                _inner = new WhisperTranscriber(path, _initialLanguage, _threads, _forceCpu, _gpuDevice);
             }
             _inner.ChangeLanguage(language);
             return await _inner.TranscribeAsync(samples, ct);
@@ -83,12 +91,11 @@ public sealed class SharedPass3Transcriber : IAsyncDisposable
 }
 
 /// <summary>
-/// The per-<see cref="ChapterDetector"/> view of a <see cref="SharedPass3Transcriber"/>: an
-/// <see cref="ITranscriber"/> that remembers this detector's own language and forwards every
-/// transcription to the shared model. Giving each detector its own proxy (rather than sharing one
-/// mutable transcriber) is what lets the shared model apply the correct language per concurrent
-/// file: the proxy carries the language, and the shared transcriber sets it atomically with the
-/// transcription under its gate.
+/// The <see cref="ChapterDetector"/>-facing view of a <see cref="SharedPass3Transcriber"/>: an
+/// <see cref="ITranscriber"/> that remembers the current file's language and forwards every
+/// transcription to the shared model, which applies that language atomically with the transcription
+/// under its gate. Keeping the language on the caller's side rather than on the shared model is what
+/// lets the model stay a single lazily-loaded instance while each file still gets its own language.
 /// </summary>
 public sealed class Pass3TranscriberProxy : ITranscriber
 {
@@ -96,7 +103,7 @@ public sealed class Pass3TranscriberProxy : ITranscriber
     private string _language;
 
     /// <summary>Creates a proxy onto the shared pass-3 transcriber.</summary>
-    /// <param name="shared">The run-wide shared pass-3 model.</param>
+    /// <param name="shared">The run-wide pass-3 model.</param>
     /// <param name="initialLanguage">Initial language until <see cref="ChangeLanguage"/> is called.</param>
     public Pass3TranscriberProxy(SharedPass3Transcriber shared, string initialLanguage)
     {

@@ -1052,9 +1052,10 @@ The details worth knowing:
   the outcome and the stale record is discarded rather than misapplied;
   options that only change the output's appearance (`--quiet`, `--verbose`,
   `--verbose-transcripts`, `--log-file`, `--debug`, `--no-bar`, `--color`, `--summary`) or how fast
-  the run gets there (`--jobs`, `--cpu-only`, `--use-gpu`) do not count, so
-  those can be added or dropped when resuming — including moving an
-  interrupted batch to a different machine or a different GPU.
+  the run gets there (`--vad-threads`, `--whisper-threads`, `--cpu-only`,
+  `--use-gpu`) do not count, so those can be added or dropped when resuming —
+  including moving an interrupted batch to a different machine or a different
+  GPU.
 - Being interrupted twice is no different from being interrupted once: a
   resumed run adds its own finished files to the record rather than starting
   it over, so however often a batch is stopped and restarted, no file is
@@ -1255,48 +1256,44 @@ touching Whisper at all.
   In the plain-text format, blank lines and lines starting with `;` or `#`
   are ignored, so notes can be added freely between chapters.
 
-### Parallel file processing
+### Thread counts
 
-`-J`, `--jobs <n|auto>`
-: Number of files processed concurrently (default: `auto`). With `auto`, the
-  ceiling depends on the Whisper backend in use and is then adjusted live
-  between 1 and that ceiling based on measured CPU load (sampled every
-  2 seconds, using `GetSystemTimes` on Windows and `/proc/stat` on Linux — no
-  extra runtime dependency on either platform): above 85% CPU usage the
-  limit is lowered by one; below 55% it is raised by one, at most one step
-  per sample to avoid flapping.
+Files are always processed one at a time, so each one gets the whole machine.
+Both options below take a number or `auto`, and `auto` means one thread per
+**physical** CPU core — not per hardware thread. Hyperthreads add a little on
+machines where they help and cost a great deal on machines where they do not,
+and nothing here can tell which machine it is running on; if you know yours
+better, say so with an explicit number. Neither option is valid with `--revert`
+or `--no-op`, which do no work to spread out.
 
-  - **GPU backends (CUDA, Vulkan):** capped at 1 concurrent file. Running
-    several Whisper inferences on the same GPU context at once is not
-    something whisper.cpp guarantees is safe, and each concurrent instance
-    would duplicate the model into VRAM, risking exhaustion. An explicit
-    `-J`/`--jobs` value always overrides this cap if you want to force it
-    anyway (verified to work correctly on a Vulkan GPU in testing, but at
-    your own risk regarding VRAM) — though it's unlikely to actually speed
-    anything up: a single GPU generally can't run more than one inference at
-    a time regardless of how many concurrent instances are asking it to, so
-    the extra "concurrent" files typically end up queued rather than truly
-    processed in parallel.
-  - **CPU backend:** ceiling is `Environment.ProcessorCount / 4`, clamped to
-    1-4; each concurrent instance is given a matching share of threads so
-    the total stays close to the core count instead of oversubscribing it.
-  - **`--import`:** since there is no Whisper involved (just `ffprobe` and a
-    direct metadata write), the ceiling is `Environment.ProcessorCount`,
-    clamped to 1-8.
+`--vad-threads <n|auto>`
+: How many stretches of the book the voice-activity pre-pass
+  ([Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) classifies at once
+  (default: `auto`). This is the pass that benefits most from a wide machine — on
+  a 12-core one, an 8.5-hour audiobook's Pass 1 drops from 201 seconds to 50 —
+  and the speech it finds does not change with the thread count.
 
-  `-J 1` forces strictly sequential processing, matching earlier versions'
-  behavior. The number actually used is also clamped to the number of files
-  being processed, so a single-file run is always sequential regardless of
-  `--jobs`. Not valid with `--revert` (there is nothing to parallelize when
-  restoring backups).
+  Each thread holds about 11 minutes of decoded audio while it works, which is
+  roughly 40 MB, so this is also the knob for how much memory Pass 1 uses: about
+  480 MB on a 12-core machine, and proportionally more on a wider one. Lower it
+  if that matters more to you than the seconds it costs.
 
-  With more than one file in flight, the progress display shows one bar per
-  active file (see [section 12](#12-output-progress-and-logging)), and
-  `--verbose` logs each automatic adjustment:
+  `--vad-threads 1` classifies the book as a single uninterrupted stream, which
+  is what versions before 0.10.0 always did.
 
-  ```
-  [14:32:07] concurrency: CPU 50%, adjusted parallel file limit 1 -> 2
-  ```
+`--whisper-threads <n|auto>`
+: CPU threads for Whisper transcription (default: `auto`). Mostly a CPU-backend
+  concern: on a GPU backend the recognition itself runs on the GPU, and this
+  only covers the work around it. A second model named with `--pass3-model` gets
+  the same budget — the two never run at the same time, so there is nothing to
+  divide between them.
+
+Both counts are recorded in the `--verbose` log at the start of a run, together
+with what the machine actually has:
+
+```
+[14:32:07] threads: Whisper 12, voice-activity pre-pass 12 (12 physical core(s), 24 logical)
+```
 
 ### Miscellaneous
 
@@ -1493,18 +1490,20 @@ own Python implementation, not the GGML build used here, which is roughly two
 to three times leaner. Read them for the model lineup and the speed/accuracy
 tradeoff, not for sizing your machine.
 
-On a GPU backend (CUDA or Vulkan) this comes out of video memory, and the
-default is one file at a time, so one model is loaded. On a CPU backend it
-comes out of system RAM, and several files are processed concurrently by
-default — each with its own copy of the model — so the requirement multiplies
-accordingly. Specifying a different `--pass3-model` adds one further copy,
-loaded only if pass 3 actually runs.
+On a GPU backend (CUDA or Vulkan) this comes out of video memory, on a CPU
+backend out of system RAM. Either way exactly one copy is loaded, whatever the
+run's size: files are processed one at a time. Specifying a different
+`--pass3-model` adds one further copy, loaded only if pass 3 actually runs.
+
+The voice-activity pre-pass wants memory of its own on top, and unlike the model
+that amount is yours to choose: about 40 MB per `--vad-threads` thread, so around
+480 MB with the default of one per physical core on a 12-core machine. See
+[thread counts](#thread-counts).
 
 ABChapterize does not check any of this up front. If the memory is not there,
 you will find out from the model loader or the operating system rather than
 from a friendly message, so on a memory-constrained machine pick the model
-deliberately: `small` is the smallest size that gives dependable results, and
-`--jobs 1` keeps a CPU-backend run down to a single copy.
+deliberately: `small` is the smallest size that gives dependable results.
 
 Audio is decoded and transcribed in bounded windows rather than a file at a
 time, so memory does not grow with the length of the audiobook — a 30-hour
@@ -1780,12 +1779,10 @@ Ahead of the file name, a coarse `H:MM` timer (whole minutes only, e.g.
 `1:05`) shows how long that file has been in progress, so a run stuck on
 one book is easy to spot at a glance.
 
-With more than one file processed concurrently (see
-[`--jobs`](#parallel-file-processing)), one bar is shown per file currently
-in flight, stacked in a block capped to the terminal's height (a terminal
-resize is picked up automatically on the next refresh); each file's bar is
-replaced by its own one-line result as soon as it finishes, while the other
-active bars keep redrawing below it.
+There is one bar, because there is one file in flight: it is replaced by that
+file's one-line result as soon as it finishes, and the next file's bar takes its
+place. The line is truncated to the terminal's width, and a resize is picked up
+automatically on the next refresh.
 
 Progress bars are only drawn on an interactive console; when the output is
 redirected (pipe, log file), they are suppressed automatically.

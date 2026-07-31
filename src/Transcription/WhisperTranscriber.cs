@@ -26,10 +26,10 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     /// <param name="modelPath">Full path of the GGML model file.</param>
     /// <param name="language">Two-letter language hint for Whisper.</param>
     /// <param name="threads">
-    /// CPU threads given to this processor. Defaults to nearly all logical cores, which is
-    /// right for the common case of one processor at a time; when several run concurrently
-    /// (see <see cref="ABChapterize.Concurrency.ConcurrencyMonitor"/>) each instance is given a
-    /// smaller share instead, so the total across all of them still roughly matches the core count.
+    /// CPU threads given to this processor. The tool always passes what --whisper-threads resolved
+    /// to (see <see cref="ABChapterize.Cli.CliOptions.EffectiveWhisperThreads"/>, one per physical
+    /// core by default); the fallback below exists only for the diagnostic harnesses under
+    /// <c>tools\</c>, which construct a transcriber without a parsed command line.
     /// </param>
     /// <param name="forceCpu">Skips the GPU backends entirely and loads straight onto CPU
     /// (--cpu-only, see <see cref="ABChapterize.Cli.CliOptions.CpuOnly"/>), rather than relying

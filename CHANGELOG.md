@@ -5,6 +5,49 @@ for you, not how it was built. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — unreleased
+
+### Changed
+
+- **The first pass got about four times faster.** The voice-activity scan that
+  opens every run used to work through the book one 32-millisecond frame at a time
+  on a single thread; it now spreads the timeline across every core. On a 12-core
+  machine an 8.5-hour audiobook's first pass went from 201 to 50 seconds — and it
+  finds exactly the same speech, with not one segment boundary moved, which was
+  the condition for shipping it at all. How much of the machine it uses is yours
+  to set with the new `--vad-threads`.
+
+- **One file at a time, with the whole machine behind it.** Multi-file runs no
+  longer process several books at once. That parallelism was worth less than it
+  looked — on a GPU it never happened anyway (one file at a time has always been
+  the rule there, for video memory), and on a CPU the concurrent files were
+  dividing one fixed pool of threads between them rather than adding to it. Giving
+  each file everything is what makes the faster first pass possible. Batches of
+  many files take about as long as before; a single file is quicker.
+
+- **Thread counts now default to your machine's physical cores** rather than
+  nearly all of its hardware threads. Hyperthreads help a little where they help
+  and hurt a lot where they do not, and the tool cannot tell which machine it is
+  on; physical cores is the setting that cannot go badly wrong. If you know your
+  own machine better, `--whisper-threads` and `--vad-threads` take any number you
+  like.
+
+### Added
+
+- **`--vad-threads <n|auto>`** — threads for the voice-activity pre-pass. Each one
+  holds about 11 minutes of decoded audio while it works, so on a machine with
+  many cores this is also the knob for how much memory that pass uses. `1` runs it
+  as a single uninterrupted stream, exactly as earlier versions did.
+
+- **`--whisper-threads <n|auto>`** — threads for Whisper transcription, replacing
+  the old "nearly all logical cores" default.
+
+### Removed
+
+- **`-J`, `--jobs`** — there is no longer more than one file in flight to count.
+  Naming it still produces an error rather than an "unknown option", so a script
+  carrying it says what to use instead.
+
 ## [0.9.1] — 2026-07-31
 
 ### Added

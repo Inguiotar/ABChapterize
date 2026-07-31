@@ -489,12 +489,29 @@ public sealed class CliOptions
     public bool SimpleMetadata { get; private set; }
 
     /// <summary>
-    /// Maximum number of files processed concurrently (--jobs / -J), or null for the
-    /// default: automatically adjusted between 1 and a hardware-derived ceiling based on
-    /// live CPU load (see <see cref="ConcurrencyMonitor"/>). "1" disables concurrency
-    /// entirely - useful for CI logs or troubleshooting.
+    /// Worker threads for the voice-activity pre-pass (--vad-threads), or null for "auto".
+    /// Read through <see cref="EffectiveVadThreads"/>, which resolves what "auto" means.
     /// </summary>
-    public int? Jobs { get; private set; }
+    public int? VadThreads { get; private set; }
+
+    /// <summary>
+    /// CPU threads for Whisper transcription (--whisper-threads), or null for "auto".
+    /// Read through <see cref="EffectiveWhisperThreads"/>, which resolves what "auto" means.
+    /// </summary>
+    public int? WhisperThreads { get; private set; }
+
+    /// <summary>
+    /// How many blocks of audio the voice-activity pre-pass classifies at once (see
+    /// <see cref="ABChapterize.Vad.SileroVadDetector"/>): <see cref="VadThreads"/>, or one per
+    /// physical CPU core.
+    /// </summary>
+    public int EffectiveVadThreads => VadThreads ?? ProcessorTopology.PhysicalCoreCount;
+
+    /// <summary>
+    /// How many CPU threads Whisper transcription is given: <see cref="WhisperThreads"/>, or one per
+    /// physical CPU core.
+    /// </summary>
+    public int EffectiveWhisperThreads => WhisperThreads ?? ProcessorTopology.PhysicalCoreCount;
 
     /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter", localized by --lang).</summary>
     public string Title { get; private set; } = "Chapter";
@@ -584,7 +601,7 @@ public sealed class CliOptions
         ['u'] = "--custom", ['U'] = "--custom-file",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
-        ['J'] = "--jobs", ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
+        ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
         ['o'] = "--log-file",
     };
 
@@ -603,7 +620,8 @@ public sealed class CliOptions
     /// </summary>
     private bool AnyProcessingOptionGiven
         => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || TrailingScan || DryRun
-           || Export || Import || SimpleMetadata || Verify || IgnoreProgress || Jobs != null
+           || Export || Import || SimpleMetadata || Verify || IgnoreProgress
+           || VadThreads != null || WhisperThreads != null
            || _langSet || _phraseSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _titleSet || _introSet || _jingleLenSet || _minSilenceSet || _earlyAbortSet
            || _markLeadSet || _expectedStartSet || _prologuePhraseSet || _prologueTitleSet
@@ -616,11 +634,12 @@ public sealed class CliOptions
     /// mode. The list below is an allowlist, so an option is exempt by not being named in it:
     /// everything that only changes what the run <i>looks like</i> (--quiet, --verbose,
     /// --verbose-transcripts, --log-file, --debug, --no-bar, --color, --summary) or how fast it gets there
-    /// (--jobs, --cpu-only, --use-gpu) stays out, so adding or dropping one of those on an
-    /// interrupted run's command line still resumes it.
+    /// (--vad-threads, --whisper-threads, --cpu-only, --use-gpu) stays out, so adding or dropping
+    /// one of those on an interrupted run's command line still resumes it.
     /// <para>
-    /// The hardware options are the interesting case: a run on a different device may transcribe
-    /// with slightly different floating-point results, so the marks are not bit-identical in
+    /// The hardware options are the interesting case: a run on a different device - or with a
+    /// different thread count, which changes the order floating-point reductions accumulate in - may
+    /// transcribe with slightly different results, so the marks are not bit-identical in
     /// principle. That is treated as noise, not as a different command - someone who moves a
     /// stalled batch to another machine, or falls back to --cpu-only after a driver failure, wants
     /// the remaining files done, not the finished ones redone.
@@ -990,7 +1009,15 @@ public sealed class CliOptions
             case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--mark-lead": MarkLeadSeconds = ParseMarkLead(nextParam()); _markLeadSet = true; return true;
-            case "--jobs": Jobs = ParseJobs(nextParam()); return true;
+            case "--vad-threads": VadThreads = ParseThreadCount("--vad-threads", nextParam()); return true;
+            case "--whisper-threads": WhisperThreads = ParseThreadCount("--whisper-threads", nextParam()); return true;
+            // Removed in 0.10.0. Kept as a named case rather than left to "Unknown option" so a
+            // script carrying it is told what replaced it instead of only that it is gone.
+            case "--jobs":
+                throw new CliError(
+                    "--jobs was removed: files are no longer processed several at a time, so that the " +
+                    "whole machine goes into each one. Use --vad-threads and --whisper-threads to " +
+                    "control how many threads that is.");
             case "--log-file": LogFilePath = ParseLogFilePath(nextParam()); return true;
             case "--color": Color = ParseColorMode(nextParam()); return true;
             default: return false;
@@ -1078,13 +1105,15 @@ public sealed class CliOptions
         _ => throw new CliError($"Invalid --color value \"{value}\": expected \"auto\", \"always\" or \"never\"."),
     };
 
-    /// <summary>Parses the --jobs parameter into a positive job count, or "auto".</summary>
-    private static int? ParseJobs(string value)
+    /// <summary>Parses a thread-count parameter into a positive count, or null for "auto".</summary>
+    /// <param name="option">Long name of the option being parsed, for the error message.</param>
+    /// <param name="value">The raw parameter.</param>
+    private static int? ParseThreadCount(string option, string value)
     {
         if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
             return null;
         if (!int.TryParse(value, out var n) || n < 1)
-            throw new CliError($"Invalid --jobs value \"{value}\": expected a positive number or \"auto\".");
+            throw new CliError($"Invalid {option} value \"{value}\": expected a positive number or \"auto\".");
         return n;
     }
 
@@ -1688,7 +1717,7 @@ public sealed class CliOptions
                                     -T for the transcripts); the console keeps just its progress
                                     bar and per-file summaries, which the file receives too. An
                                     existing file is appended to, never overwritten.
-          -B, --no-bar              Do not display progress bars; per-file summary lines are
+          -B, --no-bar              Do not display the progress bar; per-file summary lines are
                                     printed in the same timestamped format as --verbose logs.
               --color <mode>        Colorize the progress bar and the --summary block (nothing
                                     else - log lines and per-file result lines always stay
@@ -1705,10 +1734,17 @@ public sealed class CliOptions
                                     a chapter, and how much audio Whisper was fed (with its
                                     transcription speed).
 
-        Performance:
-          -J, --jobs <n|auto>       Number of files processed concurrently (default: auto -
-                                    adjusted between 1 and a hardware-derived ceiling based on
-                                    live CPU load). "1" forces strictly sequential processing.
+        Performance (files are always processed one at a time, so each gets the whole machine):
+              --vad-threads <n|auto>
+                                    Threads for the voice-activity pre-pass of pass 1 (default:
+                                    auto - one per physical CPU core). Each thread holds about
+                                    11 minutes of decoded audio while it works, so more of them
+                                    also means more memory. "1" runs the pre-pass as a single
+                                    uninterrupted stream.
+              --whisper-threads <n|auto>
+                                    Threads for Whisper transcription (default: auto - one per
+                                    physical CPU core). Mostly a CPU-backend concern; on a GPU
+                                    backend the recognition itself runs on the GPU.
 
         Info:
           -?, --help                Show this help.

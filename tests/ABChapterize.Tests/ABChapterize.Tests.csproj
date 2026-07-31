@@ -26,6 +26,12 @@
        only Program.cs stays out because the test host provides its own entry point. -->
   <ItemGroup>
     <Compile Include="..\..\src\**\*.cs" Exclude="..\..\src\Cli\Program.cs" LinkBase="src" />
+    <!-- The same embedded model the executable ships, under the resource name SileroWorker
+         expects: SileroVadDetectorTests runs the real thing, because the block-parallel path can
+         only be checked against the single-stream one by actually running both. Every other test
+         uses a scripted FakeVad and never touches this. -->
+    <EmbeddedResource Include="..\..\assets\silero_vad.onnx"
+                      LogicalName="ABChapterize.silero_vad.onnx" />
   </ItemGroup>
 
 </Project>
