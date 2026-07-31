@@ -44,7 +44,11 @@ public sealed class LogFile : IDisposable
         {
             var writer = new StreamWriter(path, append: true, new UTF8Encoding(false)) { AutoFlush = true };
             var log = new LogFile(writer);
-            log.WriteRaw($"=== abchapterize {CliOptions.Version} run started {Timestamp()} ===");
+            // The build number, not just the version: a log outlives the build that wrote it, and
+            // several builds share one version during development. Without it, a log that
+            // contradicts the current sources cannot be told from one that merely predates a fix.
+            var build = CliOptions.BuildNumber is { } n ? $" (build {n})" : "";
+            log.WriteRaw($"=== abchapterize {CliOptions.Version}{build} run started {Timestamp()} ===");
             log.WriteRaw($"=== {Environment.CommandLine} ===");
             return log;
         }

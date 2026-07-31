@@ -54,6 +54,16 @@ release means the thing has become a different program.
   Naming it still produces an error rather than an "unknown option", so a script
   carrying it says what to use instead.
 
+### Fixed
+
+- **A chapter mark could land about a second before its announcement**, on a book
+  whose chapters open with a music jingle. Pinning down exactly where the narrator
+  starts speaking means asking Whisper the same question at a series of positions,
+  and a smaller model occasionally answers "no" for a stretch of audio it can
+  plainly hear — which was taken as "the announcement starts here" and cut the mark
+  short. Those stretches are now checked rather than believed. Marks that were
+  already right do not move; the extra checking costs a few seconds per chapter.
+
 ## [0.9.1] — 2026-07-31
 
 ### Added

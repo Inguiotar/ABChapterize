@@ -121,8 +121,20 @@ internal sealed class PreciseMarkRefiner
     /// <see cref="TransientSpeechFloorSeconds"/>'s remarks on cross-language uncertainty), which
     /// means a spurious VAD "speech" blip inside a jingle that happens to clear that floor - a
     /// vocal-like musical transient, or an occasional Whisper hallucination - can still fool them
-    /// into stopping short of the true announcement; this asks the audio directly instead, at the
-    /// cost of one or more extra transcriptions per chapter.
+    /// into stopping short of the true announcement; this asks Whisper instead, at the cost of one
+    /// or more extra transcriptions per chapter.
+    /// <para>
+    /// It is worth being clear about what that does and does not buy, because the name invites the
+    /// opposite reading: this is not ground truth replacing a heuristic, it is one heuristic's
+    /// assumptions swapped for another's. The searches below are exact, but every one of them rests
+    /// on an empirical claim about how a neural net behaves - that the phrase stays audible right up
+    /// to the onset and not past it. When that claim fails, an exact search over it fails
+    /// confidently. Die Dritte Macht chapter 7 is the case on record (2026-07-31, see
+    /// <see cref="PreciseMarkPlateauProbesSeconds"/>): the heuristic mark this method exists to
+    /// correct was 0.04 s off, and the correction moved it 1.16 s early. So a disagreement between
+    /// the two is not evidence that this one is right, and the fallback when nothing confirms -
+    /// keeping the heuristic mark - is a sound outcome rather than a failure.
+    /// </para>
     /// <para>
     /// Every path here ends in <see cref="FindOnsetEdgeAsync"/>, which is what actually pins the
     /// announcement's onset; the searches before it only find <em>a</em> position where the phrase
@@ -454,7 +466,7 @@ internal sealed class PreciseMarkRefiner
     /// phrase at a position proves only that nothing transcribable precedes it within
     /// <see cref="PreciseMarkCheckWindowSeconds"/>, and a jingle is precisely the thing Whisper
     /// does not transcribe - so every position from somewhere inside the jingle right up to the
-    /// onset itself answers "yes" identically. The answers form one plateau ending at the onset:
+    /// onset itself answers "yes" identically. Those answers form a plateau ending at the onset:
     /// step past it and the window opens mid-announcement, whose leading fragment no longer matches
     /// the phrase. The plateau's right edge <em>is</em> the onset, and finding it is the whole job.
     /// <para>
@@ -465,16 +477,26 @@ internal sealed class PreciseMarkRefiner
     /// instead of one per step. A mark that was already right pays two extra checks; a mark 3.5 s
     /// into a jingle pays about twelve, where walking the whole plateau at a fixed 0.1 s cost
     /// thirty-five (measured on Stalker.m4b, 0:00:49.42 to 0:00:52.92, 2026-07-28, ~95 s for that
-    /// single mark). Bisection is exact here rather than approximate, which it would not be for an
-    /// arbitrary predicate: the plateau has exactly one edge, so no interval it discards could have
-    /// held another.
+    /// single mark).
     /// </para>
     /// <para>
-    /// The gallop is capped at the same jingle-plus-phrase span the searches use, so a phrase that
-    /// somehow keeps confirming outwards can never walk into the next chapter; that case returns
-    /// the furthest position actually confirmed, the one place the step-accuracy guarantee does not
-    /// hold. It has not been observed on real audio - it needs the announcement to stay the first
-    /// audible thing across an entire jingle-length span.
+    /// The plateau is <em>not</em> guaranteed to be unbroken, which is why the walk above is only
+    /// half the method. A smaller model can drop the phrase from a window that plainly contains it,
+    /// punching a hole of several tenths of a second into the run of "yes" well before the onset -
+    /// measured, with the grid, in <see cref="PreciseMarkPlateauProbesSeconds"/>. A bisection cannot
+    /// survive that on its own: it discards the interval past the first "no" it meets, and if that
+    /// "no" was a hole, the discarded interval held the real edge. So every converged edge is
+    /// re-examined by <see cref="FindResumedPlateauAsync"/>, and the walk restarts wherever the
+    /// plateau proves to continue. Within one uninterrupted plateau the bisection remains exact -
+    /// it has exactly one edge, so no interval it discards could have held another - and that is
+    /// precisely the property the re-examination restores in the presence of holes.
+    /// </para>
+    /// <para>
+    /// Everything is capped at the same jingle-plus-phrase span the searches use, measured from the
+    /// position the search set out from, so neither the gallop nor any number of resumes can walk
+    /// into the next chapter; that case returns the furthest position actually confirmed, the one
+    /// place the step-accuracy guarantee does not hold. It has not been observed on real audio - it
+    /// needs the announcement to stay the first audible thing across an entire jingle-length span.
     /// </para>
     /// </summary>
     /// <param name="confirmed">A position the phrase was already heard at; the search starts here
@@ -488,14 +510,47 @@ internal sealed class PreciseMarkRefiner
     private async Task<double> FindOnsetEdgeAsync(
         double confirmed, string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
     {
-        var cap = _options.MaxJingleSeconds + PhraseMarginSeconds;
-        var lo = confirmed;
+        // Measured from the position the search set out from, not from wherever a resumed walk
+        // restarts, so no number of resumes can add up to walking into the next chapter.
+        var limit = confirmed + _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var edge = await WalkPlateauEdgeAsync(confirmed, limit, file, inputDecoder, phraseRegex, ct);
+
+        for (var resumes = 0; resumes < PreciseMarkPlateauResumeLimit; resumes++)
+        {
+            if (await FindResumedPlateauAsync(edge, limit, file, inputDecoder, phraseRegex, ct)
+                is not { } resumed)
+                break;
+            _log?.Invoke($"phrase heard again at {FormatTimestamp(resumed)}, past the edge at " +
+                         $"{FormatTimestamp(edge)} - resuming the onset walk there");
+            edge = await WalkPlateauEdgeAsync(resumed, limit, file, inputDecoder, phraseRegex, ct);
+        }
+        return OnsetOf(edge);
+    }
+
+    /// <summary>
+    /// One gallop-and-bisect pass: the last position at or after <paramref name="from"/> where the
+    /// phrase is still the first thing heard, accurate to <see cref="PreciseMarkFixedStepSeconds"/>.
+    /// Split out of <see cref="FindOnsetEdgeAsync"/> so the same walk can be re-run from a later
+    /// foothold when the plateau turns out to resume past the edge this found.
+    /// </summary>
+    /// <param name="from">Position the phrase is known to be heard at; the walk only moves later.</param>
+    /// <param name="limit">Absolute position the walk may not probe beyond.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The last probe position that still heard the phrase.</returns>
+    private async Task<double> WalkPlateauEdgeAsync(
+        double from, double limit, string file, string? inputDecoder, Regex phraseRegex,
+        CancellationToken ct)
+    {
+        var lo = from;
         double? hi = null;
 
-        for (var delta = PreciseMarkFixedStepSeconds; delta <= cap; delta *= 2)
+        for (var delta = PreciseMarkFixedStepSeconds; from + delta <= limit; delta *= 2)
         {
             ct.ThrowIfCancellationRequested();
-            var probe = Math.Round(confirmed + delta, 6);
+            var probe = Math.Round(from + delta, 6);
             if (!await PreciseMarkPhraseFoundAsync(probe, file, inputDecoder, phraseRegex, ct))
             {
                 hi = probe;
@@ -505,7 +560,7 @@ internal sealed class PreciseMarkRefiner
         }
 
         if (hi is not { } failed)
-            return OnsetOf(lo);
+            return lo;
 
         while (failed - lo > PreciseMarkFixedStepSeconds)
         {
@@ -516,7 +571,46 @@ internal sealed class PreciseMarkRefiner
             else
                 failed = mid;
         }
-        return OnsetOf(lo);
+        return lo;
+    }
+
+    /// <summary>
+    /// Asks whether the plateau resumes past <paramref name="edge"/> - i.e. whether the "no" the
+    /// walk stopped at was the announcement's onset or merely a hole in an otherwise continuous run
+    /// of "yes". See <see cref="PreciseMarkPlateauProbesSeconds"/> for the measured failure that
+    /// makes this necessary and for why the probes are spaced as coarsely as they are.
+    /// <para>
+    /// The <em>rightmost</em> answering probe is returned rather than the nearest, since every one
+    /// of them is by definition a position where the phrase is still heard, and starting the next
+    /// walk from the furthest one skips the most ground. A hole never invalidates what the walk
+    /// already established: the plateau is a property of the audio, so a later confirmation only
+    /// ever means the earlier edge was premature.
+    /// </para>
+    /// </summary>
+    /// <param name="edge">Edge the walk converged on.</param>
+    /// <param name="limit">Absolute position no probe may be placed beyond.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The furthest position past <paramref name="edge"/> at which the phrase is still the
+    /// first thing heard, or null when none is - the ordinary case, in which
+    /// <paramref name="edge"/> really was the onset.</returns>
+    private async Task<double?> FindResumedPlateauAsync(
+        double edge, double limit, string file, string? inputDecoder, Regex phraseRegex,
+        CancellationToken ct)
+    {
+        double? resumed = null;
+        foreach (var offset in PreciseMarkPlateauProbesSeconds)
+        {
+            var probe = Math.Round(edge + offset, 6);
+            if (probe > limit)
+                break;
+            ct.ThrowIfCancellationRequested();
+            if (await PreciseMarkPhraseFoundAsync(probe, file, inputDecoder, phraseRegex, ct))
+                resumed = probe;
+        }
+        return resumed;
     }
 
     /// <summary>

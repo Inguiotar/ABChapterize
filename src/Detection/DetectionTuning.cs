@@ -295,6 +295,53 @@ internal static class DetectionTuning
     internal static readonly double[] PreciseMarkFootholdBackoffsSeconds = [0.0, 0.5, 1.5, 4.0];
 
     /// <summary>
+    /// How far past a converged plateau edge <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/>
+    /// looks for the plateau resuming, and at what spacing - the guard against bisecting a
+    /// predicate that turned out not to be the single clean step function it was built for.
+    /// <para>
+    /// The failure this exists to catch, measured 2026-07-31 on Die Dritte Macht chapter 7
+    /// (announcement "Kapitel 7" truly at 10784.5 s, established with <c>tools\wprobe</c>: a window
+    /// ending at 10784.60 transcribes only "[Musik]", one ending at 10784.80 catches "Kapitel").
+    /// The ordinary check answered, at 0.1 s spacing with the ggml-small model:
+    /// yes at 10783.44, <em>no</em> from 10783.49 to 10784.04, yes again at 10784.24 and 10784.44,
+    /// no from 10784.54 onward. That middle "no" run is a hole in the plateau roughly 0.8 s wide
+    /// sitting 0.45-1.0 s before the true onset, not the plateau's end: the gallop struck it at
+    /// 10783.84, bisected between 10783.04 and 10783.84, and returned the hole's left edge, putting
+    /// the mark 1.16 s early. The pre-refinement heuristic mark had been 0.04 s off, so refinement
+    /// made an already-good mark worse - the only imperfect mark in a seven-book run.
+    /// </para>
+    /// <para>
+    /// The hole is a property of the model, not of the audio: the same grid run against
+    /// ggml-large-v3-turbo is perfectly monotone with no hole at all, its last yes at 10784.64 -
+    /// 0.2 s past the truth, because a bigger model reconstructs a clipped first syllable - which
+    /// <see cref="PreciseMarkRefiner.OnsetOf"/>'s lead-in subtraction absorbs. So both models land
+    /// within a fifth of a second once the search looks for the <em>rightmost</em> plateau rather
+    /// than stopping at the first edge it meets.
+    /// </para>
+    /// <para>
+    /// Spacing and reach are calibrated against that one measured hole and are deliberately coarse:
+    /// this is a "did the plateau resume?" question, and whichever probe lands, the walk restarts
+    /// from it and re-derives the edge at the usual
+    /// <see cref="PreciseMarkFixedStepSeconds"/> accuracy. 0.3 s spacing puts a probe inside a
+    /// resumed plateau as narrow as the 0.2 s one measured there (10784.24-10784.44); 1.2 s of
+    /// reach clears a hole half again as wide as the one observed. Four probes is what that costs
+    /// every refinement, holes or not - about 4 s per mark, ~1.5 minutes on a book with 30
+    /// chapters, against a mark that would otherwise be a second out.
+    /// </para>
+    /// </summary>
+    internal static readonly double[] PreciseMarkPlateauProbesSeconds = [0.3, 0.6, 0.9, 1.2];
+
+    /// <summary>
+    /// How many times <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> may restart its walk after
+    /// finding the plateau resuming past an edge (see
+    /// <see cref="PreciseMarkPlateauProbesSeconds"/>). A bound rather than a measurement: one
+    /// resume is all the observed failure needs, and each one is required to move strictly later, so
+    /// this only caps a pathological alternation of holes and plateaus - which would otherwise cost
+    /// an unbounded number of transcriptions on a single mark.
+    /// </summary>
+    internal const int PreciseMarkPlateauResumeLimit = 2;
+
+    /// <summary>
     /// The shortest stretch of audio <see cref="PreciseMarkRefiner.PhraseSurvivesFromAsync"/> will
     /// put in front of Whisper, however little is left between the probe position and the search's
     /// end anchor. Its answer is only a step function while it is also <em>reliable</em>, and
