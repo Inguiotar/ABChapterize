@@ -346,6 +346,17 @@ for you, not how it was built. The format follows
 - **A file whose decoding provokes a flood of complaints from ffmpeg no longer hangs
   the run.** Enough of them filled a buffer nothing was emptying, and the two sides
   waited on each other indefinitely.
+- **`--mark-before-jingle` no longer stops on a musical sting inside the jingle.** A
+  drum hit or a stab of vocals partway through the music could pass for the previous
+  chapter's last words, leaving the mark seconds deep in the jingle instead of at its
+  start — audible as a run of music before the chapter begins. Such a transient is now
+  recognized for what it is wherever it sounds. Seen on two German audiobooks, on
+  jingles whose stings fell two and six seconds in.
+- **`--mark-before-jingle` no longer lands at the start of the hush before the
+  jingle.** Where a faint transient sounded within a few hundredths of a second of the
+  silence ending, the mark skipped past the silence entirely and came to rest on the
+  previous chapter's closing words — a second or two of the old chapter left playing
+  before the new one. The mark now lands where the music begins, as intended.
 
 ### Changed
 

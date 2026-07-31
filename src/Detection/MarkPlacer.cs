@@ -14,7 +14,7 @@ namespace ABChapterize.Detection;
 
 /// <summary>
 /// The per-file constants a mark placement needs, gathered so <see cref="MarkPlacer.PlaceAsync"/>
-/// does not take them one by one. Only <paramref name="TranscriptAbs"/> varies from mark to mark.
+/// does not take them one by one. Only <paramref name="Transcript"/> varies from mark to mark.
 /// </summary>
 /// <param name="File">Path of the audio file.</param>
 /// <param name="InputDecoder">Explicit input decoder to force, or null.</param>
@@ -25,17 +25,17 @@ namespace ABChapterize.Detection;
 /// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk.</param>
 /// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk and its
 /// verification search.</param>
-/// <param name="TranscriptAbs">The transcript this mark's phrase was found in, in absolute file
-/// time, so the backward walk can tell genuine preceding narration apart from a musical or vocal
-/// transient inside the jingle - see <see cref="JingleGeometry.IsGenuineSpeech"/>.</param>
-/// <param name="TranscriptEnd">Absolute end of the audio <paramref name="TranscriptAbs"/> was
-/// transcribed from - the window's own planned end, not the last segment's timestamp, which is
-/// exactly the kind of figure precise marking exists because it cannot trust. Known to lie past the
-/// announcement, since the announcement was found inside it, which is the one thing
+/// <param name="Transcript">The window this mark's phrase was found in - its segments in absolute
+/// file time, so the backward walk can tell genuine preceding narration apart from a musical or
+/// vocal transient inside the jingle (see <see cref="JingleGeometry.IsGenuineSpeech"/>), and the
+/// span of audio they came from. That span's end doubles as what precise marking anchors its
+/// search against: the window's own planned end, not the last segment's timestamp, which is
+/// exactly the kind of figure precise marking exists because it cannot trust. It is known to lie
+/// past the announcement, since the announcement was found inside it, which is the one thing
 /// <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/> needs of it.</param>
 internal readonly record struct MarkContext(
     string File, string? InputDecoder, Regex PhraseRegex, List<Silence> AllSilences,
-    List<SpeechSegment> SpeechSegments, List<TranscriptSegment> TranscriptAbs, double TranscriptEnd);
+    List<SpeechSegment> SpeechSegments, TranscriptWindow Transcript);
 
 /// <summary>
 /// Turns a default-mode mark into the final one and records what the file's statistics need to
@@ -114,7 +114,7 @@ internal sealed class MarkPlacer
         if (_options.PreciseMark)
             (time, phraseHeard) = await _refiner.RefinePreciseMarkAsync(
                 time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex,
-                phraseAbs, phraseEndAbs, ctx.TranscriptEnd, ct);
+                phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ct);
         if (_options.MarkBeforeJingle)
             time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx, ct);
         if (number is { } chapterNumber)
@@ -194,7 +194,7 @@ internal sealed class MarkPlacer
     private async Task<double> ApplyMarkBeforeJingleAsync(
         double mark, bool markConfirmed, MarkContext ctx, CancellationToken ct)
     {
-        var walked = ComputeMarkBeforeJingle(mark, ctx.AllSilences, ctx.SpeechSegments, ctx.TranscriptAbs);
+        var walked = ComputeMarkBeforeJingle(mark, ctx.AllSilences, ctx.SpeechSegments, ctx.Transcript);
         if (walked != mark)
             _log?.Invoke($"--mark-before-jingle: walked mark back from {FormatTimestamp(mark)} to {FormatTimestamp(walked)}");
 

@@ -194,7 +194,7 @@ internal sealed class PreciseMarkRefiner
     /// in - the search bracket, together with the two that follow.</param>
     /// <param name="phraseEndAbs">Absolute end of those segment(s).</param>
     /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in, capping
-    /// that bracket - see <see cref="MarkContext.TranscriptEnd"/>.</param>
+    /// that bracket - see <see cref="MarkContext.Transcript"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
     /// left as given when nothing could be confirmed), quiet-snapped as a final step, paired

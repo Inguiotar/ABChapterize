@@ -721,7 +721,7 @@ internal sealed class RegionProber
     /// <param name="candidate">The candidate whose window this is.</param>
     /// <param name="start">Absolute start of the window.</param>
     /// <param name="windowEnd">Absolute planned end of the window - what precise marking
-    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
+    /// anchors its search against (see <see cref="MarkContext.Transcript"/>).</param>
     /// <param name="segments">The window transcript in window-relative time, for phrase matching.</param>
     /// <param name="trimmedAbs">The same transcript in absolute file time, for the jingle edge
     /// adjustment inside <see cref="JingleGeometry.ResolveJingleAnchor"/>.</param>
@@ -843,7 +843,7 @@ internal sealed class RegionProber
     /// <param name="candidate">The candidate whose window this is.</param>
     /// <param name="start">Absolute start of the window.</param>
     /// <param name="windowEnd">Absolute planned end of the window - what precise marking
-    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
+    /// anchors its search against (see <see cref="MarkContext.Transcript"/>).</param>
     /// <param name="segments">The window transcript in window-relative time, for phrase matching.</param>
     /// <param name="trimmedAbs">The same transcript in absolute file time, for the jingle anchor.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -919,7 +919,7 @@ internal sealed class RegionProber
     /// <param name="candidate">The candidate whose window this probe decoded.</param>
     /// <param name="start">Absolute start of that window.</param>
     /// <param name="windowEnd">Absolute planned end of the window - what precise marking
-    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
+    /// anchors its search against (see <see cref="MarkContext.Transcript"/>).</param>
     /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task AcceptNamedMatchAsync(
@@ -938,7 +938,7 @@ internal sealed class RegionProber
             return;
         var (time, markSilence, markRegion) = placement;
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
-            _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs, windowEnd);
+            _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd));
         time = await _env.Marks.PlaceAsync(
             null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct);
 
@@ -1066,7 +1066,7 @@ internal sealed class RegionProber
     /// <param name="candidate">The candidate whose window this probe decoded.</param>
     /// <param name="start">Absolute start of that window.</param>
     /// <param name="windowEnd">Absolute planned end of the window - what precise marking
-    /// anchors its search against (see <see cref="MarkContext.TranscriptEnd"/>).</param>
+    /// anchors its search against (see <see cref="MarkContext.Transcript"/>).</param>
     /// <param name="phraseAbs">Absolute phrase start time.</param>
     /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -1079,7 +1079,7 @@ internal sealed class RegionProber
         var (time, markSilence, markRegion) = placement;
 
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile!.PhraseRegex,
-            _ctx.AllSilences, _ctx.SpeechSegments, trimmedAbs, windowEnd);
+            _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd));
         time = await _env.Marks.PlaceAsync(
             match.Number, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion,
             markCtx, ct);

@@ -22,6 +22,25 @@ namespace ABChapterize.Detection;
 /// <param name="EndSeconds">Where VAD resumed detecting speech.</param>
 internal readonly record struct NonSpeechRegion(double StartSeconds, double EndSeconds);
 
+/// <summary>
+/// One decoded window's transcript in absolute file time, carried together with the span of audio
+/// it was actually decoded from. The span cannot be recovered from the segments: Whisper reports
+/// nothing at all for a stretch it heard no words in, and
+/// <see cref="JingleGeometry.TrimLeadingNonSpeech"/> then moves the first segment's start forward
+/// past any leading silence/jingle - so on exactly the windows this matters for (one opening on a
+/// jingle, the announcement its only speech) the earliest segment timestamp can sit most of a
+/// jingle's length after the window's true start. <see cref="JingleGeometry.IsGenuineSpeech"/>
+/// distinguishes "the transcript covers this moment and heard nothing" from "the transcript does
+/// not reach back this far", and only the recorded span can tell the two apart.
+/// </summary>
+/// <param name="Segments">The window's transcript, shifted to absolute file time and already
+/// leading-non-speech-corrected.</param>
+/// <param name="StartSeconds">Absolute start of the audio that was decoded.</param>
+/// <param name="EndSeconds">Absolute end of that audio - the window's own planned end, not the
+/// last segment's timestamp.</param>
+internal readonly record struct TranscriptWindow(
+    List<TranscriptSegment> Segments, double StartSeconds, double EndSeconds);
+
 /// <summary>Locates and resolves VAD non-speech regions (jingles) and silence-based anchors
 /// around a chapter phrase: computing the regions themselves from raw VAD speech segments,
 /// matching a region to its phrase, and deriving where the chapter mark and the various
@@ -371,22 +390,22 @@ internal static class JingleGeometry
     /// <param name="silences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="speech">The raw VAD speech segments for the whole file, chronological.</param>
-    /// <param name="transcriptAbs">The window's transcript in absolute file time, for telling
+    /// <param name="transcript">The window's transcript with its decoded span, for telling
     /// genuine preceding narration apart from a musical/vocal transient in the jingle (see
     /// <see cref="IsGenuineSpeech"/>).</param>
     internal static double ComputeMarkBeforeJingle(
         double originalMark, List<Silence> silences, List<SpeechSegment> speech,
-        List<TranscriptSegment> transcriptAbs)
+        TranscriptWindow transcript)
     {
         var afterSilence = silences
             .Where(s => s.StartSeconds <= originalMark && originalMark <= s.EndSeconds)
             .Cast<Silence?>().FirstOrDefault()
             is { } leadIn ? leadIn.StartSeconds : originalMark;
 
-        if (RealSpeechAt(afterSilence, speech, transcriptAbs))
+        if (RealSpeechAt(afterSilence, speech, transcript))
             return originalMark;
 
-        var (position, foundBoundary) = RetreatPastNonSpeech(afterSilence, speech, silences, transcriptAbs, TransientSpeechFloorSeconds);
+        var (position, foundBoundary) = RetreatPastNonSpeech(afterSilence, speech, silences, transcript, TransientSpeechFloorSeconds);
         return foundBoundary ? position : Math.Max(0, position - JingleLeadSeconds);
     }
 
@@ -399,9 +418,22 @@ internal static class JingleGeometry
     /// this needs no bound: it is used only deep in a backward retreat, already past the
     /// announcement, where any transcribed overlap can only be prior narration.
     /// <para>
-    /// Falls back to the blip's VAD duration alone when it lies entirely outside the transcript's
-    /// covered span: there is nothing to corroborate against, and the window Whisper was asked to
-    /// transcribe need not reach as far back as the retreat walk does.
+    /// Falls back to the blip's VAD duration alone unless <paramref name="transcript"/>'s
+    /// <em>decoded span</em> contains the blip whole. "Whisper transcribed nothing here" is only
+    /// evidence of music where Whisper had the whole blip to listen to: one reaching past either
+    /// edge of the window was heard in part at best (the retreat walk ranges further back than any
+    /// one window reaches), and an absent transcription then says nothing about it.
+    /// </para>
+    /// <para>
+    /// That span is the window's own bounds, deliberately not the range the segment timestamps
+    /// happen to cover. Deriving it from the segments instead silently switched the check off on
+    /// the windows it matters most for: a probe opening on the jingle whose only speech is the
+    /// announcement yields exactly one segment, which <see cref="TrimLeadingNonSpeech"/> then
+    /// advances to the announcement itself, so every music transient in the jingle looked
+    /// "outside the transcript" and was trusted on duration alone. Measured on real audio
+    /// 2026-07-31: a 0.83 s sting 2 s into one book's jingle and a 0.61 s one 6 s into another's
+    /// each stopped the retreat where they sounded, leaving both marks inside the music instead of
+    /// at its leading edge.
     /// </para>
     /// <para>
     /// A covering segment for a <see cref="MaxPaceScrutinizedBlipSeconds"/>-or-shorter blip must
@@ -415,17 +447,15 @@ internal static class JingleGeometry
     /// </para>
     /// </summary>
     /// <param name="blip">The VAD speech segment to classify.</param>
-    /// <param name="transcriptAbs">The window's transcript in absolute file time.</param>
-    private static bool IsGenuineSpeech(SpeechSegment blip, List<TranscriptSegment> transcriptAbs)
+    /// <param name="transcript">The window's transcript with its decoded span.</param>
+    private static bool IsGenuineSpeech(SpeechSegment blip, TranscriptWindow transcript)
     {
-        if (transcriptAbs.Count == 0)
+        if (transcript.Segments.Count == 0)
             return true;
-        var coveredStart = transcriptAbs.Min(t => t.StartSeconds);
-        var coveredEnd = transcriptAbs.Max(t => t.EndSeconds);
-        if (blip.EndSeconds <= coveredStart || blip.StartSeconds >= coveredEnd)
+        if (blip.StartSeconds < transcript.StartSeconds || blip.EndSeconds > transcript.EndSeconds)
             return true;
         var scrutinizePace = blip.EndSeconds - blip.StartSeconds <= MaxPaceScrutinizedBlipSeconds;
-        return transcriptAbs.Any(t => !string.IsNullOrWhiteSpace(t.Text)
+        return transcript.Segments.Any(t => !string.IsNullOrWhiteSpace(t.Text)
                                      && t.StartSeconds < blip.EndSeconds && t.EndSeconds > blip.StartSeconds
                                      && (!scrutinizePace || IsPlausiblyPacedSpeech(t)));
     }
@@ -468,11 +498,11 @@ internal static class JingleGeometry
     /// unbacked by a first version that had only the end-nearby case.
     /// </para>
     /// </summary>
-    private static bool RealSpeechAt(double t, List<SpeechSegment> speech, List<TranscriptSegment> transcriptAbs)
+    private static bool RealSpeechAt(double t, List<SpeechSegment> speech, TranscriptWindow transcript)
         => speech.Any(b => b.EndSeconds - b.StartSeconds >= TransientSpeechFloorSeconds
                          && b.StartSeconds <= t
                          && t - b.EndSeconds <= JingleWalkAdjacencyToleranceSeconds
-                         && IsGenuineSpeech(b, transcriptAbs));
+                         && IsGenuineSpeech(b, transcript));
 
     /// <summary>
     /// Backward mirror of <see cref="AdvancePastNonSpeech"/>: scans from <paramref name="from"/>
@@ -521,12 +551,23 @@ internal static class JingleGeometry
     /// once accepted any straddling blip outright, and a sub-floor transient deep inside a long
     /// jingle was observed landing the mark tens of seconds short of the jingle's true start.
     /// </para>
+    /// <para>
+    /// A silence qualifies by <em>starting</em> before the current position rather than by ending
+    /// before it, so one the position has stepped a hair inside still stops the walk - at its end,
+    /// the point after which the music runs. The two detectors disagree by milliseconds at exactly
+    /// this boundary: skipping a transient that VAD timed a few samples before silencedetect ended
+    /// the hush leaves the position just inside the hush, and an ends-before test would then drop
+    /// the very silence just skipped over and sail on into the previous chapter's narration.
+    /// Measured on real audio 2026-07-31: a 0.26 s sting starting 0.01 s before its silence ended
+    /// cost two chapters (in different books, same shape) 2.7 s and 0.9 s, both marks landing at
+    /// the start of the pre-jingle hush instead of at the jingle itself.
+    /// </para>
     /// </summary>
     /// <param name="from">The point to scan backward from.</param>
     /// <param name="speech">Raw VAD speech segments, chronological.</param>
     /// <param name="silences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
-    /// <param name="transcriptAbs">The window's transcript in absolute file time, for <see
+    /// <param name="transcript">The window's transcript with its decoded span, for <see
     /// cref="IsGenuineSpeech"/>.</param>
     /// <param name="minSpeechSeconds">Speech segments shorter than this are treated as noise and
     /// skipped over rather than accepted as the true offset.</param>
@@ -538,7 +579,7 @@ internal static class JingleGeometry
     /// before running out of data, for the caller's own fallback.</returns>
     internal static (double Position, bool FoundBoundary) RetreatPastNonSpeech(
         double from, List<SpeechSegment> speech, List<Silence> silences,
-        List<TranscriptSegment> transcriptAbs, double minSpeechSeconds)
+        TranscriptWindow transcript, double minSpeechSeconds)
     {
         var t = from;
         while (true)
@@ -547,19 +588,19 @@ internal static class JingleGeometry
             if (prevSpeech is { } straddling && straddling.EndSeconds >= t)
             {
                 if (straddling.EndSeconds - straddling.StartSeconds >= minSpeechSeconds
-                    && IsGenuineSpeech(straddling, transcriptAbs))
+                    && IsGenuineSpeech(straddling, transcript))
                     return (t, true);
                 t = straddling.StartSeconds;
                 continue;
             }
 
-            var prevSilence = silences.Where(s => s.EndSeconds <= t).Cast<Silence?>().LastOrDefault();
+            var prevSilence = silences.Where(s => s.StartSeconds < t).Cast<Silence?>().LastOrDefault();
             if (prevSilence is { } sil && sil.EndSeconds >= (prevSpeech?.EndSeconds ?? double.NegativeInfinity))
                 return (sil.EndSeconds, true);
 
             if (prevSpeech is not { } blip)
                 return (t, false);
-            if (blip.EndSeconds - blip.StartSeconds < minSpeechSeconds || !IsGenuineSpeech(blip, transcriptAbs))
+            if (blip.EndSeconds - blip.StartSeconds < minSpeechSeconds || !IsGenuineSpeech(blip, transcript))
             {
                 t = blip.StartSeconds;
                 continue;

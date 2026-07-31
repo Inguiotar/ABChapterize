@@ -18,13 +18,18 @@ namespace ABChapterize.Tests;
 /// </summary>
 public class JingleGeometryTests
 {
+    /// <summary>The "no transcript to corroborate against" window every scenario below that is
+    /// about VAD/silencedetect geometry alone passes: with no segments the corroboration check
+    /// short-circuits, so the span is immaterial.</summary>
+    private static readonly TranscriptWindow NoTranscript = new([], 0, 0);
+
     // Step 2 (containment): real speech already covers the original mark - an ordinary
     // in-narration pause with no jingle at all - so it is returned unchanged.
     [Fact]
     public void ComputeMarkBeforeJingle_RealSpeechCoversTheMark_ReturnsItUnchanged()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            100, [], [new(0, 150)], []);
+            100, [], [new(0, 150)], NoTranscript);
 
         Assert.Equal(100, result);
     }
@@ -36,7 +41,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_MarkInsideASilence_StepsOutToItsStart_ThenFindsAdjacentSpeech()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [new(100.2, 110)], [new(0, 100), new(112, 200)], []);
+            105, [new(100.2, 110)], [new(0, 100), new(112, 200)], NoTranscript);
 
         Assert.Equal(105, result);
     }
@@ -49,7 +54,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_MarkInsideASilence_WithNoSpeechAtItsStart_RetreatsToTheJingleStart()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [new(100, 110)], [new(0, 80), new(110.5, 200)], []);
+            105, [new(100, 110)], [new(0, 80), new(110.5, 200)], NoTranscript);
 
         Assert.Equal(80, result);
     }
@@ -61,7 +66,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_IgnoresSubFloorTransients_WhileRetreatingThroughTheMusic()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [], [new(0, 80), new(90, 90.3), new(95, 95.35), new(110, 200)], []);
+            105, [], [new(0, 80), new(90, 90.3), new(95, 95.35), new(110, 200)], NoTranscript);
 
         Assert.Equal(80, result);
     }
@@ -77,7 +82,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_RetreatCrossesAGenuineSilence_StopsAtItsEndRatherThanThroughIt()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            102.75, [new(95, 100)], [new(0, 95), new(103, 200)], []);
+            102.75, [new(95, 100)], [new(0, 95), new(103, 200)], NoTranscript);
 
         Assert.Equal(100, result);
     }
@@ -92,7 +97,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_ABlipStartingAfterTheMark_NeverCountsAsPrecedingSpeech()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            100, [], [new(50, 70), new(100.2, 101.0)], []);
+            100, [], [new(50, 70), new(100.2, 101.0)], NoTranscript);
 
         Assert.Equal(70, result);
     }
@@ -109,11 +114,11 @@ public class JingleGeometryTests
     [Fact]
     public void ComputeMarkBeforeJingle_AnUncorroboratedBlip_IsTreatedAsMusicAndWalkedThrough()
     {
-        var transcript = new List<TranscriptSegment>
-        {
+        var transcript = new TranscriptWindow(
+        [
             new(0, 4, "Vorheriges Kapitel Text.", 1.0),
             new(60, 90, " ", 1.0), // covers the blip below but transcribes nothing over it
-        };
+        ], 0, 90);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
             105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
@@ -128,11 +133,11 @@ public class JingleGeometryTests
     [Fact]
     public void ComputeMarkBeforeJingle_ACorroboratedBlip_StopsTheRetreatThere()
     {
-        var transcript = new List<TranscriptSegment>
-        {
+        var transcript = new TranscriptWindow(
+        [
             new(0, 4, "Vorheriges Kapitel Text.", 1.0),
             new(69.5, 71.5, "Ein Wort hier.", 1.0),
-        };
+        ], 0, 90);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
             105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
@@ -149,11 +154,11 @@ public class JingleGeometryTests
     [Fact]
     public void ComputeMarkBeforeJingle_ABlipCorroboratedOnlyByAnImplausiblyPacedSegment_IsWalkedThrough()
     {
-        var transcript = new List<TranscriptSegment>
-        {
+        var transcript = new TranscriptWindow(
+        [
             new(0, 4, "Vorheriges Kapitel Text.", 1.0),
             new(55, 90, "Kapitel 8", 1.0),
-        };
+        ], 0, 90);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
             105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
@@ -161,19 +166,39 @@ public class JingleGeometryTests
         Assert.Equal(50, result);
     }
 
-    // A blip lying entirely outside the transcript's own covered span has nothing to
-    // corroborate against - the window Whisper was actually asked to transcribe does not
-    // necessarily reach as far back as the retreat walk does - so it falls back to trusting
-    // VAD's duration alone, exactly as when no transcript is available at all.
+    // A blip lying entirely outside the window Whisper was actually asked to transcribe has
+    // nothing to corroborate against - that window does not necessarily reach as far back as the
+    // retreat walk does - so it falls back to trusting VAD's duration alone, exactly as when no
+    // transcript is available at all.
     [Fact]
-    public void ComputeMarkBeforeJingle_ABlipOutsideTheTranscriptsCoverage_FallsBackToTrustingVad()
+    public void ComputeMarkBeforeJingle_ABlipOutsideTheTranscribedWindow_FallsBackToTrustingVad()
     {
-        var transcript = new List<TranscriptSegment> { new(200, 210, "Ganz woanders.", 1.0) };
+        var transcript = new TranscriptWindow([new(200, 210, "Ganz woanders.", 1.0)], 200, 210);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
             105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
 
         Assert.Equal(71.0, result);
+    }
+
+    // The counterpart, and the reason the window's span is carried alongside its segments rather
+    // than derived from them (confirmed on real audio 2026-07-31, two books, two chapters): a probe
+    // that opens exactly on the jingle hears nothing until the announcement, so its transcript is a
+    // single segment whose start TrimLeadingNonSpeech then advances to the announcement itself.
+    // Every music transient in the jingle then lies before the earliest segment timestamp while
+    // sitting squarely inside the decoded audio - "not covered" by the segments, "covered and
+    // silent" by the window. Judged against the window, the blip at 70-71 is recognised as music
+    // and walked through to the real narration at 50; judged against the segments it was trusted
+    // on duration alone, stranding the mark 20 s inside the music.
+    [Fact]
+    public void ComputeMarkBeforeJingle_ABlipBeforeTheFirstSegmentButInsideTheWindow_IsStillJudgedMusic()
+    {
+        var transcript = new TranscriptWindow([new(90, 94, "Kapitel 8", 1.0)], 50, 110);
+
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
+
+        Assert.Equal(50, result);
     }
 
     // Step 5: the retreat runs out of VAD data before ever finding real preceding speech (a
@@ -183,7 +208,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_NoPrecedingSpeechAtAll_BacksOffByTheFlatLead()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            3.0, [], [new(10, 20)], []);
+            3.0, [], [new(10, 20)], NoTranscript);
 
         Assert.Equal(2.5, result);
     }
@@ -193,7 +218,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_NoPrecedingSpeechAtAll_NeverGoesNegative()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            0.3, [], [], []);
+            0.3, [], [], NoTranscript);
 
         Assert.Equal(0, result);
     }
@@ -208,7 +233,7 @@ public class JingleGeometryTests
         double originalMark, double expected)
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            originalMark, [], [new(0, 100)], []);
+            originalMark, [], [new(0, 100)], NoTranscript);
 
         Assert.Equal(expected, result);
     }
@@ -234,7 +259,7 @@ public class JingleGeometryTests
             originalMark,
             [new(separatorStart, separatorEnd), new(hushStart, hushEnd)],
             [new(narrationStart, narrationEnd), new(announcementStart, announcementEnd)],
-            []);
+            NoTranscript);
 
         Assert.Equal(expected, result);
     }
@@ -253,9 +278,55 @@ public class JingleGeometryTests
             9966.376,
             [new(9941.758, 9945.162), new(9965.418, 9966.626)],
             [new(9940.800, 9941.824), new(9966.784, 9967.520)],
-            []);
+            NoTranscript);
 
         Assert.Equal(9945.162, result);
+    }
+
+    // The three outliers of a six-book test run (2026-07-31), at their real measured geometry -
+    // every other mark of that run was judged near-perfect by ear, so these are the whole of what
+    // the two fixes below had to move. Times are the log's own, rounded to 10 ms.
+    //
+    // The first two are the same defect: a short musical sting inside the jingle, before the
+    // announcement and therefore before the transcript's only (trimmed) segment, but well inside
+    // the decoded window - trusted as narration on its VAD duration alone until IsGenuineSpeech
+    // started judging coverage by the window's span. Both marks stopped at the sting's end,
+    // 2.9 s and 6.9 s deep into their jingle's music.
+    //
+    // The third is the boundary defect: the sting starts 0.01 s *before* silencedetect ends the
+    // pre-jingle hush, so retreating past it left the walk a hair inside that hush - which an
+    // ends-before-here silence test then refused to see, sending the walk on to the narration and
+    // the mark to the hush's start, 2.7 s early.
+    [Theory]
+    // mark, narration end, hush (start/end, equal when there is none), sting, announcement, window
+    // (start/end), expected
+    // "Die Dritte Macht" ch. 33: silence-less jingle, sting 2.05 s into it.
+    [InlineData(48516.22, 48500.19, 48500.19, 48500.19, 48502.24, 48503.07, 48516.57, 48518.17,
+                48500.19, 48561.69, 48500.19)]
+    // "Gruelfin" ch. 25: hush, then jingle, sting 6.32 s into the music.
+    [InlineData(43490.01, 43478.27, 43478.19, 43481.39, 43487.71, 43488.32, 43490.43, 43491.90,
+                43481.39, 43514.69, 43481.39)]
+    // "Gruelfin" ch. 14: hush, then a 0.26 s sting straddling its end by 0.25 s.
+    [InlineData(24206.61, 24197.53, 24197.44, 24200.10, 24200.09, 24200.35, 24206.91, 24207.74,
+                24200.10, 24236.90, 24200.10)]
+    public void ComputeMarkBeforeJingle_TheThreeMisplacedMarksOfTheJuly2026Run_LandAtTheJingleStart(
+        double originalMark, double narrationEnd, double hushStart, double hushEnd,
+        double stingStart, double stingEnd, double announcementStart, double announcementEnd,
+        double windowStart, double windowEnd, double expected)
+    {
+        // What Whisper reported for such a window: one segment, the announcement, its start
+        // already advanced onto the phrase by TrimLeadingNonSpeech.
+        var transcript = new TranscriptWindow(
+            [new(announcementStart, windowEnd, "Kapitel 25", 0.6)], windowStart, windowEnd);
+
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            originalMark,
+            hushEnd > hushStart ? [new(hushStart, hushEnd)] : [],
+            [new(narrationEnd - 3, narrationEnd), new(stingStart, stingEnd),
+             new(announcementStart, announcementEnd)],
+            transcript);
+
+        Assert.Equal(expected, result);
     }
 
     // RetreatPastNonSpeech itself: starting inside a qualifying segment never moves the
@@ -264,7 +335,7 @@ public class JingleGeometryTests
     public void RetreatPastNonSpeech_AlreadyInsideAQualifyingSegment_ReturnsFromUnchanged()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
-            50, [new(40, 60)], [], [], 0.4);
+            50, [new(40, 60)], [], NoTranscript, 0.4);
 
         Assert.Equal(50, position);
         Assert.True(foundBoundary);
@@ -282,7 +353,7 @@ public class JingleGeometryTests
     public void RetreatPastNonSpeech_StartingInsideASubFloorBlip_IsSkippedRatherThanAcceptedOutright()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
-            29.8, [new(0, 20), new(29.6, 29.984)], [], [], 0.4);
+            29.8, [new(0, 20), new(29.6, 29.984)], [], NoTranscript, 0.4);
 
         Assert.Equal(20, position);
         Assert.True(foundBoundary);
@@ -294,7 +365,7 @@ public class JingleGeometryTests
     public void RetreatPastNonSpeech_SkipsShortBlips_ChainingBackToTheFirstQualifyingOne()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
-            100, [new(0, 80), new(85, 85.2), new(92, 92.1)], [], [], 0.4);
+            100, [new(0, 80), new(85, 85.2), new(92, 92.1)], [], NoTranscript, 0.4);
 
         Assert.Equal(80, position);
         Assert.True(foundBoundary);
@@ -307,7 +378,7 @@ public class JingleGeometryTests
     public void RetreatPastNonSpeech_AGenuineSilenceIsCloser_StopsAtItsEnd()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
-            70, [new(0, 48.5)], [new(50, 60)], [], 0.4);
+            70, [new(0, 48.5)], [new(50, 60)], NoTranscript, 0.4);
 
         Assert.Equal(60, position);
         Assert.True(foundBoundary);
@@ -322,7 +393,7 @@ public class JingleGeometryTests
     public void RetreatPastNonSpeech_ASilenceStopsTheWalk_WhateverPrecedesIt()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
-            70, [new(0, 40)], [new(50, 60)], [], 0.4);
+            70, [new(0, 40)], [new(50, 60)], NoTranscript, 0.4);
 
         Assert.Equal(60, position);
         Assert.True(foundBoundary);
@@ -335,7 +406,7 @@ public class JingleGeometryTests
     public void RetreatPastNonSpeech_SeveralSilencesBehind_StopsAtTheNearestOne()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
-            100, [new(0, 50)], [new(50, 52), new(95, 97)], [], 0.4);
+            100, [new(0, 50)], [new(50, 52), new(95, 97)], NoTranscript, 0.4);
 
         Assert.Equal(97, position);
         Assert.True(foundBoundary);
@@ -348,7 +419,7 @@ public class JingleGeometryTests
     public void RetreatPastNonSpeech_RunsOutOfData_ReturnsFalseWithTheFurthestPositionReached()
     {
         var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
-            10, [new(2, 2.1)], [], [], 0.4);
+            10, [new(2, 2.1)], [], NoTranscript, 0.4);
 
         Assert.Equal(2, position);
         Assert.False(foundBoundary);
