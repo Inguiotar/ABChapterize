@@ -164,8 +164,9 @@ abchapterize --mark-before-jingle hoerbuch.m4b
 # Redo files that already have (wrong) chapter marks:
 abchapterize --force badly-marked.m4b
 
-# Not sure which files in a big collection have good marks and which don't?
-# Check each existing mark against the audio; only the bad ones get redone:
+# Marks that should be one per numbered chapter (say, from an earlier run),
+# but you're not sure they all landed right? Check each against the audio;
+# only the ones that don't check out get redone:
 abchapterize --recurse --verify "D:\Audiobooks"
 
 # Not sure a --filter regexp actually matches the files you mean? List them
@@ -245,7 +246,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-e`, `--expected-start-chapter <n>` | For a split-book part that doesn't start at chapter 1: the number this file is expected to start at. Without it (the default), whatever number pass 2 finds first is trusted outright and nothing below it is ever searched for. With it, a first chapter found *below* `<n>` aborts the file outright, unchanged; a first chapter found *above* `<n>` has pass 3 search for the missing numbers down to `<n>`, tagging the file `.missing-marks-…` if it still can't find them all. Only applies to a fresh detection run. |
 | `-L`, `--trailing-scan` | Transcribe everything after the last chapter found, through to the end of the file, looking for further chapters (default: off). A missing chapter is normally spotted as a hole in the number sequence, which needs a known chapter on either side of it — so one missing *after* the last chapter found is the one case nothing notices, and the file comes out looking complete. This closes that hole, but there are no expected numbers to satisfy here, so the scan can never stop early: every file pays a full final chapter's worth of transcription, whether or not anything was wrong. |
 | `-N`, `--max-chapter-number <n>` | Highest chapter number this book plausibly has (default: no limit). A detected chapter numbered above `<n>` is discarded as a mishearing — without it, one misheard "chapter 510" in a twelve-chapter book turns everything in between into a gap to hunt for. Not to be confused with `--max-chapters` above, which counts *pre-existing* marks. |
-| `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`): marks that check out are trusted and kept, and only the stretch(es) of the file around any mark that doesn't get redetected. If every mark fails, the file falls back to full detection. Cannot combine with `--force` or `--import`. |
+| `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`). The check assumes each mark is titled with a chapter number that the narrator announces right there: marks that check out are kept, only the stretch(es) around a mark that doesn't are redetected, and if every mark fails the file falls back to full detection. So this is **not** a read-only report, and it is the wrong tool for retailer marks that lump several book chapters into one entry — those cannot pass the check and will be replaced. Cannot combine with `--force` or `--import`. |
 | `-h`, `--verify-threshold <n>` | Requires `--verify`. If more than `<n>` marks fail verification, the ones that passed are no longer trusted as gap-recovery anchors either — the whole file falls back to full detection, same as when nothing at all is confirmed. |
 
 **Chapter titles**

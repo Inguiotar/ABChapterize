@@ -960,16 +960,36 @@ skipped (reported as "skipped").
   numbers heard in the audio.
 
 `-V`, `--verify`
-: Instead of trusting pre-existing marks blindly (the default) or discarding
-  them outright (`--force`), check each one against the audio: a short
-  window around the mark's own timestamp is probed with Whisper for the
-  chapter phrase and the expected chapter number, reusing the same
-  transcription machinery as normal detection rather than a plain
-  string/fingerprint comparison. If the phrase isn't found on the first
-  pass, any long unrecognized stretch inside the window gets a further,
-  closer look in small overlapping chunks before the mark is given up as
-  unconfirmed — documented in the source. Marks that all check out are left
-  untouched, same as a skip without `--verify`. If any mark fails but at
+: Checks one specific claim about every existing mark: *this mark is titled
+  chapter N, and chapter N is announced in the audio right here*. That makes
+  it the right tool for marks meant to be one per numbered chapter — an
+  earlier ABChapterize run, or a tagger that followed the book's own chapter
+  structure — and the wrong tool for marks that are not.
+
+  Marks that **group several book chapters into one entry**, as retailers'
+  own marks often do, cannot pass this check and are not meant to: a mark
+  titled "Chapter 2" sitting where the narrator says "chapter four" is doing
+  its job perfectly well, and `--verify` will still call it unconfirmed.
+  That matters, because **`--verify` is not a read-only report**. An
+  unconfirmed mark gets redetected, and if none of the marks can be
+  confirmed, the existing ones are discarded and the file is detected from
+  scratch. On a file whose marks are deliberately coarser than the book's
+  chapters, leave it alone (the default, no `--verify`) — or redo it
+  wholesale with `--force` if you want ABChapterize's own chapter-level
+  marks instead.
+
+  Marks whose title carries no chapter number that can be read are not
+  checked at all. If that is true of every mark in a file, there is nothing
+  to verify, and the file is skipped with a note saying so — unchanged.
+
+  What the check does: a short window around the mark's own timestamp is
+  probed with Whisper for the chapter phrase and the expected chapter
+  number, reusing the same transcription machinery as normal detection
+  rather than a plain string/fingerprint comparison. If the phrase isn't
+  found on the first pass, any long unrecognized stretch inside the window
+  gets a further, closer look in small overlapping chunks before the mark is
+  given up as unconfirmed — documented in the source. Marks that all check
+  out are left untouched, same as a skip without `--verify`. If any mark fails but at
   least one other is confirmed, the confirmed marks are trusted and kept
   as-is, and detection - including its own proper pass 2 - runs only over
   the stretch(es) of the file around the unconfirmed mark(s), rather than
