@@ -35,8 +35,10 @@ public sealed class ChapterDetector
 
     /// <summary>Transcriber used for pass 3 (gap filling). The same instance as
     /// <see cref="_transcriber"/> unless <c>--pass3-model</c> selected a different model, in which
-    /// case it is a <see cref="Pass3TranscriberProxy"/> onto the shared pass-3 model. Only which
-    /// model recognizes the gap chunks changes; detection/marking/statistics are identical.</summary>
+    /// case it is a <see cref="Transcription.Pass3Transcriber"/>. Reference equality with
+    /// <see cref="_transcriber"/> is what the code below tests to tell the two cases apart. Only
+    /// which model recognizes the gap chunks changes; detection/marking/statistics are
+    /// identical.</summary>
     private readonly ITranscriber _pass3Transcriber;
 
     private readonly IVoiceActivityDetector? _vad;
@@ -403,7 +405,7 @@ public sealed class ChapterDetector
     /// <para>
     /// This is the one place the heavier model can be reached before a gap has been declared, which
     /// means a run that would otherwise never have loaded it may now do so (it is loaded lazily, on
-    /// first use - see <see cref="Transcription.SharedPass3Transcriber"/>). That is the trade the
+    /// first use - see <see cref="Transcription.Pass3Transcriber"/>). That is the trade the
     /// check is: one model load against a Pass 3 over hours of audio that a misheard number would
     /// otherwise mandate.
     /// </para>

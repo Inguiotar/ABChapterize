@@ -269,27 +269,26 @@ public sealed partial class FileProcessor
         // Everything from here on is inside the try, so that a failure while setting the rest of the
         // run up - loading the VAD model, say - still releases the Whisper context that is already
         // holding a model in memory or in VRAM.
-        SharedPass3Transcriber? pass3Shared = null;
+        Pass3Transcriber? pass3 = null;
         try
         {
-            // A different --pass3-model gets one shared, lazily-loaded instance for the whole run
-            // (see SharedPass3Transcriber). Only gap work (pass 2.5 and 3) uses it, so a book that
-            // never opens a gap never pays for the second model at all. The same model as --model
-            // means no separate instance either way - gap work reuses the run's own transcriber.
-            pass3Shared = _options.Pass3Model != _options.Model
-                ? new SharedPass3Transcriber(_options.Pass3Model, initialLanguage,
+            // A different --pass3-model gets one lazily-loaded instance for the whole run (see
+            // Pass3Transcriber). Only gap work (pass 2.5 and 3) uses it, so a book that never opens
+            // a gap never pays for the second model at all. The same model as --model means no
+            // separate instance either way - gap work reuses the run's own transcriber.
+            pass3 = _options.Pass3Model != _options.Model
+                ? new Pass3Transcriber(_options.Pass3Model, initialLanguage,
                     _options.EffectiveWhisperThreads, _options.CpuOnly, gpu.Selected?.Index)
                 : null;
 
             if (!_options.Quiet)
-                PrintModelBanner(transcriber.RuntimeName, files.Count, pass3Shared != null, gpu);
+                PrintModelBanner(transcriber.RuntimeName, files.Count, pass3 != null, gpu);
 
             // Only needed for the VAD pre-pass, and the one thing in the run that uses more than one
             // thread of its own accord.
             using var vad = _options.RunVadPrePass ? new SileroVadDetector(_options.EffectiveVadThreads) : null;
             LogThreadBudget(vad);
 
-            var pass3 = pass3Shared != null ? new Pass3TranscriberProxy(pass3Shared, initialLanguage) : null;
             var detector = new ChapterDetector(_options, ffmpeg, transcriber, vad, pass3);
             foreach (var file in files)
             {
@@ -300,8 +299,8 @@ public sealed partial class FileProcessor
         finally
         {
             await transcriber.DisposeAsync();
-            if (pass3Shared != null)
-                await pass3Shared.DisposeAsync();
+            if (pass3 != null)
+                await pass3.DisposeAsync();
         }
     }
 
