@@ -1640,19 +1640,17 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Pass25_AbandonsTheSweep_WhenABandWouldCostMoreThanTranscribingTheGap()
+    public async Task Pass25_AbandonsTheSweep_WhenABandWouldTakeItPastItsShareOfThePass3Cost()
     {
-        // A 59.7 s gap holds at most four 12 s probe windows, so a band of five candidates is
-        // already the worse bet than the full transcription pass 3 will do anyway. The sweep must
-        // stop before that band rather than pay for it - and chapter 2 stays missing here, which is
-        // exactly the trade being made.
+        // Budget and spending are both counted in Whisper's 30 s decode windows. A 59.7 s gap costs
+        // pass 3 two of them, so the sweep may spend 1.5 - which affords exactly one 12 s probe. The
+        // 1.45 s band gets it and finds nothing; the 1.35 s band below would take the running total
+        // to two windows, past the budget, so the sweep ends there rather than paying for it. Chapter
+        // 2 stays missing, which is exactly the trade being made.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
             Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
-            [
-                new(595, 600), new(608.55, 610), new(613.55, 615), new(618.55, 620),
-                new(623.55, 625), new(628.55, 630), new(655, 660),
-            ],
+            [new(595, 600), new(608.55, 610), new(618.65, 620), new(655, 660)],
             pass2 =>
             {
                 pass2.Add(600, Seg(0.5, " Chapter one."));
@@ -1662,8 +1660,80 @@ public sealed class ChapterDetectorTests : IDisposable
             log);
 
         Assert.True(result.GapRemains);
-        Assert.Contains(log, l => l.Contains("stopping the sub-floor sweep before the 1.4-1.5 s band") &&
-                                  l.Contains("5 probe(s)"));
+        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.4-1.5 s"));
+        Assert.Contains(log, l => l.Contains("stopping the sub-floor sweep before the 1.3-1.4 s band") &&
+                                  l.Contains("2 decode window(s)") && l.Contains("1.5"));
+    }
+
+    [Fact]
+    public async Task Pass3_ReReadsAStillOpenGap_WithItsDecodesShiftedHalfAWhisperWindow()
+    {
+        // What a gap surviving a *complete* transcription means: not audio nobody read, but audio
+        // the recognizer read wrongly - and the likeliest reason is where the announcement fell
+        // inside Whisper's 30 s decode window. Chapter 14 of "Paula Monti" (2026-07-31) vanished
+        // from a 601 s chunk that read every second around it, and reappeared at p=0.94 from the
+        // same chunk started 15 s later. Scripting chapter 2 as audible only below a 590 s decode
+        // reproduces that here: pass 3's own first chunk runs 597.25 s and misses it, the shifted
+        // re-read's runs 582.25 s and does not.
+        var log = new List<string>();
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            [new(595, 600), new(645, 650)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(650, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.AddWithin(590, 300, Seg(0, " Chapter two.")),
+            log);
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 299.75), new(3, 649.95)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("pass 3.5: re-reading 0:00:00.25 - 0:10:49.95 from 0:00:15.25"));
+        Assert.Contains(log, l => l.Contains("the shifted re-read recovered 1 chapter(s)"));
+    }
+
+    [Fact]
+    public async Task Pass3_DoesNotReReadAShiftedGap_WhenThePass3ModelIsADeliberateDowngrade()
+    {
+        // A lighter --pass3-model is the one unambiguous "get the stragglers over with quickly", so
+        // doubling the cost of the gap it just failed on is the last thing wanted. Same fixture as
+        // above with the models swapped: the chapter stays missing rather than being paid for.
+        var log = new List<string>();
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "large", "--pass3-model", "base", "--max-jingle-length", "0"),
+            [new(595, 600), new(645, 650)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(650, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.AddWithin(590, 300, Seg(0, " Chapter two.")),
+            log);
+
+        Assert.True(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(3, 649.95)], result.Chapters);
+        Assert.DoesNotContain(log, l => l.Contains("re-reading"));
+    }
+
+    [Fact]
+    public async Task Pass3_ReReadsTheTrailingRegionShifted_EvenOnADowngradePass3Model()
+    {
+        // --trailing-scan is the user paying for a speculative sweep of audio nothing suspects, so
+        // asking for it settles the "is a second look worth the time" question on its own - the
+        // model gate that governs the gaps does not apply. Deliberately paired with the downgrade
+        // model that switches that gate off, so only the flag can be what let this run.
+        var log = new List<string>();
+        var (_, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "large", "--pass3-model", "base", "--max-jingle-length", "0",
+                "--trailing-scan"),
+            [new(595, 600)],
+            pass2 => pass2.Add(600, Seg(0.5, " Chapter one.")),
+            pass3 => { },
+            log);
+
+        Assert.Contains(log, l => l.Contains("re-reading trailing region 0:10:00.25 - 1:00:00.00 " +
+                                             "from 0:10:15.25"));
     }
 
     [Theory]

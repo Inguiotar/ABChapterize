@@ -320,6 +320,24 @@ through to the end of the file — at the price of doing so on every file, every
 run, whether or not anything is wrong. See
 [Detection behaviour](#detection-behaviour).
 
+### Pass 3.5 — the shifted re-read
+
+A gap that survives being transcribed end to end is a different problem from a
+gap nothing ever looked at: every second of it *was* read, so what is left to
+explain is a misreading. The likeliest one by far is a matter of framing —
+Whisper decodes in 30-second windows, and an announcement landing right on a
+window border can drop out of the transcript altogether while the sentences on
+either side of it come through perfectly, leaving text that reads as though
+nothing were missing.
+
+So each still-open gap — or, where pass 3 closed part of one, each remaining
+piece of it — is read once more with every decode shifted by 15 seconds, half a
+window, which puts whatever sat on a border as far from one as it can get.
+This runs unless `--pass3-model` names a *lighter* model than `--model`: that is
+the one setting which unambiguously says the stragglers are not worth more time.
+For `--trailing-scan` it always runs, since asking for that scan is itself the
+statement that they are.
+
 If a gap *between* detected chapters (or, with `--expected-start-chapter`,
 before the first one) still remains after pass 3, the chapters that *were*
 found are still written, but a warning is printed and the file is
@@ -421,8 +439,9 @@ Whatever number was spoken still ends up in the title (`Chapter 7`), and an
 announcement with no number at all is marked too, titled with the bare word
 (`Chapter`). Nothing checks that the numbers ascend, that none is missing, or
 that the book starts at 1. Consequently no sequence gap is ever found or
-filled, so [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model)
-and [Pass 3](#pass-3--gap-filling-only-when-needed) never run and no file is
+filled, so [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
+[Pass 3](#pass-3--gap-filling-only-when-needed) and
+[Pass 3.5](#pass-35--the-shifted-re-read) never run and no file is
 ever tagged `.missing-marks`. A run finishes after Pass 2, which usually makes
 it a good deal quicker than a normal one.
 
@@ -656,7 +675,10 @@ so that logs and reports stay comparable regardless of regional settings.
   [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
   which often closes the gap far quicker than pass 3 would, and lets
   [pass 2](#pass-2--probing) ask it for a second reading of a chapter number
-  that cannot be right. The pass-3 model is downloaded and loaded lazily — only
+  that cannot be right. Naming a *lighter* one is read as "don't spend more time
+  on the stragglers" and is the one thing that switches
+  [pass 3.5](#pass-35--the-shifted-re-read) off; leaving it alone or naming a
+  heavier model both keep it. The pass-3 model is downloaded and loaded lazily — only
   if and when a file actually needs it — so naming a model here costs nothing on
   a clean run.
 
@@ -911,7 +933,10 @@ skipped (reported as "skipped").
   costs something when it fires: with no expected numbers to satisfy, the scan
   can never stop early, so every file pays a full final chapter's worth of
   transcription time whether or not anything was wrong. Reach for it when a
-  book's last chapter matters more than the run time. Does nothing when no
+  book's last chapter matters more than the run time — and note that it takes
+  that at its word: the tail is also given the shifted re-read of
+  [pass 3.5](#pass-35--the-shifted-re-read), whatever `--pass3-model` says, so
+  the price is two passes over it rather than one. Does nothing when no
   chapter was found at all — there is no "last chapter" to scan from — nor
   after an `--early-abort` or `--expected-start-chapter` abort.
 
@@ -1509,13 +1534,15 @@ what that check does and does not cover). It also has to be a model the
 whisper.cpp engine underneath can load; if it is not, the failure comes from
 that loader.
 
-The one place ABChapterize forms an opinion about a custom model is
+ABChapterize forms an opinion about a custom model in exactly two places:
 [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
-which needs to know whether `--pass3-model` is an upgrade over `--model` or
-not. That comparison is made by **file size**, for custom and built-in models
-alike — within the Whisper family the bigger file has always been the more
-capable model. A custom model smaller than `--model`'s therefore behaves like
-naming a lighter built-in one: pass 2.5 stays off, pass 3 still uses it.
+which needs to know whether `--pass3-model` is an upgrade over `--model`, and
+[pass 3.5](#pass-35--the-shifted-re-read), which needs to know whether it is a
+downgrade. That comparison is made by **file size**, for custom and built-in
+models alike — within the Whisper family the bigger file has always been the
+more capable model. A custom model smaller than `--model`'s therefore behaves
+like naming a lighter built-in one: pass 2.5 and pass 3.5 stay off, pass 3
+still uses it.
 
 ### Download integrity verification
 
@@ -1799,8 +1826,8 @@ name, everything the pipeline does:
   line tells you the recognizer *did* hear it, which is a very different
   problem from it never being heard at all. The anchor reasons in particular
   tend to point straight at `--min-silence-length`,
-- the gap re-probes of pass 2.5 and the regions transcribed in pass 3, and
-  when each pass finishes,
+- the gap re-probes and sub-floor sweeps of pass 2.5, the regions transcribed
+  in pass 3, the shifted re-reads of pass 3.5, and when each pass finishes,
 - once the file is done, a `stats -` line: the shortest silence and (when
   the VAD pre-pass ran, which it does by default) longest jingle found
   before a chapter — each also given as

@@ -393,8 +393,20 @@ use `.`, whatever the machine's locale says.
    a phrase interrupted by a pause right at a border can slip through). Pass 3
    can use a different model than pass 2 (`--pass3-model`). A chapter missing
    after the *last* one found leaves no such gap — nothing above it to notice
-   its absence — which is what `--trailing-scan` is for. If a gap still
-   remains, the chapters that *were* found are written and the file is renamed
+   its absence — which is what `--trailing-scan` is for.
+3b. **Pass 3.5 — the shifted re-read:** a gap that survives being transcribed end
+   to end is a misreading, not unread audio — every second of it was read. The
+   likeliest misreading is framing: Whisper decodes in 30-second windows, and an
+   announcement landing on a window border can drop out of the transcript
+   entirely while the sentences either side of it come through perfectly, so the
+   text reads as though nothing were missing. Each remaining gap is therefore
+   read once more with every decode shifted by half a window, putting whatever
+   sat on a border as far from one as it can get. Runs unless `--pass3-model`
+   names a *lighter* model than `--model` — the one setting that says outright
+   the stragglers aren't worth more time — and always for `--trailing-scan`,
+   where asking for the scan says the opposite. If a gap still
+   remains after all that, the chapters that *were* found are written and the
+   file is renamed
    with a `.missing-marks-…` tag listing the still-missing numbers, rather than
    discarded. Running the tool again over such a file resumes it
    automatically: the committed chapters are trusted as-is, and only the

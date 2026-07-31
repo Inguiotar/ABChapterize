@@ -530,6 +530,31 @@ internal static class DetectionTuning
     /// <summary>Width of one <see cref="SubFloorSweepBandCount"/> band, in seconds.</summary>
     internal const double SubFloorSweepBandSeconds = 0.1;
 
+    /// <summary>
+    /// How much of Pass 3's own cost the sub-floor sweep may spend on a gap before giving it up
+    /// (<see cref="ChapterDetector.SweepSubFloorSilencesAsync"/>), measured in
+    /// <see cref="WhisperChunkSeconds"/> decode windows on both sides.
+    /// <para>
+    /// Below one rather than at it because the sweep does not replace Pass 3, it precedes it: a
+    /// sweep that finds nothing is spent on top of the full transcription that follows, so a budget
+    /// of the whole thing would let a gap cost twice what it did before the sweeps existed. Three
+    /// quarters keeps the worst case at 1.75x while still affording one probe per 80 s of gap at the
+    /// 50 s ceiling window, or per 40 s at the plain 12 s one - far more than the one or two a real
+    /// book's bands hold (measured on "Paula Monti", 2026-07-31: five gaps, one probe each, two for
+    /// one of them).
+    /// </para>
+    /// </summary>
+    internal const double SubFloorSweepBudgetFraction = 0.75;
+
+    /// <summary>
+    /// How far Pass 3's shifted re-scan (<see cref="ChapterDetector.RescanShiftedAsync"/>) displaces
+    /// its decodes when a full transcription has left a gap open: half of
+    /// <see cref="WhisperChunkSeconds"/>, which is the displacement that moves whatever sat on an
+    /// internal decode window border as far from one as it can get. Any other value leaves some
+    /// offset that was near a border still near one.
+    /// </summary>
+    internal const double Pass3ShiftSeconds = WhisperChunkSeconds / 2;
+
     /// <summary>Chunk length in seconds for full transcription of gap regions.</summary>
     internal const double GapChunkSeconds = 600;
 

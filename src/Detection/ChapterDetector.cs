@@ -476,6 +476,10 @@ public sealed class ChapterDetector
         if (gaps.Count > 0)
             _log?.Invoke("Pass 3 finished");
 
+        chapters = await RescanShiftedAsync(
+            file, info, work, chapters, allSilences, nonSpeechRegions, speechSegments,
+            bytesPerSecond, profile, ct);
+
         // The trailing region - the one thing FindGaps above structurally cannot flag, since
         // nothing bounds a still-missing last chapter from above to compare against. Two
         // independent things ask for it (see ResolveTrailingRegion), and both end up here.
@@ -497,7 +501,139 @@ public sealed class ChapterDetector
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
             _log?.Invoke("Pass 3 finished (trailing)");
+
+            // --trailing-scan is speculative and never "done", so nothing but the flag itself can say
+            // whether a second look is wanted - and setting it is already the statement that it is.
+            // The --verify fallback does know what it is after, and goes by the same rule the gaps do.
+            if (trailing.Targets is null
+                    ? _options.TrailingScan
+                    : !_options.Pass3ModelIsDowngrade &&
+                      trailing.Targets.Any(n => chapters.All(c => c.Number != n)))
+                chapters = await RescanRegionShiftedAsync(
+                    file, info, work, chapters, trailing.From, info.DurationSeconds, trailing.Targets,
+                    allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, profile,
+                    $"{what} ", ct);
         }
+        return chapters;
+    }
+
+    /// <summary>
+    /// Pass 3's last resort, for the gaps its own full transcription left open: reads them again with
+    /// every decode displaced by <see cref="DetectionTuning.Pass3ShiftSeconds"/>, half of Whisper's
+    /// internal decode window.
+    /// <para>
+    /// The premise is that a gap surviving a complete transcription is not audio nobody looked at -
+    /// every second of it was transcribed - but audio the recognizer read wrongly, and the single
+    /// likeliest reason for that is where the announcement fell inside
+    /// <see cref="DetectionTuning.WhisperChunkSeconds"/>. An announcement landing just after a window
+    /// boundary can vanish from the transcript entirely while the timeline stays contiguous, so the
+    /// text reads as if nothing were missing. Chapter 14 of "Paula Monti" (2026-07-31) is the case on
+    /// record and the measurement behind the shift: decoded from 2:30:31.29 the 601 s chunk produced
+    /// "…solennité dramatique." / "Berthe de Brevan occupait une des places de cette loge." with
+    /// "Première partie, chapitre 14, première loge numéro 7" simply absent between them, reproducibly
+    /// at every chunk length tried from 120 s to 601 s. The identical chunk decoded from 2:30:46.29 -
+    /// the same audio, 15 s later - reads it at p=0.94. Half a window is the displacement that moves
+    /// whatever sat on a boundary as far from one as it can get. End to end on that clip
+    /// (<c>-m turbo</c>, which switches Pass 2.5 off so the case reaches Pass 3 at all): Pass 3
+    /// recovered chapter 13 from the head of the gap and left 14 missing exactly as before, and the
+    /// shifted re-read placed it at the same mark the Pass 2.5 sweep produces, 0.93 confidence.
+    /// </para>
+    /// <para>
+    /// Shifting the region's start rather than re-planning its chunks is what makes this cheap and
+    /// hole-free: the first attempt already covered every second, so the head this skips is not
+    /// unread, merely not re-read - and re-reading it in the framing that already failed would buy
+    /// nothing. The guarantee therefore holds for a region's first chunk, which is the whole of it for
+    /// any remainder under <see cref="DetectionTuning.GapChunkSeconds"/>; beyond that, seam snapping
+    /// can land a later chunk back on its original border, and the shift degrades to "probably
+    /// different framing" rather than "certainly".
+    /// </para>
+    /// <para>
+    /// Only when <c>--pass3-model</c> is not a deliberate downgrade. A lighter pass-3 model is the one
+    /// unambiguous statement that this file's stragglers are not worth more time, and doubling the
+    /// cost of the gap it just failed on would be exactly the opposite.
+    /// </para>
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="work">Progress tracker; begins its own phase when there is work.</param>
+    /// <param name="chapters">The chapters known after Pass 3's own transcription.</param>
+    /// <param name="allSilences">Every silence Pass 1 retained.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions, for the jingle anchor resolution.</param>
+    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
+    /// <param name="bytesPerSecond">The file's average byte rate, for progress reporting.</param>
+    /// <param name="profile">The language profile resolved for this file.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns><paramref name="chapters"/> plus anything the re-scan recovered.</returns>
+    private async Task<List<DetectedChapter>> RescanShiftedAsync(
+        string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
+        List<SpeechSegment> speechSegments, double bytesPerSecond, LanguageProfile profile,
+        CancellationToken ct)
+    {
+        if (_options.Pass3ModelIsDowngrade)
+            return chapters;
+
+        // Recomputed rather than carried over from the loop above: a gap Pass 3 closed only in part
+        // has become one or more narrower gaps around what it did find, and those remainders - not
+        // the original span - are what is left to read again.
+        foreach (var gap in FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter))
+            chapters = await RescanRegionShiftedAsync(
+                file, info, work, chapters, gap.FromSeconds, gap.ToSeconds,
+                MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter),
+                allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, profile, "", ct);
+        return chapters;
+    }
+
+    /// <summary>
+    /// Transcribes one still-open region a second time with every decode displaced by
+    /// <see cref="DetectionTuning.Pass3ShiftSeconds"/> - see <see cref="RescanShiftedAsync"/> for why.
+    /// Skips a region with no room left for the shift, where the displaced start would be at or past
+    /// the end.
+    /// </summary>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="work">Progress tracker.</param>
+    /// <param name="chapters">The chapters known so far.</param>
+    /// <param name="fromSeconds">Start of the region as the first attempt read it.</param>
+    /// <param name="toSeconds">End of the region.</param>
+    /// <param name="expectedNumbers">The numbers this region is expected to yield, or null for an
+    /// open-ended --trailing-scan sweep.</param>
+    /// <param name="allSilences">Every silence Pass 1 retained.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions.</param>
+    /// <param name="speechSegments">Raw VAD speech segments.</param>
+    /// <param name="bytesPerSecond">The file's average byte rate.</param>
+    /// <param name="profile">The language profile resolved for this file.</param>
+    /// <param name="what">What the region is called in the log line, ending in a space, or empty
+    /// for an ordinary gap.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<List<DetectedChapter>> RescanRegionShiftedAsync(
+        string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
+        double fromSeconds, double toSeconds, IReadOnlyList<int>? expectedNumbers,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
+        List<SpeechSegment> speechSegments, double bytesPerSecond, LanguageProfile profile,
+        string what, CancellationToken ct)
+    {
+        var from = fromSeconds + Pass3ShiftSeconds;
+        if (from >= toSeconds)
+            return chapters;
+
+        _log?.Invoke(
+            $"pass 3.5: re-reading {what}{FormatTimestamp(fromSeconds)} - {FormatTimestamp(toSeconds)} " +
+            $"from {FormatTimestamp(from)}, half a decode window later");
+        work.BeginPhase("Pass 3.5", (long)((toSeconds - from) * bytesPerSecond));
+        if (!ReferenceEquals(_pass3Transcriber, _transcriber))
+            _pass3Transcriber.ChangeLanguage(profile.Language);
+
+        var fills = await TranscribeRegionAsync(
+            file, info, from, toSeconds, expectedNumbers, allSilences, nonSpeechRegions,
+            speechSegments, bytesPerSecond, work, profile, chapters, ct);
+        chapters = Normalize(chapters.Concat(fills).ToList());
+        var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
+        work.HighestChapter = highest;
+        work.MissingChapters = missingNumbers.Count;
+        _log?.Invoke(fills.Count > 0
+            ? $"pass 3.5: the shifted re-read recovered {fills.Count} chapter(s)"
+            : "pass 3.5: the shifted re-read found nothing further");
         return chapters;
     }
 
@@ -696,11 +832,15 @@ public sealed class ChapterDetector
     /// common case to one cheap sweep.
     /// </para>
     /// <para>
-    /// Bounded by what it is avoiding: probing more windows than the gap could hold end to end costs
-    /// more than the full transcription Pass 3 would do anyway, so a band that would push the run
-    /// past that many probes ends the sweep instead of starting. Without it a long gap dense in
-    /// short pauses could spend more than Pass 3 and still find nothing - the shape the pass's own
-    /// remarks already record from a 56-minute gap that re-probed for 40 minutes to no effect.
+    /// Bounded by a fraction of what it is avoiding, counted in
+    /// <see cref="DetectionTuning.WhisperChunkSeconds"/> decode windows because that is the unit
+    /// recognition is actually billed in - a 12 s probe and a 30 s slice of a Pass 3 chunk cost the
+    /// same one window. A band that would take the sweep past
+    /// <see cref="SubFloorSweepBudgetFraction"/> of what transcribing the whole gap would cost ends
+    /// it instead of starting, so the sweep is always the cheaper bet even when it finds nothing and
+    /// Pass 3 runs in full afterwards. Without a bound, a long gap dense in short pauses could spend
+    /// more than Pass 3 and still come back empty - the shape the pass's own remarks already record
+    /// from a 56-minute gap that re-probed for 40 minutes to no effect.
     /// </para>
     /// </summary>
     /// <param name="env">The probe environment the gap's ordinary re-probe used.</param>
@@ -723,10 +863,13 @@ public sealed class ChapterDetector
         if (stillMissing.Count == 0)
             return;
 
-        // The same width the prober will probe at, so "how many windows fit in this gap" is asked in
-        // the units the sweep actually spends.
+        // Budget and spending are both counted in Whisper's own internal decode windows, which is
+        // the only unit in which a handful of short probes and one long transcription compare
+        // honestly: recognition cost is per window, and a 12 s probe costs a whole one just as a
+        // 30 s stretch of a Pass 3 chunk does.
         var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
-        var budget = (int)((gap.ToSeconds - gap.FromSeconds) / probeSeconds);
+        var windowsPerProbe = ChunkWindows(probeSeconds);
+        var budget = SubFloorSweepBudgetFraction * ChunkWindows(gap.ToSeconds - gap.FromSeconds);
         var spent = 0;
 
         foreach (var (min, max) in SubFloorSweepBands(
@@ -735,14 +878,16 @@ public sealed class ChapterDetector
             var band = SilencesInBand(allSilences, gap, min, max);
             if (band.Count == 0)
                 continue;
-            if (spent + band.Count > budget)
+            var wouldSpend = spent + band.Count * windowsPerProbe;
+            if (wouldSpend > budget)
             {
                 _log?.Invoke(
                     $"pass 2.5: stopping the sub-floor sweep before the {min:0.0#}-{max:0.0#} s band - " +
-                    $"{spent + band.Count} probe(s) would cost more than transcribing the gap");
+                    $"{band.Count} more probe(s) would take the sweep to {wouldSpend} decode window(s), " +
+                    $"past the {budget:0.#} it may spend on this gap");
                 return;
             }
-            spent += band.Count;
+            spent += band.Count * windowsPerProbe;
 
             _log?.Invoke(
                 $"pass 2.5: sweeping {band.Count} silence(s) of {min:0.0#}-{max:0.0#} s for " +
@@ -764,6 +909,16 @@ public sealed class ChapterDetector
             }
         }
     }
+
+    /// <summary>
+    /// How many <see cref="DetectionTuning.WhisperChunkSeconds"/> decode windows a stretch of audio
+    /// of this length costs to recognize. Rounded up because a partial window is a whole one to the
+    /// recognizer, which is exactly why this is the unit a short probe and a long transcription can
+    /// be compared in at all.
+    /// </summary>
+    /// <param name="seconds">Length of the stretch.</param>
+    private static int ChunkWindows(double seconds)
+        => (int)Math.Ceiling(seconds / WhisperChunkSeconds);
 
     /// <summary>Which of <paramref name="expected"/> the accumulator still has no chapter for.</summary>
     /// <param name="expected">The chapter numbers a gap was expected to yield.</param>

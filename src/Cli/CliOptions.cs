@@ -139,6 +139,16 @@ public sealed class CliOptions
     public bool Pass3ModelIsUpgrade { get; private set; }
 
     /// <summary>
+    /// True when <see cref="Pass3Model"/> is strictly <em>less</em> capable than <see cref="Model"/>,
+    /// i.e. the one direction that unambiguously says "get the stragglers over with quickly". Not the
+    /// negation of <see cref="Pass3ModelIsUpgrade"/>: the default, where the two are the same model,
+    /// is neither, and the distinction matters because the retries that are worth their time on an
+    /// equal pass-3 model are not worth it on a deliberately lighter one. Gates Pass 3's shifted
+    /// re-scan (see <c>ChapterDetector</c>'s <c>RescanShiftedAsync</c>).
+    /// </summary>
+    public bool Pass3ModelIsDowngrade { get; private set; }
+
+    /// <summary>
     /// Forces the CPU backend for Whisper instead of the fastest available hardware
     /// acceleration (--cpu-only / -C; see <see cref="WhisperTranscriber"/>). The Silero VAD
     /// pre-pass already always runs on CPU regardless of this option - the ONNX Runtime
@@ -817,6 +827,8 @@ public sealed class CliOptions
             o.Pass3Model = o.Model;
         o.Pass3ModelIsUpgrade = ModelCatalog.ApproximateSizeBytes(o.Pass3Model)
                                 > ModelCatalog.ApproximateSizeBytes(o.Model);
+        o.Pass3ModelIsDowngrade = ModelCatalog.ApproximateSizeBytes(o.Pass3Model)
+                                  < ModelCatalog.ApproximateSizeBytes(o.Model);
 
         if (o.ChapterPhrase.Length == 0)
             throw new CliError("The chapter phrase must not be empty.");

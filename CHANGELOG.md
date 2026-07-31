@@ -370,6 +370,23 @@ for you, not how it was built. The format follows
   simply dropped the announcement from its reading of the long stretch. A short probe
   aimed at the spot read it without trouble. The sweep stops early on a long gap where
   it would end up costing more than the full transcription it is trying to avoid.
+- **A gap that survives being transcribed in full is now read one more time, with
+  every decode shifted by 15 seconds.** A gap that outlives a complete
+  transcription is not audio nobody read — every second of it was — but audio the
+  recognizer read wrongly, and by far the likeliest reason is where the
+  announcement happened to fall inside the 30-second windows Whisper decodes in.
+  One landing right on a window border can drop out of the transcript entirely
+  while the text around it reads as though nothing were missing. The re-read
+  displaces every window by half of one, which puts whatever sat on a border as
+  far from one as it can get. On the French audiobook this came from, the chapter
+  that vanished from a ten-minute chunk — with the sentences either side of it
+  transcribed perfectly — is read back cleanly, at high confidence, from the same
+  chunk started fifteen seconds later. It runs unless `--pass3-model` names a
+  *lighter* model than `--model`, which is the one setting that unambiguously says
+  "don't spend more time on the stragglers", and it always runs for
+  `--trailing-scan`, where asking for the scan is itself the statement that the
+  time is worth it.
+
 - **An announcement whose number cannot be read is now re-read during the ordinary
   scan**, not only during the full-transcription pass. This matters most for the one
   place the later pass can never reach: an announcement past the last chapter found is

@@ -518,6 +518,30 @@ public sealed class CliOptionsTests : IDisposable
         Assert.False(ParseFile()!.Pass3ModelIsUpgrade);
     }
 
+    [Theory]
+    // Strictly lighter than the pass-2 model: the one unambiguous "get the stragglers over with".
+    [InlineData("large", "turbo", true)]
+    [InlineData("small", "tiny", true)]
+    // Equal or better is not a downgrade - and equal is neither direction, which is the whole
+    // reason this is not simply the negation of Pass3ModelIsUpgrade.
+    [InlineData("large", "large", false)]
+    [InlineData("tiny", "tiny", false)]
+    [InlineData("base", "small", false)]
+    public void Pass3ModelIsDowngrade_IsOnlyTheStrictlyLighterDirection(
+        string model, string pass3Model, bool expected)
+    {
+        var o = ParseFile("--model", model, "--pass3-model", pass3Model)!;
+        Assert.Equal(expected, o.Pass3ModelIsDowngrade);
+    }
+
+    [Fact]
+    public void Pass3ModelIsDowngrade_IsFalse_WhenNoPass3ModelWasGivenAtAll()
+    {
+        // The default mirrors --model, so pass 3's shifted re-read stays available.
+        Assert.False(ParseFile("--model", "large")!.Pass3ModelIsDowngrade);
+        Assert.False(ParseFile()!.Pass3ModelIsDowngrade);
+    }
+
     [Fact]
     public void Verify_IsParsed_LongAndShort()
     {
