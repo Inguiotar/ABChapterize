@@ -2,8 +2,14 @@
 
 All notable, user-visible changes to ABChapterize are recorded here — what changed
 for you, not how it was built. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+Version numbers are deliberately *not*
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html), so read them like this:
+a **patch** release brings bugfixes and new features that break nothing you were
+using; a **minor** release brings significant new features and may change or remove
+something you relied on, so skim its notes before upgrading a script; a **major**
+release means the thing has become a different program.
 
 ## [0.10.0] — unreleased
 
