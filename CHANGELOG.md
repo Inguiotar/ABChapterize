@@ -185,6 +185,15 @@ for you, not how it was built. The format follows
 
 ### Changed
 
+- **`--mark-lead` is no longer ignored under `--mark-before-jingle`.** It never
+  really was for the chapters that carry no jingle — plenty of audiobooks play one
+  in front of some chapters and not others, and those have always been marked the
+  ordinary way, lead-in and all — but a mark walked back to the pause in front of a
+  jingle used to land exactly where that pause ends, hard against the jingle's
+  first note. Such a mark now backs into the pause by `--mark-lead` seconds, or
+  sits at the pause's own beginning where the pause is the shorter of the two, so
+  it can never reach back into the previous chapter's narration. With the default
+  lead this moves affected marks 0.35 seconds earlier.
 - **Mark refinement is faster and no longer takes a running start.** It used to
   begin by sampling positions near the mark that the voice-activity detector had
   flagged as speech, and only fall back to searching the stretch the announcement

@@ -373,13 +373,23 @@ internal static class JingleGeometry
     /// walked straight through, exactly like a too-short one.</item>
     /// </list>
     /// The first point meeting either condition is the jingle's true leading edge - where the
-    /// previous chapter's trailing narration ends - and is returned with no further lead: unlike
-    /// step 2's case a real jingle sits here, and the mark belongs at its start.
+    /// previous chapter's trailing narration ends - and is where the mark belongs.
     /// </para>
     /// <para>
-    /// <b>Step 5:</b> if the walk runs out of both VAD and silencedetect data before finding a stop
+    /// <b>Step 5:</b> the mark lead (--mark-lead) then applies to a walk that stopped on a
+    /// <em>silence</em>, backing the mark into that hush by the lead or by the hush's whole length,
+    /// whichever is shorter. Its meaning is unchanged from default-mode placement - a moment of
+    /// quiet before the thing the mark is for, so a player seeking here does not open mid-sound -
+    /// and a hush before a jingle is exactly such a moment. A walk that stopped on <em>speech</em>
+    /// gets none: the previous chapter's narration runs right up to the jingle there, and backing
+    /// off would put the mark inside it, which is the one thing this option exists to prevent.
+    /// </para>
+    /// <para>
+    /// <b>Step 6:</b> if the walk runs out of both VAD and silencedetect data before finding a stop
     /// (the jingle sits at the very start of the file, with no narration to find), the position
-    /// reached is backed off by <see cref="JingleLeadSeconds"/> rather than trusted outright.
+    /// reached is backed off by <see cref="JingleLeadSeconds"/> rather than trusted outright. The
+    /// flat constant rather than the lead: this is a "nothing is known here" fallback, not a
+    /// measured hush to sit inside.
     /// </para>
     /// A final backward-only quiet-point snap - precise marking's own last step - still runs on
     /// whatever this returns; see <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> and its
@@ -393,9 +403,13 @@ internal static class JingleGeometry
     /// <param name="transcript">The window's transcript with its decoded span, for telling
     /// genuine preceding narration apart from a musical/vocal transient in the jingle (see
     /// <see cref="IsGenuineSpeech"/>).</param>
+    /// <param name="markLeadSeconds">--mark-lead, applied by step 5 to a walk that stopped on a
+    /// hush; ignored by every other outcome. A phrase with no jingle in front of it never reaches
+    /// that step at all - step 2 hands back <paramref name="originalMark"/>, which the caller's own
+    /// default-mode placement already backed off by the very same lead.</param>
     internal static double ComputeMarkBeforeJingle(
         double originalMark, List<Silence> silences, List<SpeechSegment> speech,
-        TranscriptWindow transcript)
+        TranscriptWindow transcript, double markLeadSeconds)
     {
         var afterSilence = silences
             .Where(s => s.StartSeconds <= originalMark && originalMark <= s.EndSeconds)
@@ -405,8 +419,15 @@ internal static class JingleGeometry
         if (RealSpeechAt(afterSilence, speech, transcript))
             return originalMark;
 
-        var (position, foundBoundary) = RetreatPastNonSpeech(afterSilence, speech, silences, transcript, TransientSpeechFloorSeconds);
-        return foundBoundary ? position : Math.Max(0, position - JingleLeadSeconds);
+        var (position, foundBoundary, stopSilence) =
+            RetreatPastNonSpeech(afterSilence, speech, silences, transcript, TransientSpeechFloorSeconds);
+        if (!foundBoundary)
+            return Math.Max(0, position - JingleLeadSeconds);
+        // Clamped at the hush's own start, which makes this "back off by the lead, or by the whole
+        // hush if it is shorter" without a second expression saying so.
+        return stopSilence is { } hush
+            ? Math.Max(hush.StartSeconds, position - markLeadSeconds)
+            : position;
     }
 
     /// <summary>
@@ -571,13 +592,18 @@ internal static class JingleGeometry
     /// cref="IsGenuineSpeech"/>.</param>
     /// <param name="minSpeechSeconds">Speech segments shorter than this are treated as noise and
     /// skipped over rather than accepted as the true offset.</param>
-    /// <returns><c>(Position, true)</c>: the end of the qualifying silence or speech segment
+    /// <returns><c>(Position, true, …)</c>: the end of the qualifying silence or speech segment
     /// nearest to (at or before) <paramref name="from"/>, or <paramref name="from"/> itself when
     /// it already falls inside a qualifying speech segment (never moves further than necessary).
-    /// <c>(Position, false)</c>: neither <paramref name="speech"/> nor <paramref name="silences"/>
+    /// <c>(Position, false, …)</c>: neither <paramref name="speech"/> nor <paramref name="silences"/>
     /// reach far enough back to find one - <c>Position</c> is then however far the retreat got
-    /// before running out of data, for the caller's own fallback.</returns>
-    internal static (double Position, bool FoundBoundary) RetreatPastNonSpeech(
+    /// before running out of data, for the caller's own fallback.
+    /// <c>StopSilence</c> is the silence a walk that ended on one stopped at, and null for every
+    /// other outcome. Reported rather than left for the caller to re-derive from
+    /// <c>Position</c> because only the walk knows <em>why</em> it stopped: a hush before the
+    /// jingle is somewhere a mark may still be nudged back into, whereas the end of the previous
+    /// chapter's narration is not, and the two are indistinguishable from a position alone.</returns>
+    internal static (double Position, bool FoundBoundary, Silence? StopSilence) RetreatPastNonSpeech(
         double from, List<SpeechSegment> speech, List<Silence> silences,
         TranscriptWindow transcript, double minSpeechSeconds)
     {
@@ -589,23 +615,23 @@ internal static class JingleGeometry
             {
                 if (straddling.EndSeconds - straddling.StartSeconds >= minSpeechSeconds
                     && IsGenuineSpeech(straddling, transcript))
-                    return (t, true);
+                    return (t, true, null);
                 t = straddling.StartSeconds;
                 continue;
             }
 
             var prevSilence = silences.Where(s => s.StartSeconds < t).Cast<Silence?>().LastOrDefault();
             if (prevSilence is { } sil && sil.EndSeconds >= (prevSpeech?.EndSeconds ?? double.NegativeInfinity))
-                return (sil.EndSeconds, true);
+                return (sil.EndSeconds, true, sil);
 
             if (prevSpeech is not { } blip)
-                return (t, false);
+                return (t, false, null);
             if (blip.EndSeconds - blip.StartSeconds < minSpeechSeconds || !IsGenuineSpeech(blip, transcript))
             {
                 t = blip.StartSeconds;
                 continue;
             }
-            return (blip.EndSeconds, true);
+            return (blip.EndSeconds, true, null);
         }
     }
 

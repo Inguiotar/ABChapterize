@@ -2276,7 +2276,7 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task JingleWithLeadingSilence_WalksBackToTheSilenceEnd_AndVadDoesNotDoubleProbe()
+    public async Task JingleWithLeadingSilence_MarksInsideThatHush_AndVadDoesNotDoubleProbe()
     {
         // A silence (695-700) precedes the jingle's own music (700-703) - the existing
         // silence-based candidate already probes this transition, so the VAD non-speech region
@@ -2289,7 +2289,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // straight through both all the way to 695 instead; confirmed wrong on real audio (a
         // chapter transition with two genuinely separate jingles, merged by VAD into one region
         // with a real silence between them, landed at the first jingle's start rather than the
-        // second's).
+        // second's). The mark lead then backs the mark 0.25 s into that 5 s hush, so the final
+        // position is 699.75 - the same "a moment of quiet first" rule default-mode marks follow.
         var (result, _, audio) = await DetectFullAsync(
             Options("--quick-marks", "--mark-before-jingle"),
             [new(695, 700)],
@@ -2300,10 +2301,10 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        AssertContainsChapter(new DetectedChapter(2, 700), result.Chapters);
-        // Exact 700.0 is the anchor probe itself; the walked mark now also landing at 700
-        // means the final quiet-point snap's own decode sits nearby (699.85) but is a distinct
-        // value, so this still isolates "no duplicate probe decode" without being confused by it.
+        AssertContainsChapter(new DetectedChapter(2, 699.75), result.Chapters);
+        // Exact 700.0 is the anchor probe itself; every other decode around the transition (the
+        // quiet-point snap's, the walked mark's own) lands on a different value, so this isolates
+        // "no duplicate probe decode" without being confused by them.
         Assert.Single(audio.DecodeStarts, d => d == 700.0);
     }
 
@@ -2355,8 +2356,8 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task MarkBeforeJingleWithMaxJingleLengthZero_StillAnchorsViaVad_ButKeepsTheNarrowWindow()
     {
         // --mark-before-jingle turns on the VAD pre-pass and its own backward-walk mark
-        // placement (see JingleWithLeadingSilence_WalksBackToTheSilenceEnd_... for why this lands
-        // at 700, the stored silence's own end and the jingle's true start), but
+        // placement (see JingleWithLeadingSilence_MarksInsideThatHush_... for why this lands at
+        // 699.75, a mark lead inside the hush ending at the jingle's true start), but
         // --max-jingle-length 0 says no jingle is expected, so Pass 2's probe window must stay at
         // the plain 12 s width rather than widening to the jingle ceiling - the two options are
         // independent: one controls mark placement, the other the probe width.
@@ -2370,7 +2371,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 695), new(703, 3600)] });
 
-        AssertContainsChapter(new DetectedChapter(2, 700), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 699.75), result.Chapters);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 700 && w.Duration is { } d && Math.Abs(d - 12) < 0.01);
     }
@@ -3971,11 +3972,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // pause (822.5) - back in chapter one's narration. Correcting the start to the real onset
         // (836) instead finds the jingle region [830.5, 836], whose leading silence [830.3, 831.0]
         // is the true anchor - the classic "silence then jingle" shape. --mark-before-jingle's own
-        // backward walk lands the mark right at that silence's own end (831.0, the jingle's true
-        // start per silencedetect's amplitude-based measurement) rather than at VAD's slightly
-        // jittery speech-segment boundary a moment earlier (830.5) - the same silence-anchoring
-        // preference default-mode placement already has via LeadingSilence, and the same shape
-        // validated in JingleWithLeadingSilence_WalksBackToTheSilenceEnd_....
+        // backward walk lands right at that silence's own end (831.0, the jingle's true start
+        // per silencedetect's amplitude-based measurement) rather than at VAD's slightly jittery
+        // speech-segment boundary a moment earlier (830.5) - the same silence-anchoring preference
+        // default-mode placement already has via LeadingSilence, and the same shape validated in
+        // JingleWithLeadingSilence_MarksInsideThatHush_.... The mark lead then backs it 0.25 s into
+        // the 0.7 s hush, to 830.75.
         var result = await DetectAsync(
             Options("--quick-marks", "--mark-before-jingle"),
             [new(595, 600), new(820, 823), new(830.3, 831.0)],
@@ -3986,7 +3988,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 830.5), new(836, 3600)] });
 
-        AssertContainsChapter(new DetectedChapter(2, 831.0), result.Chapters);
+        AssertContainsChapter(new DetectedChapter(2, 830.75), result.Chapters);
         Assert.DoesNotContain(result.Chapters, c => c.Number == 2 && c.TimeSeconds < 830);
     }
 

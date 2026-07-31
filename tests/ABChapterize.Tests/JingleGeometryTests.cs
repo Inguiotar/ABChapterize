@@ -23,13 +23,18 @@ public class JingleGeometryTests
     /// short-circuits, so the span is immaterial.</summary>
     private static readonly TranscriptWindow NoTranscript = new([], 0, 0);
 
+    /// <summary>The mark lead every scenario about the <em>walk</em> passes, so the position each
+    /// asserts on is the one the walk itself reached rather than that position minus a lead. Step
+    /// 5's back-off has its own tests below.</summary>
+    private const double NoLead = 0;
+
     // Step 2 (containment): real speech already covers the original mark - an ordinary
     // in-narration pause with no jingle at all - so it is returned unchanged.
     [Fact]
     public void ComputeMarkBeforeJingle_RealSpeechCoversTheMark_ReturnsItUnchanged()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            100, [], [new(0, 150)], NoTranscript);
+            100, [], [new(0, 150)], NoTranscript, NoLead);
 
         Assert.Equal(100, result);
     }
@@ -41,7 +46,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_MarkInsideASilence_StepsOutToItsStart_ThenFindsAdjacentSpeech()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [new(100.2, 110)], [new(0, 100), new(112, 200)], NoTranscript);
+            105, [new(100.2, 110)], [new(0, 100), new(112, 200)], NoTranscript, NoLead);
 
         Assert.Equal(105, result);
     }
@@ -54,7 +59,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_MarkInsideASilence_WithNoSpeechAtItsStart_RetreatsToTheJingleStart()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [new(100, 110)], [new(0, 80), new(110.5, 200)], NoTranscript);
+            105, [new(100, 110)], [new(0, 80), new(110.5, 200)], NoTranscript, NoLead);
 
         Assert.Equal(80, result);
     }
@@ -66,7 +71,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_IgnoresSubFloorTransients_WhileRetreatingThroughTheMusic()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [], [new(0, 80), new(90, 90.3), new(95, 95.35), new(110, 200)], NoTranscript);
+            105, [], [new(0, 80), new(90, 90.3), new(95, 95.35), new(110, 200)], NoTranscript, NoLead);
 
         Assert.Equal(80, result);
     }
@@ -82,7 +87,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_RetreatCrossesAGenuineSilence_StopsAtItsEndRatherThanThroughIt()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            102.75, [new(95, 100)], [new(0, 95), new(103, 200)], NoTranscript);
+            102.75, [new(95, 100)], [new(0, 95), new(103, 200)], NoTranscript, NoLead);
 
         Assert.Equal(100, result);
     }
@@ -97,7 +102,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_ABlipStartingAfterTheMark_NeverCountsAsPrecedingSpeech()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            100, [], [new(50, 70), new(100.2, 101.0)], NoTranscript);
+            100, [], [new(50, 70), new(100.2, 101.0)], NoTranscript, NoLead);
 
         Assert.Equal(70, result);
     }
@@ -121,7 +126,7 @@ public class JingleGeometryTests
         ], 0, 90);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
+            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript, NoLead);
 
         Assert.Equal(50, result);
     }
@@ -140,7 +145,7 @@ public class JingleGeometryTests
         ], 0, 90);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
+            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript, NoLead);
 
         Assert.Equal(71.0, result);
     }
@@ -161,7 +166,7 @@ public class JingleGeometryTests
         ], 0, 90);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
+            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript, NoLead);
 
         Assert.Equal(50, result);
     }
@@ -176,7 +181,7 @@ public class JingleGeometryTests
         var transcript = new TranscriptWindow([new(200, 210, "Ganz woanders.", 1.0)], 200, 210);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
+            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript, NoLead);
 
         Assert.Equal(71.0, result);
     }
@@ -196,7 +201,7 @@ public class JingleGeometryTests
         var transcript = new TranscriptWindow([new(90, 94, "Kapitel 8", 1.0)], 50, 110);
 
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript);
+            105, [], [new(0, 50), new(70, 71.0), new(110, 200)], transcript, NoLead);
 
         Assert.Equal(50, result);
     }
@@ -208,7 +213,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_NoPrecedingSpeechAtAll_BacksOffByTheFlatLead()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            3.0, [], [new(10, 20)], NoTranscript);
+            3.0, [], [new(10, 20)], NoTranscript, NoLead);
 
         Assert.Equal(2.5, result);
     }
@@ -218,7 +223,7 @@ public class JingleGeometryTests
     public void ComputeMarkBeforeJingle_NoPrecedingSpeechAtAll_NeverGoesNegative()
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            0.3, [], [], NoTranscript);
+            0.3, [], [], NoTranscript, NoLead);
 
         Assert.Equal(0, result);
     }
@@ -233,7 +238,7 @@ public class JingleGeometryTests
         double originalMark, double expected)
     {
         var result = JingleGeometry.ComputeMarkBeforeJingle(
-            originalMark, [], [new(0, 100)], NoTranscript);
+            originalMark, [], [new(0, 100)], NoTranscript, NoLead);
 
         Assert.Equal(expected, result);
     }
@@ -259,7 +264,7 @@ public class JingleGeometryTests
             originalMark,
             [new(separatorStart, separatorEnd), new(hushStart, hushEnd)],
             [new(narrationStart, narrationEnd), new(announcementStart, announcementEnd)],
-            NoTranscript);
+            NoTranscript, NoLead);
 
         Assert.Equal(expected, result);
     }
@@ -278,7 +283,7 @@ public class JingleGeometryTests
             9966.376,
             [new(9941.758, 9945.162), new(9965.418, 9966.626)],
             [new(9940.800, 9941.824), new(9966.784, 9967.520)],
-            NoTranscript);
+            NoTranscript, NoLead);
 
         Assert.Equal(9945.162, result);
     }
@@ -324,9 +329,66 @@ public class JingleGeometryTests
             hushEnd > hushStart ? [new(hushStart, hushEnd)] : [],
             [new(narrationEnd - 3, narrationEnd), new(stingStart, stingEnd),
              new(announcementStart, announcementEnd)],
-            transcript);
+            transcript, NoLead);
 
         Assert.Equal(expected, result);
+    }
+
+    // Step 5, the mark lead. The walk stops at the end of the hush before the jingle (100), and
+    // the lead then backs the mark into that hush - the same "a moment of quiet before the thing
+    // the mark is for" rule default-mode placement follows, applied to a jingle instead of an
+    // announcement. --mark-lead was documented as ignored under --mark-before-jingle; it never was
+    // in the no-jingle case (see below), and now it is not here either.
+    [Theory]
+    [InlineData(0.35, 99.65)]
+    [InlineData(0.0, 100.0)]  // --mark-lead 0 keeps the mark exactly at the jingle's start
+    [InlineData(2.0, 98.0)]   // the whole 2 s hush, exactly consumed
+    public void ComputeMarkBeforeJingle_AWalkStoppingOnAHush_BacksIntoItByTheMarkLead(
+        double markLead, double expected)
+    {
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            110, [new(98, 100)], [new(0, 98), new(112, 200)], NoTranscript, markLead);
+
+        Assert.Equal(expected, result);
+    }
+
+    // ...and never further than the hush itself, whose start is where the previous chapter's
+    // narration ends. A lead longer than the hush is spent in full on it and no more, which is the
+    // one thing --mark-before-jingle exists to guarantee: no mark inside the old chapter.
+    [Fact]
+    public void ComputeMarkBeforeJingle_AMarkLeadLongerThanTheHush_StopsAtTheHushStart()
+    {
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            110, [new(99.7, 100)], [new(0, 99.7), new(112, 200)], NoTranscript, 5.0);
+
+        Assert.Equal(99.7, result);
+    }
+
+    // A walk stopping on *speech* gets no lead at all: the previous chapter's narration runs right
+    // up to the jingle here, with no hush to sit in, so backing off would put the mark inside it.
+    [Fact]
+    public void ComputeMarkBeforeJingle_AWalkStoppingOnNarration_GetsNoLead()
+    {
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            110, [], [new(0, 100), new(112, 200)], NoTranscript, 0.35);
+
+        Assert.Equal(100, result);
+    }
+
+    // And a phrase with no jingle in front of it never reaches step 5: step 2 hands the original
+    // mark straight back, and that mark already carries the lead its own default-mode placement
+    // applied. This is the case a book with jingles on only some of its chapters runs into on the
+    // rest of them, and the lead has to survive it whatever --mark-before-jingle does elsewhere.
+    [Theory]
+    [InlineData(0.35)]
+    [InlineData(2.0)]
+    public void ComputeMarkBeforeJingle_NoJingleAtAll_HandsBackTheAlreadyLedMarkWhateverTheLead(
+        double markLead)
+    {
+        var result = JingleGeometry.ComputeMarkBeforeJingle(
+            100, [], [new(0, 150)], NoTranscript, markLead);
+
+        Assert.Equal(100, result);
     }
 
     // RetreatPastNonSpeech itself: starting inside a qualifying segment never moves the
@@ -334,7 +396,7 @@ public class JingleGeometryTests
     [Fact]
     public void RetreatPastNonSpeech_AlreadyInsideAQualifyingSegment_ReturnsFromUnchanged()
     {
-        var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
+        var (position, foundBoundary, _) = JingleGeometry.RetreatPastNonSpeech(
             50, [new(40, 60)], [], NoTranscript, 0.4);
 
         Assert.Equal(50, position);
@@ -352,7 +414,7 @@ public class JingleGeometryTests
     [Fact]
     public void RetreatPastNonSpeech_StartingInsideASubFloorBlip_IsSkippedRatherThanAcceptedOutright()
     {
-        var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
+        var (position, foundBoundary, _) = JingleGeometry.RetreatPastNonSpeech(
             29.8, [new(0, 20), new(29.6, 29.984)], [], NoTranscript, 0.4);
 
         Assert.Equal(20, position);
@@ -364,7 +426,7 @@ public class JingleGeometryTests
     [Fact]
     public void RetreatPastNonSpeech_SkipsShortBlips_ChainingBackToTheFirstQualifyingOne()
     {
-        var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
+        var (position, foundBoundary, _) = JingleGeometry.RetreatPastNonSpeech(
             100, [new(0, 80), new(85, 85.2), new(92, 92.1)], [], NoTranscript, 0.4);
 
         Assert.Equal(80, position);
@@ -377,7 +439,7 @@ public class JingleGeometryTests
     [Fact]
     public void RetreatPastNonSpeech_AGenuineSilenceIsCloser_StopsAtItsEnd()
     {
-        var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
+        var (position, foundBoundary, _) = JingleGeometry.RetreatPastNonSpeech(
             70, [new(0, 48.5)], [new(50, 60)], NoTranscript, 0.4);
 
         Assert.Equal(60, position);
@@ -392,7 +454,7 @@ public class JingleGeometryTests
     [Fact]
     public void RetreatPastNonSpeech_ASilenceStopsTheWalk_WhateverPrecedesIt()
     {
-        var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
+        var (position, foundBoundary, _) = JingleGeometry.RetreatPastNonSpeech(
             70, [new(0, 40)], [new(50, 60)], NoTranscript, 0.4);
 
         Assert.Equal(60, position);
@@ -405,7 +467,7 @@ public class JingleGeometryTests
     [Fact]
     public void RetreatPastNonSpeech_SeveralSilencesBehind_StopsAtTheNearestOne()
     {
-        var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
+        var (position, foundBoundary, _) = JingleGeometry.RetreatPastNonSpeech(
             100, [new(0, 50)], [new(50, 52), new(95, 97)], NoTranscript, 0.4);
 
         Assert.Equal(97, position);
@@ -418,7 +480,7 @@ public class JingleGeometryTests
     [Fact]
     public void RetreatPastNonSpeech_RunsOutOfData_ReturnsFalseWithTheFurthestPositionReached()
     {
-        var (position, foundBoundary) = JingleGeometry.RetreatPastNonSpeech(
+        var (position, foundBoundary, _) = JingleGeometry.RetreatPastNonSpeech(
             10, [new(2, 2.1)], [], NoTranscript, 0.4);
 
         Assert.Equal(2, position);

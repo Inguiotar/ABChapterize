@@ -171,7 +171,9 @@ internal sealed class MarkPlacer
     /// Applies --mark-before-jingle on top of an already-computed (and normally already
     /// precise-marking-corrected) default-mode mark: <see
     /// cref="JingleGeometry.ComputeMarkBeforeJingle"/> walks it backward to the jingle's true
-    /// leading edge, or leaves it unchanged when VAD finds no jingle there at all.
+    /// leading edge - into the hush before it by up to <c>--mark-lead</c>, where there is one - or
+    /// leaves it unchanged when VAD finds no jingle there at all, in which case the lead the
+    /// default-mode mark already carries is what the mark keeps.
     /// <para>
     /// Only when the mark the walk started from is of unknown accuracy - precise marking ran but
     /// never actually heard the phrase, or was turned off entirely by --quick-marks - is the walked
@@ -194,7 +196,8 @@ internal sealed class MarkPlacer
     private async Task<double> ApplyMarkBeforeJingleAsync(
         double mark, bool markConfirmed, MarkContext ctx, CancellationToken ct)
     {
-        var walked = ComputeMarkBeforeJingle(mark, ctx.AllSilences, ctx.SpeechSegments, ctx.Transcript);
+        var walked = ComputeMarkBeforeJingle(
+            mark, ctx.AllSilences, ctx.SpeechSegments, ctx.Transcript, _options.MarkLeadSeconds);
         if (walked != mark)
             _log?.Invoke($"--mark-before-jingle: walked mark back from {FormatTimestamp(mark)} to {FormatTimestamp(walked)}");
 

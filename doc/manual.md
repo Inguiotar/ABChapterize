@@ -727,12 +727,17 @@ so that logs and reports stay comparable regardless of regional settings.
   found, the mark is walked backward — out of any silence
   it sits in, then, if no real speech is heard right there, back through the
   jingle's own music — until real narration is found, and placed there; a
-  mark with real narration already right before it is left unchanged. Two
+  mark with real narration already right before it is left unchanged, keeping
+  its ordinary `--mark-lead` offset, so chapters that happen to carry no jingle
+  are marked exactly as they would be without this option. Two
   jingles playing back to back with an audible break between them stop the
   walk at that break, placing the mark at the second jingle's start rather
-  than in front of the first. If a jingle opens the file with nothing spoken
-  before it at all, the mark instead backs off by a small fixed margin from
-  the earliest point reached.
+  than in front of the first. Where the walk comes to rest on a pause — the
+  hush between the previous chapter and the jingle, or between two jingles —
+  the mark is moved back into that pause by `--mark-lead` seconds, or to the
+  pause's own beginning if it is shorter than that. If a jingle opens the file
+  with nothing spoken before it at all, the mark instead backs off by a small
+  fixed margin from the earliest point reached.
   The same backward-only quietest-point nudge described under
   `--quick-marks` below is then applied to the result.
   **Avoid combining this with `--quick-marks`.** The walk can only be as good
@@ -756,8 +761,10 @@ so that logs and reports stay comparable regardless of regional settings.
   lower it to land closer to the first word — though below roughly 0.2 the
   opening consonant of the announcement starts to get clipped, and a hard one
   such as the "K" of "Kapitel" is easy to lose without noticing. `0` marks the
-  measured onset itself. Ignored under `--mark-before-jingle`, which takes its
-  position from the jingle rather than from a fixed offset. Both `,` and `.`
+  measured onset itself. Under `--mark-before-jingle` it still applies: in full
+  where a chapter has no jingle in front of it, and as a back-off into the pause
+  preceding a jingle where there is one (capped at that pause's length, so the
+  mark never lands in the previous chapter's narration). Both `,` and `.`
   work as the decimal point.
 
 `-Q`, `--quick-marks`
