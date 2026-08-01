@@ -3331,19 +3331,70 @@ public sealed class ChapterDetectorTests : IDisposable
         // Chapter one is found by the first probe - deliberately at low confidence, so the
         // overlap-sequence skip stays out of the way (a low-confidence mark must not skip the
         // windows that could re-detect the transition it may have gotten wrong) and the reuse
-        // path is actually exercised. The second probe must not re-decode the shared [606, 612]
-        // span: neither silence lies fully within window 2 ([606, 618]), so
-        // FindOverlapSplitPoint falls back to the original border (612, no snap, no reach-back) -
-        // that is where the fresh tail decode starts, and the candidate's own start (606) never is.
-        // The detected chapter is unaffected by the optimization.
+        // path is actually exercised.
+        //
+        // Window 2 costs no Whisper call whatsoever: window 1's decode reads ahead to window 2's
+        // planned end (618) because that still fits the one 30 s encoder pass it was already
+        // paying for, which leaves window 2 wholly inside the cache. So the single decode runs
+        // [600, 618] - not to window 1's own end (612) - and neither the candidate's own start
+        // (606) nor the border (612) is ever decoded from. The detected chapter is unaffected.
         var (result, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(601, 606)],
             s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
         AssertChapters([new DetectedChapter(1, 600.25, 0.3)], result.Chapters);
-        Assert.Contains(612.0, audio.DecodeStarts);        // fresh tail only (fallback: the border itself)
+        Assert.Contains((600.0, (double?)18.0), audio.DecodeWindows); // read ahead to 618, one pass
+        Assert.DoesNotContain(612.0, audio.DecodeStarts);  // no fresh tail decode was needed
         Assert.DoesNotContain(606.0, audio.DecodeStarts);  // the overlap was reused, not re-decoded
+    }
+
+    [Fact]
+    public async Task ReadAhead_StopsAtTheEncoderPass_RatherThanSwallowingTheNextWindow()
+    {
+        // The counterpart to the layout above: with a 25 s probe window (--max-jingle-length 20 plus
+        // the phrase margin) window 2 ends at 631, and window 1's decode starts at 600, so reaching
+        // that end would cost a second encoder pass. Reading ahead exists to fill the pass already
+        // bought and never to buy another, so window 1 decodes exactly its own planned span
+        // ([600, 608.3], the snapped seam) and window 2 pays for its own tail decode after all.
+        var (_, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "20"),
+            [new(595, 600), new(603, 606), new(608, 608.6)],
+            s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
+
+        Assert.Contains(audio.DecodeWindows, w =>
+            Math.Abs(w.Start - 600) < 1e-6 && Math.Abs((w.Duration ?? 0) - 8.3) < 1e-6);
+        Assert.Contains(608.3, audio.DecodeStarts); // the fresh tail, not read ahead into
+    }
+
+    [Fact]
+    public async Task ReadAhead_KeepsItsSurplusOutOfTheWindowThatDecodedIt()
+    {
+        // Three candidates (600, 606, 615) with 12 s windows. Window 1 ends at the seam 614.2, and
+        // reads ahead to 627 - candidate 615's planned end, the furthest that still fits its one
+        // encoder pass. Chapter two's announcement (abs 615) therefore sits in audio window 1 has
+        // decoded, but not in the window window 1 was probed for, and must not be scanned as part
+        // of it.
+        //
+        // The overlap-sequence skip counts the difference out loud. Chapter one is scripted at low
+        // confidence, so window 1's own mark settles nothing; chapter two is then found by window 2
+        // and settles the one window after it. Had the surplus been scanned with window 1, both marks
+        // would have come out of window 1 - and its confident chapter two would have settled two
+        // windows instead, from one candidate further back.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(595, 600), new(601, 606), new(613.4, 615)],
+            s =>
+            {
+                s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3));
+                s.Add(600, Seg(15.0, " Chapter two.")); // abs 615 - inside the read-ahead surplus
+            });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        // 27 s decoded from 600, of which the last 12.8 belong to the windows still to come.
+        Assert.Contains(log, l => l.StartsWith($"probe {27.0:0.0}s@0:10:00.00 (+{12.8:0.0}s ahead)"));
+        Assert.Contains(log, l => l.Contains("1 overlapping window(s) skipped"));
+        Assert.DoesNotContain(log, l => l.Contains("2 overlapping window(s) skipped"));
     }
 
     [Fact]
@@ -3680,11 +3731,15 @@ public sealed class ChapterDetectorTests : IDisposable
         // Same split-snapping setup as OverlappingProbe_SnapsTheSplitToASilenceMidpointWithinWindowTwo
         // (split at 608.3), but this asserts on the --verbose-transcripts log itself: the tail
         // probe's log line must show only what was actually decoded from 608.3 onward, at Whisper's
-        // own (0-based) timestamps - not the reused segment restated at window-relative time, and
-        // not a span reaching all the way to the window's nominal end (618). Chapter one is scripted
-        // at low confidence so the overlap-sequence skip stays out of the way.
+        // own (0-based) timestamps - not the reused segment restated at window-relative time.
+        // Chapter one is scripted at low confidence so the overlap-sequence skip stays out of the way.
+        //
+        // The 25 s probe window (--max-jingle-length 20 plus the phrase margin) is what keeps a tail
+        // decode in the picture at all: window 2 then ends at 631, past the 630 that window 1's one
+        // encoder pass reaches, so window 1 cannot read ahead over it the way the 12 s layout above
+        // lets it.
         var (_, log, _) = await DetectWithLogAsync(
-            Options("--verbose-transcripts", "--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--verbose-transcripts", "--min-silence-length", "1.5", "--max-jingle-length", "20"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
             s =>
             {
@@ -3692,8 +3747,8 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(608.3, Seg(1.0, " some fresh words"));
             });
 
-        // The label carries the actually decoded length: split at 608.3, window end 618 -> 9.7 s.
-        var tailLine = Assert.Single(log, l => l.StartsWith($"probe {9.7:0.#}s@0:10:08.30 (tail)"));
+        // The label carries the actually decoded length: split at 608.3, window end 631 -> 22.7 s.
+        var tailLine = Assert.Single(log, l => l.StartsWith($"probe {22.7:0.#}s@0:10:08.30 (tail)"));
         Assert.Contains($"{1.0:0.0}-{3.0:0.0}", tailLine); // Whisper's own 0-based timestamp for the fresh segment
         Assert.DoesNotContain("Chapter one", tailLine); // that segment was reused, not re-decoded
     }
@@ -3746,7 +3801,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task OverlappingProbe_FlagsADetectionThatSpansTheCacheFreshMerge()
     {
         // The "Chapter" segment (abs 606.5) is reused from window 1's cache; the number word
-        // "one." only exists in window 2's freshly decoded tail (from the 608.3 split point).
+        // "one." only exists in window 2's freshly decoded tail (from the 617.3 split point).
         // Extracting the chapter number therefore has to reach across the cache/fresh boundary -
         // FindPhraseMatches must flag that detection, and DetectAsync must log it.
         //
@@ -3754,13 +3809,18 @@ public sealed class ChapterDetectorTests : IDisposable
         // as the sole route to it: window 1 hears a bare "Chapter", and the unnumbered re-read that
         // triggers re-frames it at 15 s and 45 s - both too wide here, so they come back with the
         // same unreadable announcement and the merge still has to do the work.
+        //
+        // The geometry is picked so that a tail decode both happens and stays short: the seam sits
+        // at 617.3, and the 25 s window (--max-jingle-length 20 plus the phrase margin) puts window
+        // 2's end at 631 - past the 630 window 1's single encoder pass covers, so window 1 cannot
+        // read ahead over it, and the tail is only 13.7 s.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
-            [new(595, 600), new(603, 606), new(608, 608.6)],
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "20"),
+            [new(595, 600), new(603, 606), new(617, 617.6)],
             s =>
             {
                 s.Add(600, Seg(6.5, " Chapter"));        // abs 606.5 - reused by window 2
-                s.AddWithin(11, 608.3, Seg(0, " one.")); // abs 608.3 - fresh tail of window 2
+                s.AddWithin(14, 617.3, Seg(0, " one.")); // abs 617.3 - fresh tail of window 2
             });
 
         AssertChapters([new DetectedChapter(1, 606.25)], result.Chapters);

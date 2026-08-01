@@ -113,6 +113,18 @@ internal readonly record struct LanguageState(
 internal readonly record struct ProbeCandidate(
     double Start, Silence? Silence, NonSpeechRegion? VadRegion);
 
+/// <summary>
+/// One probe window as planned, together with the candidate sequence it came from - enough for the
+/// decode to work out how far it may read ahead (see <see cref="RegionProber.ExtendToPlannedSeam"/>)
+/// without the intervening layers having to thread a candidate list through by hand.
+/// </summary>
+/// <param name="Candidates">The candidate sequence being walked - the region's own, or the skipped
+/// subset a sequence-gap re-probe forms.</param>
+/// <param name="Index">Index of this window's candidate within <paramref name="Candidates"/>.</param>
+/// <param name="End">The window's planned end (see <see cref="RegionProber.WindowEndFor"/>).</param>
+internal readonly record struct WindowPlan(
+    IReadOnlyList<ProbeCandidate> Candidates, int Index, double End);
+
 /// <summary>One chapter mark a probe window produced.</summary>
 /// <param name="Number">The detected chapter number.</param>
 /// <param name="MarkSilence">The silence the mark falls into, or null when it sits on a VAD region
@@ -208,23 +220,27 @@ internal sealed class RegionProber
     /// the in-between numbers.</summary>
     private int? _lastNumber;
 
-    /// <summary>The previous probe's full window transcript in absolute file time; see
-    /// <see cref="_cacheTo"/> for what it is for.</summary>
+    /// <summary>The previous probe's decoded span, transcribed, in absolute file time; see
+    /// <see cref="_cacheTo"/> for what it is for. Wider than that probe's own window whenever the
+    /// decode read ahead (<see cref="ExtendToPlannedSeam"/>), which is the point of reading ahead:
+    /// the surplus is what later windows are served from.</summary>
     private List<TranscriptSegment> _cacheSegmentsAbs = [];
 
     /// <summary>Start of the absolute span <see cref="_cacheSegmentsAbs"/> covers.</summary>
     private double _cacheFrom;
 
     /// <summary>
-    /// End of that span. When the next candidate's window overlaps it, the overlapping segments are
-    /// reused verbatim instead of being re-run through Whisper - only the fresh tail beyond the
-    /// planned seam is decoded. The span test (start inside [<see cref="_cacheFrom"/>,
-    /// <see cref="_cacheTo"/>)) doubles as the seam-stitching check: it holds exactly when the
-    /// previous window really was decoded up to the seam this window's plan relies on, and when it
-    /// does not (e.g. that window was skipped by the adaptive threshold) the probe falls back to
-    /// decoding its full window from the candidate start - nothing is ever left covered by neither
-    /// decode. Starts at negative infinity so the very first probe of a region never counts as an
-    /// overlap and always does a full transcribe.
+    /// End of that span - the previous decode's end, which is at or beyond the window that decode
+    /// was run for. When the next candidate's window overlaps the span, the overlapping segments are
+    /// reused verbatim instead of being re-run through Whisper: a window that fits inside it costs no
+    /// Whisper call at all, and one that reaches past it decodes only the fresh tail beyond the
+    /// planned seam. The span test (start inside [<see cref="_cacheFrom"/>, <see cref="_cacheTo"/>))
+    /// doubles as the seam-stitching check: it holds exactly when the previous decode really did run
+    /// up to a seam this window's plan can pick up from, and when it does not (e.g. that window was
+    /// skipped by the adaptive threshold) the probe falls back to decoding its full window from the
+    /// candidate start - nothing is ever left covered by neither decode. Starts at negative infinity
+    /// so the very first probe of a region never counts as an overlap and always does a full
+    /// transcribe.
     /// </summary>
     private double _cacheTo = double.NegativeInfinity;
 
@@ -351,8 +367,8 @@ internal sealed class RegionProber
                 continue;
 
             var foundNoneYet = _found.Count == 0;
-            var windowEnd = WindowEndFor(candidates, ci);
-            var probeMarks = await ProbeAsync(candidate, windowEnd, ct);
+            var plan = new WindowPlan(candidates, ci, WindowEndFor(candidates, ci));
+            var probeMarks = await ProbeAsync(candidate, plan, ct);
 
             if (foundNoneYet && IsBelowExpectedStart())
                 break;
@@ -360,8 +376,8 @@ internal sealed class RegionProber
             // Recorded after the marks are applied, so it lands in the list that survives them: this
             // window is history for whatever gap a *later* mark reveals, never for its own.
             await ApplyProbeMarksAsync(probeMarks, ct);
-            _probedSinceLastMark.Add((candidate, windowEnd));
-            ci = SkipSettledWindows(candidates, ci, windowEnd, probeMarks);
+            _probedSinceLastMark.Add((candidate, plan.End));
+            ci = SkipSettledWindows(candidates, ci, plan.End, probeMarks);
         }
     }
 
@@ -431,6 +447,59 @@ internal sealed class RegionProber
         => PlanWindowEnd(list[index].Start,
             index + 1 < list.Count ? list[index + 1].Start : null,
             _probeSeconds, _region.ToSeconds, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
+
+    /// <summary>
+    /// How far a decode that must cover up to <c>plan.End</c> is allowed to read on past it: the
+    /// furthest end an upcoming candidate's window is already planned to have that still fits inside
+    /// the <see cref="WhisperChunkSeconds"/> passes this decode is paying for anyway. The surplus
+    /// goes into the overlap cache, so those upcoming windows are served from it outright instead of
+    /// each buying a Whisper pass of its own.
+    /// <para>
+    /// The whole saving rests on the encoder's fixed input: it runs on a 30 s mel whatever it is
+    /// handed, so a 6 s tail decode costs exactly what a 30 s one costs. A run of overlapping
+    /// candidates therefore pays a full pass per candidate for a stretch that a chunk-sized decode
+    /// covers in one. Measured on BARDIOC.m4b's 15.6 h debug log (2026-08-01, 1659 probe decodes):
+    /// 1814 encoder passes without reading ahead, 1570 with it, 244 windows served from cache that
+    /// had cost a pass each - and not one decode made longer than the passes it already bought.
+    /// </para>
+    /// <para>
+    /// Why the reach is a <em>planned window end</em> and not simply the chunk boundary, although
+    /// stopping at the boundary would save a further 124 passes: every planned end is snapped to a
+    /// silence or non-speech mid-point (see <see cref="GapPlanning.PlanWindowEnd"/>), and stopping
+    /// anywhere else would leave the cache ending mid-speech. A later window reusing it wholesale
+    /// never re-reads that audio, so an announcement straddling the cut would be lost on both sides
+    /// of it - the one failure this must not buy speed with.
+    /// </para>
+    /// <para>
+    /// Suppressed while a sequence gap re-probes (<see cref="_reprobing"/>). A re-probe's value is a
+    /// differently framed second look at audio that has already been read once and yielded nothing;
+    /// filling the cache ahead of it would hand some of its candidates the first look's transcript
+    /// instead, which is exactly the trade that had to be reverted when gap re-probes last reused a
+    /// transcript rather than re-decoding.
+    /// </para>
+    /// </summary>
+    /// <param name="plan">The window being decoded, and the candidates that follow it.</param>
+    /// <param name="decodeStart">Absolute time the decode itself starts at - the window start for a
+    /// full decode, the overlap split point for a tail decode.</param>
+    /// <returns>The absolute time the decode is to run to, never earlier than <c>plan.End</c>.</returns>
+    private double ExtendToPlannedSeam(WindowPlan plan, double decodeStart)
+    {
+        if (_reprobing)
+            return plan.End;
+
+        var chunks = Math.Max(1, (int)Math.Ceiling((plan.End - decodeStart) / WhisperChunkSeconds));
+        var budget = decodeStart + chunks * WhisperChunkSeconds;
+        var reach = plan.End;
+        for (var i = plan.Index + 1;
+             i < plan.Candidates.Count && plan.Candidates[i].Start < budget;
+             i++)
+        {
+            var end = WindowEndFor(plan.Candidates, i);
+            if (end <= budget && end > reach)
+                reach = end;
+        }
+        return reach;
+    }
 
     /// <summary>
     /// --early-abort: once Pass 2 has probed this far into the file's play time without a single
@@ -511,21 +580,25 @@ internal sealed class RegionProber
     /// <param name="candidate">The candidate whose window to probe. Its start stays the semantic
     /// anchor for the phrase-timing rule and for progress, both of which are relative to the
     /// triggering silence rather than to whatever seam the window plan chose.</param>
-    /// <param name="windowEnd">The window's <em>planned</em> end (see <see cref="WindowEndFor"/>),
-    /// possibly snapped away from the natural start plus <see cref="_probeSeconds"/>.</param>
+    /// <param name="plan">The window to probe: its <em>planned</em> end (see
+    /// <see cref="WindowEndFor"/>), possibly snapped away from the natural start plus
+    /// <see cref="_probeSeconds"/>, and the candidates that follow it, which only the decode's
+    /// read-ahead looks at (see <see cref="ExtendToPlannedSeam"/>). Everything below this scans the
+    /// planned window and nothing beyond it, whatever the decode read.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The accepted marks in window order.</returns>
     private async Task<List<ProbeMark>> ProbeAsync(
-        ProbeCandidate candidate, double windowEnd, CancellationToken ct)
+        ProbeCandidate candidate, WindowPlan plan, CancellationToken ct)
     {
         var start = candidate.Start;
+        var windowEnd = plan.End;
         ct.ThrowIfCancellationRequested();
         // Position-based Pass 2 progress (see DetectCoreAsync's BeginPhase); reported here rather
         // than only in the candidate loop so gap re-probes show their (backwards) position too.
         ReportProgress(start);
 
         var (windowSegmentsAbs, mergeBoundarySegIndex) =
-            await AssembleWindowTranscriptAsync(start, windowEnd, ct);
+            await AssembleWindowTranscriptAsync(start, plan, ct);
 
         // Correct segment starts Whisper timestamped from a leading silence/jingle before shifting
         // to window-relative time (the cache keeps the raw absolute timings its reuse math needs).
@@ -660,42 +733,63 @@ internal sealed class RegionProber
     /// </para>
     /// </summary>
     /// <param name="start">Absolute start of the window.</param>
-    /// <param name="windowEnd">Absolute planned end of the window.</param>
+    /// <param name="plan">The window being probed, and the candidates that follow it - the latter
+    /// only so a decode can read ahead into them (see <see cref="ExtendToPlannedSeam"/>).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The window transcript, plus - for a partial-overlap assembly - the index of its
     /// first fresh segment, so a detection drawing on text from both sides of the cache/fresh
     /// boundary can be flagged (see <see cref="PhraseMatch.SpansMerge"/>); null when the window is
     /// entirely one or the other.</returns>
     private async Task<(List<TranscriptSegment> Segments, int? MergeBoundarySegIndex)>
-        AssembleWindowTranscriptAsync(double start, double windowEnd, CancellationToken ct)
+        AssembleWindowTranscriptAsync(double start, WindowPlan plan, CancellationToken ct)
     {
         // A window whose start falls outside the cached span has no usable overlap.
         if (start < _cacheFrom || start >= _cacheTo)
-            return (await DecodeFullWindowAsync(start, windowEnd, ct), null);
+            return (await DecodeFullWindowAsync(start, plan, ct), null);
 
-        if (windowEnd <= _cacheTo)
-            // Fully contained in the previous window: reuse its transcript wholesale, no Whisper at
-            // all. The (larger) cache is deliberately left untouched so a later candidate starting
-            // within it can keep reusing it too.
-            return (_cacheSegmentsAbs
-                .Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList(), null);
+        if (plan.End <= _cacheTo)
+            // Fully contained in the cached span: reuse its transcript wholesale, no Whisper at all.
+            // The (larger) cache is deliberately left untouched so a later candidate starting within
+            // it can keep reusing it too.
+            return (WindowSlice(_cacheSegmentsAbs, start, plan.End), null);
 
-        return await DecodeOverlapTailAsync(start, windowEnd, ct);
+        return await DecodeOverlapTailAsync(start, plan, ct);
     }
+
+    /// <summary>
+    /// The part of a decoded or cached span that belongs to one window: the segments starting inside
+    /// it. Every decode may run past the window it was asked for (see
+    /// <see cref="ExtendToPlannedSeam"/>), and the surplus belongs to the cache alone - letting it
+    /// through to the scan would place marks from audio beyond the window the candidate was probed
+    /// with, at a candidate's window width that nothing planned.
+    /// </summary>
+    /// <param name="segmentsAbs">A decoded or cached span, in absolute file time.</param>
+    /// <param name="start">Absolute start of the window.</param>
+    /// <param name="windowEnd">Absolute planned end of the window.</param>
+    private static List<TranscriptSegment> WindowSlice(
+        List<TranscriptSegment> segmentsAbs, double start, double windowEnd)
+        => segmentsAbs.Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList();
 
     /// <summary>
     /// Transcribes a whole window from scratch and makes it the new cache. For a fresh run this is
     /// also where --lang auto resolves the language, once, from the very first probe's full
     /// samples; a gap-scoped run arrives with the profile already set, so this never re-resolves it.
+    /// <para>
+    /// Read-ahead reaches the language resolution too, harmlessly: Whisper detects from the first
+    /// mel frame either way, so a window that already spanned a whole
+    /// <see cref="WhisperChunkSeconds"/> sees exactly what it saw before, and a shorter one now has
+    /// real audio where it had zero padding.
+    /// </para>
     /// </summary>
     /// <param name="start">Absolute start of the window.</param>
-    /// <param name="windowEnd">Absolute planned end of the window.</param>
+    /// <param name="plan">The window being probed; see <see cref="AssembleWindowTranscriptAsync"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<List<TranscriptSegment>> DecodeFullWindowAsync(
-        double start, double windowEnd, CancellationToken ct)
+        double start, WindowPlan plan, CancellationToken ct)
     {
+        var decodeEnd = ExtendToPlannedSeam(plan, start);
         var samples = await _env.Audio.DecodePcmAsync(
-            _ctx.File, start, windowEnd - start, _ctx.Info.InputDecoder, ct);
+            _ctx.File, start, decodeEnd - start, _ctx.Info.InputDecoder, ct);
 
         if (Language.Profile == null)
         {
@@ -705,50 +799,79 @@ internal sealed class RegionProber
         }
 
         var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
-        _env.LogTranscript($"probe {windowEnd - start:0.0}s@{FormatTimestamp(start)}", fresh);
-        return CacheWindow(ShiftSegments(fresh, start), start, windowEnd);
+        _env.LogTranscript(
+            $"probe {decodeEnd - start:0.0}s@{FormatTimestamp(start)}{ProbeNote(false, decodeEnd, plan.End)}",
+            fresh);
+        return WindowSlice(CacheWindow(ShiftSegments(fresh, start), start, decodeEnd), start, plan.End);
     }
 
     /// <summary>
-    /// Partial overlap: cuts between the reused cache and a fresh tail decode. The previous window's
-    /// end was planned as a seam snapped to a silence mid-point inside this window (see
-    /// <see cref="GapPlanning.PlanWindowEnd"/>), so the cache normally ends exactly at that seam and
-    /// the split search re-finds it at distance zero - the fresh decode starts right where the
-    /// previous one stopped, stitching the transcripts together word-safely with nothing re-decoded
-    /// and nothing dropped. It genuinely decides only for overlaps that plan did not anticipate (a
-    /// probe-window resize in between), snapping to the best seam still covered by the cache; the
-    /// border fallback means no seam exists, and hence no chapter transition in the overlap.
+    /// Partial overlap: cuts between the reused cache and a fresh tail decode. The previous decode
+    /// stopped at a planned window end, i.e. a seam snapped to a silence mid-point (see
+    /// <see cref="GapPlanning.PlanWindowEnd"/>) - its own window's, or a later candidate's when it
+    /// read ahead - so the cache normally ends exactly at a seam and the split search re-finds it at
+    /// distance zero: the fresh decode starts right where the previous one stopped, stitching the
+    /// transcripts together word-safely with nothing re-decoded and nothing dropped. It genuinely
+    /// decides only for overlaps that plan did not anticipate (a probe-window resize in between),
+    /// snapping to the best seam still covered by the cache; the border fallback means no seam
+    /// exists, and hence no chapter transition in the overlap.
     /// </summary>
     /// <param name="start">Absolute start of the window.</param>
-    /// <param name="windowEnd">Absolute planned end of the window.</param>
+    /// <param name="plan">The window being probed; see <see cref="AssembleWindowTranscriptAsync"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<(List<TranscriptSegment> Segments, int? MergeBoundarySegIndex)>
-        DecodeOverlapTailAsync(double start, double windowEnd, CancellationToken ct)
+        DecodeOverlapTailAsync(double start, WindowPlan plan, CancellationToken ct)
     {
         var splitPoint = FindOverlapSplitPoint(
-            start, _cacheTo, windowEnd, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null,
+            start, _cacheTo, plan.End, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null,
             allowBeyondBorder: false);
+        var decodeEnd = ExtendToPlannedSeam(plan, splitPoint);
         var samples = await _env.Audio.DecodePcmAsync(
-            _ctx.File, splitPoint, windowEnd - splitPoint, _ctx.Info.InputDecoder, ct);
+            _ctx.File, splitPoint, decodeEnd - splitPoint, _ctx.Info.InputDecoder, ct);
         var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
         var reused = _cacheSegmentsAbs
             .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint).ToList();
-        _env.LogTranscript($"probe {windowEnd - splitPoint:0.0}s@{FormatTimestamp(splitPoint)} (tail)", fresh);
+        _env.LogTranscript(
+            $"probe {decodeEnd - splitPoint:0.0}s@{FormatTimestamp(splitPoint)}" +
+            ProbeNote(true, decodeEnd, plan.End), fresh);
         var assembled = CacheWindow(
-            [.. reused, .. ShiftSegments(fresh, splitPoint)], start, windowEnd);
-        return (assembled, reused.Count);
+            [.. reused, .. ShiftSegments(fresh, splitPoint)], start, decodeEnd);
+        return (WindowSlice(assembled, start, plan.End), reused.Count);
     }
 
-    /// <summary>Makes a freshly assembled window transcript the overlap cache, and returns it
-    /// unchanged so the callers can assemble and cache in one expression.</summary>
-    /// <param name="segments">The window transcript, in absolute file time.</param>
+    /// <summary>The parenthetical a probe's --verbose line carries, so a log reader can tell what
+    /// the decode was: an overlap tail rather than a whole window, and how much of it ran past the
+    /// window the candidate was actually probed with (that surplus is cache for the windows to
+    /// come, never something this candidate's scan saw).</summary>
+    /// <param name="tail">Whether this decode was an overlap tail.</param>
+    /// <param name="decodeEnd">Absolute end of what was decoded.</param>
+    /// <param name="windowEnd">Absolute planned end of the window it was decoded for.</param>
+    private static string ProbeNote(bool tail, double decodeEnd, double windowEnd)
+    {
+        // Below a tenth of a second the read-ahead is a rounding artifact of the seam search, not
+        // audio anyone gained; saying "+0.0s ahead" would only make every line noisier.
+        var ahead = decodeEnd - windowEnd >= 0.05 ? $"+{decodeEnd - windowEnd:0.0}s ahead" : null;
+        return (tail, ahead) switch
+        {
+            (false, null) => "",
+            (false, _) => $" ({ahead})",
+            (true, null) => " (tail)",
+            (true, _) => $" (tail, {ahead})",
+        };
+    }
+
+    /// <summary>Makes a freshly assembled transcript the overlap cache, and returns it unchanged so
+    /// the callers can assemble and cache in one expression. The span cached is what was
+    /// <em>decoded</em>, which reaches past the window whenever the decode read ahead - slicing it
+    /// back down to the window is <see cref="WindowSlice"/>'s job, at the caller.</summary>
+    /// <param name="segments">The transcript, in absolute file time.</param>
     /// <param name="start">Absolute start of the span it covers.</param>
-    /// <param name="windowEnd">Absolute end of that span.</param>
-    private List<TranscriptSegment> CacheWindow(List<TranscriptSegment> segments, double start, double windowEnd)
+    /// <param name="spanEnd">Absolute end of that span.</param>
+    private List<TranscriptSegment> CacheWindow(List<TranscriptSegment> segments, double start, double spanEnd)
     {
         _cacheSegmentsAbs = segments;
         _cacheFrom = start;
-        _cacheTo = windowEnd;
+        _cacheTo = spanEnd;
         return segments;
     }
 
@@ -1474,7 +1597,8 @@ internal sealed class RegionProber
         var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
         for (var si = 0; si < candidates.Count; si++)
         {
-            var gapMarks = await ProbeAsync(candidates[si], WindowEndFor(candidates, si), ct);
+            var gapMarks = await ProbeAsync(
+                candidates[si], new WindowPlan(candidates, si, WindowEndFor(candidates, si)), ct);
             foreach (var gapMark in gapMarks)
             {
                 _lastNumber = Math.Max(_lastNumber ?? 0, gapMark.Number);

@@ -23,6 +23,16 @@ release means the thing has become a different program.
   the condition for shipping it at all. How much of the machine it uses is yours
   to set with the new `--vad-threads`.
 
+- **The second pass stops paying twice for the same stretch of audio.** Where the
+  book's silences sit close together, the tool used to hand the recognizer one
+  short clip after another, each costing a full turn no matter how little audio
+  was in it — a run of eleven of them was routine on a densely-marked book. Each
+  read now runs on to the end of the next clip that fits in the turn it has already
+  paid for, and the clips that follow come out of what it read. On a 15.6-hour book
+  that takes about a fifth off the second pass's recognizer work. Where a read stops
+  has not changed: still on a silence, so no announcement is ever cut in half by
+  one. Under `--verbose` a read that got ahead of itself says so.
+
 - **One file at a time, with the whole machine behind it.** Multi-file runs no
   longer process several books at once. That parallelism was worth less than it
   looked — on a GPU it never happened anyway (one file at a time has always been
