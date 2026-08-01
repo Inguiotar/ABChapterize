@@ -351,11 +351,14 @@ use `.`, whatever the machine's locale says.
    explicit `--max-jingle-length` value keeps the window fixed at it instead.
    A sequence gap puts the window back at the ceiling and retries every
    candidate since the last chapter at that width, including ones already
-   probed while it was narrower. A number that can't be right — one leaving
-   more than three chapters missing at once, or one below the chapters
-   already found — is read again before it's believed: with `--pass3-model` if
+   probed while it was narrower — and since that retry knows both ends of the
+   hole it's filling, only the numbers actually missing from it can be right
+   there. A number that can't be right — one leaving
+   more than three chapters missing at once, one below the chapters
+   already found, or one outside the hole being searched — is read again before
+   it's believed: with `--pass3-model` if
    that's the better model, then from two differently framed windows. The new
-   reading only counts if it continues the sequence, so a book that genuinely
+   reading only counts if it fits the sequence there, so a book that genuinely
    skips numbers keeps its own. An announcement heard with *no* readable number
    at all goes down the same road, with the same rule deciding what may be
    believed — which is the only thing that can rescue one sitting past the last
@@ -372,7 +375,21 @@ use `.`, whatever the machine's locale says.
    checks at a time until one hears the phrase first; its own
    beginning is then measured to within a tenth of a second and the mark set
    just ahead of it. Costs a handful of extra transcriptions
-   per chapter, which is what `--quick-marks` trades away for speed.
+   per chapter, which is what `--quick-marks` trades away for speed. Those
+   clips are also the best look at the chapter *number* anything in the run
+   gets — the same announcement can read as "chapter forty" from a 45-second
+   window and "chapter fourteen" from every window under seven — so when they
+   agree with each other, disagree with the number in hand, and offer one the
+   sequence can hold, the mark is filed under theirs. That costs nothing extra;
+   the clips were transcribed either way.
+2b-ii. **Sequence reconciliation:** chapter numbers rise through a book, so when
+   pass 2 is done and one mark's number contradicts the marks around it, that
+   mark gives way — not the rest of the book. Before it's given up, its
+   neighbours get a say: between a chapter 13 and a chapter 15 there's exactly
+   one number the mark can carry, so it's renumbered outright; where they leave
+   several, the audio is read once more and held to that range. Running it here
+   rather than during pass 2 is the point — the chapters that settle the
+   question are often found long after the misreading.
 2c. **Pass 2.5 — a cheap second opinion (only with a heavier `--pass3-model`):**
    most gaps aren't unprobeable audio, just a number the pass-2 model misread
    with the announcement sitting right there in the window. So before pass 3

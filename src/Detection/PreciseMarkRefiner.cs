@@ -26,7 +26,13 @@ namespace ABChapterize.Detection;
 /// reason about where the announcement is relative to the mark - <see
 /// cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/> above all - are only sound when this
 /// holds.</param>
-internal readonly record struct PreciseMarkResult(double Mark, bool PhraseHeard);
+/// <param name="PhraseReadings">Every probe transcript in which the announcement was actually
+/// found, in probe order. The search itself only wants a yes or no from each, but the transcripts
+/// behind those answers are the closest, most narrowly framed look at the announcement anything in
+/// the run gets - typically five of them, sometimes seventeen - and reading a chapter
+/// <em>number</em> out of them costs nothing extra (<see cref="RefinedNumberVote"/>).</param>
+internal readonly record struct PreciseMarkResult(
+    double Mark, bool PhraseHeard, IReadOnlyList<List<TranscriptSegment>> PhraseReadings);
 
 /// <summary>Implements the precise marking correction (<see cref="CliOptions.PreciseMark"/>):
 /// verifies a default-mode mark by directly asking Whisper whether the chapter phrase starts
@@ -40,6 +46,18 @@ internal sealed class PreciseMarkRefiner
     private readonly Action<string>? _log;
     private readonly Action<string>? _debug;
     private readonly Func<float[], CancellationToken, Task<List<TranscriptSegment>>> _transcribeCounting;
+
+    /// <summary>
+    /// Collector for <see cref="PreciseMarkResult.PhraseReadings"/> while
+    /// <see cref="RefinePreciseMarkAsync"/> is running, and null at every other time - which is what
+    /// scopes the collection to one refinement without threading a parameter through the whole
+    /// probe tree. Null is not merely the idle state: it also excludes
+    /// <see cref="VerifyMarkBeforeJingleAsync"/>, whose probes ask about a position deliberately
+    /// placed <em>before</em> the announcement and whose transcripts therefore say nothing about
+    /// which chapter this is. One file's placements run strictly one after another, so a single
+    /// field is enough.
+    /// </summary>
+    private List<List<TranscriptSegment>>? _phraseReadings;
 
     /// <summary>Creates a refiner bound to the given tools and options.</summary>
     /// <param name="audio">Audio source used for PCM decoding.</param>
@@ -96,6 +114,8 @@ internal sealed class PreciseMarkRefiner
         // *non-blank* segment is what actually starts at or after the checked position.
         var first = transcript.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Text));
         var found = first.Text != null && phraseRegex.IsMatch(first.Text);
+        if (found)
+            _phraseReadings?.Add(transcript);
         LogProbe($"onset probe {length:0.00}s@{FormatTimestamp(decodeStart)} " +
                  $"(checking {FormatTimestamp(start)}) -> {(found ? "phrase" : "no")}", transcript);
         return found;
@@ -215,32 +235,41 @@ internal sealed class PreciseMarkRefiner
         double mark, string file, string? inputDecoder, Regex phraseRegex,
         double phraseAbs, double phraseEndAbs, double transcriptEnd, CancellationToken ct)
     {
-        double result;
-        var heard = true;
-        var confirmed = await LocatePhraseByShrinkingWindowAsync(
-            mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
-
-        if (confirmed is { } hit)
+        var readings = new List<List<TranscriptSegment>>();
+        _phraseReadings = readings;
+        try
         {
-            var onset = await FindOnsetEdgeAsync(hit, file, inputDecoder, phraseRegex, ct);
-            result = Math.Max(0, onset - _options.MarkLeadSeconds);
-            _log?.Invoke(result == mark
-                ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
-                : $"mark corrected from {FormatTimestamp(mark)} to {FormatTimestamp(result)} " +
-                  $"(onset {FormatTimestamp(onset)})");
-        }
-        else
-        {
-            _log?.Invoke(
-                $"could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
-            result = mark;
-            heard = false;
-        }
+            double result;
+            var heard = true;
+            var confirmed = await LocatePhraseByShrinkingWindowAsync(
+                mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
 
-        var quietest = await SnapToQuietestPointAsync(result, file, inputDecoder, ct);
-        if (quietest != result)
-            _log?.Invoke($"nudged {FormatTimestamp(result)} to quieter {FormatTimestamp(quietest)}");
-        return new PreciseMarkResult(quietest, heard);
+            if (confirmed is { } hit)
+            {
+                var onset = await FindOnsetEdgeAsync(hit, file, inputDecoder, phraseRegex, ct);
+                result = Math.Max(0, onset - _options.MarkLeadSeconds);
+                _log?.Invoke(result == mark
+                    ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
+                    : $"mark corrected from {FormatTimestamp(mark)} to {FormatTimestamp(result)} " +
+                      $"(onset {FormatTimestamp(onset)})");
+            }
+            else
+            {
+                _log?.Invoke(
+                    $"could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
+                result = mark;
+                heard = false;
+            }
+
+            var quietest = await SnapToQuietestPointAsync(result, file, inputDecoder, ct);
+            if (quietest != result)
+                _log?.Invoke($"nudged {FormatTimestamp(result)} to quieter {FormatTimestamp(quietest)}");
+            return new PreciseMarkResult(quietest, heard, readings);
+        }
+        finally
+        {
+            _phraseReadings = null;
+        }
     }
 
     /// <summary>
@@ -871,6 +900,8 @@ internal sealed class PreciseMarkRefiner
         var samples = await _audio.DecodePcmAsync(file, from, length, inputDecoder, ct);
         var transcript = await _transcribeCounting(samples, ct);
         var survives = transcript.Any(s => s.Text != null && phraseRegex.IsMatch(s.Text));
+        if (survives)
+            _phraseReadings?.Add(transcript);
         LogProbe($"survival probe {length:0.00}s@{FormatTimestamp(from)} " +
                  $"(until {FormatTimestamp(until)}) -> {(survives ? "phrase" : "no")}", transcript);
         return survives;

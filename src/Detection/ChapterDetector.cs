@@ -110,7 +110,8 @@ public sealed class ChapterDetector
         _plainLog = log.Plain;
         _debug = log.Debug;
         _marks = new MarkPlacer(
-            _audio, _options, log, (samples, ct) => TranscribeCountingAsync(samples, ct));
+            _audio, _options, log, (samples, ct) => TranscribeCountingAsync(samples, ct),
+            FindCappedPhraseMatches);
     }
 
     /// <summary>
@@ -356,7 +357,7 @@ public sealed class ChapterDetector
                 break;
         }
 
-        var chapters = Normalize(found);
+        var chapters = await ReconcileSequenceAsync(found, pass2Ctx, language.Profile, ct);
         _log?.Invoke("Pass 2 finished");
 
         // Passes 2.5 and 3 exist only to close holes in the chapter-number sequence, so with
@@ -396,6 +397,138 @@ public sealed class ChapterDetector
             _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
                 ? SecondOpinionAsync
                 : null);
+
+    /// <summary>
+    /// The pipeline stage between Pass 2 and Pass 2.5: hands
+    /// <see cref="RepairSequenceOutliersAsync"/> a re-read backed by this file's decoder and
+    /// recognizer. Everything the stage actually decides lives there.
+    /// </summary>
+    /// <param name="found">Pass 2's raw detections, in any order.</param>
+    /// <param name="ctx">The file's Pass 2 context, for the re-read's decoding and recognition.</param>
+    /// <param name="profile">The file's resolved language profile, or null when --lang auto never
+    /// got as far as resolving one (nothing was probed, so nothing was transcribed). The repair's
+    /// sequence arithmetic still runs then; only the step that would re-read audio is withheld,
+    /// since there is no phrase to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The ascending chapter sequence, including whatever was repaired back into it.</returns>
+    private Task<List<DetectedChapter>> ReconcileSequenceAsync(
+        List<DetectedChapter> found, Pass2Context ctx, LanguageProfile? profile, CancellationToken ct)
+    {
+        if (profile is not { } resolved)
+            return RepairSequenceOutliersAsync(
+                found, _options.ExpectedStartChapter, _log, (_, _, _) => Task.FromResult((int?)null), ct);
+
+        // Spans the whole file: the re-framings clip themselves to the region, and an outlier can
+        // sit anywhere. What actually constrains a re-read is the bounds handed to it per outlier.
+        var mender = new SuspectNumberMender(
+            BuildProbeEnvironment(), ctx,
+            new DetectionRegion(0, ctx.Info.DurationSeconds, 0, null));
+        return RepairSequenceOutliersAsync(
+            found, _options.ExpectedStartChapter, _log,
+            (outlier, bounds, token) => mender.ReReadAtMarkAsync(
+                outlier.TimeSeconds, _options.MarkLeadSeconds, resolved, bounds, outlier.Number, token),
+            ct);
+    }
+
+    /// <summary>
+    /// Reconciles Pass 2's raw finds into an ascending chapter sequence and tries to win back the
+    /// marks that reconciliation would otherwise cost - the last line of defence against a misheard
+    /// chapter number, and the only one that gets to use evidence which did not exist when the
+    /// number was read.
+    /// <para>
+    /// That evidence is the rest of the book. Chapter numbers ascend with time, so a mark whose
+    /// number contradicts the marks around it is provably wrong, and the chapters that were detected
+    /// <em>after</em> it - later in the file, and often later in the run - pin down what it should
+    /// have been. "Die Cyber-Brutzellen" (2026-08-01) is the worked example: the announcement at
+    /// 7:01:30 was read as chapter 40, sits between chapter 13 at 6:21:09 and chapter 15 at 7:47:34,
+    /// and 14 is therefore the only number it can carry. Neither bounding chapter was known when the
+    /// misreading happened - 15 had been found but not yet related to it, and everything up to 29
+    /// came later.
+    /// </para>
+    /// <para>
+    /// Two ways to settle an outlier, in order of how much they cost. When the chapters bracketing
+    /// it leave exactly one number unaccounted for (<see cref="NumberBounds.SoleCandidate"/>), that
+    /// number is the answer and no audio need be consulted at all. When they leave several, the
+    /// audio is asked again with the bracket as the acceptance rule
+    /// (<see cref="SuspectNumberMender.ReReadAtMarkAsync"/>), which is a far tighter question than
+    /// the one that could be asked at detection time - back then nothing was yet known to follow.
+    /// An outlier neither settles keeps the number it has and stays out of the sequence, exactly as
+    /// <see cref="GapPlanning.Normalize"/> would have left it.
+    /// </para>
+    /// <para>
+    /// Duplicates are not outliers and are silently left alone: a second detection of a number
+    /// already in the sequence is one announcement heard by two overlapping windows, which
+    /// <see cref="GapPlanning.Normalize"/> is right to drop and which there is nothing to repair
+    /// about.
+    /// </para>
+    /// <para>
+    /// Runs once, between Pass 2 and Pass 2.5, which is where it pays for itself twice over: the
+    /// repaired sequence is also what the missing-chapter list is computed from, so a book no longer
+    /// sends Pass 2.5 and Pass 3 hunting through hours of audio for chapters that were never missing.
+    /// On the file above that was 14 minutes spent searching the stretch between 6:21 and 7:01 for a
+    /// chapter 14 whose announcement sits at the far end of it.
+    /// </para>
+    /// <para>
+    /// The one step that touches audio is a delegate rather than a call, so everything here -
+    /// which is all sequence arithmetic - can be tested without a decoder, a recognizer or a file.
+    /// Internal for that reason.
+    /// </para>
+    /// </summary>
+    /// <param name="found">The raw detections, in any order.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null; the lower bound for an
+    /// outlier that has no chapter before it.</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="reread">Asks the audio what number the given outlier really carries, holding the
+    /// answer to the given bounds; only called when the sequence leaves more than one possibility,
+    /// and at most <see cref="MaxSequenceRepairsPerFile"/> times.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The ascending chapter sequence, including whatever was repaired back into it.</returns>
+    internal static async Task<List<DetectedChapter>> RepairSequenceOutliersAsync(
+        List<DetectedChapter> found, int? expectedStartChapter, Action<string>? log,
+        Func<DetectedChapter, NumberBounds, CancellationToken, Task<int?>> reread,
+        CancellationToken ct)
+    {
+        var (kept, dropped) = NormalizeWithOutliers(found);
+        var taken = kept.Select(c => c.Number).ToHashSet();
+        var outliers = dropped.Where(c => !taken.Contains(c.Number)).ToList();
+        if (outliers.Count == 0)
+            return kept;
+
+        var repaired = new List<DetectedChapter>(kept);
+        var rereads = 0;
+
+        foreach (var outlier in outliers)
+        {
+            ct.ThrowIfCancellationRequested();
+            var bounds = BracketingBounds(outlier.TimeSeconds, repaired, [], expectedStartChapter);
+            log?.Invoke(
+                $"chapter {outlier.Number} at {FormatTimestamp(outlier.TimeSeconds)} contradicts the " +
+                $"chapters around it, which leave room only {bounds.Describe()}");
+
+            var repairedNumber = bounds.SoleCandidate(taken);
+            if (repairedNumber is { } sole)
+                log?.Invoke($"chapter {sole} is the only number that fits there - renumbering the mark");
+            else if (rereads < MaxSequenceRepairsPerFile)
+            {
+                rereads++;
+                repairedNumber = await reread(outlier, bounds, ct);
+            }
+
+            if (repairedNumber is not { } number || taken.Contains(number))
+            {
+                log?.Invoke($"chapter {outlier.Number} at {FormatTimestamp(outlier.TimeSeconds)} " +
+                            "could not be placed in the sequence - dropping the mark");
+                continue;
+            }
+            repaired.Add(new DetectedChapter(number, outlier.TimeSeconds, outlier.Confidence));
+            taken.Add(number);
+        }
+
+        // Through Normalize once more so the repaired entries land in chronological order and any
+        // that still do not fit (nothing observed, but a re-read is not infallible) fall out here
+        // rather than downstream.
+        return Normalize(repaired);
+    }
 
     /// <summary>
     /// Re-transcribes samples with the <c>--pass3-model</c> recognizer for
@@ -1716,18 +1849,50 @@ public sealed class ChapterDetector
         }
         var markCtx = new MarkContext(
             file, inputDecoder, profile.PhraseRegex, allSilences, speechSegments, transcript);
-        time = await _marks!.PlaceAsync(
-            match.Number, time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx, ct);
-        found.Add(new DetectedChapter(match.Number, time, match.Confidence));
-        remaining?.Remove(match.Number);
+        var placed = await _marks!.PlaceAsync(
+            new NumberCheck(match.Number, profile,
+                BracketingBounds(phraseAbs, knownChapters, found, _options.ExpectedStartChapter)),
+            time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx, ct);
+        // The refinement's own probes may have re-read the number (see RefinedNumberVote), so the
+        // gap's remaining-numbers bookkeeping has to follow what they settled on.
+        time = placed.TimeSeconds;
+        var number = placed.Number!.Value;
+        found.Add(new DetectedChapter(number, time, match.Confidence));
+        remaining?.Remove(number);
         var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), _options.ExpectedStartChapter);
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
-        _log?.Invoke($"chapter {match.Number} found in gap, mark placed at {FormatTimestamp(time)} " +
+        _log?.Invoke($"chapter {number} found in gap, mark placed at {FormatTimestamp(time)} " +
                      $"(confidence {match.Confidence:0.00}" +
                      await _marks.LoudnessNoteAsync(time, markCtx, ct) +
                      $"){LowConfidenceNote(match.Confidence)}" +
                      MissingNote(missingNumbers));
+    }
+
+    /// <summary>
+    /// The stretch of the chapter sequence an announcement at <paramref name="phraseAbs"/> sits in,
+    /// read off the chapters already placed around it: the highest number before it and the lowest
+    /// after it. <see cref="RegionProber.SequenceBounds"/>'s counterpart for the passes that have a
+    /// chapter list rather than a running window sequence.
+    /// <para>
+    /// Position, not detection order, is what bounds it - which matters because neither Pass 3 nor
+    /// the repair below meets its chapters in file order. An announcement between two known chapters
+    /// can only be one of the numbers between them, however late either of those was found.
+    /// </para>
+    /// </summary>
+    /// <param name="phraseAbs">Absolute position of the announcement.</param>
+    /// <param name="knownChapters">Chapters detected elsewhere.</param>
+    /// <param name="found">Chapters found in the current gap so far.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null; supplies the lower
+    /// bound when nothing precedes the announcement at all.</param>
+    private static NumberBounds BracketingBounds(
+        double phraseAbs, IReadOnlyList<DetectedChapter> knownChapters,
+        IReadOnlyList<DetectedChapter> found, int? expectedStartChapter)
+    {
+        var all = knownChapters.Concat(found).ToList();
+        var below = all.Where(c => c.TimeSeconds <= phraseAbs).Select(c => (int?)c.Number).Max();
+        var above = all.Where(c => c.TimeSeconds > phraseAbs).Select(c => (int?)c.Number).Min();
+        return new NumberBounds(below ?? (expectedStartChapter ?? 1) - 1, above);
     }
 
     /// <summary>

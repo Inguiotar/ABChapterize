@@ -130,7 +130,8 @@ public sealed class ChapterDetectorTests : IDisposable
     private sealed class ScriptedTranscriber : ITranscriber
     {
         private readonly FakeAudioSource _audio;
-        private readonly List<(double Start, double MaxWindowSeconds, List<TranscriptSegment> Segments)> _script = [];
+        private readonly List<(double Start, double MinWindowSeconds, double MaxWindowSeconds,
+                               List<TranscriptSegment> Segments)> _script = [];
 
         /// <summary>Creates a transcriber that follows the decode requests of <paramref name="audio"/>.</summary>
         public ScriptedTranscriber(FakeAudioSource audio) => _audio = audio;
@@ -150,7 +151,7 @@ public sealed class ChapterDetectorTests : IDisposable
         /// <param name="start">Absolute time the segment offsets are measured from.</param>
         /// <param name="segments">The scripted speech, in window-relative time.</param>
         public void Add(double start, params TranscriptSegment[] segments)
-            => _script.Add((start, double.PositiveInfinity, [.. segments]));
+            => _script.Add((start, 0, double.PositiveInfinity, [.. segments]));
 
         /// <summary>
         /// Scripts speech the recognizer only hears when the decode is at most
@@ -166,7 +167,23 @@ public sealed class ChapterDetectorTests : IDisposable
         /// <param name="start">Absolute time the segment offsets are measured from.</param>
         /// <param name="segments">The scripted speech, in window-relative time.</param>
         public void AddWithin(double maxWindowSeconds, double start, params TranscriptSegment[] segments)
-            => _script.Add((start, maxWindowSeconds, [.. segments]));
+            => _script.Add((start, 0, maxWindowSeconds, [.. segments]));
+
+        /// <summary>
+        /// <see cref="AddWithin"/>'s mirror: speech the recognizer only hears when the decode is
+        /// <em>longer</em> than <paramref name="minWindowSeconds"/>. Pairing the two at one position
+        /// is how a test spells the failure that motivated
+        /// <see cref="RefinedNumberVote"/> - one stretch of audio read as one
+        /// chapter number by a wide window and as another by a narrow one, which is not a fault in
+        /// either reading but the ordinary consequence of where the announcement lands inside
+        /// Whisper's fixed 30 s mel frame ("Die Cyber-Brutzellen" 7:01:30, 2026-08-01: "Kapitel 40"
+        /// from 44.2 s, "Kapitel 14" from every window under 7 s).
+        /// </summary>
+        /// <param name="minWindowSeconds">Shortest decode that still hears this speech.</param>
+        /// <param name="start">Absolute time the segment offsets are measured from.</param>
+        /// <param name="segments">The scripted speech, in window-relative time.</param>
+        public void AddBeyond(double minWindowSeconds, double start, params TranscriptSegment[] segments)
+            => _script.Add((start, minWindowSeconds, double.PositiveInfinity, [.. segments]));
 
         /// <summary>Called at the start of every <see cref="TranscribeAsync"/>, so a test can
         /// sample detector-external state (progress, say) at the exact moments this transcriber
@@ -201,7 +218,8 @@ public sealed class ChapterDetectorTests : IDisposable
             // to sit exactly on one lands a rounding error either side of it.
             const double epsilon = 1e-9;
             var segments = _script
-                .Where(entry => end - start <= entry.MaxWindowSeconds + epsilon)
+                .Where(entry => end - start <= entry.MaxWindowSeconds + epsilon &&
+                                end - start > entry.MinWindowSeconds - epsilon)
                 .SelectMany(entry => entry.Segments.Select(seg => (Absolute: entry.Start + seg.StartSeconds,
                                                                    End: entry.Start + seg.EndSeconds, seg)))
                 .Where(x => x.Absolute >= start - epsilon && x.Absolute < end)
@@ -1333,7 +1351,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 602.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("chapter 90 at 0:10:02.50 does not continue the sequence") &&
+        Assert.Contains(log, l => l.Contains("chapter 90 at 0:10:02.50 does not fit the sequence") &&
                                   l.Contains("would leave 88 missing"));
         Assert.Contains(log, l => l.Contains("a 45 s window read it as 2 instead of 90"));
     }
@@ -1356,9 +1374,90 @@ public sealed class ChapterDetectorTests : IDisposable
             null);
 
         AssertChapters([new(5, 0.25), new(6, 1202.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("chapter 2 at 0:20:02.50 does not continue the sequence") &&
+        Assert.Contains(log, l => l.Contains("chapter 2 at 0:20:02.50 does not fit the sequence") &&
                                   l.Contains("it is not above it"));
         Assert.Contains(log, l => l.Contains("a 45 s window read it as 6 instead of 2"));
+    }
+
+    [Fact]
+    public async Task TheMarkRefinement_CorrectsANumberTheDetectingWindowMisread()
+    {
+        // "Die Cyber-Brutzellen", 2026-08-01, in miniature. One announcement, two readings: the 12 s
+        // probe window that finds it reads one number, and every window short enough to be framed on
+        // the announcement itself reads another. That is not a coin toss - the short windows are the
+        // ones the mark refinement decodes anyway, and on that book all ten of them read "Kapitel 14"
+        // against the wide window's "Kapitel 40". Here the wide window says three and the refinement
+        // says two, and two is what the mark is recorded under.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.AddBeyond(11, 600, Seg(2.5, " Chapter three."));  // the 12 s probe window
+                s.AddWithin(11, 600, Seg(2.5, " Chapter two."));    // every refinement probe
+            });
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 602.25)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("the mark refinement read chapter 3 at 0:10:02.50 as 2") &&
+                                  l.Contains("correcting the number, the mark stays where it is"));
+    }
+
+    [Fact]
+    public async Task TheMarkRefinement_DoesNotCorrectANumberIntoOneTheSequenceCannotHold()
+    {
+        // The guard that keeps a free second opinion from becoming a free second chance to be wrong.
+        // The refinement is unanimous about chapter 20, and it is refused anyway: after chapter 1
+        // that would leave eighteen chapters missing at a stroke, which is no better founded than
+        // the 3 it would replace. The mark keeps the number the window gave it and the ordinary gap
+        // machinery takes over.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.AddBeyond(11, 600, Seg(2.5, " Chapter three."));
+                s.AddWithin(11, 600, Seg(2.5, " Chapter twenty."));
+            });
+
+        Assert.Contains(result.Chapters, c => c.Number == 3);
+        Assert.DoesNotContain(result.Chapters, c => c.Number == 20);
+        Assert.Contains(log, l => l.Contains("the mark refinement read chapter 3 at 0:10:02.50 as 20") &&
+                                  l.Contains("does not fit the sequence after chapter 1 - leaving it at 3"));
+    }
+
+    [Fact]
+    public async Task AGapReprobe_ReReadsANumberItsOwnHoleCannotHold()
+    {
+        // The failure that cost "Die Cyber-Brutzellen" (2026-08-01) half its marks. A sequence-gap
+        // re-probe is searching a hole it knows both ends of - here the one chapter between 2 and 4
+        // - and it used to accept whatever number came back, on the reasoning that its wider window
+        // was already the remedy. The wider window is what produces the mishearing: the announcement
+        // sits deep inside it and comes back as chapter 40. Questioned against the hole it is
+        // filling, the only readings worth having are the ones that fit in it, and a re-framed
+        // window supplies one.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--verbose", "--max-jingle-length", "0", "--quick-marks"),
+            // 2.0 s is below the 3.75 s threshold chapter 2's own 5 s silence sets, so 700 is
+            // skipped on the first pass and only the gap re-probe ever decodes it.
+            [new(595, 600), new(698, 700), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.AddWithin(13, 700, Seg(0.3, " Chapter forty."));  // the 12 s re-probe window
+                s.AddBeyond(13, 700, Seg(0.3, " Chapter three."));  // the mender's 15 s re-framing
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("chapter 40 at 0:11:40.30 does not fit the sequence " +
+                                             "between chapters 2 and 4") &&
+                                  l.Contains("chapter 4 already follows it"));
+        Assert.Contains(log, l => l.Contains("a 15 s window read it as 3 instead of 40"));
     }
 
     [Fact]
@@ -1380,7 +1479,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.GapRemains);
         AssertChapters([new(1, 0.25), new(4, 600.25)], result.Chapters);
-        Assert.DoesNotContain(log, l => l.Contains("does not continue the sequence"));
+        Assert.DoesNotContain(log, l => l.Contains("does not fit the sequence"));
         Assert.Contains(log, l => l.Contains("skipped chapter 4") &&
                                   l.Contains("not above the last accepted chapter 4"));
     }
@@ -1826,7 +1925,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         AssertChapters([new(1, 0.25)], result.Chapters);
         Assert.Contains(log, l => l.Contains("the pass 3 model read it as 1 - " +
-                                             "which does not continue the sequence after chapter 1"));
+                                             "which does not fit the sequence after chapter 1"));
         Assert.Contains(log, l => l.Contains("no number continuing the sequence could be read " +
                                              "there either - leaving the announcement unmarked"));
     }
@@ -4347,12 +4446,250 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void Normalize_KeepsTheManyChaptersAfterAnOutlier_RatherThanTheOutlier()
+    {
+        // "Die Cyber-Brutzellen", 2026-08-01, reduced: chapter 14's announcement was read as 40,
+        // and a greedy left-to-right filter then measured chapters 15 onward against 40 and threw
+        // every one of them away - 15 correctly placed marks lost to one misheard digit, leaving a
+        // 17 h book marked as far as its chapter 13 and no further. The longest ascending
+        // subsequence drops the outlier instead.
+        var raw = new List<DetectedChapter> { new(13, 100), new(40, 200) };
+        for (var n = 15; n <= 29; n++)
+            raw.Add(new DetectedChapter(n, 200 + (n - 14) * 100));
+
+        var kept = GapPlanning.Normalize(raw);
+        Assert.Equal([13, .. Enumerable.Range(15, 15)], kept.Select(c => c.Number));
+        Assert.DoesNotContain(kept, c => c.Number == 40);
+    }
+
+    [Fact]
+    public void NormalizeWithOutliers_ReportsWhatItHadToDrop()
+    {
+        // The dropped half is what the repair works from, and it has to separate the two reasons an
+        // entry falls out: a genuine outlier (40 here) versus a duplicate of a number that survived
+        // (the second chapter 2), which is one announcement heard twice and nothing to repair.
+        var raw = new List<DetectedChapter>
+        {
+            new(1, 10), new(2, 100), new(40, 200), new(2, 250), new(3, 400),
+        };
+        var (kept, dropped) = GapPlanning.NormalizeWithOutliers(raw);
+        Assert.Equal([1, 2, 3], kept.Select(c => c.Number));
+        Assert.Equal([(40, 200.0), (2, 250.0)], dropped.Select(c => (c.Number, c.TimeSeconds)));
+    }
+
+    [Fact]
+    public void Normalize_BreaksTiesTowardTheEarliestEntries()
+    {
+        // Two equally long ascending subsequences exist here (chapter 2 at 600 or at 900). Keeping
+        // the earlier one is what preserves the older "of two detections of one chapter, keep the
+        // earlier" rule: overlapping probe windows hear one announcement twice, and the earlier
+        // reading is the one that saw it rather than its tail.
+        var raw = new List<DetectedChapter> { new(1, 10), new(2, 600), new(2, 900), new(3, 1200) };
+        Assert.Equal(
+            [new(1, 10), new(2, 600), new(3, 1200)],
+            GapPlanning.Normalize(raw));
+    }
+
+    [Fact]
+    public void NumberBounds_AdmitsOnlyWhatTheSequenceCanHold()
+    {
+        // Open above: anything up to SuspectGapMinMissing chapters of hole is ordinary.
+        var open = new NumberBounds(13);
+        Assert.True(open.Admits(14));
+        Assert.True(open.Admits(13 + 1 + SuspectGapMinMissing));
+        Assert.False(open.Admits(13 + 2 + SuspectGapMinMissing));
+        Assert.False(open.Admits(13));
+
+        // Bounded above: exactly the open interval, however small the hole.
+        var closed = new NumberBounds(13, 15);
+        Assert.True(closed.Admits(14));
+        Assert.False(closed.Admits(15));
+        Assert.False(closed.Admits(16));
+    }
+
+    [Fact]
+    public void NumberBounds_LeavesTheBoundsThemselvesUnquestioned()
+    {
+        // A number equal to either bound is an overlapping window re-hearing an announcement that
+        // is already marked, not a mishearing - and re-reading one could only "improve" by
+        // inventing a neighbouring number for an announcement that is not it.
+        var bounds = new NumberBounds(13, 15);
+        Assert.False(bounds.WorthQuestioning(13));
+        Assert.False(bounds.WorthQuestioning(15));
+        Assert.False(bounds.WorthQuestioning(14));
+        Assert.True(bounds.WorthQuestioning(40));
+        Assert.True(bounds.WorthQuestioning(2));
+    }
+
+    [Fact]
+    public void NumberBounds_NamesTheSoleCandidate_OnlyWhenThereIsExactlyOne()
+    {
+        Assert.Equal(14, new NumberBounds(13, 15).SoleCandidate(new HashSet<int>()));
+        Assert.Null(new NumberBounds(13, 16).SoleCandidate(new HashSet<int>()));
+        // A number already carried by another mark is no longer a possibility, which can narrow a
+        // wider hole down to a single answer.
+        Assert.Equal(15, new NumberBounds(13, 16).SoleCandidate(new HashSet<int> { 14 }));
+        // Nothing left at all, and the open-ended case, both have no sole candidate.
+        Assert.Null(new NumberBounds(13, 15).SoleCandidate(new HashSet<int> { 14 }));
+        Assert.Null(new NumberBounds(13).SoleCandidate(new HashSet<int>()));
+    }
+
+    [Fact]
     public void FindGaps_ReportsMissingRegions()
     {
         var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
         Assert.Equal(
             [new(0, 500), new(900, 2000)],
             GapPlanning.FindGaps(chapters, Duration, expectedStartChapter: 1));
+    }
+
+    /// <summary>One refinement probe transcript reading the given text, as
+    /// <see cref="PreciseMarkResult.PhraseReadings"/> carries them.</summary>
+    private static List<TranscriptSegment> Reading(string text)
+        => [new TranscriptSegment(0, 2, text, 0.9)];
+
+    /// <summary>Runs <see cref="RefinedNumberVote.Recount"/> against the run's default (English)
+    /// profile and uncapped phrase matching.</summary>
+    private int? Recount(IReadOnlyList<List<TranscriptSegment>> readings, int heard, NumberBounds bounds)
+        => RefinedNumberVote.Recount(
+            readings, Options().DefaultProfile,
+            (segments, profile, merge) => PhraseMatching.FindPhraseMatches(segments, profile, merge),
+            heard, bounds, phraseAbs: 100, log: null);
+
+    [Fact]
+    public void RefinedNumberVote_OverrulesTheWindow_WhenItsOwnProbesAgreeOnAnotherNumber()
+    {
+        // The "Die Cyber-Brutzellen" shape: the window that found the announcement read it as 40,
+        // every probe framed on the announcement itself read 14, and 14 fits the hole between
+        // chapters 13 and 15 that the window was searching.
+        var readings = Enumerable.Repeat(Reading("Chapter fourteen."), 4).ToList();
+        Assert.Equal(14, Recount(readings, heard: 40, new NumberBounds(13, 15)));
+    }
+
+    [Fact]
+    public void RefinedNumberVote_KeepsQuiet_WhenTheProbesAgreeWithTheWindow()
+    {
+        // The overwhelmingly common case, and the one that must cost nothing: 267 of the 271 marks
+        // in the ten-book run of 2026-08-01 looked like this.
+        var readings = Enumerable.Repeat(Reading("Chapter fourteen."), 5).ToList();
+        Assert.Null(Recount(readings, heard: 14, new NumberBounds(13, 15)));
+    }
+
+    [Fact]
+    public void RefinedNumberVote_KeepsQuiet_BelowTheMinimumOrWithoutAMajority()
+    {
+        // Too thin a sample to overrule anything with.
+        var thin = Enumerable.Repeat(Reading("Chapter fourteen."), RefinedNumberVoteMinimum - 1).ToList();
+        Assert.Null(Recount(thin, heard: 40, new NumberBounds(13, 15)));
+
+        // Enough readings, but they do not agree among themselves. A refinement that drifts across
+        // several numbers has no verdict to offer, and half the votes is not a majority.
+        List<List<TranscriptSegment>> split =
+            [Reading("Chapter fourteen."), Reading("Chapter fourteen."),
+             Reading("Chapter forty."), Reading("Chapter forty.")];
+        Assert.Null(Recount(split, heard: 40, new NumberBounds(13, 15)));
+    }
+
+    [Fact]
+    public void RefinedNumberVote_KeepsQuiet_WhenItsVerdictDoesNotFitTheSequence()
+    {
+        // Unanimous and still refused: the hole between chapters 13 and 15 cannot hold a 20, so a
+        // reading of 20 is no better founded than the 40 it would replace. Same rule the mender
+        // adopts by - the sequence is what makes a re-read evidence rather than a second guess.
+        var readings = Enumerable.Repeat(Reading("Chapter twenty."), 5).ToList();
+        Assert.Null(Recount(readings, heard: 40, new NumberBounds(13, 15)));
+    }
+
+    /// <summary>Runs the sequence repair with a scripted re-read, recording what it was asked.</summary>
+    private static async Task<(List<DetectedChapter> Chapters, List<string> Log, List<(int Number, NumberBounds Bounds)> Asked)>
+        RepairAsync(List<DetectedChapter> found, Func<NumberBounds, int?>? reread = null)
+    {
+        var log = new List<string>();
+        var asked = new List<(int, NumberBounds)>();
+        var chapters = await ChapterDetector.RepairSequenceOutliersAsync(
+            found, expectedStartChapter: null, log.Add,
+            (outlier, bounds, _) =>
+            {
+                asked.Add((outlier.Number, bounds));
+                return Task.FromResult(reread?.Invoke(bounds));
+            },
+            CancellationToken.None);
+        return (chapters, log, asked);
+    }
+
+    [Fact]
+    public async Task SequenceRepair_RenumbersFromTheSequenceAlone_WhenOnlyOneNumberFits()
+    {
+        // The whole point of doing this after Pass 2 rather than during it: chapter 15 at 200 and
+        // everything above it were not yet known when the announcement at 150 was misread as 40.
+        // Between 13 and 15 there is exactly one number to be had, so no audio need be consulted.
+        var (chapters, log, asked) = await RepairAsync(
+            [new(13, 100), new(40, 150), new(15, 200), new(16, 300)]);
+
+        Assert.Equal([13, 14, 15, 16], chapters.Select(c => c.Number));
+        Assert.Equal(150, chapters.Single(c => c.Number == 14).TimeSeconds);
+        Assert.Empty(asked);
+        Assert.Contains(log, l => l.Contains("chapter 40 at 0:02:30.00 contradicts the chapters around it") &&
+                                  l.Contains("between chapters 13 and 15"));
+        Assert.Contains(log, l => l.Contains("chapter 14 is the only number that fits there"));
+    }
+
+    [Fact]
+    public async Task SequenceRepair_AsksTheAudio_WhenTheSequenceLeavesSeveralPossibilities()
+    {
+        // A two-chapter hole cannot be resolved by arithmetic, so the audio is asked again - now
+        // held to a far tighter rule than anything available when the number was first read.
+        var (chapters, _, asked) = await RepairAsync(
+            [new(13, 100), new(40, 150), new(16, 200)], bounds => bounds.Admits(15) ? 15 : null);
+
+        Assert.Equal([13, 15, 16], chapters.Select(c => c.Number));
+        Assert.Equal([(40, new NumberBounds(13, 16))], asked);
+    }
+
+    [Fact]
+    public async Task SequenceRepair_DropsAnOutlierItCannotPlace_WithoutTouchingTheRest()
+    {
+        // Nothing to renumber it to and the audio offers nothing either. The mark is lost, which is
+        // exactly what Normalize alone would have done - the chapters around it are not.
+        var (chapters, log, _) = await RepairAsync([new(13, 100), new(40, 150), new(16, 200)]);
+
+        Assert.Equal([13, 16], chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("chapter 40 at 0:02:30.00 could not be placed in the sequence"));
+    }
+
+    [Fact]
+    public async Task SequenceRepair_LeavesADuplicateAlone()
+    {
+        // A second detection of a number already in the sequence is one announcement heard by two
+        // overlapping windows. Normalize drops the later one and there is nothing to repair, so the
+        // audio must not be asked about it.
+        var (chapters, _, asked) = await RepairAsync([new(1, 10), new(2, 100), new(2, 120), new(3, 200)]);
+
+        Assert.Equal([1, 2, 3], chapters.Select(c => c.Number));
+        Assert.Equal(100, chapters.Single(c => c.Number == 2).TimeSeconds);
+        Assert.Empty(asked);
+    }
+
+    [Fact]
+    public async Task SequenceRepair_LeavesAnAscendingSequenceUntouched()
+    {
+        List<DetectedChapter> found = [new(1, 10), new(2, 100), new(3, 200)];
+        var (chapters, log, asked) = await RepairAsync(found);
+
+        Assert.Equal(found, chapters);
+        Assert.Empty(asked);
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public async Task SequenceRepair_RefusesARereadThatCollidesWithAChapterAlreadyPlaced()
+    {
+        // The re-read is not infallible, and a number another mark already carries would make the
+        // sequence ambiguous rather than repaired - so it is refused and the outlier dropped.
+        var (chapters, _, _) = await RepairAsync(
+            [new(13, 100), new(40, 150), new(16, 200), new(17, 300)], _ => 16);
+
+        Assert.Equal([13, 16, 17], chapters.Select(c => c.Number));
     }
 
     [Fact]

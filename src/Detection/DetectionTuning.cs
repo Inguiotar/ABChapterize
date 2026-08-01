@@ -536,6 +536,46 @@ internal static class DetectionTuning
         [(2.0, 15.0), (12.0, 45.0)];
 
     /// <summary>
+    /// How many of a mark refinement's own probes must have read a chapter number before their
+    /// verdict may overrule the detecting window's (<see cref="RefinedNumberVote"/>). The winner
+    /// additionally needs a strict majority, so this is really "at least two against one".
+    /// <para>
+    /// The whole check is free - those probes are transcribed either way, and only their yes/no
+    /// answer used to be kept - and the ten-book test run of 2026-08-01 says it is also close to
+    /// unerring. Over 271 marks the refinement's plurality reading agreed with the accepted number
+    /// 267 times, disagreed once (the mishearing this was built for: "Die Cyber-Brutzellen" chapter
+    /// 14 announced at 7:01:30, read as 40 by the one 44 s window that found it and as 14 by all ten
+    /// refinement probes) and offered nothing at all 3 times. Four refinements split their vote and
+    /// the majority was right in all four ({18:3, 8:2}, {15:8, 510:4}, {15:11, 4:1, 5:1, 50:1},
+    /// {19:4, 9:1}), which is what the majority requirement is calibrated against.
+    /// </para>
+    /// <para>
+    /// Three rather than two because a two-probe refinement is a thin sample and abstaining costs
+    /// nothing: the vote only ever acts when it <em>disagrees</em>, and a number left uncorrected
+    /// here still faces <see cref="SuspectNumberMender"/>, the ascending-sequence filter in
+    /// <see cref="GapPlanning.Normalize"/> and the repair in
+    /// <see cref="ChapterDetector.RepairSequenceOutliersAsync"/>. Measured on the same run, a minimum of
+    /// three abstains on 4 of 271 marks and 3 more have no numbered reading at all; the median
+    /// refinement offers five.
+    /// </para>
+    /// </summary>
+    internal const int RefinedNumberVoteMinimum = 3;
+
+    /// <summary>
+    /// How many outliers <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> may spend audio
+    /// re-reads on in one file. Only the ambiguous ones cost anything: an outlier whose bracketing
+    /// chapters leave a single number unaccounted for is settled from the sequence alone, for free
+    /// and without a cap.
+    /// <para>
+    /// Generous rather than tight, because reaching this cap means the book has more mis-numbered
+    /// marks than it has chapters worth trusting, and eight re-reads (at most two decodes each) is a
+    /// rounding error next to the Pass 3 such a book is heading for anyway. Over the ten-book run of
+    /// 2026-08-01 exactly one file produced a single outlier.
+    /// </para>
+    /// </summary>
+    internal const int MaxSequenceRepairsPerFile = 8;
+
+    /// <summary>
     /// How many unreadable-number re-reads (<see cref="SuspectNumberMender.ReadUnnumberedAsync"/>)
     /// one <see cref="RegionProber"/> region may run. The same guard
     /// <see cref="MaxUnnumberedRetriesPerChunk"/> puts on Pass 3, for the same reason: an in-text

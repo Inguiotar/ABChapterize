@@ -87,7 +87,12 @@ internal sealed record ProbeEnvironment(
 /// acted on (<see cref="SuspectNumberMender"/>). False for a pass 2.5 re-probe: its windows already go
 /// through the heavier model, and its whole purpose is to re-read the numbers a gap is missing, so
 /// questioning its readings against the very sequence it is repairing would be circular. Pass 3 never
-/// probes and so never asks.</param>
+/// probes and so never asks. Pass 2's own sequence-gap re-probe <em>does</em> ask, and used to be
+/// exempted alongside pass 2.5 on the reasoning that a wider window was already the remedy being
+/// applied - which "Die Cyber-Brutzellen" (2026-08-01) refuted: the wider window is what produced
+/// the mishearing, an announcement 27 s deep into a 44 s window coming back as chapter 40 instead of
+/// 14. A re-probe is now the <em>best</em> place to question a number, since it alone knows both
+/// ends of the hole it is filling (see <see cref="RegionProber.SequenceBounds"/>).</param>
 internal readonly record struct Pass2Context(
     string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond, double JingleCeilingSeconds,
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
@@ -212,6 +217,21 @@ internal sealed class RegionProber
     /// <see cref="_adaptedWindowSeconds"/>, but must not pull <see cref="_probeSeconds"/> back down
     /// mid-re-probe - the whole point of the reset is that every re-probe runs at the ceiling.</summary>
     private bool _reprobing;
+
+    /// <summary>
+    /// While the sequence-gap recovery re-probes, the chapter number that closes the gap - the mark
+    /// that revealed it. Null at every other time.
+    /// <para>
+    /// It is the single most informative fact available anywhere in Pass 2 and it used to be
+    /// discarded: a re-probe of the hole between chapters 13 and 15 is searching for chapter 14 and
+    /// nothing else, yet an announcement read as chapter 40 was accepted there unquestioned on "Die
+    /// Cyber-Brutzellen" (2026-08-01) while <see cref="ReprobeGapCandidatesAsync"/> held a
+    /// <c>missing</c> set containing exactly one number. Feeding it into
+    /// <see cref="SequenceBounds"/> lets both the mender and the refinement vote hold a re-read to
+    /// the hole it is filling. Pass 3 has enforced the same rule on its own gap chunks all along.
+    /// </para>
+    /// </summary>
+    private int? _gapAbove;
 
     /// <summary>The last chapter number accepted in this region, seeded from
     /// <see cref="DetectionRegion.LowerNumber"/> when a chapter is already confirmed to precede it
@@ -917,13 +937,14 @@ internal sealed class RegionProber
             // indistinguishable from an in-text mention until the audio is asked again. A mend that
             // finds nothing leaves the reading untouched, so the check below then does what it always
             // did - including rejecting it.
-            if (_ctx.SecondGuessNumbers && !_reprobing &&
+            if (_ctx.SecondGuessNumbers &&
                 await _mender.MendAsync(
-                    match, Language.Profile!, start, windowEnd, SequenceFloor(windowLast), ct) is { } mended)
+                    match, Language.Profile!, start, windowEnd, SequenceBounds(windowLast), ct) is { } mended)
                 match = match with { Number = mended };
             if (IsOutOfSequence(match, phraseAbs, windowLast))
                 continue;
-            if (await AcceptMatchAsync(match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct)
+            if (await AcceptMatchAsync(
+                    match, candidate, start, windowEnd, phraseAbs, trimmedAbs, windowLast, ct)
                 is not { } mark)
                 continue;
             marks.Add(mark);
@@ -934,18 +955,28 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// The chapter number a fresh announcement is measured against when judging how big a hole it
-    /// would leave (<see cref="SuspectNumberMender"/>). Normally the last one accepted; before this
-    /// region has one, the sequence is expected to begin at --expected-start-chapter (or chapter 1),
-    /// so the number below that expectation plays the same role. Without this, the one mishearing that
-    /// costs the most - the file's <em>first</em> chapter read as some large number, which declares
-    /// everything before it missing and sends Pass 3 across the whole book - would be the one case
-    /// never questioned.
+    /// The stretch of the chapter sequence a fresh announcement is judged against
+    /// (<see cref="SuspectNumberMender"/>, <see cref="RefinedNumberVote"/>).
+    /// <para>
+    /// The lower bound is normally the last number accepted; before this region has one, the sequence
+    /// is expected to begin at --expected-start-chapter (or chapter 1), so the number below that
+    /// expectation plays the same role. Without that, the one mishearing that costs the most - the
+    /// file's <em>first</em> chapter read as some large number, which declares everything before it
+    /// missing and sends Pass 3 across the whole book - would be the one case never questioned.
+    /// </para>
+    /// <para>
+    /// The upper bound exists only while something is known to follow: a --verify gap region's
+    /// <see cref="DetectionRegion.UpperNumber"/>, or - during a sequence-gap re-probe - the chapter
+    /// that revealed the gap (<see cref="_gapAbove"/>). Both turn the question from "could the
+    /// sequence continue like this?" into "can this hole hold that number?", which for a
+    /// one-chapter hole has exactly one answer.
+    /// </para>
     /// </summary>
     /// <param name="windowLast">The highest number accepted so far in this window's sequence, or 0
     /// when there is none.</param>
-    private int SequenceFloor(int windowLast)
-        => windowLast > 0 ? windowLast : (_env.Options.ExpectedStartChapter ?? 1) - 1;
+    internal NumberBounds SequenceBounds(int windowLast)
+        => new(windowLast > 0 ? windowLast : (_env.Options.ExpectedStartChapter ?? 1) - 1,
+               _gapAbove ?? _region.UpperNumber);
 
     /// <summary>
     /// Reports the announcements this window heard but could not number, queues the window for the
@@ -1011,7 +1042,7 @@ internal sealed class RegionProber
                 continue;
             _unnumberedMends++;
             if (await _mender.ReadUnnumberedAsync(
-                    heard, Language.Profile!, start, windowEnd, SequenceFloor(windowLast), ct)
+                    heard, Language.Profile!, start, windowEnd, SequenceBounds(windowLast), ct)
                 is not { } number)
                 continue;
 
@@ -1019,7 +1050,8 @@ internal sealed class RegionProber
                 number, heard.PhraseStartSeconds, heard.PhraseEndSeconds, heard.Confidence);
             if (IsOutOfSequence(match, phraseAbs, windowLast))
                 continue;
-            if (await AcceptMatchAsync(match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct)
+            if (await AcceptMatchAsync(
+                    match, candidate, start, windowEnd, phraseAbs, trimmedAbs, windowLast, ct)
                 is not { } mark)
                 continue;
             marks.Add(mark);
@@ -1137,8 +1169,9 @@ internal sealed class RegionProber
         var (time, markSilence, markRegion) = placement;
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd));
-        time = await _env.Marks.PlaceAsync(
-            null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct);
+        time = (await _env.Marks.PlaceAsync(
+            null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct))
+            .TimeSeconds;
 
         // Second dedupe pass, now against the placed time. The pre-placement one compares phrase
         // times, which two probes of the same announcement can easily disagree about by more than
@@ -1242,14 +1275,15 @@ internal sealed class RegionProber
                              (match.Number < windowLast ? " (in-text mention?)" : ""));
             return true;
         }
-        // A snapped window can, near a gap region's own upper boundary, reach right up against the
-        // next already-confirmed chapter's own announcement - reject a match at or above it outright
-        // so gap recovery can never displace a chapter --verify already trusts. Never set for the
-        // whole-file region (its UpperNumber is always null), so this never fires for a fresh run.
-        if (_region.UpperNumber is { } upperBound && match.Number >= upperBound)
+        // A snapped window can, near a gap's own upper boundary, reach right up against the next
+        // already-confirmed chapter's own announcement - reject a match at or above it outright so
+        // gap recovery can never displace a chapter that is already in hand. Two kinds of gap set
+        // this: a --verify region (never for a fresh run's whole-file region, whose UpperNumber is
+        // always null) and a sequence-gap re-probe (see _gapAbove).
+        if ((_gapAbove ?? _region.UpperNumber) is { } upperBound && match.Number >= upperBound)
         {
             _env.Log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
-                             $"at or above chapter {upperBound}, which bounds this gap region");
+                             $"at or above chapter {upperBound}, which bounds this gap");
             return true;
         }
         return false;
@@ -1267,10 +1301,13 @@ internal sealed class RegionProber
     /// anchors its search against (see <see cref="MarkContext.Transcript"/>).</param>
     /// <param name="phraseAbs">Absolute phrase start time.</param>
     /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
+    /// <param name="windowLast">The highest number accepted so far, in this window or before it -
+    /// the sequence position the refinement's own re-read of the number is held to
+    /// (<see cref="SequenceBounds"/>).</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<ProbeMark?> AcceptMatchAsync(
         PhraseMatch match, ProbeCandidate candidate, double start, double windowEnd, double phraseAbs,
-        List<TranscriptSegment> trimmedAbs, CancellationToken ct)
+        List<TranscriptSegment> trimmedAbs, int windowLast, CancellationToken ct)
     {
         if (ResolveProbeMark(match, candidate, start, trimmedAbs) is not { } placement)
             return null;
@@ -1278,19 +1315,23 @@ internal sealed class RegionProber
 
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile!.PhraseRegex,
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd));
-        time = await _env.Marks.PlaceAsync(
-            match.Number, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion,
-            markCtx, ct);
+        var placed = await _env.Marks.PlaceAsync(
+            new NumberCheck(match.Number, Language.Profile!, SequenceBounds(windowLast)),
+            time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct);
+        // Placement may have re-read the number out of the refinement's own probes, so everything
+        // below reports and records what those settled on rather than what the window heard.
+        time = placed.TimeSeconds;
+        var number = placed.Number!.Value;
 
         if (match.SpansMerge)
-            _env.Log?.Invoke($"chapter {match.Number} detection spans the reused/fresh transcript " +
+            _env.Log?.Invoke($"chapter {number} detection spans the reused/fresh transcript " +
                              "merge from Pass 2's overlap reuse - worth a spot check");
 
-        _found.Add(new DetectedChapter(match.Number, time, match.Confidence));
+        _found.Add(new DetectedChapter(number, time, match.Confidence));
         var (highest, missingNumbers) = ChapterProgress(_found, _env.Options.ExpectedStartChapter);
         _ctx.Work.HighestChapter = highest;
         _ctx.Work.MissingChapters = missingNumbers.Count;
-        _env.Log?.Invoke($"chapter {match.Number} detected, mark placed at {FormatTimestamp(time)} " +
+        _env.Log?.Invoke($"chapter {number} detected, mark placed at {FormatTimestamp(time)} " +
                          $"(confidence {match.Confidence:0.00}" +
                          await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
                          $"){LowConfidenceNote(match.Confidence)}" +
@@ -1300,7 +1341,7 @@ internal sealed class RegionProber
         // start is the candidate's own position (see ProbeAsync), so the window-relative phrase end
         // is already the reach measured from the candidate.
         return new ProbeMark(
-            match.Number, markSilence, match.Confidence, match.PhraseEndSeconds);
+            number, markSilence, match.Confidence, match.PhraseEndSeconds);
     }
 
     /// <summary>
@@ -1594,6 +1635,7 @@ internal sealed class RegionProber
             _env.Log?.Invoke($"jingle probe window reset to {_probeSeconds:0.#} s for the re-probe");
         }
         _reprobing = true;
+        _gapAbove = number;
         var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
         for (var si = 0; si < candidates.Count; si++)
         {
@@ -1624,6 +1666,7 @@ internal sealed class RegionProber
             break;
         }
         _reprobing = false;
+        _gapAbove = null;
         // Re-probing done: bring the jingle window back down from the ceiling to the adapted value,
         // including anything the re-probed marks just taught us.
         if (_env.Vad != null && _env.Options.AutoMaxJingle &&

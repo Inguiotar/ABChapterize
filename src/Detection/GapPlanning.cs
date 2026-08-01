@@ -218,19 +218,92 @@ internal static class GapPlanning
     }
 
     /// <summary>
-    /// Sorts detections chronologically, removes duplicates of the same chapter number
-    /// (keeping the earliest) and drops out-of-order regressions, which are typically
-    /// in-text mentions like "as seen in chapter three". Internal for unit testing.
+    /// Sorts detections chronologically and reduces them to the largest subset whose numbers still
+    /// ascend with time: duplicates of one number (the earliest survives) and out-of-order
+    /// regressions - typically in-text mentions like "as seen in chapter three" - fall out.
+    /// Internal for unit testing.
+    /// <para>
+    /// <em>Largest</em> subset rather than a greedy left-to-right scan, and the difference is not
+    /// academic. A greedy scan keeps whatever it meets first and measures the rest of the file
+    /// against it, so one number misheard <em>upwards</em> takes the whole remainder of the book
+    /// with it. On "Die Cyber-Brutzellen" (2026-08-01) chapter 14's announcement at 7:01:30 was read
+    /// as 40, and chapters 15 through 29 - every one of them detected, refined and correctly placed
+    /// - then failed "greater than 40" one after another and were discarded: a 17 h audiobook came
+    /// out marked as far as 6:21 and no further. Fifteen mutually corroborating chapters losing to a
+    /// single outlier is the wrong way round. The longest strictly ascending subsequence drops the
+    /// outlier and keeps the fifteen, which bounds what any one mishearing can cost at its own mark
+    /// - and <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> then tries to win that back too.
+    /// </para>
+    /// <para>
+    /// Ties are settled in two steps. Between two equally long readings, the one whose last chapter
+    /// number is lower wins - it claims fewer chapters exist, and chapter numbers ascend one at a
+    /// time, so the denser reading is the likelier one. Between two of <em>those</em>, the earlier
+    /// wins, which is what preserves the "of two detections of one chapter, keep the earlier" rule:
+    /// overlapping probe windows hearing one announcement yield equally long subsequences, and the
+    /// earlier detection is the one that saw the announcement rather than its tail. Confidence is
+    /// deliberately not part of the objective - a re-hearing reported more confidently is no
+    /// evidence of a better <em>position</em>, and letting it win would move marks that nothing has
+    /// shown to be wrong.
+    /// </para>
     /// </summary>
+    /// <param name="found">The raw detections, in any order.</param>
     internal static List<DetectedChapter> Normalize(List<DetectedChapter> found)
+        => NormalizeWithOutliers(found).Kept;
+
+    /// <summary>
+    /// <see cref="Normalize"/>'s full answer: the chapters it keeps, plus the ones it had to drop to
+    /// make the sequence ascend. Separate because only <see cref="ChapterDetector.RepairSequenceOutliersAsync"/>
+    /// wants the second half, and every other caller reads better without it.
+    /// </summary>
+    /// <param name="found">The raw detections, in any order.</param>
+    /// <returns>The ascending subset in chronological order, and the discarded entries in the same
+    /// order.</returns>
+    internal static (List<DetectedChapter> Kept, List<DetectedChapter> Dropped) NormalizeWithOutliers(
+        List<DetectedChapter> found)
     {
-        var result = new List<DetectedChapter>();
-        foreach (var c in found.OrderBy(c => c.TimeSeconds).ThenBy(c => c.Number))
+        var ordered = found.OrderBy(c => c.TimeSeconds).ThenBy(c => c.Number).ToList();
+        if (ordered.Count == 0)
+            return ([], []);
+
+        // Textbook O(n^2) longest-increasing-subsequence DP. The O(n log n) formulation would not
+        // pay here - a book has tens of chapters, not millions - and this one reconstructs the
+        // actual subsequence without the extra bookkeeping that one needs.
+        var runLength = new int[ordered.Count];
+        var predecessor = new int[ordered.Count];
+        var best = 0;
+        for (var i = 0; i < ordered.Count; i++)
         {
-            if (result.Count == 0 || c.Number > result[^1].Number)
-                result.Add(c);
+            runLength[i] = 1;
+            predecessor[i] = -1;
+            for (var j = 0; j < i; j++)
+            {
+                // Strictly longer, never merely as long: the first predecessor reaching a given
+                // length wins, which is what makes ties resolve toward the earliest entries.
+                if (ordered[j].Number < ordered[i].Number && runLength[j] + 1 > runLength[i])
+                {
+                    runLength[i] = runLength[j] + 1;
+                    predecessor[i] = j;
+                }
+            }
+            // Longest wins; between equally long readings the one claiming the fewest chapters
+            // exist does, and between two of those the earlier one. Ending the search at the first
+            // maximum instead - which is what "earliest wins" naively means - would truncate the
+            // sequence at an outlier: [13, 40, 16] has two readings of length two, and the one
+            // ending at 40 is the earlier of them.
+            if (runLength[i] > runLength[best] ||
+                (runLength[i] == runLength[best] && ordered[i].Number < ordered[best].Number))
+                best = i;
         }
-        return result;
+
+        var keptIndices = new HashSet<int>();
+        for (var i = best; i >= 0; i = predecessor[i])
+            keptIndices.Add(i);
+
+        var kept = new List<DetectedChapter>(keptIndices.Count);
+        var dropped = new List<DetectedChapter>(ordered.Count - keptIndices.Count);
+        for (var i = 0; i < ordered.Count; i++)
+            (keptIndices.Contains(i) ? kept : dropped).Add(ordered[i]);
+        return (kept, dropped);
     }
 
     /// <summary>

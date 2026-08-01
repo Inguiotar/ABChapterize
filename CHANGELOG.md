@@ -66,6 +66,47 @@ release means the thing has become a different program.
 
 ### Fixed
 
+- **One misheard chapter number could cost a book every mark after it.** Where a
+  chapter's spoken number came out wrong and too high — chapter 14 announced at
+  7:01:30 read as chapter 40, on a 17-hour book — every later chapter was measured
+  against that 40, found wanting, and thrown away. Fifteen chapters that had been
+  correctly found and correctly placed vanished from the output, which came out
+  marked as far as 6:21 and no further. Chapter numbers still have to ascend
+  through a book, but when one mark contradicts the rest, it is now the mark that
+  gives way rather than the rest of the book. The worst a mishearing can cost is
+  its own mark — and usually not even that, see below.
+
+- **A misheard chapter number is now caught by the marking that follows it.**
+  Placing a mark precisely means asking the recognizer about the announcement
+  several times over in short, tightly framed windows, and those readings are far
+  more reliable about the *number* than the long window that first found the
+  chapter — on the book above, the one long window read "chapter 40" while all ten
+  short ones read "chapter 14". Their verdict now counts: when they agree clearly
+  with each other, disagree with the number in hand, and offer one the chapter
+  sequence can actually accommodate, the mark is recorded under theirs. This costs
+  no extra recognition — the readings were already being taken and discarded — and
+  it is skipped entirely under `--quick-marks`. `--verbose` reports each correction.
+
+- **A gap search no longer accepts a chapter number that cannot be in the gap.**
+  When the tool goes back over a stretch between two known chapters looking for the
+  ones missing between them, it knows exactly which numbers it is looking for. It
+  now says so: a number from outside that range is questioned and re-read before it
+  is believed, and one at or beyond the chapter closing the gap is refused outright.
+  Previously such a reading was taken at face value on the reasoning that the wider
+  window used for the search was already the best available look — but the wider
+  window is precisely what produces this kind of mishearing.
+
+- **A mark whose number contradicts the chapters around it is now repaired from
+  them.** Between a chapter 13 and a chapter 15 there is exactly one number a mark
+  can carry, whatever was heard there, and the chapters that settle it are often
+  found long after the misreading happened. Where the surrounding chapters leave a
+  single possibility, the mark is simply renumbered; where they leave several, the
+  audio is read again and held to that range. This runs before the tool decides
+  which chapters are missing, so a book no longer spends passes hunting through
+  hours of audio for a chapter that was never missing — on the book above, fourteen
+  minutes of searching for a chapter 14 whose announcement sat at the far end of the
+  stretch being searched.
+
 - **A chapter mark could land about a second before its announcement**, on a book
   whose chapters open with a music jingle. Pinning down exactly where the narrator
   starts speaking means asking Whisper the same question at a series of positions,

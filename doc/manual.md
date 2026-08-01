@@ -147,16 +147,33 @@ over the same audio. The spot is therefore read once more from a window short
 enough to stay inside a single chunk, and `--verbose` says so. This needs the
 pre-pass, so `--max-jingle-length 0` never does it.
 
-A number that *is* read but cannot plausibly be the next chapter — one that
-would leave more than three chapters missing in one go, or one below the
+A number that *is* read but cannot plausibly belong where it was heard — one
+that would leave more than three chapters missing in one go, or one below the
 chapters already found — is not taken at face value either. It is read again:
 with `--pass3-model` first if that names a better model than the probing one,
 then from two differently framed windows around the announcement. The new
-reading is adopted only if it continues the chapter sequence, so a book that
+reading is adopted only if it fits the sequence at that point, so a book that
 genuinely skips numbers keeps its own numbering; where nothing sensible can be
 read, the original number stands (and, if it was below the sequence, is skipped
 as before). The mark itself never moves — only the number changes.
 `--verbose` reports every attempt and its outcome.
+
+Inside a gap search — a re-reading of the stretch between two chapters already
+found, looking for the ones missing between them — "fits the sequence" is much
+narrower, because both ends of the hole are known. Only the numbers actually
+missing from that stretch can be right there, so anything else is questioned and
+re-read as above, and a number at or beyond the chapter that closes the gap is
+refused outright rather than displacing it.
+
+Mark placement supplies one more reading of the number, at no extra cost. Unless
+`--quick-marks` is in force, pinning down where an announcement begins
+(see below) means transcribing it several times over in short windows framed on
+the announcement itself, and those windows read a spoken number more reliably
+than the long one that found the chapter — the same audio can come back as
+"chapter forty" from a 45-second window and "chapter fourteen" from every window
+under seven. When those readings agree clearly with one another, disagree with
+the number in hand, and offer one that fits the sequence, the mark is recorded
+under theirs. `--verbose` reports the correction.
 
 Where a chapter announcement is found, the mark is placed a fixed lead-in
 before it — 0.35 seconds by default, `--mark-lead` — no matter what precedes
@@ -261,6 +278,19 @@ window by no more than a quarter of its current width, though: a wide window
 makes probes overlap and so costs time on every remaining candidate, and a
 single unusual chapter should not decide that for the rest of a long book. A
 reach beyond that is granted over several recoveries.
+
+When pass 2 is done, its finds are reconciled into one ascending sequence, since
+chapter numbers rise through a book. Where a mark's number contradicts the marks
+around it, that mark gives way rather than the rest of the book — a single
+mishearing can cost its own mark but never the chapters behind it. And before it
+is given up, the surrounding chapters get a say in what it should have been:
+between a chapter 13 and a chapter 15 there is exactly one number the mark can
+carry, so it is simply renumbered; where the neighbours leave several
+possibilities, the audio is read again and held to that range. This is why the
+step waits until pass 2 has finished — the chapters that settle the question are
+often found long after the misreading. It also runs before the tool works out
+which chapters are missing, so the passes below never go hunting for a chapter
+that was never missing. `--verbose` reports each repair.
 
 ### Pass 2.5 — cheap gap re-probe (only with a heavier `--pass3-model`)
 

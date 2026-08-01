@@ -4,11 +4,13 @@
 
 using ABChapterize.Audio;
 using ABChapterize.Cli;
+using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Vad;
 using System.Text.RegularExpressions;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.JingleGeometry;
+using static ABChapterize.Detection.PhraseMatching;
 
 namespace ABChapterize.Detection;
 
@@ -38,6 +40,24 @@ internal readonly record struct MarkContext(
     List<SpeechSegment> SpeechSegments, TranscriptWindow Transcript);
 
 /// <summary>
+/// The chapter number a placement is for, plus what it takes to check that number against the
+/// refinement's own view of the announcement (<see cref="RefinedNumberVote"/>). Named marks have no
+/// number and pass none; everything else about their placement is identical.
+/// </summary>
+/// <param name="Number">The chapter number the detecting window read.</param>
+/// <param name="Profile">The resolved language profile, for re-reading a number from the
+/// refinement's probe transcripts.</param>
+/// <param name="Bounds">Where in the chapter sequence this announcement sits, which is what a
+/// corrected number still has to satisfy to be adopted.</param>
+internal readonly record struct NumberCheck(int Number, LanguageProfile Profile, NumberBounds Bounds);
+
+/// <summary>The outcome of placing one mark.</summary>
+/// <param name="TimeSeconds">The final mark position.</param>
+/// <param name="Number">The chapter number to record it under - the one that came in, unless the
+/// refinement's probes overruled it; null for a named mark.</param>
+internal readonly record struct MarkPlacement(double TimeSeconds, int? Number);
+
+/// <summary>
 /// Turns a default-mode mark into the final one and records what the file's statistics need to
 /// know about it. Both passes that detect a chapter - Pass 2's window probing and Pass 3's gap
 /// transcription - compute their default-mode mark differently (a probe window has a candidate and
@@ -59,6 +79,11 @@ internal sealed class MarkPlacer
     private readonly Action<string>? _log;
     private readonly PreciseMarkRefiner _refiner;
 
+    /// <summary>The detector's <c>--max-chapter-number</c>-capped phrase matcher, for the
+    /// refinement's number re-read (<see cref="RefinedNumberVote"/>). Borrowed rather than
+    /// re-implemented so a number the cap rules out during detection is ruled out here too.</summary>
+    private readonly Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> _findMatches;
+
     /// <summary>Per detected chapter number, the length of the silence that preceded its phrase
     /// (when the VAD pre-pass ran, the silence preceding the jingle - see <see cref="Record"/>).
     /// Keyed by number so a re-detection overwrites; filtered to the surviving chapters when the
@@ -74,12 +99,15 @@ internal sealed class MarkPlacer
     /// <param name="options">Validated command line options.</param>
     /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="transcribeCounting">The detector's statistics-counting transcribe wrapper.</param>
+    /// <param name="findMatches">The detector's --max-chapter-number-capped phrase matcher.</param>
     internal MarkPlacer(IAudioSource audio, CliOptions options, DetectionLog log,
-        Func<float[], CancellationToken, Task<List<TranscriptSegment>>> transcribeCounting)
+        Func<float[], CancellationToken, Task<List<TranscriptSegment>>> transcribeCounting,
+        Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> findMatches)
     {
         _audio = audio;
         _options = options;
         _log = log.Fanout();
+        _findMatches = findMatches;
         _refiner = new PreciseMarkRefiner(audio, options, log, transcribeCounting);
     }
 
@@ -89,11 +117,19 @@ internal sealed class MarkPlacer
     /// result back to the jingle's leading edge, and the chapter's silence/jingle measurements are
     /// recorded either way - the auto mechanisms and statistics stay meaningful even when marks are
     /// placed at the plain default offset.
+    /// <para>
+    /// Precise marking also settles the chapter <em>number</em> here, from the transcripts its own
+    /// probes produced (<see cref="RefinedNumberVote"/>), which is why the number goes out as well
+    /// as in. It has to happen at this point and not at the call site: the measurements below are
+    /// keyed by chapter number, and recording them under a number the very next step overturns
+    /// would file a chapter's silence and jingle under a chapter that does not exist.
+    /// </para>
     /// </summary>
-    /// <param name="number">The detected chapter number, or null for a named (prologue/epilogue)
-    /// mark - which is placed identically but contributes nothing to the per-chapter measurements,
-    /// since those describe the book's regular chapter breaks and a prologue or epilogue transition
-    /// is exactly the atypical one the "inter-chapter" statistics already exclude chapter 1 for.</param>
+    /// <param name="chapter">The detected chapter number and what it takes to double-check it, or
+    /// null for a named (prologue/epilogue) mark - which is placed identically but contributes
+    /// nothing to the per-chapter measurements, since those describe the book's regular chapter
+    /// breaks and a prologue or epilogue transition is exactly the atypical one the "inter-chapter"
+    /// statistics already exclude chapter 1 for.</param>
     /// <param name="defaultMark">The default-mode mark the caller's own pass computed.</param>
     /// <param name="phraseAbs">Absolute phrase start time, the clip point for the jingle length.</param>
     /// <param name="phraseEndAbs">Absolute end of the transcript segment(s) the phrase was matched
@@ -104,22 +140,31 @@ internal sealed class MarkPlacer
     /// the VAD pre-pass did not run).</param>
     /// <param name="ctx">The file's mark-placement constants.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The final mark position.</returns>
-    internal async Task<double> PlaceAsync(
-        int? number, double defaultMark, double phraseAbs, double phraseEndAbs, Silence? statSilence,
-        NonSpeechRegion? statRegion, MarkContext ctx, CancellationToken ct)
+    /// <returns>The final mark position and the number to record it under.</returns>
+    internal async Task<MarkPlacement> PlaceAsync(
+        NumberCheck? chapter, double defaultMark, double phraseAbs, double phraseEndAbs,
+        Silence? statSilence, NonSpeechRegion? statRegion, MarkContext ctx, CancellationToken ct)
     {
         var time = defaultMark;
         var phraseHeard = false;
+        var number = chapter?.Number;
         if (_options.PreciseMark)
-            (time, phraseHeard) = await _refiner.RefinePreciseMarkAsync(
+        {
+            var refined = await _refiner.RefinePreciseMarkAsync(
                 time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex,
                 phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ct);
+            (time, phraseHeard) = (refined.Mark, refined.PhraseHeard);
+            if (chapter is { } check &&
+                RefinedNumberVote.Recount(
+                    refined.PhraseReadings, check.Profile, _findMatches, check.Number, check.Bounds,
+                    phraseAbs, _log) is { } recounted)
+                number = recounted;
+        }
         if (_options.MarkBeforeJingle)
             time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx, ct);
         if (number is { } chapterNumber)
             Record(chapterNumber, statSilence, statRegion, phraseAbs);
-        return time;
+        return new MarkPlacement(time, number);
     }
 
     /// <summary>
