@@ -898,10 +898,9 @@ public sealed partial class FileProcessor
 
     /// <summary>
     /// The --verify decision tree for a file that would otherwise be skipped: markings that all
-    /// check out leave the file alone; a partial failure keeps the trusted markings and gap-recovers
-    /// only around the unconfirmed ones; nothing trustworthy left - or more failures than
-    /// --verify-threshold allows, which discredits even the survivors as gap-recovery anchors -
-    /// falls back to a full whole-file redetect.
+    /// check out leave the file alone; some of them wrong keeps the trusted ones and gap-recovers
+    /// only around the unconfirmed ones; nearly all of them wrong warns and leaves the file
+    /// completely alone (see <see cref="IsWholesaleFailure"/>).
     /// </summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="detector">The detector borrowed for this file.</param>
@@ -921,24 +920,60 @@ public sealed partial class FileProcessor
             return null;
         }
 
-        var thresholdExceeded = _options.VerifyFailThreshold is { } threshold && verify.Failed > threshold;
-        if (verify.ConfirmedChapters.Count > 0 && !thresholdExceeded)
+        if (IsWholesaleFailure(verify, _options.VerifyFailThreshold))
         {
-            // At least one marking is trusted - only the gap(s) around the unconfirmed one(s) get
-            // their own Pass 2 (and, for a still-missing trailing chapter, Pass 3); everything
-            // else in the file is left exactly as --verify found it.
-            var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
-                              $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
-            return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct), trustedNote);
+            _warnings++;
+            var thresholdNote = _options.VerifyFailThreshold is { } threshold
+                ? $", over the --verify-threshold of {threshold}"
+                : "";
+            ReportSkipped(ctx.Work, ctx.Name,
+                $"--verify could not confirm {verify.Failed} of {verify.Checked} checked chapter " +
+                $"marking(s){thresholdNote} - existing markings left untouched",
+                " (use --force without --verify to mark it from scratch)", important: true);
+            return null;
         }
 
-        var thresholdNote = thresholdExceeded
-            ? $", exceeding --verify-threshold {_options.VerifyFailThreshold}"
-            : "";
-        var discardNote = $", {ctx.Info.ChapterCount} existing marking(s) discarded " +
-                          $"(--verify: {verify.Failed} of {verify.Checked} checked mark(s) not confirmed{thresholdNote})";
-        return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), discardNote);
+        // At least one marking is trusted, and they still outnumber the failures - only the gap(s)
+        // around the unconfirmed one(s) get their own Pass 2 (and, for a still-missing trailing
+        // chapter, Pass 3); everything else in the file is left exactly as --verify found it.
+        var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
+                          $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
+        return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct), trustedNote);
     }
+
+    /// <summary>
+    /// Whether a file's markings failed verification <em>wholesale</em> rather than individually -
+    /// the difference between a book with a few bad marks and a book whose marks were never what
+    /// --verify assumes they are.
+    /// <para>
+    /// It is worth being explicit about why the two get opposite treatment, because the wholesale
+    /// case used to be the one that redetected the file from scratch. A mark set that fails almost
+    /// entirely is far more likely to be marks that mean something other than "one numbered chapter"
+    /// - a retailer's marks lumping several book chapters into one entry are the case on record, and
+    /// a mark titled "Capitolo due" sitting where the narrator says "capitolo quattro" is correct for
+    /// what it is and unconfirmable by anything here - than it is to be a book whose every single
+    /// mark drifted. Silently replacing that user's marks is the worst thing this tool can do to
+    /// them, and it did it to precisely the population it was already serving worst. So the file is
+    /// skipped with a warning, and fixing it is made a deliberate per-file decision (--force without
+    /// --verify) rather than something a batch run does on its own.
+    /// </para>
+    /// <para>
+    /// The default rule is a ratio, because <see cref="CliOptions.VerifyFailThreshold"/> is an
+    /// absolute count that is off unless asked for and so cannot supply one. Where the failures no
+    /// longer outnumber the confirmations, gap recovery's own premise still holds: the survivors are
+    /// trustworthy anchors bracketing the failures. Where they do, the "anchors" are the minority
+    /// reading. Nothing confirmed at all is always wholesale, whatever an explicit threshold says -
+    /// there would be no anchor to recover a gap between.
+    /// </para>
+    /// Internal (and pure) for unit testing.
+    /// </summary>
+    /// <param name="verify">The verification result to judge.</param>
+    /// <param name="failThreshold">The explicit <c>--verify-threshold</c>, or null for the ratio.</param>
+    internal static bool IsWholesaleFailure(VerifyResult verify, int? failThreshold)
+        => verify.ConfirmedChapters.Count == 0 ||
+           (failThreshold is { } threshold
+               ? verify.Failed > threshold
+               : verify.Failed > verify.ConfirmedChapters.Count);
 
     /// <summary>
     /// Commits a detection that left a chapter-sequence gap. Rather than discard the work, the

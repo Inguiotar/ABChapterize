@@ -1013,13 +1013,13 @@ skipped (reported as "skipped").
   own marks often do, cannot pass this check and are not meant to: a mark
   titled "Chapter 2" sitting where the narrator says "chapter four" is doing
   its job perfectly well, and `--verify` will still call it unconfirmed.
-  That matters, because **`--verify` is not a read-only report**. An
-  unconfirmed mark gets redetected, and if none of the marks can be
-  confirmed, the existing ones are discarded and the file is detected from
-  scratch. On a file whose marks are deliberately coarser than the book's
-  chapters, leave it alone (the default, no `--verify`) — or redo it
-  wholesale with `--force` if you want ABChapterize's own chapter-level
-  marks instead.
+  That matters, because **`--verify` is not a read-only report**: an
+  unconfirmed mark gets redetected. A file whose marks fail *wholesale* is
+  the one case that is left completely alone — see below — so a coarsely
+  marked book is not silently rewritten; but its marks are also not
+  improved. On such a file, either leave it alone (the default, no
+  `--verify`) or redo it wholesale with `--force` if you want
+  ABChapterize's own chapter-level marks instead.
 
   Marks whose title carries no chapter number that can be read are not
   checked at all. If that is true of every mark in a file, there is nothing
@@ -1038,9 +1038,13 @@ skipped (reported as "skipped").
   the stretch(es) of the file around the unconfirmed mark(s), rather than
   the whole file; a still-missing mark past the last one in the file is
   covered by a further, file-end-only fallback pass, since nothing else
-  would notice it is missing at all. If every checked mark fails, there is
-  nothing left to anchor a scoped recovery to, so the file falls back to
-  full detection instead, same as `--force` would. A file already over
+  would notice it is missing at all. If the failures start to *outnumber*
+  the confirmations — nothing confirmed at all being the extreme case — the
+  file is instead skipped with a warning and every existing mark is left
+  exactly as it was. Marks failing in bulk almost always means they were
+  never one-per-numbered-chapter to begin with, and replacing them is not a
+  decision a batch run should make on its own; re-run that one file with
+  `--force` and without `--verify` if replacing them is what you want. A file already over
   the `--max-chapters` threshold is still assumed bogus outright and skips
   verification entirely; `--verify` only decides the borderline cases where
   the mark count alone isn't proof of anything. Since its intent
@@ -1053,13 +1057,12 @@ skipped (reported as "skipped").
   `(-N)` gap.
 
 `-h`, `--verify-threshold <n>`
-: Requires `--verify`. Sharpens the "at least one confirmed marking keeps
-  the rest as a gap-scoped recovery" rule above: if more than `<n>` markings
-  fail verification, the ones that did pass are no longer trusted as
-  gap-recovery anchors either, and the file falls back to full detection -
-  the same fallback already used when nothing at all is confirmed. Without
-  this option, even a single confirmed marking out of many is enough to
-  keep the rest as a gap-scoped recovery instead of redoing the whole file.
+: Requires `--verify`. Draws the "failed wholesale" line above by hand: more
+  than `<n>` failed marks in a file leaves it untouched with a warning,
+  however many others were confirmed. Without this option the line sits
+  where the failures begin to outnumber the confirmations. Note this only
+  moves the line — it cannot switch the outcome back to the full,
+  from-scratch redetection that earlier versions did here.
 
 ### Safety and undo
 

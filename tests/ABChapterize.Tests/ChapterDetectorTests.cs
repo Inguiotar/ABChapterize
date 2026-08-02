@@ -4993,6 +4993,24 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Verify_ChecksTitlesWithTheNumberBehindTheChapterWord()
+    {
+        // The ordinary written form, and the one that used to make --verify report a file as
+        // having nothing checkable at all: the number is the title's *second* word, which the
+        // transcript-tail parser this once borrowed never looks at (see MarkingTitleNumber).
+        // Everything here is about the count - one marking checked and confirmed rather than
+        // silently passed over.
+        var result = await VerifyAsync(
+            Options("--max-jingle-length", "0"),
+            [new Chapter(10, "Chapter Two: Seven Days Later")],
+            s => s.Add(0, Seg(10, " Chapter 2.")));
+
+        Assert.True(result.Passed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(0, result.Failed);
+    }
+
+    [Fact]
     public async Task Verify_WithAutoLanguage_ResolvesLanguageUpfront_BeforeParsingAnyTitle()
     {
         // Both markings' titles are only parseable as German ordinals ("Erstes"/"Zweites") - not

@@ -126,4 +126,50 @@ public sealed class FileProcessorTests : IDisposable
         Assert.Empty(chapters);
         Assert.Equal("", note);
     }
+
+    /// <summary>Builds a <see cref="VerifyResult"/> with the given confirmed/failed counts, which is
+    /// all <see cref="FileProcessor.IsWholesaleFailure"/> looks at.</summary>
+    /// <param name="confirmed">How many markings were confirmed.</param>
+    /// <param name="failed">How many were not.</param>
+    private VerifyResult Verified(int confirmed, int failed)
+        => new(failed == 0, confirmed + failed, failed,
+               [.. Enumerable.Range(1, confirmed).Select(n => new DetectedChapter(n, n * 100))],
+               [], _profile, null, 0, []);
+
+    /// <summary>
+    /// The default rule: a file keeps its gap-scoped recovery while the confirmed markings still
+    /// outnumber the failures, and is left alone once they do not. The 0-confirmed row is the one
+    /// that used to discard a whole marking set and redetect the file.
+    /// </summary>
+    /// <param name="confirmed">Confirmed markings.</param>
+    /// <param name="failed">Unconfirmed markings.</param>
+    /// <param name="wholesale">Whether this counts as a wholesale failure.</param>
+    [Theory]
+    [InlineData(0, 20, true)]
+    [InlineData(2, 18, true)]
+    [InlineData(9, 11, true)]
+    [InlineData(10, 10, false)]
+    [InlineData(19, 1, false)]
+    public void IsWholesaleFailure_ComparesFailuresAgainstConfirmations(
+        int confirmed, int failed, bool wholesale)
+        => Assert.Equal(wholesale, FileProcessor.IsWholesaleFailure(Verified(confirmed, failed), null));
+
+    /// <summary>
+    /// An explicit --verify-threshold replaces the ratio in both directions - it can condemn a file
+    /// the ratio would have recovered, and spare one the ratio would have condemned.
+    /// </summary>
+    [Fact]
+    public void IsWholesaleFailure_ObeysAnExplicitThreshold()
+    {
+        Assert.True(FileProcessor.IsWholesaleFailure(Verified(confirmed: 19, failed: 1), 0));
+        Assert.False(FileProcessor.IsWholesaleFailure(Verified(confirmed: 2, failed: 18), 20));
+    }
+
+    /// <summary>
+    /// Nothing confirmed is wholesale however high the threshold is set: gap recovery has no anchor
+    /// to work from, which is a structural fact rather than a policy the option may overrule.
+    /// </summary>
+    [Fact]
+    public void IsWholesaleFailure_HoldsWithNothingConfirmed_WhateverTheThresholdSays()
+        => Assert.True(FileProcessor.IsWholesaleFailure(Verified(confirmed: 0, failed: 3), 100));
 }

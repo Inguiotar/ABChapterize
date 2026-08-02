@@ -120,6 +120,27 @@ public static class NumberWordParser
     }
 
     /// <summary>
+    /// Finds an unambiguous Roman numeral anywhere in <paramref name="text"/>, rather than only at
+    /// the end nearest a chapter phrase. Written for a pre-existing marking's <em>title</em>
+    /// (<see cref="ABChapterize.Detection.MarkingTitleNumber"/>), where the number can sit behind a
+    /// heading the phrase-anchored rules do not reach - and only ever reached there once those have
+    /// found nothing, since scanning a whole string for something that is also a word is a last
+    /// resort by nature. The one-letter guard applies exactly as everywhere else, so a stray "I" or
+    /// "C" in a title is not a chapter number unless it is written like a heading.
+    /// </summary>
+    /// <param name="text">The text to scan.</param>
+    /// <param name="number">Receives the parsed number on success.</param>
+    /// <returns>True when some token is an unambiguous Roman numeral.</returns>
+    public static bool TryExtractRomanAnywhere(string text, out int number)
+    {
+        foreach (var token in Tokenize(text, int.MaxValue))
+            if (TryParseRoman(token, out number))
+                return true;
+        number = 0;
+        return false;
+    }
+
+    /// <summary>
     /// Parses a token as a Roman numeral ("XIII"), subject to the one-letter guard below. Like
     /// digits, and unlike spoken words, the notation is the same in every language - but unlike
     /// digits it overlaps with real words, so every caller tries it <em>after</em> the language's
@@ -185,17 +206,20 @@ public static class NumberWordParser
         => tokens.ConvertAll(t => t.Text);
 
     /// <summary>
-    /// Splits text into words, stripping surrounding punctuation. Only the first few tokens
-    /// are relevant, so tokenization stops after five words.
+    /// Splits text into words, stripping surrounding punctuation. Only the first few tokens are
+    /// relevant to a number following a phrase, so tokenization stops after five words by default.
     /// </summary>
-    private static List<Token> Tokenize(string text)
+    /// <param name="text">The text to split.</param>
+    /// <param name="limit">How many tokens to keep; <see cref="TryExtractRomanAnywhere"/> lifts it,
+    /// having a whole title to scan rather than the words right after a phrase.</param>
+    private static List<Token> Tokenize(string text, int limit = 5)
     {
         var tokens = new List<Token>();
         foreach (var raw in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             if (MakeToken(raw) is { } token)
                 tokens.Add(token);
-            if (tokens.Count >= 5)
+            if (tokens.Count >= limit)
                 break;
         }
         return tokens;

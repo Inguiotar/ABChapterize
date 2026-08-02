@@ -48,6 +48,18 @@ release means the thing has become a different program.
   book is a handful at most, and the heavier model is still loaded only if something
   actually asks for it.
 
+- **`--verify` no longer replaces a whole set of marks that failed wholesale.** Where
+  some marks fail the check, nothing has changed: the confirmed ones are kept and only
+  the stretches around the failures are redetected. Where nearly all of them fail —
+  previously the case that discarded every mark and redetected the file from scratch —
+  the file is now skipped with a warning and left exactly as it was. Marks failing in
+  bulk almost always means they were never one-per-numbered-chapter to begin with, which
+  is true of every retailer mark set that groups several book chapters into one entry,
+  and replacing those is not a decision a batch run should be making by itself. Re-run
+  that one file with `--force` and without `--verify` if replacing them is what you
+  want. `--verify-threshold` now draws that line by hand instead of forcing the
+  from-scratch redetection.
+
 - **Thread counts now default to your machine's physical cores** rather than
   nearly all of its hardware threads. Hyperthreads help a little where they help
   and hurt a lot where they do not, and the tool cannot tell which machine it is
@@ -157,6 +169,24 @@ release means the thing has become a different program.
   plainly hear — which was taken as "the announcement starts here" and cut the mark
   short. Those stretches are now checked rather than believed. Marks that were
   already right do not move; the extra checking costs a few seconds per chapter.
+
+- **`--verify` could not read most chapter mark titles, and said the file had nothing
+  to check.** It looked for digits anywhere in a title and otherwise expected the number
+  to be its very first word, so the ordinary written form was unreadable in every
+  language: "Chapter Five", "Kapitel Fünf", "Capítulo Cinco", "Chapitre Cinq", and Roman
+  numerals anywhere. A file whose marks are all titled that way was reported as having
+  no checkable marks and skipped — verification asked for, and nothing verified. Titles
+  are now read the way an announcement in the audio is: from the chapter word outwards,
+  in both word orders, with digits, spelled-out numbers and Roman numerals all
+  understood. A title written in a different language than the audio is read too, so an
+  English-tooled tagger's marks on a German book still check out.
+
+  Two things that used to go wrong in the other direction are gone with it: a heading
+  behind the number is no longer mistaken for it ("Chapter Two: Seven Days Later" was
+  read as chapter nine), and a year in a title is no longer read as a chapter number
+  ("Capitolo uno - Anno 1984" was read as chapter 1984, and enough such marks used to be
+  enough to get a file's marks discarded). Under `--verbose`, every title that still
+  cannot be read is now named in the log.
 
 - **A mark could be left unpinned because the search looked in the wrong place.**
   Pinning a mark means searching the stretch of audio the announcement was heard in,

@@ -192,7 +192,7 @@ public sealed class ChapterDetector
         // identity and is dropped, exactly like an unparseable --verify marking.
         var confirmed = new List<DetectedChapter>();
         foreach (var marking in info.ExistingChapters)
-            if (TryParseExpectedNumber(marking.Title, profile.Language, out var number))
+            if (TryParseExpectedNumber(marking.Title, profile, out var number))
                 confirmed.Add(new DetectedChapter(number, marking.StartSeconds));
         confirmed = Normalize(confirmed);
         var namedSeed = CarryOverNamedMarkings(info, profile);
@@ -241,7 +241,7 @@ public sealed class ChapterDetector
         foreach (var marking in info.ExistingChapters)
         {
             var title = marking.Title.Trim();
-            if (TryParseExpectedNumber(title, profile.Language, out _) ||
+            if (TryParseExpectedNumber(title, profile, out _) ||
                 string.Equals(title, profile.IntroTitle, StringComparison.OrdinalIgnoreCase))
                 continue;
             if (profile.NamedPhrases.FirstOrDefault(p => p.TitleMatcher.IsMatch(title)) is { } phrase)
@@ -1320,8 +1320,13 @@ public sealed class ChapterDetector
                 continue;
             }
 
-            if (!TryParseExpectedNumber(marking.Title, profile.Language, out var expected))
+            if (!TryParseExpectedNumber(marking.Title, profile, out var expected))
             {
+                // Named on purpose: "none had a checkable number" is otherwise a dead end for
+                // anyone asking why --verify did nothing, since the answer lives entirely in what
+                // the titles say and nothing else ever prints them.
+                _log?.Invoke($"marking at {FormatTimestamp(marking.StartSeconds)} (\"{marking.Title}\") " +
+                             "carries no readable chapter number - not checked");
                 markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
                 work.Advance(1);
                 continue;
@@ -1449,18 +1454,16 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Extracts an expected chapter number from a pre-existing marking's title: a plain digit
-    /// sequence first (works regardless of language, and covers titles from other tools like
-    /// "Chapter 05" or "05 - Title"), then a spelled-out number via <see cref="NumberWordParser"/>
-    /// for the given language. Returns false when the title has no parseable number at all.
+    /// Extracts an expected chapter number from a pre-existing marking's title - see
+    /// <see cref="MarkingTitleNumber"/>, which owns the rules. Returns false when the title has no
+    /// readable number at all, which is a marking <c>--verify</c> can neither confirm nor fault and
+    /// a resume path has no chapter identity for.
     /// </summary>
-    private static bool TryParseExpectedNumber(string title, string language, out int number)
-    {
-        var digits = Regex.Match(title, @"\d+");
-        if (digits.Success && int.TryParse(digits.Value, NumberStyles.None, CultureInfo.InvariantCulture, out number))
-            return true;
-        return NumberWordParser.TryExtractNumber(title, language, out number);
-    }
+    /// <param name="title">The marking's title.</param>
+    /// <param name="profile">The file's resolved language profile.</param>
+    /// <param name="number">Receives the chapter number on success.</param>
+    private static bool TryParseExpectedNumber(string title, LanguageProfile profile, out int number)
+        => MarkingTitleNumber.TryParse(title, profile, out number);
 
     /// <summary>
     /// Resolves the language profile to use for this file: with an explicit --lang, always

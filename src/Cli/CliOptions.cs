@@ -266,12 +266,12 @@ public sealed class CliOptions
     /// <summary>
     /// Maximum number of unconfirmed --verify markings a file may have and still get the
     /// gap-scoped recovery <see cref="ChapterDetector.DetectGapsAsync"/> normally runs around
-    /// them (--verify-threshold / -h). Above it, the confirmed markings are no longer trusted
-    /// either - the file's whole marking set is treated as bogus and discarded outright, the
-    /// same full, from-scratch detection a --verify run with nothing confirmed at all already
-    /// falls back to. Guards against trusting a couple of lucky survivors as gap-recovery
-    /// anchors in a file whose markings are otherwise mostly wrong. Null (the default) never
-    /// overrides the plain "at least one confirmed marking" rule; requires --verify.
+    /// them (--verify-threshold / -h). Above it the file is left completely alone with a warning
+    /// instead, on the reasoning
+    /// <see cref="ABChapterize.Processing.FileProcessor.IsWholesaleFailure"/> spells out: markings
+    /// that fail in bulk are more likely to mean something other than one numbered chapter each
+    /// than to be a book whose every mark drifted. Null (the default) leaves that judgement to the
+    /// ratio rule there; requires --verify.
     /// </summary>
     public int? VerifyFailThreshold { get; private set; }
 
@@ -1633,18 +1633,20 @@ public sealed class CliOptions
                                     instead of trusting them blindly: a short window around
                                     each marking is probed for the chapter phrase and the
                                     expected number. Markings that all check out are left
-                                    alone; if any fails, they are discarded and the file goes
-                                    through full detection, same as --force would. A file
+                                    alone; where some fail, the confirmed ones are kept and
+                                    only the stretches around the failures are redetected;
+                                    where nearly all fail, the file is left untouched with a
+                                    warning, since markings that fail in bulk usually mean
+                                    something other than one numbered chapter each. A file
                                     already rejected by --max-chapters skips verification and
                                     stays bogus. Cannot be combined with --force or --import.
           -h, --verify-threshold <n>
-                                    Requires --verify. If more than <n> markings fail
-                                    verification, the ones that did pass are no longer trusted
-                                    as gap-recovery anchors either - the whole marking set is
-                                    discarded and the file goes through full detection, the
-                                    same fallback used when --verify confirms nothing at all.
-                                    Without this option, even a single confirmed marking is
-                                    enough to keep the rest as a gap-scoped recovery instead.
+                                    Requires --verify. Sets the "nearly all failed" line
+                                    explicitly: more than <n> failures leaves the file
+                                    untouched with a warning instead of recovering the
+                                    stretches around them. Without this option the line is
+                                    drawn where the failures start to outnumber the confirmed
+                                    markings.
 
         Chapter titles:
           -t, --title <word>        Word used for chapter titles; the chapter number is appended
