@@ -15,23 +15,21 @@ release means the thing has become a different program.
 
 ### Changed
 
-- **The first pass got about four times faster.** The voice-activity scan that
-  opens every run used to work through the book one 32-millisecond frame at a time
-  on a single thread; it now spreads the timeline across every core. On a 12-core
-  machine an 8.5-hour audiobook's first pass went from 201 to 50 seconds — and it
-  finds exactly the same speech, with not one segment boundary moved, which was
-  the condition for shipping it at all. How much of the machine it uses is yours
-  to set with the new `--vad-threads`.
+- **The first pass is several times faster.** The voice-activity scan that opens
+  every run used to work through the book one short frame at a time on a single
+  thread; it now spreads the timeline across every core, and finds exactly the same
+  speech, with not one segment boundary moved — which was the condition for shipping
+  it at all. How much of the machine it uses is yours to set with the new
+  `--vad-threads`.
 
-- **The second pass stops paying twice for the same stretch of audio.** Where the
-  book's silences sit close together, the tool used to hand the recognizer one
-  short clip after another, each costing a full turn no matter how little audio
-  was in it — a run of eleven of them was routine on a densely-marked book. Each
+- **The second pass stops paying twice for the same stretch of audio.** Where a
+  book's silences sit close together, the recognizer used to be handed one short clip
+  after another, each costing a full turn no matter how little audio was in it. Each
   read now runs on to the end of the next clip that fits in the turn it has already
-  paid for, and the clips that follow come out of what it read. On a 15.6-hour book
-  that takes about a fifth off the second pass's recognizer work. Where a read stops
-  has not changed: still on a silence, so no announcement is ever cut in half by
-  one. Under `--verbose` a read that got ahead of itself says so.
+  paid for, and the clips that follow come out of what it read — roughly a fifth off
+  the second pass's recognizer work on a densely-marked book. Where a read stops has
+  not changed: still on a silence, so no announcement is ever cut in half by one.
+  Under `--verbose` a read that got ahead of itself says so.
 
 - **One file at a time, with the whole machine behind it.** Multi-file runs no
   longer process several books at once. That parallelism was worth less than it
@@ -51,20 +49,20 @@ release means the thing has become a different program.
 ### Added
 
 - **`--vad-threads <n|auto>`** — threads for the voice-activity pre-pass. Each one
-  holds about 11 minutes of decoded audio while it works, so on a machine with
-  many cores this is also the knob for how much memory that pass uses. `1` runs it
-  as a single uninterrupted stream, exactly as earlier versions did.
+  holds a block of decoded audio while it works, so on a machine with many cores
+  this is also the knob for how much memory that pass uses. `1` runs it as a single
+  uninterrupted stream, exactly as earlier versions did.
 
 - **`--whisper-threads <n|auto>`** — threads for Whisper transcription, replacing
   the old "nearly all logical cores" default.
 
 - **`--summary` now names the files it counted.** After the totals it lists every
   file that was skipped, with the reason, and every file left with chapter marks
-  still missing, with how many are missing and which chapters they are. In a run
-  over a few hundred audiobooks these were the two questions the closing counts
-  raised and could not answer, and the per-file lines they were buried in have long
-  scrolled away by then (or, under `--quiet`, were never printed). Where the output
-  is colored, the book titles are shown in dark cyan.
+  still missing, with how many are missing and which chapters they are. In a large
+  batch these were the two questions the closing counts raised and could not answer,
+  and the per-file lines they were buried in have long scrolled away by then (or,
+  under `--quiet`, were never printed). Where the output is colored, the book titles
+  are shown in dark cyan.
 
   Consequently the skipped count now includes the two kinds of skip it used to leave
   out: a file whose codec this ffmpeg cannot decode, and an `--import` run finding no
@@ -79,38 +77,34 @@ release means the thing has become a different program.
 ### Fixed
 
 - **Some books quietly pulled the tool's sense of time out from under it.** An
-  audiobook stitched together from separately encoded pieces — a very common way of
-  building an `.m4b` — hands the decoder a few milliseconds more audio at every seam
-  than the file's own timeline accounts for. The speech scan counted that surplus as
-  play time, so the further into such a book it got, the later everything it heard
-  appeared to be: a fifth of a second off after three hours, over a second and a half
-  by the end of a 17-hour book. Marks that got their position from that scan landed
-  correspondingly late — on "Raumschiff Erde" chapter 25's mark sat *after* the words
-  "Kapitel 25", right on the chapter title behind them. The scan is now held to the
-  file's own timeline, seam by seam. Four of ten test books were affected; the other
-  six were already within a frame, and their speech boundaries come out unchanged to
-  the millisecond.
+  audiobook stitched together from separately encoded pieces — a common way of
+  building an `.m4b` — hands the decoder slightly more audio at every seam than the
+  file's own timeline accounts for. The speech scan counted that surplus as play
+  time, so the further into such a book it got, the later everything it heard
+  appeared to be, drifting by more than a second by the end of a long book. Marks
+  that took their position from that scan landed correspondingly late, in the worst
+  case past the announcement and onto the chapter title behind it. The scan is now
+  held to the file's own timeline, seam by seam. Books without the defect are
+  unaffected, down to the millisecond.
 
 - **One misheard chapter number could cost a book every mark after it.** Where a
-  chapter's spoken number came out wrong and too high — chapter 14 announced at
-  7:01:30 read as chapter 40, on a 17-hour book — every later chapter was measured
-  against that 40, found wanting, and thrown away. Fifteen chapters that had been
-  correctly found and correctly placed vanished from the output, which came out
-  marked as far as 6:21 and no further. Chapter numbers still have to ascend
-  through a book, but when one mark contradicts the rest, it is now the mark that
-  gives way rather than the rest of the book. The worst a mishearing can cost is
-  its own mark — and usually not even that, see below.
+  chapter's spoken number came out wrong and too high, every later chapter was
+  measured against it, found wanting, and thrown away — so a book could lose most
+  of its marks to a single mishearing, all of them correctly found and correctly
+  placed. Chapter numbers still have to ascend through a book, but when one mark
+  contradicts the rest, it is now the mark that gives way rather than the rest of
+  the book. The worst a mishearing can cost is its own mark — and usually not even
+  that, see below.
 
 - **A misheard chapter number is now caught by the marking that follows it.**
   Placing a mark precisely means asking the recognizer about the announcement
   several times over in short, tightly framed windows, and those readings are far
   more reliable about the *number* than the long window that first found the
-  chapter — on the book above, the one long window read "chapter 40" while all ten
-  short ones read "chapter 14". Their verdict now counts: when they agree clearly
-  with each other, disagree with the number in hand, and offer one the chapter
-  sequence can actually accommodate, the mark is recorded under theirs. This costs
-  no extra recognition — the readings were already being taken and discarded — and
-  it is skipped entirely under `--quick-marks`. `--verbose` reports each correction.
+  chapter. Their verdict now counts: when they agree clearly with each other,
+  disagree with the number in hand, and offer one the chapter sequence can actually
+  accommodate, the mark is recorded under theirs. This costs no extra recognition —
+  the readings were already being taken and discarded — and it is skipped entirely
+  under `--quick-marks`. `--verbose` reports each correction.
 
 - **A gap search no longer accepts a chapter number that cannot be in the gap.**
   When the tool goes back over a stretch between two known chapters looking for the
@@ -128,9 +122,7 @@ release means the thing has become a different program.
   single possibility, the mark is simply renumbered; where they leave several, the
   audio is read again and held to that range. This runs before the tool decides
   which chapters are missing, so a book no longer spends passes hunting through
-  hours of audio for a chapter that was never missing — on the book above, fourteen
-  minutes of searching for a chapter 14 whose announcement sat at the far end of the
-  stretch being searched.
+  hours of audio for a chapter that was never missing.
 
 - **A file could keep a `.missing-marks` tag it had earned its way out of.** The tag
   is a note that chapters are still missing, and a run that finds them all takes it
@@ -194,16 +186,16 @@ release means the thing has become a different program.
 
 - **A chapter number that cannot be right is now questioned before it is
   believed.** A German "chapter nineteen" heard as chapter 90 used to be accepted
-  at face value, leaving 70 chapters "missing" and sending the gap re-probe after
-  47 candidate spots for nothing. Now, when a number would either leave more than
-  three chapters missing at once or falls below the chapters already found,
-  the spot is read again: first with `--pass3-model` when it names a better model
-  than the probing one, then from two differently framed windows around the
-  announcement. A re-reading is adopted only if it actually continues the chapter
-  sequence, so a genuine jump in a book's numbering is left alone. `--verbose`
-  reports each attempt and what came of it. A number below the sequence used to be
-  discarded unheard; now it is discarded only once re-reading has failed to make
-  sense of it — which turns some of those into the chapter they always were.
+  at face value, leaving dozens of chapters "missing" and sending the gap re-probe
+  off after them. Now, when a number would either leave more than three chapters
+  missing at once or falls below the chapters already found, the spot is read
+  again: first with `--pass3-model` when it names a better model than the probing
+  one, then from two differently framed windows around the announcement. A
+  re-reading is adopted only if it actually continues the chapter sequence, so a
+  genuine jump in a book's numbering is left alone. `--verbose` reports each attempt
+  and what came of it. A number below the sequence used to be discarded unheard; now
+  it is discarded only once re-reading has failed to make sense of it — which turns
+  some of those into the chapter they always were.
 
 - **The progress bar now counts the extra marks it finds**, alongside the
   chapters: `ch 5(-1+1)` means chapter 5 is marked, one chapter below it is
@@ -227,22 +219,22 @@ release means the thing has become a different program.
   terminals it misjudges — Git Bash on Windows, CI logs, and anything modern
   still calling itself plain `xterm`.
 
-- **Pick the GPU by name.** `--use-gpu gtx` runs Whisper on the GPU whose name
-  contains "gtx", matched case-insensitively against any part of it, and
+- **Pick the GPU by name.** `--use-gpu <text>` runs Whisper on the GPU whose name
+  contains that text, matched case-insensitively against any part of it, and
   `--list-gpus` prints the names your machine reports:
 
   ```
   > abchapterize --list-gpus
   Vulkan GPUs on this machine:
-    0: Intel(R) UHD Graphics 630 (integrated)
-    1: NVIDIA GeForce GTX 1070 (discrete)
+    0: <integrated GPU name> (integrated)
+    1: <discrete GPU name> (discrete)
   ```
 
   A request that matches no GPU, or more than one, stops the run and lists what
   is available rather than quietly using a different card. Names are matched
-  instead of numbers on purpose: the numbering is the driver's, and on one test
-  machine it came out in opposite order depending on whether the user was
-  sitting at the desktop or connected remotely.
+  instead of numbers on purpose: the numbering is the driver's, and the same
+  machine has been seen to report it in opposite order depending on whether the
+  session was local or remote.
 
 - **`--mark-lead <seconds>`** (`-k`) sets how far in front of the announcement a
   mark is placed. Marks are located just as precisely whatever it is; all it
@@ -256,7 +248,7 @@ release means the thing has become a different program.
   `phrase:title` mappings, several of them separated by semicolons:
 
   ```
-  abchapterize --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel" book.m4b
+  abchapterize --custom "interlude:Interlude;/time[- ]?line/:Timeline" book.m4b
   ```
 
   A phrase is a plain word or a `/regexp/`, exactly as for `--chapter-phrase`,
@@ -316,7 +308,7 @@ release means the thing has become a different program.
   command line; lines are written as they happen, so even a run that is cut
   short leaves its log behind.
 - **Several files and folders in one command.** The trailing argument is now a
-  list: `abchapterize -r "D:\Audiobooks" "E:\More" "one-off.m4b"` works, mixing
+  list: `abchapterize -r "Audiobooks" "More books" "one-off.m4b"` works, mixing
   files and folders freely. Duplicates (and files that a listed folder already
   covers) are processed once, in the order the arguments were given.
 - **Interrupted batch runs pick up where they left off.** While a folder is
@@ -335,41 +327,40 @@ release means the thing has become a different program.
 - **Mark refinement is faster and no longer takes a running start.** It used to
   begin by sampling positions near the mark that the voice-activity detector had
   flagged as speech, and only fall back to searching the stretch the announcement
-  was heard in when none of them confirmed. On a 12-hour test book that first step
-  earned its keep 3 times out of 26 while spending 8 minutes on it — the search it
-  was meant to save then placed all the remaining marks in under 4. It has been
-  dropped, so every mark now goes straight to the search, with unchanged accuracy.
-  With `--verbose`, refinement announces itself once per mark
-  (`refining mark at … - narrowing in on the phrase between … and …`) instead of
-  reporting a candidate walk first.
+  was heard in when none of them confirmed. That first step almost never earned
+  the minutes it cost, and the search it was meant to save turned out to be
+  quicker on its own. It has been dropped, so every mark now goes straight to the
+  search, with unchanged accuracy. With `--verbose`, refinement announces itself
+  once per mark (`refining mark at … - narrowing in on the phrase between … and …`)
+  instead of reporting a candidate walk first.
 - **The progress bar leads with the percentage**, with the phase moved behind it
   into a separated section of its own — `[####----]  42% | Pass 2 | ch 6 | …`
   rather than `[####----] Pass 2  42% | ch 6 | …`.
-- **Marks now sit 0.35 seconds before the announcement instead of 0.25.** Since
-  marks became accurate to a tenth of a second, the old lead-in turned out to be
-  cutting it too fine: a chapter would occasionally start so close to the first
-  word that its opening consonant was clipped — and a hard one, like the "K" of
-  "Kapitel", is easy to lose without a listener being able to say whether they
-  heard it. Use `--mark-lead` to set it back, or anywhere else you like.
+- **Marks now sit slightly further before the announcement.** Since marks became
+  accurate to a tenth of a second, the old lead-in turned out to be cutting it too
+  fine: a chapter would occasionally start so close to the first word that its
+  opening consonant was clipped — and a hard one, like the "K" of "Kapitel", is
+  easy to lose without a listener being able to say whether they heard it. Use
+  `--mark-lead` to set it back, or anywhere else you like.
 - **A single discrete GPU is now preferred automatically**, and the startup line
   names the GPU in use instead of only the backend:
 
   ```
-  Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070), 3 file(s) to process.
+  Whisper model "turbo" loaded (Vulkan backend on <GPU name>), 3 file(s) to process.
   ```
 
   Previously the Vulkan runtime took whichever GPU it enumerated first, which on
   a machine with an integrated GPU beside a discrete one could be the integrated
-  one — 8.6× slower on the test machine, with nothing in the output to say so.
-  Machines with one GPU, several discrete GPUs, or none that report themselves
-  as discrete keep the runtime's own choice; use `--use-gpu` to decide those
-  cases. The device is named either way, which also makes a less obvious case
-  visible: a software rasterizer like `llvmpipe` is a real Vulkan device, so a
-  container or WSL2 distro without GPU passthrough would report "Vulkan backend"
-  while quietly running on the CPU. It now says `on llvmpipe`. A run that steps
-  aside for the Vulkan runtime's own `GGML_VK_VISIBLE_DEVICES` variable names
-  both the variable and the GPU it leaves in charge, rather than falling back
-  to a bare "Vulkan backend" that looks like the naming failed.
+  one — many times slower, with nothing in the output to say so. Machines with
+  one GPU, several discrete GPUs, or none that report themselves as discrete keep
+  the runtime's own choice; use `--use-gpu` to decide those cases. The device is
+  named either way, which also makes a less obvious case visible: a software
+  rasterizer like `llvmpipe` is a real Vulkan device, so a container or WSL2
+  distro without GPU passthrough would report "Vulkan backend" while quietly
+  running on the CPU. It now says `on llvmpipe`. A run that steps aside for the
+  Vulkan runtime's own `GGML_VK_VISIBLE_DEVICES` variable names both the variable
+  and the GPU it leaves in charge, rather than falling back to a bare "Vulkan
+  backend" that looks like the naming failed.
 - **The built-in chapter, prologue and epilogue phrases now cover each
   language's spelling variants.** They are regular expressions rather than
   single words, so a transcript that dropped an accent still matches
@@ -394,12 +385,11 @@ release means the thing has become a different program.
 
 - **A mark left far from its announcement is now recovered in seconds rather
   than minutes.** When the usual nearby candidates all fail, the fallback used
-  to comb the surrounding audio a tenth of a second at a time — which, for a
-  mark that had landed half a minute early, meant hundreds of transcriptions
-  and twenty minutes of apparent silence on one mark. It now closes in on the
-  announcement instead, roughly halving the search each time, and finds the
-  same position in a couple of dozen checks. Marks that were already being
-  placed correctly are unaffected.
+  to comb the surrounding audio a tenth of a second at a time, which for a badly
+  misplaced mark meant hundreds of transcriptions and a long stretch of apparent
+  silence on that one mark. It now closes in on the announcement instead, roughly
+  halving the search each time, and finds the same position in a couple of dozen
+  checks. Marks that were already being placed correctly are unaffected.
 
 - **`--verbose` now reports mark refinement** instead of going quiet while it
   works. Each mark logs the candidates it is about to check, and — for the rare
@@ -440,23 +430,21 @@ release means the thing has become a different program.
   `--max-jingle-length auto` the window narrows to fit the jingles seen so far, and it
   was sized purely from how long each jingle ran. A chapter whose announcement sits far
   from the nearest silence therefore kept being missed even after an identical case had
-  just been recovered from a gap, because that recovery taught the window nothing: on one
-  15½-hour German audiobook, four chapters were lost the same way and each cost its own
-  retry pass. A chapter recovered from a gap now also reports how far into its window the
-  announcement actually ended, and the window widens to cover that for the rest of the
-  file — so the same shape of chapter is found the first time instead of after the fact.
-  One recovery may widen the window by at most 25 %, so a single outlier chapter cannot
-  leave every later probe running at the maximum window for hours; an extreme reach is
-  granted over several recoveries instead.
+  just been recovered from a gap, because that recovery taught the window nothing — so
+  the same shape of chapter cost its own retry pass over and over in one book. A chapter
+  recovered from a gap now also reports how far into its window the announcement actually
+  ended, and the window widens to cover that for the rest of the file. One recovery may
+  widen the window by at most 25 %, so a single outlier chapter cannot leave every later
+  probe running at the maximum window for hours; an extreme reach is granted over several
+  recoveries instead.
 - **A chapter recovered from a sequence gap is no longer found several times over.**
   The retry that closes a gap kept going through the candidates behind the recovered
   chapter, and because they cover the same stretch of audio each one found that same
   chapter again — placing, refining and then discarding an identical mark every time,
-  for minutes of needless work on a long book (four times over for one chapter of a
-  real audiobook). The retry now stops the moment the gap is closed, and an already
-  recovered chapter cannot be picked up a second time. Detection then carries on from
-  where it was, with the recovered chapters' own silences and jingles folded into the
-  two self-tightening settings first.
+  for minutes of needless work on a long book. The retry now stops the moment the gap
+  is closed, and an already recovered chapter cannot be picked up a second time.
+  Detection then carries on from where it was, with the recovered chapters' own
+  silences and jingles folded into the two self-tightening settings first.
 - **A misheard chapter number no longer costs a genuine chapter its mark.** When
   the final transcription pass went looking for, say, the chapter 2 missing
   between chapters 1 and 3, a "chapter seven" misheard somewhere in that stretch
@@ -475,18 +463,17 @@ release means the thing has become a different program.
 - **A mark no longer stops just short of the announcement it belongs to.** Where the
   recognizer timestamped the announcement several seconds later than it was actually
   spoken, mark refinement searched a stretch that began *after* the words, found
-  nothing, and left the mark where the first estimate had put it — in one real case
-  a second *into* the spoken "Chapter 21", which is exactly where a listener notices.
-  The search now reaches far enough behind a suspect timestamp to cover the words it
-  was meant to describe.
+  nothing, and left the mark where the first estimate had put it — which could be a
+  full second *into* the spoken announcement, exactly where a listener notices. The
+  search now reaches far enough behind a suspect timestamp to cover the words it was
+  meant to describe.
 - **A mark near the end of the stretch it was found in is no longer placed at
   random.** Deciding whether the announcement is still audible from a given point
   means asking the recognizer about the audio after it, and when the mark sat close
   to the end of the transcribed stretch there was barely a second of it left to ask
-  about — at which length the answer is a coin flip, and one wrong answer sent the
-  search off by half a minute. Refinement now always listens to a few seconds,
-  however little is nominally left, which fixed a `--custom` mark landing 30 seconds
-  early in a real book.
+  about — at which length the answer is a coin flip, and one wrong answer could send
+  the search half a minute off. Refinement now always listens to a few seconds,
+  however little is nominally left.
 - **A batch run no longer garbles its progress bars when it cannot keep its resume
   record.** The warning about an unwritable `.abchapterize-progress` file was printed
   straight past the display, which then erased the wrong lines and left the bars
@@ -503,8 +490,7 @@ release means the thing has become a different program.
   drum hit or a stab of vocals partway through the music could pass for the previous
   chapter's last words, leaving the mark seconds deep in the jingle instead of at its
   start — audible as a run of music before the chapter begins. Such a transient is now
-  recognized for what it is wherever it sounds. Seen on two German audiobooks, on
-  jingles whose stings fell two and six seconds in.
+  recognized for what it is wherever it sounds.
 - **`--mark-before-jingle` no longer lands at the start of the hush before the
   jingle.** Where a faint transient sounded within a few hundredths of a second of the
   silence ending, the mark skipped past the silence entirely and came to rest on the
@@ -512,16 +498,14 @@ release means the thing has become a different program.
   before the new one. The mark now lands where the music begins, as intended.
 - **A chapter whose pause falls just short of `--min-silence-length` is now found.**
   Where a narrator's chapter break is right at the limit — no jingle, just a breath's
-  pause — every chapter of the book can sit a tenth of a second under it, and the tool
-  looked at none of them. With `--pass3-model` naming a better model, a gap that the
-  cheap retry cannot close is now swept for shorter pauses first, in steps of a tenth
-  of a second down to half a second under the setting, stopping as soon as the missing
-  chapter turns up. That is both faster than transcribing the whole gap and, on the
-  French audiobook this came from, the only thing that worked: five chapters were
-  preceded by pauses of 1.39–1.49 s against the default 1.5 s, four were eventually
-  recovered by the slow pass, and the fifth was lost outright because the recognizer
-  simply dropped the announcement from its reading of the long stretch. A short probe
-  aimed at the spot read it without trouble. The sweep stops early on a long gap where
+  pause — every chapter of the book can sit a fraction under it, and the tool looked at
+  none of them. With `--pass3-model` naming a better model, a gap that the cheap retry
+  cannot close is now swept for shorter pauses first, in steps of a tenth of a second
+  down to half a second under the setting, stopping as soon as the missing chapter turns
+  up. That is both faster than transcribing the whole gap and, on the book this came
+  from, the only thing that found some of the chapters at all: the recognizer had simply
+  dropped their announcements from its reading of the long stretch, while a short probe
+  aimed at the spot read them without trouble. The sweep stops early on a long gap where
   it would end up costing more than the full transcription it is trying to avoid.
 - **A gap that survives being transcribed in full is now read one more time, with
   every decode shifted by 15 seconds.** A gap that outlives a complete
@@ -531,25 +515,23 @@ release means the thing has become a different program.
   One landing right on a window border can drop out of the transcript entirely
   while the text around it reads as though nothing were missing. The re-read
   displaces every window by half of one, which puts whatever sat on a border as
-  far from one as it can get. On the French audiobook this came from, the chapter
-  that vanished from a ten-minute chunk — with the sentences either side of it
-  transcribed perfectly — is read back cleanly, at high confidence, from the same
-  chunk started fifteen seconds later. It runs unless `--pass3-model` names a
-  *lighter* model than `--model`, which is the one setting that unambiguously says
-  "don't spend more time on the stragglers", and it always runs for
-  `--trailing-scan`, where asking for the scan is itself the statement that the
-  time is worth it.
+  far from one as it can get — and reads back cleanly, at high confidence, a
+  chapter that had vanished from the very same stretch of audio. It runs unless
+  `--pass3-model` names a *lighter* model than `--model`, which is the one setting
+  that unambiguously says "don't spend more time on the stragglers", and it always
+  runs for `--trailing-scan`, where asking for the scan is itself the statement
+  that the time is worth it.
 
 - **An announcement whose number cannot be read is now re-read during the ordinary
   scan**, not only during the full-transcription pass. This matters most for the one
   place the later pass can never reach: an announcement past the last chapter found is
   inside no gap, so without `--trailing-scan` nothing ever looked at it again — which
-  is how the closing chapter of a French audiobook went missing after being heard as
-  "chapitre ban 5". The spot is now read again straight away, first with
-  `--pass3-model` where it names a better model and then from two differently framed
-  windows, and a reading is only believed if it continues the chapter sequence, so an
-  in-book mention of the word "chapter" still cannot produce a mark. The recovered
-  chapter is marked exactly where it was first heard.
+  is how a book's closing chapter could go missing after its number came out as
+  gibberish. The spot is now read again straight away, first with `--pass3-model` where
+  it names a better model and then from two differently framed windows, and a reading is
+  only believed if it continues the chapter sequence, so an in-book mention of the word
+  "chapter" still cannot produce a mark. The recovered chapter is marked exactly where
+  it was first heard.
 
 ## [0.9.0] — 2026-07-27
 
