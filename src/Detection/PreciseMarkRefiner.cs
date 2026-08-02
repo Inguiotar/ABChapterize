@@ -268,8 +268,9 @@ internal sealed class PreciseMarkRefiner
     /// <param name="phraseAbs">Absolute start of the transcript segment(s) the phrase was matched
     /// in - the search bracket, together with the two that follow.</param>
     /// <param name="phraseEndAbs">Absolute end of those segment(s).</param>
-    /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in, capping
-    /// that bracket - see <see cref="MarkContext.Transcript"/>.</param>
+    /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in, tightening
+    /// that bracket where it can - see <see cref="MarkContext.Transcript"/> and
+    /// <see cref="LocatePhraseByShrinkingWindowAsync"/>'s ceiling for the case where it cannot.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
     /// left as given when neither model could confirm it), quiet-snapped as a final step, paired
@@ -791,9 +792,35 @@ internal sealed class PreciseMarkRefiner
         string? inputDecoder, Regex phraseRegex, CancellationToken ct)
     {
         // The bracket the announcement has to lie in: the segment(s) it was matched in, a phrase
-        // margin either side for a timestamp that reported them slightly narrow, and never past the
-        // end of the audio it was heard in.
-        var ceiling = Math.Min(phraseEndAbs + PhraseMarginSeconds, transcriptEnd);
+        // margin either side for a timestamp that reported them slightly narrow, and normally no
+        // further than the end of the audio it was heard in.
+        //
+        // That last cap is a tightening one, and it is only sound while the matched segment really
+        // fits inside the window it came from - which is not something a window can promise. A
+        // window admits a segment by its start alone (correctly: that is what keeps a smeared
+        // segment from being dropped) and Whisper routinely stretches a window's last segment far
+        // past its own audio, all the more so since a probe decode may read tens of seconds beyond
+        // the window it was planned for. Where that happens the window end is not an upper bound on
+        // the announcement at all, it is a position in front of it, and every probe below then asks
+        // about audio the announcement is not in - a total failure that looks exactly like the
+        // honest "this was an in-text mention" outcome. Measured on Raumschiff Erde chapter 25
+        // (2026-08-02): window end 10:51:16.16, matched segment 10:51:15.66-10:51:33.16, so the
+        // bracket came out as [10:50:51.17, 10:51:16.17] and all eight probes read "[Musik]" or the
+        // previous chapter's narration. Letting the cap pull the ceiling below the segment's own
+        // end is therefore the one thing it may not do; everything else about it is unchanged, so a
+        // segment that ends inside its window brackets exactly as it always did.
+        //
+        // Blast radius, measured over the ten-book run of 2026-08-02 (278 refinements, debug logs
+        // replayed): 12 marks get a different ceiling, by 0.29 s to 17.0 s. Two of them are total
+        // failures this recovers - Raumschiff Erde chapter 25 and Die Dritte Macht chapter 15, both
+        // with the incoming mark sitting past the old bracket entirely, which is the signature to
+        // grep a log for. The other ten were confirmed anyway and stay confirmed for a structural
+        // reason worth keeping in mind before touching this line again: the ceiling decides only
+        // which foothold LocatePhraseByShrinkingWindowAsync hands over, and FindOnsetEdgeAsync -
+        // which is what actually fixes the mark - probes fixed-width windows and converges on the
+        // same plateau edge from any foothold inside the plateau. Seven of the ten had every
+        // survival probe pinned at PreciseMarkMinSurvivalSeconds anyway.
+        var ceiling = Math.Max(Math.Min(phraseEndAbs + PhraseMarginSeconds, transcriptEnd), phraseEndAbs);
         var segmentFloor = Math.Max(0, phraseAbs - PhraseMarginSeconds);
         // How far the backward gallop may run below that, for the case the segment's own timestamps
         // do not describe: one that Whisper timed *later* than the words in it, leaving the whole
@@ -804,7 +831,12 @@ internal sealed class PreciseMarkRefiner
         // "Zeittafel", 25 s from a stretched floor reads "[Musik]" and nothing else).
         var floor = Math.Max(0, Math.Min(segmentFloor, ceiling - PreciseMarkMaxBracketSeconds));
         if (ceiling - floor <= PreciseMarkFixedStepSeconds)
+        {
+            _log?.Invoke($"cannot refine the mark at {FormatTimestamp(mark)} - the phrase was " +
+                         $"matched in too short a stretch to search ({FormatTimestamp(floor)} to " +
+                         $"{FormatTimestamp(ceiling)})");
             return null;
+        }
 
         // Announced before it starts rather than after: this step can keep a single mark busy for a
         // while, and an unexplained silent wait is indistinguishable from a hang - which is exactly
@@ -816,7 +848,7 @@ internal sealed class PreciseMarkRefiner
         if (await FindPhraseSurvivalEdgeAsync(
                 origin, floor, ceiling, file, inputDecoder, phraseRegex, ct)
             is not { } edge)
-            return null;
+            return null;   // FindPhraseSurvivalEdgeAsync has already said which way it failed.
 
         _log?.Invoke($"phrase survives up to {FormatTimestamp(edge)} - " +
                      $"confirming the announcement just before it");
@@ -830,6 +862,8 @@ internal sealed class PreciseMarkRefiner
             if (candidate == 0)
                 break;
         }
+        _log?.Invoke($"nothing just before {FormatTimestamp(edge)} opens with the announcement - " +
+                     "the phrase survived that far for some other reason (an in-text mention?)");
         return null;
     }
 
@@ -884,7 +918,10 @@ internal sealed class PreciseMarkRefiner
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The last surviving position, accurate to <see cref="PreciseMarkFixedStepSeconds"/>;
     /// null when the phrase survives right across the range (so no edge exists to aim by) or is not
-    /// found anywhere in it.</returns>
+    /// found anywhere in it. Those two are logged apart rather than sharing a line: the first says
+    /// the range ended in front of the announcement and the second that it may never have reached
+    /// it, and both are a different event from the honest "nothing here matched" the caller's own
+    /// failure reports.</returns>
     private async Task<double?> FindPhraseSurvivalEdgeAsync(
         double origin, double floor, double ceiling, string file, string? inputDecoder,
         Regex phraseRegex, CancellationToken ct)
@@ -914,7 +951,11 @@ internal sealed class PreciseMarkRefiner
                     break;
                 }
                 if (probe >= ceiling)
+                {
+                    _log?.Invoke($"the phrase still survives from {FormatTimestamp(ceiling)}, the " +
+                                 "far end of the search range - the announcement lies past it");
                     return null;
+                }
                 lastTrue = probe;
                 stride *= 2;
             }
@@ -931,7 +972,11 @@ internal sealed class PreciseMarkRefiner
                     break;
                 }
                 if (probe <= floor)
+                {
+                    _log?.Invoke($"the phrase was not heard anywhere from {FormatTimestamp(floor)} " +
+                                 "on - the search range may not reach the announcement at all");
                     return null;
+                }
                 firstFalse = probe;
                 stride *= 2;
             }

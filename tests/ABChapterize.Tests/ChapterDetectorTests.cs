@@ -3139,6 +3139,33 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task PreciseMark_SearchesPastTheWindowEnd_WhenTheMatchedSegmentIsSmearedBeyondIt()
+    {
+        // Real-world failure (Raumschiff Erde chapter 25, 2026-08-02): a probe window is allowed to
+        // keep a segment that merely *starts* inside it, and Whisper had stretched this one
+        // seventeen seconds past the window's own end (window end 10:51:16.16, segment
+        // 10:51:15.66-10:51:33.16). The window end therefore capped the search bracket in front of
+        // the announcement instead of behind it, every probe read the jingle or the previous
+        // chapter's narration, and the refinement reported "could not confirm the phrase" - the
+        // same line it prints for an honest in-text mention, so nothing said the bracket had been
+        // the problem.
+        //
+        // Modelled at 1/1 scale with that exact geometry: the window ends 0.5 s into a 17.5 s
+        // segment, and the announcement sits at 710, ten seconds past the window end. Reaching it
+        // needs the ceiling to stop obeying a window end that no longer bounds anything.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(710, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            699, _file, null, profile.PhraseRegex, profile.Language, 699.5, 717, 700,
+            CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        AssertMarkTime("chapter two", 709.75, result.Mark);
+    }
+
+    [Fact]
     public async Task PreciseMark_KeepsProbingLongEnoughToBeHeard_WhenTheAnchorSitsRightAfterTheOnset()
     {
         // Real-world failure (Stalker.m4b's "Zeittafel", true onset 52.7 s, 2026-07-29/30): the end
@@ -3157,8 +3184,9 @@ public sealed class ChapterDetectorTests : IDisposable
         transcriber.Add(52.7, new TranscriptSegment(0, 1.5, " Chapter two.", 1.0));
         var (refiner, profile) = MakeVerifier(transcriber);
 
-        // Anchor 54.19: one phrase margin past the segment end would be 59.2, but the transcript
-        // ends first - the clamp that produced the too-short probes.
+        // Anchor 54.2: one phrase margin past the segment end would be 59.2, but the transcript
+        // ends within a hundredth of the segment - the tight anchor that produced the too-short
+        // probes.
         var result = await refiner.RefinePreciseMarkAsync(
             52.9, _file, null, profile.PhraseRegex, profile.Language, 52.7, 54.2, 54.19, CancellationToken.None);
 

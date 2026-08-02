@@ -32,9 +32,12 @@ namespace ABChapterize.Detection;
 /// vocal transient inside the jingle (see <see cref="JingleGeometry.IsGenuineSpeech"/>), and the
 /// span of audio they came from. That span's end doubles as what precise marking anchors its
 /// search against: the window's own planned end, not the last segment's timestamp, which is
-/// exactly the kind of figure precise marking exists because it cannot trust. It is known to lie
-/// past the announcement, since the announcement was found inside it, which is the one thing
-/// <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/> needs of it.</param>
+/// exactly the kind of figure precise marking exists because it cannot trust. It only tightens that
+/// search where the matched segment ends inside the window, though - a segment is admitted to a
+/// window by its start alone, so one that Whisper stretched past the window's end describes audio
+/// this figure knows nothing about. See
+/// <see cref="PreciseMarkRefiner.LocatePhraseByShrinkingWindowAsync"/>'s ceiling, where that is
+/// resolved.</param>
 /// <param name="Language">The file's resolved language code, for the <c>--pass3-model</c> retry a
 /// failed refinement falls back on. Carried here rather than taken from
 /// <see cref="NumberCheck.Profile"/> because a named (prologue/epilogue/<c>--custom</c>) mark has no

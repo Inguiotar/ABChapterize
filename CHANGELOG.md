@@ -158,6 +158,17 @@ release means the thing has become a different program.
   short. Those stretches are now checked rather than believed. Marks that were
   already right do not move; the extra checking costs a few seconds per chapter.
 
+- **A mark could be left unpinned because the search looked in the wrong place.**
+  Pinning a mark means searching the stretch of audio the announcement was heard in,
+  bounded at the far end by the clip it was found in. Whisper routinely reports a
+  clip's last sentence as running well past the clip itself, though, and where that
+  happened the search covered only audio in front of the announcement, found nothing
+  there, and left the mark at its estimated position — reported exactly like the
+  ordinary "this was only a passing mention" outcome. That bound now yields to what
+  was actually heard, and under `--verbose` a search that never reached the
+  announcement says so instead of sharing a line with one that looked and found
+  nothing.
+
 ## [0.9.1] — 2026-07-31
 
 ### Added
