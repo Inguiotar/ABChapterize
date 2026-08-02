@@ -607,6 +607,9 @@ public sealed class ChapterDetector
                          $"{FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)}");
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
                 MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter),
+                // Whatever this leaves open goes to the shifted re-read below, unless a downgraded
+                // --pass3-model has switched that off - so the seams go too. See snapSeams.
+                snapSeams: _options.Pass3ModelIsDowngrade,
                 allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work, profile, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
@@ -628,13 +631,22 @@ public sealed class ChapterDetector
             // "suspicious" only fits the --verify fallback, which is chasing specific numbers it
             // has reason to believe are there; a --trailing-scan sweep is speculative by design.
             var what = trailing.Targets is null ? "trailing region" : "suspicious trailing region";
+            // Whether a shifted re-read may follow at all, which decides both this transcription's
+            // chunk borders (see snapSeams) and, below, whether one actually runs.
+            // --trailing-scan is speculative and never "done", so nothing but the flag itself can
+            // say whether a second look is wanted - and setting it is already that statement. The
+            // --verify fallback does know what it is after, and goes by the same rule the gaps do.
+            var rereadPossible = trailing.Targets is null
+                ? _options.TrailingScan
+                : !_options.Pass3ModelIsDowngrade;
             _log?.Invoke($"transcribing {what} " +
                          $"{FormatTimestamp(trailing.From)} - {FormatTimestamp(info.DurationSeconds)}");
             work.BeginPhase("Pass 3", (long)((info.DurationSeconds - trailing.From) * bytesPerSecond));
             if (!ReferenceEquals(_pass3Transcriber, _transcriber))
                 _pass3Transcriber.ChangeLanguage(profile.Language);
             var fills = await TranscribeRegionAsync(file, info, trailing.From, info.DurationSeconds,
-                trailing.Targets, allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
+                trailing.Targets, snapSeams: !rereadPossible,
+                allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
                 profile, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
@@ -642,13 +654,8 @@ public sealed class ChapterDetector
             work.MissingChapters = missingNumbers.Count;
             _log?.Invoke("Pass 3 finished (trailing)");
 
-            // --trailing-scan is speculative and never "done", so nothing but the flag itself can say
-            // whether a second look is wanted - and setting it is already the statement that it is.
-            // The --verify fallback does know what it is after, and goes by the same rule the gaps do.
-            if (trailing.Targets is null
-                    ? _options.TrailingScan
-                    : !_options.Pass3ModelIsDowngrade &&
-                      trailing.Targets.Any(n => chapters.All(c => c.Number != n)))
+            if (rereadPossible &&
+                (trailing.Targets is null || trailing.Targets.Any(n => chapters.All(c => c.Number != n))))
                 chapters = await RescanRegionShiftedAsync(
                     file, info, work, chapters, trailing.From, info.DurationSeconds, trailing.Targets,
                     allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, profile,
@@ -682,10 +689,13 @@ public sealed class ChapterDetector
     /// Shifting the region's start rather than re-planning its chunks is what makes this cheap and
     /// hole-free: the first attempt already covered every second, so the head this skips is not
     /// unread, merely not re-read - and re-reading it in the framing that already failed would buy
-    /// nothing. The guarantee therefore holds for a region's first chunk, which is the whole of it for
-    /// any remainder under <see cref="DetectionTuning.GapChunkSeconds"/>; beyond that, seam snapping
-    /// can land a later chunk back on its original border, and the shift degrades to "probably
-    /// different framing" rather than "certainly".
+    /// nothing. Shifting the start alone only guaranteed a new framing for the region's <em>first</em>
+    /// chunk, though - which is the whole of it for any remainder under
+    /// <see cref="DetectionTuning.GapChunkSeconds"/>, but past that, seam snapping could land a later
+    /// chunk back on its original border and hand the re-read exactly the framing that had already
+    /// failed. So neither attempt snaps its seams where the other one may run: see
+    /// <see cref="TranscribeRegionAsync"/>'s <c>snapSeams</c>, which is what turns "probably a
+    /// different framing" into "one shift later, every chunk".
     /// </para>
     /// <para>
     /// Only when <c>--pass3-model</c> is not a deliberate downgrade. A lighter pass-3 model is the one
@@ -765,7 +775,11 @@ public sealed class ChapterDetector
             _pass3Transcriber.ChangeLanguage(profile.Language);
 
         var fills = await TranscribeRegionAsync(
-            file, info, from, toSeconds, expectedNumbers, allSilences, nonSpeechRegions,
+            file, info, from, toSeconds, expectedNumbers,
+            // Never snapped here either: a re-read that snapped could land a later chunk back on the
+            // border the first attempt used, which is the one framing already known to fail.
+            snapSeams: false,
+            allSilences, nonSpeechRegions,
             speechSegments, bytesPerSecond, work, profile, chapters, ct);
         chapters = Normalize(chapters.Concat(fills).ToList());
         var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
@@ -1527,6 +1541,18 @@ public sealed class ChapterDetector
     /// exists near a border does that joint fall back to a raw cut with
     /// <see cref="GapChunkOverlapSeconds"/> of overlap as redundancy against a possible mid-word cut.
     /// </summary>
+    /// <param name="snapSeams">Whether chunk borders may snap to a seam at all. False turns the
+    /// region into plain <see cref="GapChunkSeconds"/> chunks, every border taking the raw-cut
+    /// fallback above - which is what makes <see cref="RescanShiftedAsync"/>'s displacement a
+    /// guarantee rather than a hope. Snapping searches
+    /// <see cref="Pass3SeamSearchSeconds"/> either way while the two attempts' natural borders lie
+    /// only <see cref="Pass3ShiftSeconds"/> apart, so both can snap to the same silence and the
+    /// re-read can hand a later chunk exactly the framing that already failed. Unsnapped, chunk
+    /// <em>k</em> of the re-read always starts one shift past chunk <em>k</em> of the first attempt.
+    /// The price is a border that may cut through an announcement, which is what snapping exists to
+    /// avoid - but a cut border is precisely the case the overlap covers, and the announcement it
+    /// cuts is one the shifted re-read is then certain to hear whole. Passed false by both attempts
+    /// whenever a re-read may follow; a Pass 3 that will not be re-read keeps its seams.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">The file's probed media info (duration, size, decoder).</param>
     /// <param name="fromSeconds">Start of the region to transcribe, in seconds.</param>
@@ -1561,7 +1587,7 @@ public sealed class ChapterDetector
     /// <param name="ct">Cancellation token.</param>
     private async Task<List<DetectedChapter>> TranscribeRegionAsync(
         string file, MediaInfo info, double fromSeconds, double toSeconds,
-        IReadOnlyList<int>? expectedNumbers,
+        IReadOnlyList<int>? expectedNumbers, bool snapSeams,
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
         List<SpeechSegment> speechSegments, double bytesPerSecond,
         WorkTracker work, LanguageProfile profile, IReadOnlyList<DetectedChapter> knownChapters,
@@ -1582,7 +1608,7 @@ public sealed class ChapterDetector
         {
             ct.ThrowIfCancellationRequested();
             var naturalEnd = Math.Min(chunkStart + GapChunkSeconds, toSeconds);
-            var seam = naturalEnd < toSeconds
+            var seam = snapSeams && naturalEnd < toSeconds
                 ? FindNearestSeam(naturalEnd,
                     Math.Max(chunkStart, naturalEnd - Pass3SeamSearchSeconds),
                     Math.Min(naturalEnd + Pass3SeamSearchSeconds, toSeconds),

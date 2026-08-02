@@ -1771,24 +1771,24 @@ public sealed class ChapterDetectorTests : IDisposable
         // the recognizer read wrongly - and the likeliest reason is where the announcement fell
         // inside Whisper's 30 s decode window. Chapter 14 of "Paula Monti" (2026-07-31) vanished
         // from a 601 s chunk that read every second around it, and reappeared at p=0.94 from the
-        // same chunk started 15 s later. Scripting chapter 2 as audible only below a 590 s decode
-        // reproduces that here: pass 3's own first chunk runs 597.25 s and misses it, the shifted
-        // re-read's runs 582.25 s and does not.
+        // same chunk started 15 s later. Scripting chapter 2 as audible only below a 340 s decode
+        // reproduces that here: pass 3 reads the whole gap [0.25, 349.95] in one 349.7 s chunk and
+        // misses it, the shifted re-read's own single chunk runs 334.7 s from 15.25 and does not.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
             Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
-            [new(595, 600), new(645, 650)],
+            [new(295, 300), new(345, 350)],
             pass2 =>
             {
                 pass2.Add(0, Seg(0.5, " Chapter one."));
-                pass2.Add(650, Seg(0.2, " Chapter three."));
+                pass2.Add(350, Seg(0.2, " Chapter three."));
             },
-            pass3 => pass3.AddWithin(590, 300, Seg(0, " Chapter two.")),
+            pass3 => pass3.AddWithin(340, 150, Seg(0, " Chapter two.")),
             log);
 
         Assert.False(result.GapRemains);
-        AssertChapters([new(1, 0.25), new(2, 299.75), new(3, 649.95)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("pass 3.5: re-reading 0:00:00.25 - 0:10:49.95 from 0:00:15.25"));
+        AssertChapters([new(1, 0.25), new(2, 149.75), new(3, 349.95)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("pass 3.5: re-reading 0:00:00.25 - 0:05:49.95 from 0:00:15.25"));
         Assert.Contains(log, l => l.Contains("the shifted re-read recovered 1 chapter(s)"));
     }
 
@@ -4301,8 +4301,13 @@ public sealed class ChapterDetectorTests : IDisposable
         // no phrase. The detection must be flagged as seam-spanning in the log, and the chunk
         // decodes must reflect the snapped borders: [0.5, 598.5] and [598.5, 1197.5] (the
         // second border snaps to [1195, 1200]'s mid-point).
+        //
+        // The lighter --pass3-model is what puts seam snapping in play at all: it is the one
+        // setting that switches the shifted re-read off, and where a re-read may follow, neither
+        // attempt snaps (see TranscribeRegionAsync's snapSeams).
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--model", "large", "--pass3-model", "tiny",
+                    "--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(598, 599), new(1195, 1200)],
             s =>
             {
@@ -4324,6 +4329,36 @@ public sealed class ChapterDetectorTests : IDisposable
                  w.Duration is { } d && Math.Abs(d - (598.5 - gapStart)) < 0.01);
         Assert.Contains(audio.DecodeWindows,
             w => w.Start == 598.5 && w.Duration is { } d && Math.Abs(d - 599) < 0.01);
+    }
+
+    [Fact]
+    public async Task Pass3_LeavesItsChunkBordersUnsnapped_WhenAShiftedReReadMayFollow()
+    {
+        // The same fixture as the seam test above, minus the lighter --pass3-model - so a shifted
+        // re-read is on the table, and the borders stop snapping. Snapping searches 30 s either way
+        // while the two attempts' natural borders lie only 15 s apart, so both could snap to the
+        // silence at [598, 599] and the re-read would hand its second chunk exactly the framing
+        // that had already failed. Unsnapped, chunk 1 of the re-read is chunk 1 of the first
+        // attempt moved one shift later, and the same holds for every chunk after it.
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(598, 599), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter three."));
+                // Chapter 2 is nowhere: pass 3 must fail so that pass 3.5 runs at all.
+            });
+
+        Assert.True(result.GapRemains);
+        var gapStart = result.Chapters[0].TimeSeconds;
+        Assert.Contains(audio.DecodeWindows,
+            w => Math.Abs(w.Start - gapStart) < 1e-6 &&
+                 w.Duration is { } d && Math.Abs(d - DetectionTuning.GapChunkSeconds) < 1e-6);
+        Assert.Contains(audio.DecodeWindows,
+            w => Math.Abs(w.Start - (gapStart + DetectionTuning.Pass3ShiftSeconds)) < 1e-6 &&
+                 w.Duration is { } d && Math.Abs(d - DetectionTuning.GapChunkSeconds) < 1e-6);
+        Assert.Contains(log, l => l.Contains("pass 3.5: re-reading"));
     }
 
     [Fact]

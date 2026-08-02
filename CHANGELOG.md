@@ -170,6 +170,15 @@ release means the thing has become a different program.
   short. Those stretches are now checked rather than believed. Marks that were
   already right do not move; the extra checking costs a few seconds per chapter.
 
+- **The second look at a stubborn gap is now a second look all the way through.** A gap
+  that survives being transcribed in full is read once more with every window shifted by
+  15 seconds — but past the first ten minutes of it, only *probably* differently framed:
+  the reading is cut into chunks at convenient pauses, and both attempts could pick the
+  same pause and then re-read everything after it exactly as before. Where a second look
+  is possible, both now cut at fixed positions instead, so every chunk of the re-read
+  really does sit 15 seconds off the one that failed. Only gaps longer than ten minutes
+  were affected.
+
 - **`--verify` could not read most chapter mark titles, and said the file had nothing
   to check.** It looked for digits anywhere in a title and otherwise expected the number
   to be its very first word, so the ordinary written form was unreadable in every
