@@ -3166,6 +3166,56 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task PreciseMark_AimsFromTheFarEndOfTheBracket_WhenTheAnnouncementLiesPastIt()
+    {
+        // Real-world failure (Raumschiff Erde chapter 1, 2026-08-02): the announcement was found in
+        // a 26.7 s overlap tail decoded from 0:04:55.38, and Whisper timestamped "Kapitel 1." as
+        // that decode's very first segment, 0.0-7.0 - twelve seconds before the words were actually
+        // spoken. The bracket drawn round that segment therefore ended at 0:05:07.38, right at the
+        // announcement rather than behind it; all three survival probes still heard the phrase, the
+        // gallop ran out of range with no edge to aim by, and the refinement gave up.
+        //
+        // Modelled at 1/1 scale with that exact geometry, the announcement scripted where the audio
+        // really has it (307.5 s; established with tools\wprobe, whose plateau's last confirming
+        // probe is 307.60 and first failing one 307.70). The ceiling comes out at 307.38, a tenth
+        // of a second in front of the onset, so recovering the mark needs the far end of an
+        // exhausted bracket to be offered to the foothold hunt instead of discarded.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(307.5, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            307.13, _file, null, profile.PhraseRegex, profile.Language, 295.38, 302.38, 308.98,
+            CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        AssertMarkTime("chapter two", 307.25, result.Mark);
+    }
+
+    [Fact]
+    public async Task PreciseMark_GivesUp_WhenTheAnnouncementLiesFurtherPastTheBracketThanACheckWindow()
+    {
+        // The boundary of the recovery above, and the reason it needs no wider bracket: the far end
+        // is only worth aiming from while the announcement starts inside the foothold probe's own
+        // PreciseMarkCheckWindowSeconds. Same geometry, but with the announcement at 312 - still
+        // close enough for the survival probes' PreciseMarkMinSurvivalSeconds floor to reach it, so
+        // the gallop runs off the ceiling exactly as above, yet 4.6 s past that ceiling and so out
+        // of reach of every foothold backoff. The mark is left alone rather than moved somewhere
+        // unsupported. Over the ten-book run of 2026-08-02 the onset never landed more than 2.2 s
+        // past the ceiling, so this is the case that stays theoretical.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(312, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            307.13, _file, null, profile.PhraseRegex, profile.Language, 295.38, 302.38, 308.98,
+            CancellationToken.None);
+
+        Assert.False(result.PhraseHeard);
+        Assert.Equal(307.13, result.Mark, 3);
+    }
+
+    [Fact]
     public async Task PreciseMark_KeepsProbingLongEnoughToBeHeard_WhenTheAnchorSitsRightAfterTheOnset()
     {
         // Real-world failure (Stalker.m4b's "Zeittafel", true onset 52.7 s, 2026-07-29/30): the end

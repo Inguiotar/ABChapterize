@@ -775,6 +775,36 @@ internal sealed class PreciseMarkRefiner
     /// fallback worth adding: the edge came from the phrase appearing <em>somewhere</em> in a long
     /// window, which an unrelated mention in the narration can also produce.
     /// </para>
+    /// <para>
+    /// When the gallop instead runs out of range with the phrase <em>still</em> surviving from the
+    /// ceiling, there is no edge inside the bracket to aim by - the announcement lies at or past
+    /// the far end - and the ceiling itself becomes the aim point. That is the mirror of the defect
+    /// <see cref="PreciseMarkMaxBracketSeconds"/> extends the floor for, a segment Whisper
+    /// timestamped <em>earlier</em> than the words in it, and it is answered differently for a
+    /// reason: extending the floor only lets the search reach further, while extending the ceiling
+    /// would lengthen the gallop's own probes and push them past
+    /// <see cref="WhisperChunkSeconds"/>, where a window re-segments and the predicate stops being
+    /// the step function the bisection needs. Aiming from the ceiling costs nothing at all - the
+    /// foothold hunt and <see cref="FindOnsetEdgeAsync"/>'s walk were going to run either way - and
+    /// gives up no accuracy, since the walk probes fixed-width windows and converges on the same
+    /// plateau edge from any foothold inside the plateau.
+    /// </para>
+    /// <para>
+    /// The reach that buys is one <see cref="PreciseMarkCheckWindowSeconds"/>: the foothold probe at
+    /// the ceiling confirms while the announcement starts inside its own window, and fails honestly
+    /// past that. Measured against the ten-book run of 2026-08-02 (222 refinements that reported an
+    /// onset), the onset landed past the search ceiling exactly twice, by 1.4 s and 2.2 s, with a
+    /// median headroom of 6.9 s - so a check window's reach covers every case on record with room
+    /// to spare, and no wider bracket has ever been called for. Raumschiff Erde chapter 1 is the
+    /// case this was built for and the only refinement of 278 that reached this branch: its
+    /// detecting decode was a 26.7 s overlap tail from 0:04:55.38 and Whisper timestamped
+    /// "Kapitel 1." as its very first segment, 0.0-7.0, twelve seconds before the words were
+    /// spoken, so the bracket [0:04:42.38, 0:05:07.38] ended right at the announcement rather than
+    /// behind it. The words are in fact at 0:05:07.0-0:05:12.0 and the onset at 307.50 s, the
+    /// plateau's last confirming probe being 307.60 and the first failing one 307.70
+    /// (<c>tools\wprobe</c>, ggml-small, 2026-08-02); a foothold probe at the ceiling, 307.38,
+    /// confirms cleanly and the walk from it lands on exactly that onset.
+    /// </para>
     /// </summary>
     /// <param name="mark">The mark being refined; the gallop starts here, clamped into the
     /// bracket.</param>
@@ -847,23 +877,34 @@ internal sealed class PreciseMarkRefiner
         var origin = Math.Clamp(mark, Math.Min(segmentFloor, ceiling), ceiling);
         if (await FindPhraseSurvivalEdgeAsync(
                 origin, floor, ceiling, file, inputDecoder, phraseRegex, ct)
-            is not { } edge)
-            return null;   // FindPhraseSurvivalEdgeAsync has already said which way it failed.
+            is not { } survival)
+        {
+            _log?.Invoke($"the phrase was not heard anywhere from {FormatTimestamp(floor)} on - " +
+                         "the search range may not reach the announcement at all");
+            return null;
+        }
 
-        _log?.Invoke($"phrase survives up to {FormatTimestamp(edge)} - " +
-                     $"confirming the announcement just before it");
+        var (aim, isEdge) = survival;
+        _log?.Invoke(isEdge
+            ? $"phrase survives up to {FormatTimestamp(aim)} - " +
+              "confirming the announcement just before it"
+            : $"the phrase still survives from {FormatTimestamp(aim)}, the far end of the search " +
+              "range - the announcement lies at or past it, so that is where confirmation starts");
 
         foreach (var backoff in PreciseMarkFootholdBackoffsSeconds)
         {
-            var candidate = Math.Round(Math.Max(0, edge - backoff), 6);
+            var candidate = Math.Round(Math.Max(0, aim - backoff), 6);
             ct.ThrowIfCancellationRequested();
             if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
                 return candidate;
             if (candidate == 0)
                 break;
         }
-        _log?.Invoke($"nothing just before {FormatTimestamp(edge)} opens with the announcement - " +
-                     "the phrase survived that far for some other reason (an in-text mention?)");
+        _log?.Invoke(isEdge
+            ? $"nothing just before {FormatTimestamp(aim)} opens with the announcement - " +
+              "the phrase survived that far for some other reason (an in-text mention?)"
+            : $"nothing at or just before {FormatTimestamp(aim)} opens with the announcement - " +
+              "it lies further past the search range than one check window reaches");
         return null;
     }
 
@@ -916,13 +957,16 @@ internal sealed class PreciseMarkRefiner
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="phraseRegex">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The last surviving position, accurate to <see cref="PreciseMarkFixedStepSeconds"/>;
-    /// null when the phrase survives right across the range (so no edge exists to aim by) or is not
-    /// found anywhere in it. Those two are logged apart rather than sharing a line: the first says
-    /// the range ended in front of the announcement and the second that it may never have reached
-    /// it, and both are a different event from the honest "nothing here matched" the caller's own
-    /// failure reports.</returns>
-    private async Task<double?> FindPhraseSurvivalEdgeAsync(
+    /// <returns>The furthest position the phrase is known to survive from, and whether that is the
+    /// edge itself. <c>IsEdge</c> holds in the ordinary case, where the next step failed and the
+    /// position is therefore accurate to <see cref="PreciseMarkFixedStepSeconds"/>; it is false when
+    /// the gallop ran out of <paramref name="ceiling"/> with the phrase still surviving, where the
+    /// position is only a lower bound on an edge that lies somewhere past the searched range - see
+    /// <see cref="LocatePhraseByShrinkingWindowAsync"/> for why that is still worth aiming from.
+    /// Null when the phrase is not found anywhere in the range, the one outcome with nothing to aim
+    /// at; the caller logs it as its own event, distinct from the honest "nothing here matched" its
+    /// own failure reports.</returns>
+    private async Task<(double Position, bool IsEdge)?> FindPhraseSurvivalEdgeAsync(
         double origin, double floor, double ceiling, string file, string? inputDecoder,
         Regex phraseRegex, CancellationToken ct)
     {
@@ -944,17 +988,15 @@ internal sealed class PreciseMarkRefiner
             lastTrue = origin;
             while (true)
             {
+                // Tested before probing rather than after, so a mark already sitting at the ceiling
+                // does not pay for asking the identical question twice on its way out.
+                if (lastTrue >= ceiling)
+                    return (lastTrue, false);
                 var probe = Math.Min(ceiling, Math.Round(lastTrue + stride, 6));
                 if (!await SurvivesAsync(probe))
                 {
                     firstFalse = probe;
                     break;
-                }
-                if (probe >= ceiling)
-                {
-                    _log?.Invoke($"the phrase still survives from {FormatTimestamp(ceiling)}, the " +
-                                 "far end of the search range - the announcement lies past it");
-                    return null;
                 }
                 lastTrue = probe;
                 stride *= 2;
@@ -972,11 +1014,7 @@ internal sealed class PreciseMarkRefiner
                     break;
                 }
                 if (probe <= floor)
-                {
-                    _log?.Invoke($"the phrase was not heard anywhere from {FormatTimestamp(floor)} " +
-                                 "on - the search range may not reach the announcement at all");
                     return null;
-                }
                 firstFalse = probe;
                 stride *= 2;
             }
@@ -990,7 +1028,7 @@ internal sealed class PreciseMarkRefiner
             else
                 firstFalse = mid;
         }
-        return lastTrue;
+        return (lastTrue, true);
     }
 
     /// <summary>

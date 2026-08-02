@@ -238,6 +238,15 @@ release means the thing has become a different program.
   announcement says so instead of sharing a line with one that looked and found
   nothing.
 
+- **The same search could also stop just short of the announcement.** Whisper sometimes
+  timestamps a sentence seconds before the words are actually spoken, and where it did
+  that to the announcement itself, the stretch searched for it ended in front of it —
+  the search ran to the far end still hearing the announcement ahead, and then gave up
+  with nothing to show. It now takes that far end for what it is, the last place the
+  announcement is known to still lie ahead, and starts confirming from there. Where the
+  announcement is further off than that can reach, the mark is left at its estimated
+  position as before, and `--verbose` now says which of the two happened.
+
 ## [0.9.1] — 2026-07-31
 
 ### Added
