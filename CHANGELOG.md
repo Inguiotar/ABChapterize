@@ -77,6 +77,26 @@ release means the thing has become a different program.
 - **`--whisper-threads <n|auto>`** — threads for Whisper transcription, replacing
   the old "nearly all logical cores" default.
 
+- **Phrases and titles can now be written per language**, for a batch run over a library
+  that is not all in one language. Where `--lang auto` gives every file its own language,
+  a single literal phrase can only ever be right for some of them — so the value may
+  instead be a list of `[xx]`-tagged entries separated by semicolons:
+
+  ```
+  --chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/;[en]section"
+  --title          "[fr]Chapitre;[en]Section"
+  --custom         "[fr]/scène/:Scène;[en]/scene/:Scene"
+  ```
+
+  Each file takes the entry for its own language. One entry may be left untagged as the
+  fallback; a language the value does not name keeps its own built-in default, so naming
+  French does not impose French on the German books in the same run. `--title`,
+  `--intro-title`, `--prologue-phrase`, `--prologue-title`, `--epilogue-phrase`,
+  `--epilogue-title` and `--custom` all take the same syntax, and a `--custom` mapping
+  tagged for one language is not even looked for in the others. A value with no tag
+  anywhere is taken whole, semicolons and all, so anything that worked before still means
+  exactly what it did.
+
 - **`--summary` now names the files it counted.** After the totals it lists every
   file that was skipped, with the reason, and every file left with chapter marks
   still missing, with how many are missing and which chapters they are. In a large

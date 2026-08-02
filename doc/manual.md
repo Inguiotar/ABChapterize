@@ -667,6 +667,26 @@ so that logs and reports stay comparable regardless of regional settings.
     chapter number as digits; without a group, the number is parsed from the
     surrounding words as with a literal phrase.
 
+  For a batch run over books in more than one language, the value may also be
+  written **per language**: entries separated by `;`, each opened by a `[xx]`
+  language tag.
+
+  ```
+  --chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/;[en]section"
+  --title          "[fr]Chapitre;[en]Section"
+  --custom         "[fr]/scène/:Scène;[en]/scene/:Scene"
+  ```
+
+  With `--lang auto` each file resolves its own language and takes that
+  language's entry. One entry may be left untagged, which makes it the
+  fallback for the languages the value does not name; without one, those
+  languages keep their own built-in default, exactly as if the option had not
+  been given. A value carrying no tag anywhere is taken whole, semicolons
+  included, so a phrase written for an earlier version still means what it
+  did; a semicolon inside a tagged entry is written `\;`. The same syntax
+  works for `--title`, `--intro-title`, `--prologue-phrase`,
+  `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`.
+
 `-p`, `--prologue-phrase <p>`
 : The word or phrase that announces a prologue (default: `/prolog/`,
   localized by `--lang`). Takes the same literal and `/regexp/` forms as
@@ -686,7 +706,9 @@ so that logs and reports stay comparable regardless of regional settings.
   phrase is a word or a `/regexp/` and parses no number; a match anywhere in
   the file becomes a mark titled after the colon, as often as the phrase
   occurs. Titles may reference the phrase's capturing groups as `$1`, `$2` or
-  by name. Repeat the option to add further mappings. Never localized. See
+  by name. Repeat the option to add further mappings. Never localized — but a
+  mapping may open with a `[xx]` language tag, which restricts it to files that
+  resolve to that language; untagged mappings apply to every file. See
   [Custom marks](#custom-marks) for the full syntax and the per-file limit.
 
 `-U`, `--custom-file <path>`

@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-using System.Text;
 using ABChapterize.Errors;
 
 namespace ABChapterize.Cli;
@@ -13,7 +12,11 @@ namespace ABChapterize.Cli;
 /// the surrounding options resolve to).</summary>
 /// <param name="Phrase">The raw phrase: a plain word, or "/regexp/".</param>
 /// <param name="Title">The raw title template, possibly with <c>$1</c>-style group references.</param>
-public readonly record struct CustomMapping(string Phrase, string Title);
+/// <param name="Language">The two-letter code of the only language this mapping applies to, from a
+/// leading <c>[xx]</c> tag, or null for one that applies to every file in the run. A mixed-language
+/// batch is the whole reason for the tag: a phrase written for French narration matches nothing in
+/// a German book, but it costs a probe window's worth of matching in every one of them.</param>
+public readonly record struct CustomMapping(string Phrase, string Title, string? Language = null);
 
 /// <summary>
 /// Parses the <c>--custom</c> mapping syntax: <c>phrase:title</c> pairs, several of them separated
@@ -27,6 +30,11 @@ public readonly record struct CustomMapping(string Phrase, string Title);
 /// really needs one, and a mapping file needs no such escape at all, since its mappings are
 /// separated by line breaks rather than semicolons.
 /// </para>
+/// <para>
+/// A mapping may open with a <c>[xx]</c> language tag, which restricts it to files that resolve to
+/// that language - see <see cref="CustomMapping.Language"/> and <see cref="LocalizedOption"/>, which
+/// reads the same tag for the phrase and title options.
+/// </para>
 /// </summary>
 internal static class CustomMappingParser
 {
@@ -36,7 +44,7 @@ internal static class CustomMappingParser
     /// <exception cref="CliError">Thrown for a mapping with no delimiter, an empty phrase or an
     /// empty title.</exception>
     internal static List<CustomMapping> ParseSpec(string spec)
-        => SplitOnUnescapedSemicolons(spec)
+        => SpecSyntax.SplitOnUnescapedSemicolons(spec)
             .Where(entry => entry.Trim().Length > 0)
             .Select(entry => ParseOne(entry, $"--custom mapping \"{entry.Trim()}\""))
             .ToList();
@@ -74,33 +82,6 @@ internal static class CustomMappingParser
         return mappings;
     }
 
-    /// <summary>Splits a spec at every semicolon that is not written as <c>\;</c>. Any other
-    /// backslash is passed through untouched, so a regexp's own <c>\d</c> or <c>\s</c> survives
-    /// this step intact.</summary>
-    /// <param name="spec">The raw option value.</param>
-    private static IEnumerable<string> SplitOnUnescapedSemicolons(string spec)
-    {
-        var entry = new StringBuilder();
-        for (var i = 0; i < spec.Length; i++)
-        {
-            if (spec[i] == '\\' && i + 1 < spec.Length && spec[i + 1] == ';')
-            {
-                entry.Append(';');
-                i++;
-            }
-            else if (spec[i] == ';')
-            {
-                yield return entry.ToString();
-                entry.Clear();
-            }
-            else
-            {
-                entry.Append(spec[i]);
-            }
-        }
-        yield return entry.ToString();
-    }
-
     /// <summary>Parses a single <c>phrase:title</c> mapping.</summary>
     /// <param name="text">The mapping, with surrounding whitespace still possible.</param>
     /// <param name="where">How to name this mapping in an error message.</param>
@@ -108,6 +89,7 @@ internal static class CustomMappingParser
     /// empty phrase or an empty title.</exception>
     private static CustomMapping ParseOne(string text, string where)
     {
+        var language = SpecSyntax.TakeLanguageTag(text.Trim(), out text);
         text = text.Trim();
         var delimiter = FindDelimiter(text, where);
         var phrase = text[..delimiter].TrimEnd();
@@ -117,7 +99,7 @@ internal static class CustomMappingParser
             throw new CliError($"{where}: the phrase before the \":\" must not be empty.");
         if (title.Length == 0)
             throw new CliError($"{where}: the title after the \":\" must not be empty.");
-        return new CustomMapping(phrase, title);
+        return new CustomMapping(phrase, title, language);
     }
 
     /// <summary>The index of the colon separating phrase from title - after the closing slash for a

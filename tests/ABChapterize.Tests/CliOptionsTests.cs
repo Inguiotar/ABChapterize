@@ -198,6 +198,109 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void PerLanguage_PhraseAndTitle_ResolveIndependentlyPerFile()
+    {
+        // What the syntax exists for: one batch run over a mixed-language library, where --lang
+        // auto resolves a different language per file and one literal phrase can only ever be right
+        // for some of them.
+        var options = ParseFile(
+            "--chapter-phrase", "[fr]/(?:premi|1).re partie.? chapitre/;[en]section",
+            "--title", "[fr]Chapitre;[en]Section")!;
+
+        Assert.Equal("/(?:premi|1).re partie.? chapitre/", options.ResolveProfile("fr").ChapterPhrase);
+        Assert.Equal("section", options.ResolveProfile("en").ChapterPhrase);
+        Assert.Equal("Chapitre", options.ResolveProfile("fr").Title);
+        Assert.Equal("Section", options.ResolveProfile("en").Title);
+    }
+
+    [Fact]
+    public void PerLanguage_LeavesUnnamedLanguagesOnTheirOwnDefaults()
+    {
+        // The property that makes the feature additive: naming French does not impose French on the
+        // German files in the same run - they get the German defaults, exactly as if the option had
+        // never been given.
+        var profile = ParseFile("--chapter-phrase", "[fr]chapitre", "--title", "[fr]Chapitre")!
+            .ResolveProfile("de");
+
+        Assert.Equal("/kapitel/", profile.ChapterPhrase);
+        Assert.Equal("Kapitel", profile.Title);
+    }
+
+    [Fact]
+    public void PerLanguage_UsesAnUntaggedEntryAsTheFallback()
+    {
+        var options = ParseFile("--title", "[fr]Chapitre;Section")!;
+
+        Assert.Equal("Chapitre", options.ResolveProfile("fr").Title);
+        Assert.Equal("Section", options.ResolveProfile("de").Title);
+    }
+
+    [Fact]
+    public void PerLanguage_TakesAValueWithoutTagsWhole_SemicolonsAndAll()
+    {
+        // Backwards compatibility, and the reason the syntax only engages once something is tagged:
+        // a semicolon is a character a regexp may legitimately contain, and every phrase that
+        // worked before this existed still has to mean what it did.
+        var options = ParseFile("--chapter-phrase", "/kapitel|abschnitt;teil/")!;
+
+        Assert.Equal("/kapitel|abschnitt;teil/", options.ResolveProfile("de").ChapterPhrase);
+        Assert.Equal("/kapitel|abschnitt;teil/", options.ResolveProfile("en").ChapterPhrase);
+    }
+
+    [Fact]
+    public void PerLanguage_KeepsTheEscapedSemicolonInsideATaggedEntry()
+    {
+        // A semicolon a tagged entry really needs is written "\;", the same escape --custom uses.
+        var options = ParseFile("--chapter-phrase", @"[de]/kapitel[\;:]/;[en]/chapter/")!;
+
+        Assert.Equal("/kapitel[;:]/", options.ResolveProfile("de").ChapterPhrase);
+        Assert.Equal("/chapter/", options.ResolveProfile("en").ChapterPhrase);
+    }
+
+    [Theory]
+    [InlineData("[fr]Chapitre;[fr]Chapitre")]   // the same language twice
+    [InlineData("[fr]Chapitre;A;B")]            // two entries claiming to be the fallback
+    public void PerLanguage_IsRejected_WhenTheSpecContradictsItself(string spec)
+        => Assert.Throws<CliError>(() => ParseFile("--title", spec));
+
+    [Fact]
+    public void PerLanguage_ChecksEveryLanguagesOwnEntryForEmptiness()
+        => Assert.Throws<CliError>(() => ParseFile("--chapter-phrase", "[fr];[en]chapter"));
+
+    [Fact]
+    public void PerLanguage_Custom_AppliesAMappingOnlyToItsOwnLanguage()
+    {
+        var options = ParseFile("--custom", "[fr]/scène/:Scène;[en]/scene/:Scene;/zeittafel/:Zeittafel")!;
+
+        Assert.Equal(
+            ["Scène", "Zeittafel"],
+            options.ResolveProfile("fr").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title));
+        Assert.Equal(
+            ["Scene", "Zeittafel"],
+            options.ResolveProfile("en").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title));
+        // A language neither mapping names keeps only the untagged one.
+        Assert.Equal(
+            ["Zeittafel"],
+            options.ResolveProfile("de").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title));
+    }
+
+    [Fact]
+    public void PerLanguage_Custom_KeepsAMappingsOwnNumberInItsKind()
+    {
+        // The kind a log line names has to point at the mapping the user wrote, whatever the file's
+        // language leaves out of the list.
+        var profile = ParseFile("--custom", "[fr]/scène/:Scène;/zeittafel/:Zeittafel")!.ResolveProfile("de");
+
+        Assert.Equal(["custom 2"], profile.NamedPhrases.Where(p => p.Repeatable).Select(p => p.Kind));
+    }
+
+    [Fact]
+    public void PerLanguage_DistinguishesTwoSpecsThatAgreeOnTheFallbackLanguage()
+        => Assert.NotEqual(
+            ParseFile("--title", "[en]Section;[fr]Chapitre")!.RunFingerprint,
+            ParseFile("--title", "[en]Section;[de]Kapitel")!.RunFingerprint);
+
+    [Fact]
     public void Custom_AccumulatesAcrossRepeatedOptions()
     {
         var options = ParseFile("--custom", "a:A", "--custom", "b:B;c:C")!;

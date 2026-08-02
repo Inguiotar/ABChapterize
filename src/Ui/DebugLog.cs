@@ -146,8 +146,12 @@ public sealed class DebugLog : IDisposable
         yield return $"chapter-phrase {o.ChapterPhrase}, title \"{o.Title}\", intro-title \"{o.IntroTitle}\"";
         yield return $"prologue {o.ProloguePhrase} -> \"{o.PrologueTitle}\", " +
                      $"epilogue {o.EpiloguePhrase} -> \"{o.EpilogueTitle}\"";
+        // The language tag is echoed with the mapping rather than dropped: this list is what a
+        // reader checks a missing custom mark against, and "why did it never match" is answered by
+        // the tag as often as by the phrase.
         foreach (var mapping in o.CustomMappings)
-            yield return $"custom {mapping.Phrase} -> \"{mapping.Title}\"";
+            yield return $"custom {(mapping.Language is { } code ? $"[{code}] " : "")}" +
+                         $"{mapping.Phrase} -> \"{mapping.Title}\"";
         yield return $"min-silence-length {(o.AutoMinSilence ? $"auto (floor {o.MinSilenceSeconds:0.##} s)" : $"{o.MinSilenceSeconds:0.##} s")}, " +
                      $"max-jingle-length {(o.AutoMaxJingle ? $"auto (ceiling {o.MaxJingleSeconds:0.#} s)" : $"{o.MaxJingleSeconds:0.#} s")}, " +
                      $"mark-lead {o.MarkLeadSeconds:0.##} s";
