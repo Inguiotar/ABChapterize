@@ -47,6 +47,22 @@ internal sealed class PreciseMarkRefiner
     private readonly Action<string>? _debug;
     private readonly Func<float[], CancellationToken, Task<List<TranscriptSegment>>> _transcribeCounting;
 
+    /// <summary>The same through the heavier <c>--pass3-model</c>, or null when the run has no
+    /// upgrade model to fall back on - see <see cref="RefinePreciseMarkAsync"/>'s retry.</summary>
+    private readonly Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? _transcribeUpgraded;
+
+    /// <summary>
+    /// The recognizer every probe below goes through: <see cref="_transcribeCounting"/> at all
+    /// times except inside <see cref="RefinePreciseMarkAsync"/>'s upgrade-model retry, which swaps
+    /// it for the duration of that second attempt. Scoped exactly like
+    /// <see cref="_phraseReadings"/> and safe for the same reason - one file's placements run
+    /// strictly one after another - and swapped in the same <c>try/finally</c>, so nothing outside
+    /// that attempt (<see cref="VerifyMarkBeforeJingleAsync"/> above all) can ever see the heavier
+    /// model. Threading it through the search instead would put a parameter on all seven methods of
+    /// a call tree for a value that is constant across any one attempt.
+    /// </summary>
+    private Func<float[], CancellationToken, Task<List<TranscriptSegment>>> _transcribe;
+
     /// <summary>
     /// Collector for <see cref="PreciseMarkResult.PhraseReadings"/> while
     /// <see cref="RefinePreciseMarkAsync"/> is running, and null at every other time - which is what
@@ -67,15 +83,21 @@ internal sealed class PreciseMarkRefiner
     /// transcribe-with-stat-counting helper, so this class's transcriptions are tallied into the
     /// same per-file Whisper audio/time statistics as every other detection-path recognition,
     /// without duplicating that accumulation logic here.</param>
+    /// <param name="transcribeUpgraded">The same through the <c>--pass3-model</c> recognizer, which
+    /// takes the language as well since that recognizer is not the one the file's language was set
+    /// on; null when no upgrade model was chosen, which is what switches the retry off.</param>
     internal PreciseMarkRefiner(
         IAudioSource audio, CliOptions options, DetectionLog log,
-        Func<float[], CancellationToken, Task<List<TranscriptSegment>>> transcribeCounting)
+        Func<float[], CancellationToken, Task<List<TranscriptSegment>>> transcribeCounting,
+        Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? transcribeUpgraded = null)
     {
         _audio = audio;
         _options = options;
         _log = log.Fanout();
         _debug = log.Debug;
         _transcribeCounting = transcribeCounting;
+        _transcribeUpgraded = transcribeUpgraded;
+        _transcribe = transcribeCounting;
     }
 
     /// <summary>
@@ -108,7 +130,7 @@ internal sealed class PreciseMarkRefiner
         var decodeStart = Math.Round(Math.Max(0, start - PreciseMarkLeadInSeconds), 6);
         var length = Math.Round(PreciseMarkCheckWindowSeconds + (start - decodeStart), 6);
         var samples = await _audio.DecodePcmAsync(file, decodeStart, length, inputDecoder, ct);
-        var transcript = await _transcribeCounting(samples, ct);
+        var transcript = await _transcribe(samples, ct);
         // The lead-in can surface a trailing fragment of whatever preceded `start` as the first
         // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
         // *non-blank* segment is what actually starts at or after the checked position.
@@ -201,7 +223,27 @@ internal sealed class PreciseMarkRefiner
     /// that is the search below.
     /// </para>
     /// <para>
-    /// When nothing can be confirmed, <paramref name="mark"/> itself carries forward into the final
+    /// A search that confirms nothing is run a second time through the <c>--pass3-model</c>
+    /// recognizer, where the run has one that outclasses the probing model - the whole procedure
+    /// again, not a patch on the first attempt, since which position the search converges on depends
+    /// on every answer along the way. The failure this addresses is the model, not the geometry: a
+    /// quietly-spoken announcement inside a jingle drops out of a smaller model's reading of a long
+    /// window as plain "[Musik]", which is indistinguishable from "the announcement is not here" and
+    /// sends the survival edge (<see cref="FindPhraseSurvivalEdgeAsync"/>) back to well before the
+    /// onset, where no foothold can then be confirmed. Measured on the two marks that prompted this
+    /// (2026-08-02, chapters 6 and 14 of one German audiobook, <c>-m small -M turbo</c>): the single
+    /// probe that broke each search read "* Musik *" on the small model and "Kapitel 6 Fernweh 3"
+    /// respectively "Kapitel 14 Srimavo" on the upgrade one, and every foothold the corrected edge
+    /// would then have offered confirms on it.
+    /// </para>
+    /// <para>
+    /// Affordable because it is rare and small: over a ten-book run only five marks of 271 reached
+    /// the failure branch at all, and a refinement is a handful of short decodes. The heavier model
+    /// is loaded lazily, so a run that never needed it still never loads it - the same trade
+    /// <see cref="ChapterDetector"/>'s suspect-number re-read already makes.
+    /// </para>
+    /// <para>
+    /// When neither model can confirm, <paramref name="mark"/> itself carries forward into the final
     /// step below rather than guessing - validated against a real audiobook's full set of known good
     /// and previously-broken marks (see <c>tools\vadprobe</c>'s <c>precise</c> prototype) before
     /// this was ported here. The default-mode heuristic it falls back to measured within 0.05-0.35 s
@@ -222,6 +264,7 @@ internal sealed class PreciseMarkRefiner
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
     /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
+    /// <param name="language">The file's resolved language, for the upgrade-model retry.</param>
     /// <param name="phraseAbs">Absolute start of the transcript segment(s) the phrase was matched
     /// in - the search bracket, together with the two that follow.</param>
     /// <param name="phraseEndAbs">Absolute end of those segment(s).</param>
@@ -229,36 +272,49 @@ internal sealed class PreciseMarkRefiner
     /// that bracket - see <see cref="MarkContext.Transcript"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
-    /// left as given when nothing could be confirmed), quiet-snapped as a final step, paired
+    /// left as given when neither model could confirm it), quiet-snapped as a final step, paired
     /// with whether the phrase was ever actually heard - see <see cref="PreciseMarkResult"/>.</returns>
     internal async Task<PreciseMarkResult> RefinePreciseMarkAsync(
-        double mark, string file, string? inputDecoder, Regex phraseRegex,
+        double mark, string file, string? inputDecoder, Regex phraseRegex, string language,
         double phraseAbs, double phraseEndAbs, double transcriptEnd, CancellationToken ct)
     {
         var readings = new List<List<TranscriptSegment>>();
         _phraseReadings = readings;
         try
         {
-            double result;
-            var heard = true;
-            var confirmed = await LocatePhraseByShrinkingWindowAsync(
+            var onset = await LocateOnsetAsync(
                 mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
-
-            if (confirmed is { } hit)
+            if (onset == null && _transcribeUpgraded is { } upgraded)
             {
-                var onset = await FindOnsetEdgeAsync(hit, file, inputDecoder, phraseRegex, ct);
-                result = Math.Max(0, onset - _options.MarkLeadSeconds);
+                _log?.Invoke($"could not confirm the phrase near {FormatTimestamp(mark)} - " +
+                             "trying again with the --pass3-model recognizer");
+                _transcribe = (samples, innerCt) => upgraded(samples, language, innerCt);
+                try
+                {
+                    onset = await LocateOnsetAsync(
+                        mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
+                }
+                finally
+                {
+                    _transcribe = _transcribeCounting;
+                }
+            }
+
+            double result;
+            var heard = onset != null;
+            if (onset is { } found)
+            {
+                result = Math.Max(0, found - _options.MarkLeadSeconds);
                 _log?.Invoke(result == mark
                     ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
                     : $"mark corrected from {FormatTimestamp(mark)} to {FormatTimestamp(result)} " +
-                      $"(onset {FormatTimestamp(onset)})");
+                      $"(onset {FormatTimestamp(found)})");
             }
             else
             {
                 _log?.Invoke(
                     $"could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
                 result = mark;
-                heard = false;
             }
 
             var quietest = await SnapToQuietestPointAsync(result, file, inputDecoder, ct);
@@ -270,6 +326,36 @@ internal sealed class PreciseMarkRefiner
         {
             _phraseReadings = null;
         }
+    }
+
+    /// <summary>
+    /// One whole attempt at locating the announcement's onset: find a position the phrase is
+    /// audible at (<see cref="LocatePhraseByShrinkingWindowAsync"/>), then walk that foothold
+    /// forward to the onset itself (<see cref="FindOnsetEdgeAsync"/>). Split out of
+    /// <see cref="RefinePreciseMarkAsync"/> so the upgrade-model retry re-runs the identical
+    /// procedure rather than resuming the first attempt somewhere in the middle: every position
+    /// either half converges on depends on the answers the other gave, so a second opinion is only
+    /// worth anything if it is asked from the beginning. Reads the recognizer off
+    /// <see cref="_transcribe"/>, which is what the caller swaps between the two attempts.
+    /// </summary>
+    /// <param name="mark">The mark being refined; the search's own starting point.</param>
+    /// <param name="phraseAbs">Absolute start of the matched segment(s).</param>
+    /// <param name="phraseEndAbs">Absolute end of those segment(s).</param>
+    /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in.</param>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The announcement's onset, or null when nothing could be confirmed.</returns>
+    private async Task<double?> LocateOnsetAsync(
+        double mark, double phraseAbs, double phraseEndAbs, double transcriptEnd, string file,
+        string? inputDecoder, Regex phraseRegex, CancellationToken ct)
+    {
+        var confirmed = await LocatePhraseByShrinkingWindowAsync(
+            mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
+        return confirmed is { } hit
+            ? await FindOnsetEdgeAsync(hit, file, inputDecoder, phraseRegex, ct)
+            : null;
     }
 
     /// <summary>
@@ -898,7 +984,7 @@ internal sealed class PreciseMarkRefiner
             return false;
         var length = Math.Round(Math.Max(until - from, PreciseMarkMinSurvivalSeconds), 6);
         var samples = await _audio.DecodePcmAsync(file, from, length, inputDecoder, ct);
-        var transcript = await _transcribeCounting(samples, ct);
+        var transcript = await _transcribe(samples, ct);
         var survives = transcript.Any(s => s.Text != null && phraseRegex.IsMatch(s.Text));
         if (survives)
             _phraseReadings?.Add(transcript);

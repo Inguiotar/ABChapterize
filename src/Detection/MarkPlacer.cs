@@ -35,9 +35,13 @@ namespace ABChapterize.Detection;
 /// exactly the kind of figure precise marking exists because it cannot trust. It is known to lie
 /// past the announcement, since the announcement was found inside it, which is the one thing
 /// <see cref="PreciseMarkRefiner.RefinePreciseMarkAsync"/> needs of it.</param>
+/// <param name="Language">The file's resolved language code, for the <c>--pass3-model</c> retry a
+/// failed refinement falls back on. Carried here rather than taken from
+/// <see cref="NumberCheck.Profile"/> because a named (prologue/epilogue/<c>--custom</c>) mark has no
+/// <see cref="NumberCheck"/> and is refined exactly like a numbered one.</param>
 internal readonly record struct MarkContext(
     string File, string? InputDecoder, Regex PhraseRegex, List<Silence> AllSilences,
-    List<SpeechSegment> SpeechSegments, TranscriptWindow Transcript);
+    List<SpeechSegment> SpeechSegments, TranscriptWindow Transcript, string Language);
 
 /// <summary>
 /// The chapter number a placement is for, plus what it takes to check that number against the
@@ -99,16 +103,19 @@ internal sealed class MarkPlacer
     /// <param name="options">Validated command line options.</param>
     /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="transcribeCounting">The detector's statistics-counting transcribe wrapper.</param>
+    /// <param name="transcribeUpgraded">The same, through the heavier <c>--pass3-model</c>, for the
+    /// retry a failed refinement falls back on; null when no upgrade model was chosen.</param>
     /// <param name="findMatches">The detector's --max-chapter-number-capped phrase matcher.</param>
     internal MarkPlacer(IAudioSource audio, CliOptions options, DetectionLog log,
         Func<float[], CancellationToken, Task<List<TranscriptSegment>>> transcribeCounting,
+        Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? transcribeUpgraded,
         Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> findMatches)
     {
         _audio = audio;
         _options = options;
         _log = log.Fanout();
         _findMatches = findMatches;
-        _refiner = new PreciseMarkRefiner(audio, options, log, transcribeCounting);
+        _refiner = new PreciseMarkRefiner(audio, options, log, transcribeCounting, transcribeUpgraded);
     }
 
     /// <summary>
@@ -151,7 +158,7 @@ internal sealed class MarkPlacer
         if (_options.PreciseMark)
         {
             var refined = await _refiner.RefinePreciseMarkAsync(
-                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex,
+                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.Language,
                 phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ct);
             (time, phraseHeard) = (refined.Mark, refined.PhraseHeard);
             if (chapter is { } check &&

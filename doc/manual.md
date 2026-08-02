@@ -201,8 +201,11 @@ measured to within a tenth of a second. The mark is set `--mark-lead` seconds
 ahead of it. Hearing the phrase at the mark is not by itself taken as proof that the
 mark is right — a jingle is not transcribed at all, so a mark several seconds
 inside one hears the announcement just as clearly as a mark sitting on it. A
-mark that cannot be confirmed this way at all is left as
-originally placed rather than guessed at. Finally, whatever mark results —
+mark that cannot be confirmed this way is searched for once more, in full, through
+the model `--pass3-model` names where that is a better one than `--model` — a
+quietly-spoken announcement inside a jingle can be lost on the smaller model and
+plain to the larger. Only when neither hears it is the mark left as originally
+placed rather than guessed at. Finally, whatever mark results —
 confirmed, corrected, or left as is — is nudged up to 0.15 seconds earlier to
 the quietest point in that stretch, but only when doing so is a clear (at
 least 6 dB) improvement over the mark's own position; a mark is never moved
@@ -714,7 +717,8 @@ so that logs and reports stay comparable regardless of regional settings.
   [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
   which often closes the gap far quicker than pass 3 would, and lets
   [pass 2](#pass-2--probing) ask it for a second reading of a chapter number
-  that cannot be right. Naming a *lighter* one is read as "don't spend more time
+  that cannot be right and for a second attempt at any mark it could not pin
+  down. Naming a *lighter* one is read as "don't spend more time
   on the stragglers" and is the one thing that switches
   [pass 3.5](#pass-35--the-shifted-re-read) off; leaving it alone or naming a
   heavier model both keep it. The pass-3 model is downloaded and loaded lazily — only
@@ -1571,7 +1575,8 @@ tradeoff, not for sizing your machine.
 On a GPU backend (CUDA or Vulkan) this comes out of video memory, on a CPU
 backend out of system RAM. Either way exactly one copy is loaded, whatever the
 run's size: files are processed one at a time. Specifying a different
-`--pass3-model` adds one further copy, loaded only if pass 3 actually runs.
+`--pass3-model` adds one further copy, loaded only once something actually asks
+for it — pass 3, or one of the second opinions pass 2 asks a heavier model for.
 
 The voice-activity pre-pass wants memory of its own on top, and unlike the model
 that amount is yours to choose: about 40 MB per `--vad-threads` thread, so around

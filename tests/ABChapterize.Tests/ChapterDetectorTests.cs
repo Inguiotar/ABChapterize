@@ -3107,7 +3107,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, 650, 662, 700, CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, profile.Language, 650, 662, 700, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(655.3, result.Mark, 3);
@@ -3132,7 +3132,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            641.06, _file, null, profile.PhraseRegex, 645.2, 647.2, 651.7, CancellationToken.None);
+            641.06, _file, null, profile.PhraseRegex, profile.Language, 645.2, 647.2, 651.7, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("chapter two", 639.75, result.Mark);
@@ -3160,7 +3160,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Anchor 54.19: one phrase margin past the segment end would be 59.2, but the transcript
         // ends first - the clamp that produced the too-short probes.
         var result = await refiner.RefinePreciseMarkAsync(
-            52.9, _file, null, profile.PhraseRegex, 52.7, 54.2, 54.19, CancellationToken.None);
+            52.9, _file, null, profile.PhraseRegex, profile.Language, 52.7, 54.2, 54.19, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("Zeittafel", 52.45, result.Mark);
@@ -3173,6 +3173,77 @@ public sealed class ChapterDetectorTests : IDisposable
             Math.Abs(d - checkWindow) < 1e-9 ||     // a phrase check
             d >= DetectionTuning.PreciseMarkMinSurvivalSeconds - 1e-9,
             $"decode at {w.Start} ran {w.Duration} s - too short to be a reliable survival probe"));
+    }
+
+    [Fact]
+    public async Task PreciseMark_UnconfirmedByTheProbingModel_RetriesTheWholeSearchOnTheUpgradeModel()
+    {
+        // Real-world failure (chapters 6 and 14 of one German audiobook, 2026-08-02, -m small
+        // -M turbo): a quietly-spoken announcement inside a jingle drops out of the smaller model's
+        // reading of a long window as plain music, which reads exactly like "the announcement is not
+        // in front of me" and sends the survival edge back to well before the onset - after which no
+        // foothold can be confirmed and the mark is left where the heuristic put it. Replaying the
+        // one probe that broke each search through both models settled it: "* Musik *" on the
+        // probing model, the announcement in full on the upgrade one.
+        //
+        // Modelled here by scripting the announcement into the upgrade transcriber alone, so the
+        // first attempt has nothing anywhere to find and the second has it at 660. The whole
+        // procedure is re-run rather than resumed, which is why the second attempt needs no help
+        // from the first: it re-derives the survival edge and the onset from scratch.
+        var audio = new FakeAudioSource();
+        var probing = new ScriptedTranscriber(audio);
+        var upgrade = new ScriptedTranscriber(audio);
+        upgrade.Add(660, Seg(0, " Chapter two."));
+        var profile = Options().ResolveProfile("en");
+        var refiner = new PreciseMarkRefiner(
+            audio, Options(), default, probing.TranscribeAsync,
+            (samples, language, ct) =>
+            {
+                Assert.Equal("en", language);
+                return upgrade.TranscribeAsync(samples, ct);
+            });
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        AssertMarkTime("chapter 2", 659.75, result.Mark);
+        // The transcripts the upgrade attempt produced are kept for the number vote exactly as the
+        // probing model's would have been - they are the better reading of the two.
+        Assert.NotEmpty(result.PhraseReadings);
+    }
+
+    [Fact]
+    public async Task PreciseMark_UnconfirmedWithNoUpgradeModel_LeavesTheMarkAndDoesNotRetry()
+    {
+        // The other half of the gate: without a --pass3-model worth asking (ChapterDetector passes
+        // null then), an unconfirmed mark is still left exactly where the heuristic put it, and no
+        // second search is paid for. Asserted on the decode count rather than only the mark, since
+        // both outcomes agree on the mark.
+        var audio = new FakeAudioSource();
+        var probing = new ScriptedTranscriber(audio);
+        var refiner = new PreciseMarkRefiner(audio, Options(), default, probing.TranscribeAsync);
+        var profile = Options().ResolveProfile("en");
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, CancellationToken.None);
+        var firstAttemptDecodes = audio.DecodeWindows.Count;
+
+        Assert.False(result.PhraseHeard);
+        AssertMarkTime("chapter 2", 655, result.Mark);
+
+        // The same search with an upgrade model that also hears nothing costs strictly more, which
+        // is what makes the count above evidence that no retry ran rather than a coincidence.
+        var alsoDeaf = new ScriptedTranscriber(audio);
+        var retrying = new PreciseMarkRefiner(
+            audio, Options(), default, probing.TranscribeAsync,
+            (samples, _, ct) => alsoDeaf.TranscribeAsync(samples, ct));
+        audio.DecodeWindows.Clear();
+        await retrying.RefinePreciseMarkAsync(
+            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, CancellationToken.None);
+
+        Assert.True(audio.DecodeWindows.Count > firstAttemptDecodes,
+            $"retry ran {audio.DecodeWindows.Count} decodes, single attempt {firstAttemptDecodes}");
     }
 
     [Fact]
@@ -5347,7 +5418,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, 660, 663, 700, CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);
@@ -5362,7 +5433,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, 660, 663, 700, CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, CancellationToken.None);
 
         Assert.False(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);

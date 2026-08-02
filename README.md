@@ -374,7 +374,9 @@ use `.`, whatever the machine's locale says.
    the stretch the phrase was heard in, closing in on the announcement a few
    checks at a time until one hears the phrase first; its own
    beginning is then measured to within a tenth of a second and the mark set
-   just ahead of it. Costs a handful of extra transcriptions
+   just ahead of it. A mark none of those clips can confirm is searched for once
+   more through a heavier `--pass3-model`, where one is named, before it is left
+   at its estimated position. Costs a handful of extra transcriptions
    per chapter, which is what `--quick-marks` trades away for speed. Those
    clips are also the best look at the chapter *number* anything in the run
    gets — the same announcement can read as "chapter forty" from a 45-second

@@ -39,6 +39,15 @@ release means the thing has become a different program.
   each file everything is what makes the faster first pass possible. Batches of
   many files take about as long as before; a single file is quicker.
 
+- **`--pass3-model` now also backs up mark placement.** Pinning a mark means asking the
+  recognizer, over and over in short clips, where the announcement really begins — and a
+  smaller model can write a quietly-spoken announcement inside a jingle off as music, at
+  which point the search has nothing to find and the mark keeps its estimated position.
+  Where a better model is named, the whole search is now run again through it before that
+  happens. Only a mark the first attempt could not confirm pays for it, which on a normal
+  book is a handful at most, and the heavier model is still loaded only if something
+  actually asks for it.
+
 - **Thread counts now default to your machine's physical cores** rather than
   nearly all of its hardware threads. Hyperthreads help a little where they help
   and hurt a lot where they do not, and the tool cannot tell which machine it is

@@ -111,6 +111,11 @@ public sealed class ChapterDetector
         _debug = log.Debug;
         _marks = new MarkPlacer(
             _audio, _options, log, (samples, ct) => TranscribeCountingAsync(samples, ct),
+            // Same gate the suspect-number re-read uses: a --pass3-model worth a second opinion is
+            // one that outclasses the probing model and is a separate recognizer at all.
+            _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
+                ? SecondOpinionAsync
+                : null,
             FindCappedPhraseMatches);
     }
 
@@ -1849,7 +1854,8 @@ public sealed class ChapterDetector
             statSilence = anchor;
         }
         var markCtx = new MarkContext(
-            file, inputDecoder, profile.PhraseRegex, allSilences, speechSegments, transcript);
+            file, inputDecoder, profile.PhraseRegex, allSilences, speechSegments, transcript,
+            profile.Language);
         var placed = await _marks!.PlaceAsync(
             new NumberCheck(match.Number, profile,
                 BracketingBounds(phraseAbs, knownChapters, found, _options.ExpectedStartChapter)),

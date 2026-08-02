@@ -1168,7 +1168,8 @@ internal sealed class RegionProber
             return;
         var (time, markSilence, markRegion) = placement;
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
-            _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd));
+            _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
+            Language.Profile!.Language);
         time = (await _env.Marks.PlaceAsync(
             null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct))
             .TimeSeconds;
@@ -1314,7 +1315,8 @@ internal sealed class RegionProber
         var (time, markSilence, markRegion) = placement;
 
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile!.PhraseRegex,
-            _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd));
+            _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
+            Language.Profile!.Language);
         var placed = await _env.Marks.PlaceAsync(
             new NumberCheck(match.Number, Language.Profile!, SequenceBounds(windowLast)),
             time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct);
