@@ -253,17 +253,18 @@ internal sealed class RegionProber
     private double _cacheFrom;
 
     /// <summary>
-    /// End of that span - the previous decode's end, which is at or beyond the window that decode
-    /// was run for. When the next candidate's window overlaps the span, the overlapping segments are
-    /// reused verbatim instead of being re-run through Whisper: a window that fits inside it costs no
-    /// Whisper call at all, and one that reaches past it decodes only the fresh tail beyond the
-    /// planned seam. The span test (start inside [<see cref="_cacheFrom"/>, <see cref="_cacheTo"/>))
-    /// doubles as the seam-stitching check: it holds exactly when the previous decode really did run
-    /// up to a seam this window's plan can pick up from, and when it does not (e.g. that window was
-    /// skipped by the adaptive threshold) the probe falls back to decoding its full window from the
-    /// candidate start - nothing is ever left covered by neither decode. Starts at negative infinity
-    /// so the very first probe of a region never counts as an overlap and always does a full
-    /// transcribe.
+    /// End of that span - as far as the previous decode may be trusted, which is at or beyond the
+    /// window that decode was run for but not necessarily as far as it read (see
+    /// <see cref="CacheableEnd"/>). When the next candidate's window overlaps the span, the
+    /// overlapping segments are reused verbatim instead of being re-run through Whisper: a window
+    /// that fits inside it costs no Whisper call at all, and one that reaches past it decodes only
+    /// the fresh tail beyond the planned seam. The span test (start inside
+    /// [<see cref="_cacheFrom"/>, <see cref="_cacheTo"/>)) doubles as the seam-stitching check: it
+    /// holds exactly when the previous decode really did run up to a seam this window's plan can
+    /// pick up from, and when it does not (e.g. that window was skipped by the adaptive threshold)
+    /// the probe falls back to decoding its full window from the candidate start - nothing is ever
+    /// left covered by neither decode. Starts at negative infinity so the very first probe of a
+    /// region never counts as an overlap and always does a full transcribe.
     /// </summary>
     private double _cacheTo = double.NegativeInfinity;
 
@@ -492,6 +493,12 @@ internal sealed class RegionProber
     /// anywhere else would leave the cache ending mid-speech. A later window reusing it wholesale
     /// never re-reads that audio, so an announcement straddling the cut would be lost on both sides
     /// of it - the one failure this must not buy speed with.
+    /// </para>
+    /// <para>
+    /// Reading ahead is all this does. How much of the surplus is then <em>trusted</em> is
+    /// <see cref="CacheableEnd"/>'s question, and the answer is not "all of it": a longer decode is
+    /// a worse-framed one, and where the recognizer fell silent the audio has to be read again
+    /// rather than reused.
     /// </para>
     /// <para>
     /// Suppressed while a sequence gap re-probes (<see cref="_reprobing"/>). A re-probe's value is a
@@ -837,10 +844,12 @@ internal sealed class RegionProber
         }
 
         var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
+        var freshAbs = ShiftSegments(fresh, start);
+        var cacheEnd = CacheableEnd(freshAbs, plan.End, decodeEnd);
         _env.LogTranscript(
-            $"probe {decodeEnd - start:0.0}s@{FormatTimestamp(start)}{ProbeNote(false, decodeEnd, plan.End)}",
-            fresh);
-        return WindowSlice(CacheWindow(ShiftSegments(fresh, start), start, decodeEnd), start, plan.End);
+            $"probe {decodeEnd - start:0.0}s@{FormatTimestamp(start)}" +
+            ProbeNote(false, decodeEnd, plan.End, cacheEnd), fresh);
+        return WindowSlice(CacheWindow(freshAbs, start, cacheEnd), start, plan.End);
     }
 
     /// <summary>
@@ -869,42 +878,94 @@ internal sealed class RegionProber
         var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
         var reused = _cacheSegmentsAbs
             .Where(s => s.StartSeconds >= start && s.StartSeconds < splitPoint).ToList();
+        List<TranscriptSegment> assembledAbs = [.. reused, .. ShiftSegments(fresh, splitPoint)];
+        var cacheEnd = CacheableEnd(assembledAbs, plan.End, decodeEnd);
         _env.LogTranscript(
             $"probe {decodeEnd - splitPoint:0.0}s@{FormatTimestamp(splitPoint)}" +
-            ProbeNote(true, decodeEnd, plan.End), fresh);
-        var assembled = CacheWindow(
-            [.. reused, .. ShiftSegments(fresh, splitPoint)], start, decodeEnd);
+            ProbeNote(true, decodeEnd, plan.End, cacheEnd), fresh);
+        var assembled = CacheWindow(assembledAbs, start, cacheEnd);
         return (WindowSlice(assembled, start, plan.End), reused.Count);
     }
 
     /// <summary>The parenthetical a probe's --verbose line carries, so a log reader can tell what
-    /// the decode was: an overlap tail rather than a whole window, and how much of it ran past the
+    /// the decode was: an overlap tail rather than a whole window, how much of it ran past the
     /// window the candidate was actually probed with (that surplus is cache for the windows to
-    /// come, never something this candidate's scan saw).</summary>
+    /// come, never something this candidate's scan saw), and how much of <em>that</em> the
+    /// recognizer left untranscribed and so will be read again rather than reused.</summary>
     /// <param name="tail">Whether this decode was an overlap tail.</param>
     /// <param name="decodeEnd">Absolute end of what was decoded.</param>
     /// <param name="windowEnd">Absolute planned end of the window it was decoded for.</param>
-    private static string ProbeNote(bool tail, double decodeEnd, double windowEnd)
+    /// <param name="cacheEnd">Absolute end of what the decode may be trusted for; see
+    /// <see cref="CacheableEnd"/>.</param>
+    private static string ProbeNote(bool tail, double decodeEnd, double windowEnd, double cacheEnd)
     {
         // Below a tenth of a second the read-ahead is a rounding artifact of the seam search, not
         // audio anyone gained; saying "+0.0s ahead" would only make every line noisier.
         var ahead = decodeEnd - windowEnd >= 0.05 ? $"+{decodeEnd - windowEnd:0.0}s ahead" : null;
-        return (tail, ahead) switch
-        {
-            (false, null) => "",
-            (false, _) => $" ({ahead})",
-            (true, null) => " (tail)",
-            (true, _) => $" (tail, {ahead})",
-        };
+        // Worth naming, because a log reader cannot see it otherwise: the transcript simply stops,
+        // and only arithmetic against the decode length shows that it did. This is the shape
+        // CacheableEnd exists for, so a run in which it never appears is a run in which the rule
+        // never bit.
+        var uncached = decodeEnd - cacheEnd >= 0.05 ? $"{decodeEnd - cacheEnd:0.0}s uncached" : null;
+        var notes = new[] { tail ? "tail" : null, ahead, uncached }.Where(n => n != null);
+        return string.Join(", ", notes) is { Length: > 0 } joined ? $" ({joined})" : "";
+    }
+
+    /// <summary>
+    /// How far a decode may be trusted, i.e. how much of it becomes overlap cache: as far as the
+    /// recognizer actually got, and never past that into audio it read but said nothing about.
+    /// <para>
+    /// A transcript that stops short of the decode end has not established silence there, it has
+    /// failed to read it - and the cache cannot tell those apart, so a later window served from that
+    /// stretch inherits the failure instead of decoding the audio itself with its own, better
+    /// framing. "BARDIOC.m4b" (2026-08-02) is the case on record: the "Zeittafel" announcement at
+    /// 0:00:51 was lost for a whole run. The probe at 0:00:00 planned a window to 0:00:40.73 and read
+    /// ahead to 0:00:54.19; handed 54 s beginning with ~20 s of jingle music, Whisper stopped
+    /// emitting at 0:00:37. The unread 17 s went into the cache as if empty, the next two candidates
+    /// (a VAD jingle region at 0:00:19.48, a silence end at 0:00:43.33) were both served from it, and
+    /// the next fresh decode began at 0:00:54.19 - past the phrase. Replayed through the real decoder
+    /// and recognizer, the tail decode this rule restores (0:00:40.73-0:01:10.69) reads "Zeittafel
+    /// 1971 bis 1984..." at p=0.72, and so do windows framed from 0:00:43.33 and 0:00:46. Nothing
+    /// else could have caught it: Silero hears no speech at all between 0:00:23.3 and 0:00:54.56 at
+    /// any threshold from 0.50 to 0.70, so the announcement is not a blip
+    /// <see cref="RereadJingleSpeechAsync"/> could have found either.
+    /// </para>
+    /// <para>
+    /// Floored at the window's own planned end, never below: the scan has already covered that far,
+    /// and a planned end is a snapped seam (see <see cref="GapPlanning.PlanWindowEnd"/>), which is
+    /// what the next overlap's split search expects to find. So this can only ever give back the
+    /// read-ahead surplus - the worst case for a window is the behaviour it had before reading ahead
+    /// existed, and the saving survives untouched wherever the recognizer did fill the audio it was
+    /// handed.
+    /// </para>
+    /// <para>
+    /// The floor leaves one residual, deliberately: a window whose own decode came back empty still
+    /// caches its planned end as read. That is not the read-ahead's doing but the overlap cache's
+    /// original bargain, unchanged since before it - re-deciding it would re-decode every quiet
+    /// stretch in a book, which wants a measurement this fix does not have.
+    /// </para>
+    /// </summary>
+    /// <param name="segmentsAbs">The decode's transcript, in absolute file time.</param>
+    /// <param name="windowEnd">Absolute planned end of the window it was decoded for.</param>
+    /// <param name="decodeEnd">Absolute end of what was decoded.</param>
+    private static double CacheableEnd(
+        List<TranscriptSegment> segmentsAbs, double windowEnd, double decodeEnd)
+    {
+        // Max rather than the last segment's end: Whisper's segment ends are not strictly ordered
+        // once a window re-segments, and an end that overshoots the audio it was given is common
+        // enough that the decode end has to cap it.
+        var transcribedTo = segmentsAbs.Count == 0 ? windowEnd : segmentsAbs.Max(s => s.EndSeconds);
+        return Math.Min(decodeEnd, Math.Max(windowEnd, transcribedTo));
     }
 
     /// <summary>Makes a freshly assembled transcript the overlap cache, and returns it unchanged so
-    /// the callers can assemble and cache in one expression. The span cached is what was
-    /// <em>decoded</em>, which reaches past the window whenever the decode read ahead - slicing it
-    /// back down to the window is <see cref="WindowSlice"/>'s job, at the caller.</summary>
+    /// the callers can assemble and cache in one expression. The segments kept are all of them, the
+    /// span claimed only as far as <see cref="CacheableEnd"/> allows - which reaches past the window
+    /// whenever the decode read ahead and was transcribed that far. Slicing back down to the window
+    /// is <see cref="WindowSlice"/>'s job, at the caller.</summary>
     /// <param name="segments">The transcript, in absolute file time.</param>
     /// <param name="start">Absolute start of the span it covers.</param>
-    /// <param name="spanEnd">Absolute end of that span.</param>
+    /// <param name="spanEnd">Absolute end of that span, from <see cref="CacheableEnd"/>.</param>
     private List<TranscriptSegment> CacheWindow(List<TranscriptSegment> segments, double start, double spanEnd)
     {
         _cacheSegmentsAbs = segments;

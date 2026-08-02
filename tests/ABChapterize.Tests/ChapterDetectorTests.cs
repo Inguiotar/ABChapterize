@@ -3653,10 +3653,21 @@ public sealed class ChapterDetectorTests : IDisposable
         // paying for, which leaves window 2 wholly inside the cache. So the single decode runs
         // [600, 618] - not to window 1's own end (612) - and neither the candidate's own start
         // (606) nor the border (612) is ever decoded from. The detected chapter is unaffected.
+        //
+        // The narration at 616 is what makes the read-ahead cacheable at all: a transcript that
+        // stops short of the decode end is not trusted to the end (see RegionProber.CacheableEnd),
+        // and a scripted transcriber says nothing except where a test tells it to, so a window that
+        // real audio would fill with words is otherwise silent from 602.5 on. Scripting the tail is
+        // the faithful setup here - this test is about reuse, not about the untranscribed case,
+        // which ReadAhead_DoesNotCacheATailTheRecognizerLeftUntranscribed covers on its own.
         var (result, _, audio) = await DetectFullAsync(
             Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
             [new(595, 600), new(601, 606)],
-            s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
+            s =>
+            {
+                s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3));
+                s.Add(600, Seg(16.0, " And the story went on.")); // abs 616-618, to the decode end
+            });
 
         AssertChapters([new DetectedChapter(1, 600.25, 0.3)], result.Chapters);
         Assert.Contains((600.0, (double?)18.0), audio.DecodeWindows); // read ahead to 618, one pass
@@ -3703,13 +3714,46 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3));
                 s.Add(600, Seg(15.0, " Chapter two.")); // abs 615 - inside the read-ahead surplus
-            });
+                s.Add(600, Seg(25.0, " And so it ended."));  // abs 625-627, to the decode end, so
+            });                                              // the whole surplus stays cacheable
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
         // 27 s decoded from 600, of which the last 12.8 belong to the windows still to come.
         Assert.Contains(log, l => l.StartsWith($"probe {27.0:0.0}s@0:10:00.00 (+{12.8:0.0}s ahead)"));
         Assert.Contains(log, l => l.Contains("1 overlapping window(s) skipped"));
         Assert.DoesNotContain(log, l => l.Contains("2 overlapping window(s) skipped"));
+    }
+
+    [Fact]
+    public async Task ReadAhead_DoesNotCacheATailTheRecognizerLeftUntranscribed()
+    {
+        // "BARDIOC.m4b" (2026-08-02) in miniature, the failure that made CacheableEnd necessary: the
+        // announcement sits in a window's read-ahead surplus, the long decode does not hear it, and
+        // the surplus is then cached as though it had been read - so every later candidate is served
+        // an empty transcript for audio no decode ever reported on, and the chapter is lost outright.
+        // On the book itself that was the "Zeittafel" at 0:00:51, inside a 54.2 s decode from 0:00:00
+        // that stopped emitting at 0:00:37 after ~20 s of jingle music.
+        //
+        // Here window 1 (candidate 600, planned end 614.2) reads ahead to 627, and the announcement
+        // at 615 is scripted chunk-sensitively: heard by any decode up to 20 s, lost by the 27 s one -
+        // real Whisper's own framing artifact (see ScriptedTranscriber.AddWithin). Capping the cache
+        // at the transcript's reach sends the next candidate back to the audio, where a short decode
+        // reads it cleanly.
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(595, 600), new(601, 606), new(613.4, 615)],
+            s =>
+            {
+                s.Add(600, Seg(0.5, " Some narration."));            // abs 600.5-602.5, then quiet
+                s.AddWithin(20.0, 615, Seg(0, " Chapter one."));      // abs 615, in the surplus
+            });
+
+        AssertChapters([new DetectedChapter(1, 614.75, 1.0)], result.Chapters);
+        // The decode read to 627 but is trusted only to 614.2 - its own planned end, the floor this
+        // can never go below - so the 12.8 s of surplus it said nothing about is read again.
+        Assert.Contains(log, l => l.StartsWith($"probe {27.0:0.0}s@0:10:00.00 " +
+                                               $"(+{12.8:0.0}s ahead, {12.8:0.0}s uncached)"));
+        Assert.Contains(audio.DecodeStarts, d => Math.Abs(d - 614.2) < 1e-6);
     }
 
     [Fact]

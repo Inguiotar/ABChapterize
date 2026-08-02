@@ -28,8 +28,12 @@ release means the thing has become a different program.
   read now runs on to the end of the next clip that fits in the turn it has already
   paid for, and the clips that follow come out of what it read — roughly a fifth off
   the second pass's recognizer work on a densely-marked book. Where a read stops has
-  not changed: still on a silence, so no announcement is ever cut in half by one.
-  Under `--verbose` a read that got ahead of itself says so.
+  not changed: still on a silence, so no announcement is ever cut in half by one. Nor
+  is a read believed further than it actually got: where the recognizer fell silent
+  partway through — as it can when a long read opens with a stretch of music — the
+  rest is read again from a shorter clip rather than taken for silence, so a quietly
+  announced chapter cannot be lost to a read that ran past it. Under `--verbose` a
+  read that got ahead of itself says so, and says how much of that it gave back.
 
 - **One file at a time, with the whole machine behind it.** Multi-file runs no
   longer process several books at once. That parallelism was worth less than it
