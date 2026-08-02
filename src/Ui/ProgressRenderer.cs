@@ -272,6 +272,23 @@ public sealed class ProgressRenderer : IDisposable
     /// <param name="line">The finished summary line.</param>
     public void AnnounceSummary(string line) => WriteAnnouncement(line, highlight: true);
 
+    /// <summary>
+    /// Prints one line of the closing <c>--summary</c> block that was assembled from pieces rather
+    /// than from one string, so that the book titles in it are colored as titles instead of being
+    /// pattern-matched like prose. Same as <see cref="AnnounceSummary"/> in every other respect.
+    /// </summary>
+    /// <param name="segments">The pieces of the finished summary line, in print order.</param>
+    public void AnnounceSummarySegments(IReadOnlyList<SummarySegment> segments)
+    {
+        lock (_lock)
+        {
+            var spans = SummaryHighlighter.HighlightSegments(segments);
+            _logFile?.Write(ConsoleColors.PlainText(spans));
+            ClearBar();
+            WriteSpans(spans);
+        }
+    }
+
     /// <summary>The shared body of <see cref="Announce"/> and <see cref="AnnounceSummary"/>.
     /// Not an overload of either: a <c>cref</c> to an overloaded <c>Announce</c> would no longer
     /// resolve to one method, which the documentation build reports as CS0419.</summary>

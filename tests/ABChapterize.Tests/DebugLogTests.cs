@@ -95,6 +95,50 @@ public sealed class DebugLogTests : IDisposable
     }
 
     [Fact]
+    public void FollowTo_MovesTheLogToTheAudioFilesNewName()
+    {
+        // What a file shedding its ".missing-marks" tag needs: the log is opened under the tagged
+        // name and has to end up under the book's own one.
+        var options = Parse("--debug");
+        var tagged = Path.Combine(_dir, "book.missing-marks.m4b");
+        File.Move(_file, tagged);
+        using (var log = DebugLog.Open(tagged, options, Info))
+            log.FollowTo(_file);
+
+        Assert.False(File.Exists(DebugLog.PathFor(tagged)));
+        Assert.Contains(tagged, File.ReadAllText(DebugLog.PathFor(_file)));
+    }
+
+    [Fact]
+    public void FollowTo_AppendsToAnExistingLogAtTheDestination()
+    {
+        // The destination log is the earlier run's - the one that left the tag behind. Losing it is
+        // exactly the failure LogFile appends to avoid, and a rename must not reintroduce it.
+        using (var first = DebugLog.Open(_file, Parse("--debug"), Info))
+            first.Write("the run that left the tag");
+        var tagged = Path.Combine(_dir, "book.missing-marks.m4b");
+        using (var second = DebugLog.Open(tagged, Parse("--debug"), Info))
+        {
+            second.Write("the run that took it off");
+            second.FollowTo(_file);
+        }
+
+        var text = File.ReadAllText(DebugLog.PathFor(_file));
+        Assert.Contains("the run that left the tag", text);
+        Assert.Contains("the run that took it off", text);
+        Assert.False(File.Exists(DebugLog.PathFor(tagged)));
+    }
+
+    [Fact]
+    public void FollowTo_DoesNothing_WhenTheNameIsUnchanged()
+    {
+        using (var log = DebugLog.Open(_file, Parse("--debug"), Info))
+            log.FollowTo(_file);
+
+        Assert.True(File.Exists(DebugLog.PathFor(_file)));
+    }
+
+    [Fact]
     public void TheOption_TurnsLoggingOnByItself()
     {
         // Without this, every "only build the message if someone is listening" guard in the

@@ -396,6 +396,15 @@ unresolved, it is re-tagged with the (possibly shorter) remaining list.
 `--force` bypasses this and redoes the file from scratch instead, discarding
 every existing marking including the partial ones.
 
+An unnumbered tagged file is never picked up automatically, so redoing it means
+`--force` (or `--verify`, or a `--max-chapters` low enough to condemn its
+partial markings). Whichever way it happens, *any* run that ends with a
+complete chapter sequence takes the tag off again and gives the file its own
+name back — the tag records work still to be done, and there is none left.
+With `--debug`, the log written beside the file follows it to that name;
+if a log is already sitting there from the run that left the tag, the new one
+is appended to it rather than replacing it.
+
 ### Prologue and epilogue
 
 Alongside the numbered chapters, every run also listens for a prologue and an
@@ -1209,6 +1218,25 @@ of its own; see [Custom marks](#custom-marks).
   length (over 100 % is normal — re-probed stretches are counted each time),
   and Whisper's transcription speed as a percentage of real time.
 
+  The block closes with two listings, each left out when it would be empty:
+  every file that was **skipped** and why, and every file left **still missing
+  chapter marks**, with how many are missing and — up to ten of them — which
+  chapters those are. Files appear under the name they carry once the run is
+  over, so a book tagged
+  [`.missing-marks-…`](#pass-35--the-shifted-re-read) is listed under its
+  tagged name and can be found in the folder as printed.
+
+  ```
+  Summary: 4 file(s) encountered, 2 processed, 2 skipped, 1 with warnings
+  Total time: 1:42:07, average per processed file: 50:31
+  Confidence of written chapter marks: min 0.71, max 0.99, avg 0.94
+  Skipped 2 file(s):
+    Stalker.m4b: has 30 chapter marking(s)
+    Wintersmith.m4b: 14 pre-existing chapter marking(s) verified correct
+  Still missing chapter marks in 1 file(s):
+    Die Dritte Macht.missing-marks-3-7.m4b: 2 mark(s) missing (chapter 3, 7)
+  ```
+
 `-d`, `--dry-run`
 : Run full detection but write nothing. Instead of the usual "N chapter(s)
   written" line, the file's result shows every chapter that *would* be
@@ -1853,7 +1881,9 @@ something outstanding.
 
 The `--summary` block is colored on the same principle: prose in white,
 brackets in dark grey, and every measured value in cyan together with its unit,
-so `1.52 s` and `3.7%` each read as one figure. **`--color never`** turns all
+so `1.52 s` and `3.7%` each read as one figure. The book titles in its closing
+listings are dark cyan, whole — brackets, digits and all, so a name like
+`Der Fall (Teil 2).m4b` reads as one thing. **`--color never`** turns all
 of it off, **`--color always`** forces it on where it was not detected. Log
 lines and per-file result lines are never colored, and a `--log-file` always
 receives plain text.

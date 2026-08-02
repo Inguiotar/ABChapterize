@@ -95,4 +95,33 @@ public class SummaryHighlighterTests
         var spans = Spans("Total time: unknown");
         Assert.Equal([("Total time: unknown", ConsoleColor.White)], spans);
     }
+
+    [Fact]
+    public void HighlightSegments_DrawsABookTitleWholeInDarkCyan()
+    {
+        // The whole reason a title is passed in as its own segment: left to the pattern rules, this
+        // name would come out with grey brackets and a cyan "2" in the middle of it.
+        var spans = SummaryHighlighter.HighlightSegments([
+            SummarySegment.Prose("  "),
+            SummarySegment.Title("Der Fall (Teil 2).m4b"),
+            SummarySegment.Prose(": has 24 chapter marking(s)"),
+        ]);
+
+        Assert.Contains(spans, s => s == new ColoredSpan("Der Fall (Teil 2).m4b", ConsoleColor.DarkCyan));
+        Assert.Equal(ConsoleColor.Cyan, spans.Single(s => s.Text == "24").Color);
+    }
+
+    [Fact]
+    public void HighlightSegments_LeavesTheAssembledLineUnchanged()
+    {
+        List<SummarySegment> segments = [
+            SummarySegment.Prose("  "),
+            SummarySegment.Title("A Storm of Swords.missing-marks-3-7.m4b"),
+            SummarySegment.Prose(": 2 mark(s) missing (chapter 3, 7)"),
+        ];
+
+        Assert.Equal(
+            "  A Storm of Swords.missing-marks-3-7.m4b: 2 mark(s) missing (chapter 3, 7)",
+            ConsoleColors.PlainText(SummaryHighlighter.HighlightSegments(segments)));
+    }
 }

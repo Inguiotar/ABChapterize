@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using System.Text;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Errors;
@@ -33,19 +34,68 @@ public sealed class DebugLog : IDisposable
 {
     private readonly LogFile _file;
 
+    /// <summary>Where this log is opened, and where <see cref="Dispose"/> is to move it - see
+    /// <see cref="FollowTo"/>.</summary>
+    private readonly string _path;
+    private string? _moveTo;
+
     /// <summary>Takes ownership of an opened log file; use <see cref="Open"/>.</summary>
     /// <param name="file">The opened destination.</param>
-    private DebugLog(LogFile file) => _file = file;
+    /// <param name="path">Where it was opened.</param>
+    private DebugLog(LogFile file, string path) => (_file, _path) = (file, path);
 
     /// <summary>
     /// The debug log's path for an audiobook: its own name plus a suffix, so the two stay together
     /// when files are moved around and a folder full of books yields one log each. Derived from the
     /// path as it was when processing started - a file later renamed with a
     /// <c>.missing-marks-...</c> tag keeps the log under its original name, which is also the name
-    /// every line inside it refers to.
+    /// every line inside it refers to. <see cref="FollowTo"/> is how the log gets back to the
+    /// audiobook when that tag is dropped again.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
     public static string PathFor(string file) => file + ".debug.log";
+
+    /// <summary>
+    /// Asks this log to move itself next to the audiobook's new name once it is closed, which is
+    /// what a file shedding its <c>.missing-marks</c> tag calls for: the tag was never part of the
+    /// book's name, and the log's whole reason for sitting beside it is that the two are found
+    /// together. Deferred to <see cref="Dispose"/> because the writer still holds the file open,
+    /// and because the rename this follows happens while detection's last lines are still being
+    /// written.
+    /// </summary>
+    /// <param name="file">The audio file's new path.</param>
+    public void FollowTo(string file) => _moveTo = PathFor(file);
+
+    /// <summary>
+    /// Performs the deferred <see cref="FollowTo"/> move. An existing log at the destination is
+    /// appended to rather than replaced: it belongs to the same book under the same name, written
+    /// by the earlier run that left the tag behind, and losing it is the one failure a debug log
+    /// must not have (the same bargain <see cref="LogFile"/> makes by appending).
+    /// </summary>
+    /// <exception cref="AppError">The move failed - the destination is open in an editor, say.
+    /// Reported rather than swallowed: a run asked to keep a record does not get to decide
+    /// quietly that it kept a differently-named one.</exception>
+    private void MoveToFollowedPath()
+    {
+        if (_moveTo is not { } target || string.Equals(_path, target, StringComparison.OrdinalIgnoreCase))
+            return;
+        try
+        {
+            if (File.Exists(target))
+            {
+                File.AppendAllText(target, File.ReadAllText(_path), new UTF8Encoding(false));
+                File.Delete(_path);
+            }
+            else
+            {
+                File.Move(_path, target);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw new AppError($"Cannot move the debug log \"{_path}\" to \"{target}\": {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// Opens (or creates) one file's debug log and writes its header: the run's own banner, the file
@@ -59,7 +109,8 @@ public sealed class DebugLog : IDisposable
     /// <see cref="LogFile"/> makes.</exception>
     public static DebugLog Open(string file, CliOptions options, MediaInfo info)
     {
-        var log = new DebugLog(LogFile.Open(PathFor(file)));
+        var path = PathFor(file);
+        var log = new DebugLog(LogFile.Open(path), path);
         log.Write($"file: {file}");
         log.Write($"media: duration {TimeFormat.Hms(info.DurationSeconds)}, {info.SizeBytes} bytes, " +
                   $"codec {info.AudioCodec}" + (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
@@ -74,8 +125,13 @@ public sealed class DebugLog : IDisposable
     /// <param name="message">The message, without timestamp.</param>
     public void Write(string message) => _file.Write(message);
 
-    /// <summary>Writes the closing line and releases the file.</summary>
-    public void Dispose() => _file.Dispose();
+    /// <summary>Writes the closing line, releases the file and, when
+    /// <see cref="FollowTo"/> asked for it, moves it next to the audiobook's new name.</summary>
+    public void Dispose()
+    {
+        _file.Dispose();
+        MoveToFollowedPath();
+    }
 
     /// <summary>
     /// The settings the header records: every option whose value changes what detection does, as

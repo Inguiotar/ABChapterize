@@ -286,7 +286,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-o`, `--log-file <path>` | Write the log to a file instead of the console — switches logging on by itself (add `-T` for the transcripts). The console keeps its progress bar and result lines, which the file gets too. Appends to an existing file. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
 | `--color <mode>` | Colorize the progress bar and the `--summary` block: `auto` (default), `always` or `never`. Nothing else is ever colored, and a `--log-file` always gets plain text. |
-| `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics. |
+| `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics — followed by a list of every file that was skipped and why, and of every file left with chapter marks still missing. |
 
 **Performance** — files are always processed one at a time, so each gets the whole machine.
 
@@ -437,7 +437,9 @@ use `.`, whatever the machine's locale says.
    More than ten missing chapters are left out of the tag (just
    `.missing-marks`), and such a file is not resumed automatically — a gap that
    wide wants a look by hand first, usually starting with
-   `--max-chapter-number`.
+   `--max-chapter-number`. However it is eventually redone, any run that ends
+   with a complete chapter sequence takes the tag back off (and, with `--debug`,
+   brings the log beside it along).
 
 `--custom "phrase:Title;..."` adds marks for anything else a book announces —
 an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` (with

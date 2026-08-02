@@ -179,6 +179,18 @@ public sealed class FileEnumerationTests : IDisposable
         Assert.False(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.missing-marks.m4b")));
     }
 
+    [Theory]
+    // "Is this file still flagged?", which - unlike the auto-resume question HasMissingMarksTag
+    // answers - both forms of the tag say yes to. It is what decides whether a completed run has a
+    // tag to take back off, and which of the two rename directions the debug log follows.
+    [InlineData("Book.missing-marks.m4b", true)]
+    [InlineData("Book.missing-marks-3-7.m4b", true)]
+    [InlineData("Book.m4b", false)]
+    public void HasAnyMissingMarksTag_RecognizesBothFormsOfTheTag(string name, bool expected)
+    {
+        Assert.Equal(expected, FileProcessor.HasAnyMissingMarksTag(Path.Combine("lib", name)));
+    }
+
     [Fact]
     public void FormatMissingList_ListsEverythingUpToTheCap()
     {

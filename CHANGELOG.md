@@ -58,6 +58,18 @@ release means the thing has become a different program.
 - **`--whisper-threads <n|auto>`** — threads for Whisper transcription, replacing
   the old "nearly all logical cores" default.
 
+- **`--summary` now names the files it counted.** After the totals it lists every
+  file that was skipped, with the reason, and every file left with chapter marks
+  still missing, with how many are missing and which chapters they are. In a run
+  over a few hundred audiobooks these were the two questions the closing counts
+  raised and could not answer, and the per-file lines they were buried in have long
+  scrolled away by then (or, under `--quiet`, were never printed). Where the output
+  is colored, the book titles are shown in dark cyan.
+
+  Consequently the skipped count now includes the two kinds of skip it used to leave
+  out: a file whose codec this ffmpeg cannot decode, and an `--import` run finding no
+  sidecar file. Both always said "skipped" on their own result line.
+
 ### Removed
 
 - **`-J`, `--jobs`** — there is no longer more than one file in flight to count.
@@ -106,6 +118,15 @@ release means the thing has become a different program.
   hours of audio for a chapter that was never missing — on the book above, fourteen
   minutes of searching for a chapter 14 whose announcement sat at the far end of the
   stretch being searched.
+
+- **A file could keep a `.missing-marks` tag it had earned its way out of.** The tag
+  is a note that chapters are still missing, and a run that finds them all takes it
+  back off — but only the resume path did so, which never picks up the unnumbered
+  `<name>.missing-marks<ext>` form. Redoing such a file with `--force` left the tag on
+  a book that was now completely marked. Any completed run now hands the file its
+  own name back, and with `--debug` the log beside it follows; where a log under that
+  name is already there from the run that left the tag, the two are joined rather
+  than one replacing the other.
 
 - **A chapter mark could land about a second before its announcement**, on a book
   whose chapters open with a music jingle. Pinning down exactly where the narrator

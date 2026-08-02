@@ -457,7 +457,8 @@ public sealed class CliOptions
     /// <see cref="Verbose"/>.</summary>
     public bool LoggingEnabled => Verbose || LogFilePath != null || Debug;
 
-    /// <summary>Print a run summary with file counts and timings at the end (--summary / -s).</summary>
+    /// <summary>Print a run summary with file counts, timings and the per-file listings of
+    /// <see cref="ABChapterize.Processing.RunOutcomes"/> at the end (--summary / -s).</summary>
     public bool Summary { get; private set; }
 
     /// <summary>
@@ -1732,7 +1733,8 @@ public sealed class CliOptions
                                     processing time, the confidence spread across every mark
                                     written, the shortest silence and longest jingle seen before
                                     a chapter, and how much audio Whisper was fed (with its
-                                    transcription speed).
+                                    transcription speed) - then a list of every file skipped
+                                    and why, and of every file still missing chapter marks.
 
         Performance (files are always processed one at a time, so each gets the whole machine):
               --vad-threads <n|auto>

@@ -41,9 +41,6 @@ public sealed partial class FileProcessor
     /// <summary>Number of files for which processing was aborted with a warning.</summary>
     private int _warnings;
 
-    /// <summary>Number of files skipped because of pre-existing chapter markings.</summary>
-    private int _skipped;
-
     /// <summary>Number of files that actually went through chapter detection.</summary>
     private int _processed;
 
@@ -57,6 +54,10 @@ public sealed partial class FileProcessor
     /// <summary>Run-wide detection/confidence statistics and formatting for --verbose and
     /// --summary reporting, accumulated across every file of the run.</summary>
     private readonly RunStatistics _runStats = new();
+
+    /// <summary>The files --summary names one by one at the end: those skipped, and those left
+    /// with chapter marks still missing.</summary>
+    private readonly RunOutcomes _outcomes = new();
 
     /// <summary>Creates a processor for the given validated options.</summary>
     /// <param name="options">Validated command line options.</param>
@@ -409,7 +410,9 @@ public sealed partial class FileProcessor
 
     /// <summary>
     /// Prints the --summary report closing a run: the file counts and elapsed time this class
-    /// tracks, followed by whatever run-wide statistics <see cref="RunStatistics"/> collected.
+    /// tracks, whatever run-wide statistics <see cref="RunStatistics"/> collected, and last the
+    /// per-file listings <see cref="RunOutcomes"/> gathered - last because they are the only part
+    /// that grows with the size of the run.
     /// </summary>
     /// <param name="fileCount">Number of files the run encountered.</param>
     /// <param name="elapsed">Wall-clock time the run took.</param>
@@ -419,13 +422,15 @@ public sealed partial class FileProcessor
         var noChaptersNote = _noChaptersFound > 0 ? $", {_noChaptersFound} with no chapters found" : "";
         _progress.AnnounceSummary(
             $"Summary: {fileCount} file(s) encountered, {_processed} processed, " +
-            $"{_skipped} skipped{warningNote}{noChaptersNote}");
+            $"{_outcomes.SkippedCount} skipped{warningNote}{noChaptersNote}");
         var average = _processed > 0
             ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
             : "";
         _progress.AnnounceSummary($"Total time: {FormatTime(elapsed)}{average}");
         foreach (var line in _runStats.FormatRunSummaryLines())
             _progress.AnnounceSummary(line);
+        foreach (var line in _outcomes.FormatListings())
+            _progress.AnnounceSummarySegments(line);
     }
 
     /// <summary>
@@ -548,6 +553,15 @@ public sealed partial class FileProcessor
     [GeneratedRegex(@"\.missing-marks-[0-9-]+$", RegexOptions.CultureInvariant)]
     private static partial Regex NumberedMissingMarksTagRegex();
 
+    /// <summary>True when a file name carries a ".missing-marks" tag in either form. Unlike
+    /// <see cref="HasMissingMarksTag"/> this asks "is this file still flagged?" rather than "can a
+    /// resume act on it", which is the question both when deciding whether a completed run has a
+    /// tag to take off again and when telling the two rename directions apart. Internal for unit
+    /// testing.</summary>
+    /// <param name="file">Path of the file being considered.</param>
+    internal static bool HasAnyMissingMarksTag(string file)
+        => MissingMarksTagRegex().IsMatch(Path.GetFileNameWithoutExtension(file));
+
     /// <summary>The file's own original name, with any ".missing-marks-..." tag stripped - what a
     /// resumed file is renamed back to once every previously-missing chapter is found.</summary>
     /// <param name="file">Path of the tagged file.</param>
@@ -624,9 +638,9 @@ public sealed partial class FileProcessor
     }
 
     /// <summary>
-    /// The per-file pipeline itself: probe, decoder resolution, then whichever of the three
-    /// outcomes applies - a resume of a previously tagged file, a skip, or a detection run whose
-    /// result one of the report/write stages below commits.
+    /// The per-file pipeline's opening and closing: probe, decoder resolution, the --debug log, and
+    /// - once <see cref="CommitOneAsync"/> has decided the file's fate - taking that log along when
+    /// the file loses its ".missing-marks" tag.
     /// </summary>
     /// <param name="file">Path of the file to process.</param>
     /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
@@ -654,6 +668,27 @@ public sealed partial class FileProcessor
         using var debug = _options.Debug ? DebugLog.Open(file, _options, probed.Info) : null;
         var ctx = probed with { Logs = new DetectionLog(log, debug != null ? debug.Write : null) };
 
+        var renamedTo = await CommitOneAsync(ctx, detector, watch, ct);
+        // The debug log belongs beside the audiobook under the book's own name, so it follows the
+        // file back when the tag comes off - but not when one is put on, where the untagged name it
+        // already has is the right one (see DebugLog.PathFor).
+        if (renamedTo != null && !HasAnyMissingMarksTag(renamedTo))
+            debug?.FollowTo(renamedTo);
+        return renamedTo;
+    }
+
+    /// <summary>
+    /// Decides and commits one file's fate: a resume of a previously tagged file, a skip, or a
+    /// detection run whose result one of the report/write stages below writes out.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="detector">A detector borrowed from the run's pool for the duration of this file.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The name the file was renamed to, or null when it kept its own.</returns>
+    private async Task<string?> CommitOneAsync(
+        FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
+    {
         // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
         // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed markings
         // are trusted as-is. --force means "redo the whole file from scratch" and takes priority,
@@ -661,7 +696,7 @@ public sealed partial class FileProcessor
         // The resume path is entirely about chapter numbers the tag names, so a run that forms no
         // opinion about them re-detects the file from scratch instead - the tag is simply not this
         // run's business.
-        if (!_options.Force && !_options.IgnoreChapterNumbers && HasMissingMarksTag(file))
+        if (!_options.Force && !_options.IgnoreChapterNumbers && HasMissingMarksTag(ctx.File))
             return await ProcessResumeAsync(ctx, detector, watch, ct);
 
         if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
@@ -675,10 +710,11 @@ public sealed partial class FileProcessor
         if (result.GapRemains)
             return await ReportUnresolvedGapAsync(ctx, result, ct);
         if (result.Chapters.Count == 0 && result.NamedMarks.Count == 0)
+        {
             ReportNoChaptersFound(ctx, result);
-        else
-            await WriteDetectedChaptersAsync(ctx, result, discardNote, ct);
-        return null;
+            return null;
+        }
+        return await WriteDetectedChaptersAsync(ctx, result, discardNote, ct);
     }
 
     /// <summary>Probes a file and emits the one-line --verbose note describing what came back.
@@ -720,6 +756,10 @@ public sealed partial class FileProcessor
             return ctx with { Info = ctx.Info with { InputDecoder = "libfdk_aac" } };
         }
         _warnings++;
+        // Counted as a warning *and* listed as a skip: the file is not processed, and "which files
+        // did you not do" is exactly the question the listing answers. The listing gets the one-line
+        // form - XheAacHint runs to six lines of build advice that belong on the result line alone.
+        _outcomes.RecordSkipped(ctx.Name, "xHE-AAC (USAC) audio and no libfdk_aac decoder available");
         _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: WARNING - {XheAacHint}", important: true);
         return null;
     }
@@ -765,6 +805,7 @@ public sealed partial class FileProcessor
         _warnings++;
         var retarget = MissingMarksPath(ctx.File, resumed.MissingNumbers);
         var stillMissing = FormatMissingList(resumed.MissingNumbers);
+        RecordStillMissing(ctx, retarget, resumed.MissingNumbers);
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
@@ -832,10 +873,27 @@ public sealed partial class FileProcessor
         if (_options.Verify)
             return await VerifyThenDetectAsync(ctx, detector, ct);
 
-        _skipped++;
-        _progress.FinishWithSummary(ctx.Work,
-            $"{ctx.Name}: skipped - has {ctx.Info.ChapterCount} chapter marking(s) (use --force to redo)");
+        ReportSkipped(ctx.Work, ctx.Name, $"has {ctx.Info.ChapterCount} chapter marking(s)");
         return null;
+    }
+
+    /// <summary>
+    /// Lists and reports one skipped file. The reason is worded so that it can stand alone under
+    /// the file's name in --summary's listing, which is why the advice that follows it on the
+    /// result line is a separate argument: repeated under every entry of a two-hundred-file
+    /// listing, the same "(use --force to redo)" is noise.
+    /// </summary>
+    /// <param name="work">The file's progress tracker.</param>
+    /// <param name="name">Its bare file name.</param>
+    /// <param name="reason">Why it was skipped.</param>
+    /// <param name="hint">Advice appended to the result line only.</param>
+    /// <param name="important">Whether the result line is worth surfacing above the progress bar.</param>
+    private void ReportSkipped(
+        WorkTracker work, string name, string reason,
+        string hint = " (use --force to redo)", bool important = false)
+    {
+        _outcomes.RecordSkipped(name, reason);
+        _progress.FinishWithSummary(work, $"{name}: skipped - {reason}{hint}", important);
     }
 
     /// <summary>
@@ -856,11 +914,10 @@ public sealed partial class FileProcessor
         var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
         if (verify.Checked == 0 || verify.Passed)
         {
-            _skipped++;
             var verifyNote = verify.Checked > 0
                 ? $"{verify.Checked} pre-existing chapter marking(s) verified correct"
                 : $"has {ctx.Info.ChapterCount} chapter marking(s) (none had a checkable number)";
-            _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: skipped - {verifyNote} (use --force to redo)");
+            ReportSkipped(ctx.Work, ctx.Name, verifyNote);
             return null;
         }
 
@@ -901,6 +958,7 @@ public sealed partial class FileProcessor
         var (chapters, introNote) = BuildChapters(result);
         var target = MissingMarksPath(ctx.File, result.MissingNumbers);
         var missingList = FormatMissingList(result.MissingNumbers);
+        RecordStillMissing(ctx, target, result.MissingNumbers);
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
@@ -917,6 +975,18 @@ public sealed partial class FileProcessor
             $"{Path.GetFileName(target)}{backupNote}", important: true);
         return target;
     }
+
+    /// <summary>
+    /// Lists one file --summary is to report as still incomplete, under the name its reader will
+    /// actually find in the folder: the freshly tagged one, or - under --dry-run, where nothing is
+    /// renamed - the one it already has.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="taggedPath">The ".missing-marks" path it is being renamed to.</param>
+    /// <param name="missingNumbers">The chapter numbers still missing.</param>
+    private void RecordStillMissing(FileContext ctx, string taggedPath, IReadOnlyList<int> missingNumbers)
+        => _outcomes.RecordMissingMarks(
+            _options.DryRun ? ctx.Name : Path.GetFileName(taggedPath), missingNumbers);
 
     /// <summary>Reports a detection that produced no chapters at all - the file is left
     /// untouched - naming whichever of the three reasons applies.</summary>
@@ -937,12 +1007,15 @@ public sealed partial class FileProcessor
     }
 
     /// <summary>The normal, successful outcome: writes the detected chapters into the file (or,
-    /// under --dry-run, lists what would be written) and prints the file's summary line.</summary>
+    /// under --dry-run, lists what would be written), takes any ".missing-marks" tag back off the
+    /// file name, and prints the file's summary line.</summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="result">The file's detection result.</param>
     /// <param name="discardNote">Note about any pre-existing markings that were discarded.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task WriteDetectedChaptersAsync(
+    /// <returns>The original name the file was restored to when this run completed a previously
+    /// tagged one, or null when it kept the name it came in under.</returns>
+    private async Task<string?> WriteDetectedChaptersAsync(
         FileContext ctx, DetectionResult result, string discardNote, CancellationToken ct)
     {
         _runStats.AccumulateConfidence(result.Chapters);
@@ -952,17 +1025,26 @@ public sealed partial class FileProcessor
         var what = FormatWrittenCount(result);
         // A low-confidence mark is the one thing here worth surfacing above the progress bar.
         var important = result.LowConfidenceNumbers.Count > 0;
+        // The tag is a to-do note left on the file name, and a run that reached here left nothing
+        // to do: every chapter of the sequence is present. So the file gets its own name back.
+        // A *numbered* tag normally takes the resume path instead and is untagged there; what
+        // reaches this point is the unnumbered form, which no resume picks up, or either form under
+        // --force, which redetects the whole file from scratch.
+        var restored = HasAnyMissingMarksTag(ctx.File) ? StripMissingMarksPath(ctx.File) : null;
+        var renameNote = restored != null ? $", renamed to {Path.GetFileName(restored)}" : "";
 
         if (_options.DryRun)
         {
+            var wouldRename = restored != null ? $" and rename to {Path.GetFileName(restored)}" : "";
             _progress.FinishWithSummary(ctx.Work,
-                $"{ctx.Name}: DRY RUN - would write {what}" +
-                $"{notes}:{Environment.NewLine}{FormatChapterListing(chapters)}", important);
-            return;
+                $"{ctx.Name}: DRY RUN - would write {what}{notes}{wouldRename}:" +
+                $"{Environment.NewLine}{FormatChapterListing(chapters)}", important);
+            return null;
         }
-        var backupNote = await CommitChaptersAsync(ctx, chapters, null, ct);
+        var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
-            $"{ctx.Name}: {what} written{notes}{backupNote}", important);
+            $"{ctx.Name}: {what} written{notes}{renameNote}{backupNote}", important);
+        return restored;
     }
 
     /// <summary>What the summary line calls the marks this file yielded: the numbered chapters with
@@ -1141,9 +1223,8 @@ public sealed partial class FileProcessor
         var sidecarPath = ChapterSidecar.PathFor(file, _options.SimpleMetadata);
         if (!File.Exists(sidecarPath))
         {
-            _progress.FinishWithSummary(work,
-                $"{name}: skipped - no sidecar file found ({Path.GetFileName(sidecarPath)}); use --export to create one",
-                important: true);
+            ReportSkipped(work, name, $"no sidecar file found ({Path.GetFileName(sidecarPath)})",
+                "; use --export to create one", important: true);
             return;
         }
 
@@ -1152,9 +1233,7 @@ public sealed partial class FileProcessor
         var (skip, discardNote) = EvaluateExistingChapters(info);
         if (skip)
         {
-            _skipped++;
-            _progress.FinishWithSummary(work,
-                $"{name}: skipped - has {info.ChapterCount} chapter marking(s) (use --force to redo)");
+            ReportSkipped(work, name, $"has {info.ChapterCount} chapter marking(s)");
             return;
         }
 
