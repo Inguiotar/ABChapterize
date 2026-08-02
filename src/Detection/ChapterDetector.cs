@@ -378,6 +378,11 @@ public sealed class ChapterDetector
 
             chapters = await RunPass3Async(file, info, work, chapters, allSilences, nonSpeechRegions,
                 speechSegments, bytesPerSecond, language.Profile!, trailingFallback, pass2Completed, ct);
+
+            // Last, because it is the only step that can compare what every pass made of the same
+            // announcement: two passes reading one announcement under two different numbers leave
+            // two marks on top of each other, and only now are both of them in the same list.
+            chapters = await ReconcileCollidingMarksAsync(chapters, pass2Ctx, language.Profile, ct);
         }
 
         return BuildDetectionResult(
@@ -433,6 +438,126 @@ public sealed class ChapterDetector
             (outlier, bounds, token) => mender.ReReadAtMarkAsync(
                 outlier.TimeSeconds, _options.MarkLeadSeconds, resolved, bounds, outlier.Number, token),
             ct);
+    }
+
+    /// <summary>
+    /// The pipeline stage after Pass 3: hands <see cref="SettleCollidingMarksAsync"/> a re-read
+    /// backed by this file's decoder and recognizer, exactly as
+    /// <see cref="ReconcileSequenceAsync"/> does for the sequence repair.
+    /// </summary>
+    /// <param name="chapters">The chapter sequence every pass has finished with.</param>
+    /// <param name="ctx">The file's Pass 2 context, for the re-read's decoding and recognition.</param>
+    /// <param name="profile">The file's resolved language profile, or null when nothing was ever
+    /// transcribed - in which case there is no phrase to re-read and the confidence tiebreak decides
+    /// alone.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private Task<List<DetectedChapter>> ReconcileCollidingMarksAsync(
+        List<DetectedChapter> chapters, Pass2Context ctx, LanguageProfile? profile, CancellationToken ct)
+    {
+        if (profile is not { } resolved)
+            return SettleCollidingMarksAsync(
+                chapters, _options.ExpectedStartChapter, _log, (_, _, _) => Task.FromResult((int?)null), ct);
+
+        var mender = new SuspectNumberMender(
+            BuildProbeEnvironment(), ctx,
+            new DetectionRegion(0, ctx.Info.DurationSeconds, 0, null));
+        return SettleCollidingMarksAsync(
+            chapters, _options.ExpectedStartChapter, _log,
+            (mark, bounds, token) => mender.ReReadAtMarkAsync(
+                mark.TimeSeconds, _options.MarkLeadSeconds, resolved, bounds, mark.Number, token),
+            ct);
+    }
+
+    /// <summary>
+    /// Settles two chapter marks that landed on top of each other, which is one announcement read
+    /// under two different numbers rather than two chapters
+    /// (see <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> for the case on record).
+    /// <para>
+    /// This is the one misreading none of the other four defences can touch, and the reason is worth
+    /// stating: they all reason about whether a number <em>fits the sequence</em>, and a number
+    /// misheard as its own neighbour fits perfectly. A chapter 13 read as 12 continues the sequence,
+    /// so <see cref="SuspectNumberMender"/> is never invoked, the longest-increasing-subsequence
+    /// filter in <see cref="GapPlanning.Normalize"/> keeps both marks (12 then 13 ascends in both
+    /// time and number), and <see cref="RepairSequenceOutliersAsync"/> sees no outlier to repair.
+    /// What gives it away is not arithmetic at all but geometry: two chapters cannot begin a
+    /// hundredth of a second apart.
+    /// </para>
+    /// <para>
+    /// Which of the two numbers is right cannot be decided from the sequence either - both sit
+    /// between the same neighbours, so both are admissible - and it cannot be decided by which pass
+    /// found it, since the mirror case swaps the roles: read 12 as 13 instead and it is Pass 2 that
+    /// is wrong, the real chapter 13 further on is rejected as "not above the last accepted", and
+    /// every mark after it carries a number one too high. So the audio is asked again, in the tightly
+    /// framed windows <see cref="SuspectNumberMender.ReReadAtMarkAsync"/> uses, with the pair's own
+    /// neighbours as the acceptance rule.
+    /// </para>
+    /// <para>
+    /// When the re-read settles nothing, the higher-confidence reading survives. That is a tiebreak
+    /// and not evidence, and it is documented as one - but it beats keeping both, which leaves a
+    /// player two chapter entries at the same position and hands the file a chapter number the rest
+    /// of the book then has to live with.
+    /// </para>
+    /// <para>
+    /// The one step that touches audio is a delegate rather than a call, so the rule itself can be
+    /// tested without a decoder, a recognizer or a file. Internal for that reason.
+    /// </para>
+    /// </summary>
+    /// <param name="chapters">The chapter sequence after every pass, ascending in time.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null; the lower bound for a
+    /// collision with no chapter before it.</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <param name="reread">Asks the audio which number the announcement at the given mark really
+    /// carries, holding the answer to the given bounds; called at most
+    /// <see cref="DetectionTuning.MaxSequenceRepairsPerFile"/> times.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The sequence with every collision reduced to one mark.</returns>
+    internal static async Task<List<DetectedChapter>> SettleCollidingMarksAsync(
+        List<DetectedChapter> chapters, int? expectedStartChapter, Action<string>? log,
+        Func<DetectedChapter, NumberBounds, CancellationToken, Task<int?>> reread,
+        CancellationToken ct)
+    {
+        var settled = new List<DetectedChapter>(chapters);
+        var rereads = 0;
+        for (var i = 1; i < settled.Count; i++)
+        {
+            var (first, second) = (settled[i - 1], settled[i]);
+            if (second.TimeSeconds - first.TimeSeconds >= CollidingChapterMarkSeconds)
+                continue;
+
+            ct.ThrowIfCancellationRequested();
+            log?.Invoke(
+                $"chapters {first.Number} and {second.Number} are marked " +
+                $"{second.TimeSeconds - first.TimeSeconds:0.00} s apart at " +
+                $"{FormatTimestamp(first.TimeSeconds)} - one announcement read two ways");
+
+            // The pair's own members are excluded so the bounds describe the room the rest of the
+            // book leaves at this position, which is what both candidates have to fit into.
+            var others = settled.Where((_, index) => index != i && index != i - 1).ToList();
+            var bounds = BracketingBounds(first.TimeSeconds, others, [], expectedStartChapter);
+
+            int? settledNumber = null;
+            if (rereads < MaxSequenceRepairsPerFile)
+            {
+                rereads++;
+                settledNumber = await reread(first, bounds, ct);
+            }
+
+            DetectedChapter winner;
+            if (settledNumber is { } number && (number == first.Number || number == second.Number))
+                winner = number == first.Number ? first : second;
+            else
+            {
+                winner = second.Confidence > first.Confidence ? second : first;
+                log?.Invoke($"the announcement could not be settled by re-reading it - keeping " +
+                            $"chapter {winner.Number}, the reading heard with more confidence");
+            }
+            settled.RemoveAt(i);
+            settled[i - 1] = winner;
+            // Re-examine the winner against whatever now follows it: three marks can collide, and
+            // dropping one of them must not hide the next pair.
+            i--;
+        }
+        return settled;
     }
 
     /// <summary>

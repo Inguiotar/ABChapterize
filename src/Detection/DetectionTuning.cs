@@ -724,6 +724,32 @@ internal static class DetectionTuning
     internal const double NamedMarkDedupeSeconds = 10;
 
     /// <summary>
+    /// How close two <em>numbered</em> chapter marks have to be before they are read as one
+    /// announcement heard twice under two different numbers rather than as two chapters
+    /// (<see cref="ChapterDetector.SettleCollidingMarksAsync"/>).
+    /// <para>
+    /// Half of <see cref="NamedMarkDedupeSeconds"/>, and tighter for a reason that constant's own
+    /// remarks give: the wide window there absorbs the jitter in a <em>phrase</em> timestamp, which
+    /// two decodes of the same audio can put ten seconds apart, while both checks that matter after
+    /// placement compare marks - and two marks derived from one onset agree to a fraction of a
+    /// second unless a refinement failed for one of them. Erring small is also the safer direction:
+    /// a collision missed leaves one bad number, a collision invented destroys a real chapter. Five
+    /// seconds sits well above the placement spread and well below the shortest chapter anyone
+    /// writes.
+    /// </para>
+    /// <para>
+    /// The difference from the named case is what happens next, and it is the whole reason this is
+    /// a separate rule. Two named matches of the same phrase are interchangeable, so the duplicate
+    /// is simply dropped. Two numbered ones disagree about something - "Paula Monti", 2026-07-31,
+    /// <c>-m turbo</c>: chapter 13's announcement was read as "chapitre 12" by Pass 2 and correctly
+    /// as 13 by Pass 3, leaving two marks a hundredth of a second apart titled Chapitre 12 and
+    /// Chapitre 13 - and dropping either one at random would be a coin toss over which number the
+    /// book carries from there on.
+    /// </para>
+    /// </summary>
+    internal const double CollidingChapterMarkSeconds = NamedMarkDedupeSeconds / 2;
+
+    /// <summary>
     /// Whisper language-detection probability below which the result counts as inconclusive and
     /// the file falls back to English, with <c>--lang auto</c>. Reuses
     /// <see cref="LowConfidenceThreshold"/>'s cutoff for the same reason.

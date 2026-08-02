@@ -340,10 +340,15 @@ internal sealed class SuspectNumberMender
                 : $"which does not fit the sequence {bounds.Describe()}"));
             return null;
         }
-        _env.Log?.Invoke(suspect is { } previous
-            ? $"{source} read it as {reread} instead of {previous} - " +
-              "correcting the number, the mark stays where it is"
-            : $"{source} read it as chapter {reread} - marking the announcement after all");
+        _env.Log?.Invoke(suspect switch
+        {
+            // Only a colliding-mark re-read can confirm the number it was given: every other caller
+            // asks about a number the bounds already exclude, so agreement is impossible there.
+            { } previous when previous == reread => $"{source} read it as {reread} again - the number stands",
+            { } previous => $"{source} read it as {reread} instead of {previous} - " +
+                            "correcting the number, the mark stays where it is",
+            null => $"{source} read it as chapter {reread} - marking the announcement after all",
+        });
         return reread;
     }
 

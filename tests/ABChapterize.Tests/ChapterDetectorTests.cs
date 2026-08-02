@@ -4773,6 +4773,98 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Null(Recount(readings, heard: 40, new NumberBounds(13, 15)));
     }
 
+    /// <summary>Runs the colliding-mark settling with a scripted re-read, recording what it was
+    /// asked.</summary>
+    /// <param name="chapters">The finished sequence, ascending in time.</param>
+    /// <param name="reread">What the audio says when asked, or null for "nothing usable".</param>
+    private static async Task<(List<DetectedChapter> Chapters, List<string> Log, List<(int Number, NumberBounds Bounds)> Asked)>
+        SettleAsync(List<DetectedChapter> chapters, Func<NumberBounds, int?>? reread = null)
+    {
+        var log = new List<string>();
+        var asked = new List<(int, NumberBounds)>();
+        var settled = await ChapterDetector.SettleCollidingMarksAsync(
+            chapters, expectedStartChapter: null, log.Add,
+            (mark, bounds, _) =>
+            {
+                asked.Add((mark.Number, bounds));
+                return Task.FromResult(reread?.Invoke(bounds));
+            },
+            CancellationToken.None);
+        return (settled, log, asked);
+    }
+
+    [Fact]
+    public async Task CollidingMarks_AreSettledByReadingTheAnnouncementAgain()
+    {
+        // "Paula Monti" (2026-07-31): chapter 13's announcement was read as "chapitre 12" by pass 2
+        // and correctly as 13 by pass 3, leaving two marks a hundredth of a second apart. Neither
+        // number is an outlier - both continue the sequence between 11 and 14 - so nothing else in
+        // the detector has anything to say about it; only the geometry gives it away.
+        var (chapters, log, asked) = await SettleAsync(
+            [new(11, 100), new(12, 200), new(13, 200.01), new(14, 300)],
+            _ => 13);
+
+        Assert.Equal([11, 13, 14], chapters.Select(c => c.Number));
+        Assert.Equal(200.01, chapters.Single(c => c.Number == 13).TimeSeconds);
+        // Asked with the room the rest of the book leaves at that position, both candidates
+        // excluded - which is what makes either answer acceptable and the question worth asking.
+        Assert.Equal([(12, new NumberBounds(11, 14))], asked);
+        Assert.Contains(log, l => l.Contains("chapters 12 and 13 are marked 0.01 s apart") &&
+                                  l.Contains("one announcement read two ways"));
+    }
+
+    [Fact]
+    public async Task CollidingMarks_KeepTheFirstReading_WhenTheReReadConfirmsIt()
+    {
+        // The mirror case, and the reason the re-read has to decide rather than a rule of thumb
+        // about which pass to believe: here it is the later find that is wrong.
+        var (chapters, _, _) = await SettleAsync(
+            [new(11, 100), new(12, 200), new(13, 200.01), new(14, 300)],
+            _ => 12);
+
+        Assert.Equal([11, 12, 14], chapters.Select(c => c.Number));
+        Assert.Equal(200, chapters.Single(c => c.Number == 12).TimeSeconds);
+    }
+
+    [Fact]
+    public async Task CollidingMarks_FallBackToTheMoreConfidentReading_WhenTheReReadSettlesNothing()
+    {
+        // A tiebreak, not evidence - but it beats leaving a player two chapter entries at the same
+        // position, and it is deterministic.
+        var (chapters, log, _) = await SettleAsync(
+            [new(11, 100), new(12, 200, 0.4), new(13, 200.01, 0.9), new(14, 300)]);
+
+        Assert.Equal([11, 13, 14], chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("could not be settled by re-reading it") &&
+                                  l.Contains("keeping chapter 13"));
+    }
+
+    [Fact]
+    public async Task CollidingMarks_LeaveOrdinarilySpacedChaptersAlone()
+    {
+        // The other side of the threshold: nothing is asked and nothing is dropped for chapters
+        // that merely follow each other closely. A short chapter is still a chapter.
+        var (chapters, log, asked) = await SettleAsync(
+            [new(11, 100), new(12, 200), new(13, 260), new(14, 300)], _ => 12);
+
+        Assert.Equal([11, 12, 13, 14], chapters.Select(c => c.Number));
+        Assert.Empty(asked);
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public async Task CollidingMarks_KeepLookingAfterSettlingOne()
+    {
+        // Three marks on one announcement: dropping the loser of the first pair must not hide the
+        // pair the winner then forms with what follows it.
+        var (chapters, _, asked) = await SettleAsync(
+            [new(11, 100), new(12, 200), new(13, 200.01), new(14, 200.02), new(15, 400)],
+            _ => null);
+
+        Assert.Equal([11, 12, 15], chapters.Select(c => c.Number));
+        Assert.Equal(2, asked.Count);
+    }
+
     /// <summary>Runs the sequence repair with a scripted re-read, recording what it was asked.</summary>
     private static async Task<(List<DetectedChapter> Chapters, List<string> Log, List<(int Number, NumberBounds Bounds)> Asked)>
         RepairAsync(List<DetectedChapter> found, Func<NumberBounds, int?>? reread = null)
@@ -5260,14 +5352,16 @@ public sealed class ChapterDetectorTests : IDisposable
             Options().DefaultProfile, null, 0);
 
         var (result, audio) = await DetectGapsAsync(
-            Options("--quick-marks", "--max-jingle-length", "0"), verify, [],
-            s => s.Add(10, Seg(0.3, " Chapter 2.")));
+            Options("--quick-marks", "--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            verify, [new(28, 30)],
+            s => s.Add(30, Seg(0.3, " Chapter 2.")));
 
         Assert.False(result.GapRemains);
-        AssertChapters([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
-        // Confirmed markings are trusted verbatim - the only decode is the gap region's own
-        // single synthetic candidate; nothing probes near the confirmed markings' own timestamps.
-        Assert.Equal([10.0], audio.DecodeStarts);
+        AssertChapters([new(1, 10), new(2, 30.05), new(3, 50)], result.Chapters);
+        // Confirmed markings are trusted verbatim - the only decodes are the gap region's own
+        // candidates, its synthetic start and the silence inside it; nothing probes near the
+        // confirmed markings' own timestamps.
+        Assert.Equal([10.0, 30.0], audio.DecodeStarts);
     }
 
     [Fact]
@@ -5343,15 +5437,16 @@ public sealed class ChapterDetectorTests : IDisposable
         // marking (@10, so its own window would start at 0) that --lang auto would otherwise add,
         // keeping the decode-start assertion below solely about the gap-scoped Pass 2 region.
         var (result, audio, _) = await ResumeMissingMarksAsync(
-            Options("--quick-marks", "--lang", "en", "--max-jingle-length", "0"),
-            [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
-            s => s.Add(10, Seg(0.3, " Chapter 2.")));
+            Options("--quick-marks", "--lang", "en", "--min-silence-length", "1.5",
+                    "--max-jingle-length", "0"),
+            [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [new(28, 30)],
+            s => s.Add(30, Seg(0.3, " Chapter 2.")));
 
         Assert.False(result.GapRemains);
-        AssertChapters([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+        AssertChapters([new(1, 10), new(2, 30.05), new(3, 50)], result.Chapters);
         // The committed markings are trusted verbatim - nothing probes near their own timestamps,
-        // only the gap region's own synthetic candidate.
-        Assert.Equal([10.0], audio.DecodeStarts);
+        // only the gap region's own candidates.
+        Assert.Equal([10.0, 30.0], audio.DecodeStarts);
     }
 
     [Fact]
@@ -5375,12 +5470,13 @@ public sealed class ChapterDetectorTests : IDisposable
         // still correctly bounded by chapter 1 (@10) and chapter 3 (@50), exactly as if the intro
         // marking were not present at all.
         var (result, _, _) = await ResumeMissingMarksAsync(
-            Options("--max-jingle-length", "0"),
-            [new Chapter(0, "Intro"), new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
-            s => s.Add(10, Seg(0.3, " Chapter 2.")));
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new Chapter(0, "Intro"), new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")],
+            [new(28, 30)],
+            s => s.Add(30, Seg(0.3, " Chapter 2.")));
 
         Assert.False(result.GapRemains);
-        AssertChapters([new(1, 10), new(2, 10.05), new(3, 50)], result.Chapters);
+        AssertChapters([new(1, 10), new(2, 30.05), new(3, 50)], result.Chapters);
     }
 
     [Fact]

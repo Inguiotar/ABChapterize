@@ -170,6 +170,16 @@ release means the thing has become a different program.
   short. Those stretches are now checked rather than believed. Marks that were
   already right do not move; the extra checking costs a few seconds per chapter.
 
+- **Two chapter marks could land on one announcement under different numbers.** Where a
+  chapter's spoken number was heard as its own neighbour's, one pass could mark the
+  announcement as chapter 12 while another, reading the very same words correctly, marked
+  it as chapter 13 — leaving two entries a hundredth of a second apart. Nothing caught it:
+  every safeguard against a misheard number asks whether the number fits the chapter
+  sequence, and one misheard as its neighbour fits perfectly. What gives it away is not the
+  numbering but the clock, since two chapters cannot begin at the same moment. Marks that
+  land on top of each other are now recognized as the single announcement they are, the
+  audio is read again to settle which number it really carries, and one mark is kept.
+
 - **The second look at a stubborn gap is now a second look all the way through.** A gap
   that survives being transcribed in full is read once more with every window shifted by
   15 seconds — but past the first ten minutes of it, only *probably* differently framed:
