@@ -1834,7 +1834,8 @@ public sealed class ChapterDetector
                 phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
                 nonSpeechRegions, candidateVadRegion: null, speechSegments, transcript.Segments);
             time = RefineDefaultMark(
-                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, speechSegments) - _options.MarkLeadSeconds),
+                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, anchorSilence, speechSegments)
+                            - _options.MarkLeadSeconds),
                 speechSegments, _options.MarkLeadSeconds);
             (statSilence, statRegion) = (anchorSilence, vadRegion);
         }

@@ -112,6 +112,21 @@ internal static class DetectionTuning
     internal const double JingleWalkAdjacencyToleranceSeconds = LeadingSilenceStartToleranceSeconds;
 
     /// <summary>
+    /// How far past a jingle's own musical start a VAD speech blip swallowed into its region must
+    /// begin before <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> will take it for the
+    /// announcement rather than for the previous chapter's trailing words.
+    /// <para>
+    /// The two are told apart by which detector saw the gap in front of the blip. Silencedetect does
+    /// not read jingle music as silence, so a blip that starts where the region's leading silence
+    /// ends is speech resuming after a pause - in front of the music, not inside it. Measured on the
+    /// two marks this was written for (2026-08-02): both blips began within 3 ms of that silence's
+    /// end. This sits two orders of magnitude above that jitter and still far below where a real
+    /// announcement sits from its jingle's start, since an announcement comes at the music's end.
+    /// </para>
+    /// </summary>
+    internal const double PreJingleSpeechToleranceSeconds = 0.5;
+
+    /// <summary>
     /// Longest stretch of VAD-speech "glue" the anchor-time jingle edge adjustment (see
     /// <see cref="JingleGeometry.AdjustJingleRegion"/>) steps across at the jingle's leading edge -
     /// both when trimming trailing-narration blips off a merged region's front and when bridging

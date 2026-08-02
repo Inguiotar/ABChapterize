@@ -1470,14 +1470,18 @@ internal sealed class RegionProber
                 phraseAbs >= cvr.StartSeconds - JinglePhraseMatchToleranceSeconds &&
                 phraseAbs <= cvr.EndSeconds + JinglePhraseMatchToleranceSeconds
                 ? candidate.VadRegion : null;
-            var (markSilence, markRegion) = ResolveJingleAnchor(
+            var (leadingSilence, markRegion) = ResolveJingleAnchor(
                 phraseAbs, start + phraseEndSeconds, start, _ctx.AllSilences,
                 _ctx.NonSpeechRegions, candidateRegion, _ctx.SpeechSegments, trimmedAbs);
-            if (markSilence == null && markRegion == null)
-                markSilence = candidate.Silence;
             var time = RefineDefaultMark(
-                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, _ctx.SpeechSegments) - MarkLead),
+                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, markRegion, leadingSilence, _ctx.SpeechSegments)
+                            - MarkLead),
                 _ctx.SpeechSegments, MarkLead);
+            // The candidate's own silence stands in for the statistics where neither a jingle nor a
+            // silence leading one was found. It is deliberately not offered to the onset resolution
+            // above, which asks where *this region's* music begins and would be misled by a silence
+            // belonging to no region at all.
+            var markSilence = leadingSilence ?? (markRegion == null ? candidate.Silence : null);
             return (time, markSilence, markRegion);
         }
 

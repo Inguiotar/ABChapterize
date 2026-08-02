@@ -672,25 +672,54 @@ internal static class JingleGeometry
     /// transient.
     /// </para>
     /// <para>
-    /// Without any swallowed blip there is nothing more precise than <paramref name="phraseAbs"/>:
-    /// at or after the region's start it is at least in the right neighbourhood (that is what
-    /// qualified the region by containment) and used unchanged; only when it still precedes the
-    /// region - Whisper smeared the segment past what <see cref="TrimLeadingNonSpeech"/> could
-    /// bridge - is it floored at the region's end, so the mark cannot land back in the previous
-    /// chapter's narration.
+    /// The invariant holds only for blips inside the jingle's <em>music</em>, so a blip at or before
+    /// where that music starts - <paramref name="anchorSilence"/>'s end, else the region's own start -
+    /// is excluded. Such a blip is the speech that <em>ended</em> the hush before the jingle, i.e. the
+    /// previous chapter's trailing words, and nothing about it is untranscribable: it is only inside
+    /// the region at all because <see cref="ComputeNonSpeechRegions"/>'s short-gap merge swallowed the
+    /// narrator's own pause between two closing sentences. <see cref="AdjustJingleRegion"/> normally
+    /// trims exactly that blip off the region's head, but it can only do so where the window's
+    /// transcript reaches back far enough to corroborate the words - and a probe window opening on the
+    /// jingle does not (see <see cref="IsGenuineSpeech"/> for the same "the transcript does not reach
+    /// this far" trap on the other side of the walk).
+    /// </para>
+    /// <para>
+    /// Measured on the two marks that forced this (2026-08-02, chapters 6 and 14 of one German
+    /// audiobook): both regions began where the previous chapter's narration stopped, both had a
+    /// single swallowed blip 0.7-0.9 s later carrying its last two words, and in both the region's
+    /// leading silence ended within 3 ms of that blip's own start - the signature of speech resuming
+    /// after a pause rather than of a voice inside music, since silencedetect does not read jingle
+    /// music as silence (the same reasoning <see cref="RetreatPastNonSpeech"/> stops at a silence
+    /// for). Taken as the announcement, each put its mark some twelve to eighteen seconds early, on
+    /// the previous chapter's closing sentence.
+    /// </para>
+    /// <para>
+    /// Without any usable swallowed blip there is nothing more precise than
+    /// <paramref name="phraseAbs"/>: at or after the region's start it is at least in the right
+    /// neighbourhood (that is what qualified the region by containment) and used unchanged; only when
+    /// it still precedes the region - Whisper smeared the segment past what
+    /// <see cref="TrimLeadingNonSpeech"/> could bridge - is it floored at the region's end, so the
+    /// mark cannot land back in the previous chapter's narration. That fallback is not blind:
+    /// <see cref="RefineDefaultMark"/> still advances it onto the next genuine VAD speech onset.
     /// </para>
     /// </summary>
     /// <param name="phraseAbs">The (TrimLeadingNonSpeech-corrected) phrase onset estimate.</param>
     /// <param name="jingleRegion">The jingle region <see cref="ResolveJingleAnchor"/> resolved for
     /// this phrase, or null when none was found.</param>
+    /// <param name="anchorSilence">The silence leading that region, as
+    /// <see cref="ResolveJingleAnchor"/> resolved it alongside; null for a silence-less jingle, where
+    /// the region's own start is where its music begins.</param>
     /// <param name="speech">The raw VAD speech segments behind the regions.</param>
     internal static double ResolveDefaultPhraseOnset(
-        double phraseAbs, NonSpeechRegion? jingleRegion, List<SpeechSegment> speech)
+        double phraseAbs, NonSpeechRegion? jingleRegion, Silence? anchorSilence,
+        List<SpeechSegment> speech)
     {
         if (jingleRegion is not { } r)
             return phraseAbs;
+        var musicStart = anchorSilence?.EndSeconds ?? r.StartSeconds;
         var swallowed = speech
-            .Where(b => b.StartSeconds > r.StartSeconds && b.EndSeconds < r.EndSeconds)
+            .Where(b => b.StartSeconds > r.StartSeconds && b.EndSeconds < r.EndSeconds
+                     && b.StartSeconds > musicStart + PreJingleSpeechToleranceSeconds)
             .OrderBy(b => b.StartSeconds)
             .ToList();
         if (swallowed.Count == 0)

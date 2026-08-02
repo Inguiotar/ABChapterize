@@ -2933,6 +2933,45 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultMode_BlipEndingTheHushBeforeTheJingle_IsNotTakenForTheAnnouncement()
+    {
+        // The clustering rule's other failure mode, and the one that needs the *leading* silence to
+        // resolve (real audio, chapters 6 and 14 of one German book, 2026-08-02): the previous
+        // chapter's closing words are split by the narrator's own pause into two VAD blips, and the
+        // short-gap merge swallows the second one (640.9-641.7) into the jingle's region exactly as
+        // it swallows a quiet announcement. Being the only swallowed blip it was the last cluster
+        // too, so the mark landed on the last sentence of the chapter before - eighteen seconds
+        // early, in the middle of a spoken word.
+        //
+        // AdjustJingleRegion exists to trim precisely that blip off the region's head, and cannot
+        // here: it wants a transcript segment covering the blip with words, and this probe window
+        // opens on the jingle (at 640) with the announcement its only content. The transcript's
+        // silence about audio it never saw is not evidence that nothing was spoken there.
+        //
+        // What settles it without the transcript is which detector saw the gap in front of the blip.
+        // Silencedetect does not read jingle music as silence, so a blip starting where the region's
+        // leading silence ends (640.9) is speech resuming after a pause - in front of the music, not
+        // inside it - and cannot be the announcement. With it excluded the mark falls back to the
+        // phrase timestamp, floored at the region end (660) where the announcement really is.
+        // A blip genuinely inside the music is unaffected: the tests above have no leading silence
+        // at all, so their region start stands in for its end and their blips clear it easily.
+        var result = await DetectAsync(
+            Options("--quick-marks", "--min-silence-length", "1.5"),
+            // Both below the 1.5 s candidate floor, so neither becomes a probe of its own: the
+            // narrator's pause mid-sentence (640-640.9) and the hush before the music (641.7-642.7).
+            [new(640, 640.9), new(641.7, 642.7)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(640, new TranscriptSegment(5, 25, " Chapter two.", 1.0)); // abs 645-665, smeared
+            },
+            new FakeVad { Speech = [new(0, 640), new(640.9, 641.7), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 659.75)], result.Chapters);
+    }
+
+    [Fact]
     public async Task PreciseMark_LeavesAnAlreadyCorrectMarkUnchanged()
     {
         // precise marking's cheap path: re-transcribing right at the mark already computed (here,

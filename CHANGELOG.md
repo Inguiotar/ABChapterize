@@ -87,6 +87,14 @@ release means the thing has become a different program.
   held to the file's own timeline, seam by seam. Books without the defect are
   unaffected, down to the millisecond.
 
+- **A chapter mark could land on the previous chapter's closing sentence**, on a book
+  whose chapters open with a music jingle. Where the narrator pauses for breath a word
+  or two before the end, the speech detector cuts those last words into a fragment of
+  their own, and the tool mistook that fragment for a chapter announcement spoken
+  quietly inside the jingle — putting the mark back into the chapter before, mid-word.
+  Such a fragment is now recognized by the pause in front of it, which a jingle's music
+  does not have, and the mark goes back on the announcement.
+
 - **One misheard chapter number could cost a book every mark after it.** Where a
   chapter's spoken number came out wrong and too high, every later chapter was
   measured against it, found wanting, and thrown away — so a book could lose most

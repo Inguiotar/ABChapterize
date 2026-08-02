@@ -474,6 +474,58 @@ public class JingleGeometryTests
         Assert.True(foundBoundary);
     }
 
+    // Real-audio replay, chapters 6 and 14 of one German audiobook (2026-08-02). Both marks landed
+    // on the previous chapter's closing sentence, twelve and eighteen seconds early, and both had
+    // the identical shape: the narrator pauses mid-sentence, so VAD cuts the last words into a
+    // second blip which the short-gap merge then swallows into the jingle's region, where
+    // ResolveDefaultPhraseOnset took it for the announcement. AdjustJingleRegion cannot trim it -
+    // the probe window opens on the jingle and its transcript has no words for audio it never saw.
+    //
+    // The numbers below are the file's own, measured with toolsadprobe's wholevad mode, and the
+    // transcript is the one that window really produced; the announcement's true position was
+    // confirmed by re-transcribing 5.25 s from each expected mark. Replaying them through the real
+    // helpers is what makes this a regression test rather than a restatement of the fix.
+    [Theory]
+    // Chapter 6, reached through the short-window jingle re-read: its window opens at 6891.29, past
+    // the blip entirely, and Whisper hands back one 25 s segment.
+    [InlineData(6891.29, 6916.29, 6908.416)]
+    // Chapter 14, an ordinary probe window opening on the region itself at 18698.144. The reused
+    // half of its transcript starts before the window and is sliced off, so the announcement's own
+    // segment (18701.40-18713.40 before trimming) is all that reaches the geometry.
+    [InlineData(18698.144, 18713.40, 18710.688)]
+    public void ResolveDefaultPhraseOnset_BlipEndingTheHush_IsNotTakenForTheAnnouncement(
+        double windowStart, double segmentEnd, double expectedOnset)
+    {
+        List<SpeechSegment> speech =
+        [
+            new(6883.104, 6886.624), new(6887.744, 6889.472), new(6890.368, 6891.264),
+            new(6908.416, 6909.600), new(6910.592, 6911.296),
+            new(18693.984, 18695.968), new(18697.024, 18698.144), new(18698.848, 18699.616),
+            new(18710.688, 18711.936), new(18712.960, 18713.856),
+        ];
+        List<Silence> silences =
+        [
+            new(6886.489, 6887.760), new(6889.206, 6890.372), new(6891.104, 6895.008),
+            new(6909.511, 6910.596), new(6911.171, 6912.148),
+            new(18695.658, 18697.038), new(18698.019, 18698.843), new(18699.374, 18703.431),
+            new(18711.911, 18712.925), new(18713.739, 18715.899),
+        ];
+        var regions = JingleGeometry.ComputeNonSpeechRegions(speech);
+
+        // What the window's transcript amounts to once the announcement's segment is trimmed of the
+        // silence and jingle Whisper timestamped it from - the phrase onset the geometry is handed.
+        List<TranscriptSegment> transcript = [new(expectedOnset, segmentEnd, " Kapitel", 1.0)];
+        var (anchorSilence, region) = JingleGeometry.ResolveJingleAnchor(
+            expectedOnset, segmentEnd, windowStart, silences, regions,
+            candidateVadRegion: null, speech, transcript);
+
+        var onset = JingleGeometry.ResolveDefaultPhraseOnset(
+            expectedOnset, region, anchorSilence, speech);
+
+        Assert.Equal(expectedOnset, onset, 3);
+        Assert.Equal(expectedOnset - 0.35, JingleGeometry.RefineDefaultMark(onset - 0.35, speech, 0.35), 3);
+    }
+
     // When the retreat runs out of speech data entirely, it still reports however far it got
     // (having skipped past any too-short blips along the way) rather than the original
     // starting position - the caller's own fallback (step 5) backs off from that.
