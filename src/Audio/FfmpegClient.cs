@@ -260,6 +260,34 @@ public sealed partial class FfmpegClient : IAudioSource
     /// the whole file is never held in memory at once.</summary>
     private const int StreamChunkSamples = 65536;
 
+    /// <summary>
+    /// How far the PCM stream handed to the VAD may run out of step with the file's presentation
+    /// timeline before <c>aresample</c>'s hard compensation trims or pads it back into line, in
+    /// seconds. The VAD has no timestamps: it dates every frame by its sample index, so any
+    /// discrepancy between "samples decoded so far" and "seconds of play time so far" becomes an
+    /// error in every speech boundary it reports - and every mark those boundaries anchor.
+    /// <para>
+    /// The discrepancy is real and is a property of the file, not of the decoder. An AAC packet
+    /// always decodes to 1024 samples, but an MP4 may declare a shorter duration for one, which is
+    /// how a container assembled by concatenating separately-encoded pieces absorbs each piece's
+    /// encoder delay. Every such packet leaves the raw sample stream a fraction of a second longer
+    /// than the timeline silencedetect, <c>-ss</c> seeking and the written chapter marks all use, and
+    /// the error only ever accumulates. Measured on "Raumschiff Erde.m4b" (17:00:40, 2026-08-02):
+    /// 202 short packets out of 2637487, 78565 samples of overlap in total, putting the VAD 0.29 s
+    /// late by 2:46:40, 1.09 s by 10:51 and 1.76 s by the end. That 1.09 s is what moved chapter 25's
+    /// mark off the announcement and onto the chapter title behind it. Three more of the ten books in
+    /// that test set carry the same defect (0.99-2.15 s); the other six are within 0.07 s.
+    /// </para>
+    /// <para>
+    /// A millisecond is far below anything the rest of the pipeline resolves (a VAD frame is 32 ms)
+    /// and far above the sub-sample rounding a well-formed file produces, so a clean file is left
+    /// untouched while a junction of a few milliseconds is corrected where it happens rather than
+    /// being carried forward. Left at ffmpeg's own 0.1 s default the same file would still drift, just
+    /// in visible 0.1 s steps instead of smoothly.
+    /// </para>
+    /// </summary>
+    private const double PcmResyncToleranceSeconds = 0.001;
+
     /// <inheritdoc/>
     public async Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
         string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
@@ -283,10 +311,19 @@ public sealed partial class FfmpegClient : IAudioSource
                 // stdout. Explicit -map'd outputs from a filtergraph, so (unlike
                 // DetectSilencesAsync) no automatic stream selection ever needs -vn/-sn/-dn to
                 // keep cover art or subtitle streams out.
+                //
+                // The PCM branch resamples *in sync with the presentation timeline* rather than
+                // simply emitting whatever the decoder produces: async=1 with first_pts=0 pads or
+                // trims so that sample N really is second N/16000 of the file, which is the one
+                // thing the VAD assumes and cannot check (see PcmResyncToleranceSeconds). The
+                // silencedetect branch needs nothing of the sort - it reads timestamps off the
+                // frames it is handed.
                 "-filter_complex",
                 "[0:a]asplit=2[sd][pcm];" +
                 $"[sd]silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}[sdout];" +
-                $"[pcm]aresample={SampleRate},aformat=sample_fmts=flt:channel_layouts=mono[pcmout]",
+                $"[pcm]aresample={SampleRate}:async=1:first_pts=0" +
+                $":min_hard_comp={PcmResyncToleranceSeconds.ToString(CultureInfo.InvariantCulture)}," +
+                "aformat=sample_fmts=flt:channel_layouts=mono[pcmout]",
                 "-map", "[sdout]", "-f", "null", "-",
                 "-map", "[pcmout]", "-f", "f32le", "pipe:1",
             ]);

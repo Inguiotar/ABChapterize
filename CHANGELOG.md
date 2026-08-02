@@ -78,6 +78,19 @@ release means the thing has become a different program.
 
 ### Fixed
 
+- **Some books quietly pulled the tool's sense of time out from under it.** An
+  audiobook stitched together from separately encoded pieces — a very common way of
+  building an `.m4b` — hands the decoder a few milliseconds more audio at every seam
+  than the file's own timeline accounts for. The speech scan counted that surplus as
+  play time, so the further into such a book it got, the later everything it heard
+  appeared to be: a fifth of a second off after three hours, over a second and a half
+  by the end of a 17-hour book. Marks that got their position from that scan landed
+  correspondingly late — on "Raumschiff Erde" chapter 25's mark sat *after* the words
+  "Kapitel 25", right on the chapter title behind them. The scan is now held to the
+  file's own timeline, seam by seam. Four of ten test books were affected; the other
+  six were already within a frame, and their speech boundaries come out unchanged to
+  the millisecond.
+
 - **One misheard chapter number could cost a book every mark after it.** Where a
   chapter's spoken number came out wrong and too high — chapter 14 announced at
   7:01:30 read as chapter 40, on a 17-hour book — every later chapter was measured
