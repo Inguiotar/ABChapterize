@@ -40,9 +40,12 @@ namespace ABChapterize.Detection;
 /// <param name="LogTranscript">Logs a decoded window's transcript under --verbose.</param>
 /// <param name="FindCappedPhraseMatches">The detector's --max-chapter-number-capped phrase matcher.</param>
 /// <param name="SecondOpinion">Transcribes samples with the heavier <c>--pass3-model</c> in a given
-/// language, for <see cref="SuspectNumberMender"/>'s re-read of an implausible chapter number. Null
-/// when no upgrade model was chosen, and null for a pass 2.5 re-probe, which already decodes every
-/// window through that model and so has no better opinion left to ask.</param>
+/// language, for the two Pass 2 steps that are worth asking a better recognizer:
+/// <see cref="SuspectNumberMender"/>'s re-read of an implausible chapter number, and
+/// <see cref="RegionProber.RereadJingleSpeechAsync"/>'s second look at an announcement the first
+/// decode's framing lost. Null when no upgrade model was chosen, and null for a pass 2.5 re-probe,
+/// which already decodes every window through that model and so has no better opinion left to
+/// ask.</param>
 internal sealed record ProbeEnvironment(
     CliOptions Options,
     IAudioSource Audio,
@@ -652,12 +655,13 @@ internal sealed class RegionProber
     /// transcript segment has any words for means the recognizer lost it rather than that it is not
     /// there.
     /// <para>
-    /// Losing it is a framing artifact, not a limit of the model: crossing
+    /// Losing it is a framing artifact before it is anything else: crossing
     /// <see cref="WhisperChunkSeconds"/> is what does it (see that constant for Gruelfin.m4b's
-    /// prologue, the case on record), so the re-read simply asks the same recognizer for the same
-    /// announcement inside a single-pass window. Confined to windows that actually crossed the
-    /// boundary, since below it the second decode would be the same framing as the first and could
-    /// only produce the same answer.
+    /// prologue, the case on record), so the re-read asks for the same announcement inside a
+    /// single-pass window. Confined to windows that actually crossed the boundary, since below it
+    /// the second decode would be the same framing as the first and could only produce the same
+    /// answer - and, where the run has a <c>--pass3-model</c> upgrade, put through that recognizer
+    /// rather than the probing one, for the reason the decode itself documents.
     /// </para>
     /// <para>
     /// The re-read window ends a phrase margin past the blip - far enough for the number after
@@ -691,13 +695,27 @@ internal sealed class RegionProber
         if (to - from <= PhraseMarginSeconds)
             return [];
 
+        // Both remedies at once where the run has an upgrade model: a re-framed window and a better
+        // recognizer. They address different halves of the same failure - the framing lost the
+        // announcement, but what makes an announcement droppable in the first place is that it is
+        // one or two quiet words against a jingle, which is exactly where model size tells (see
+        // PreciseMarkRefiner.RefinePreciseMarkAsync's own upgrade retry, where the probe that broke
+        // each search read "* Musik *" on the small model and the announcement on the large one).
+        // Costs nothing extra: this decode was going to happen either way, so the only difference is
+        // which recognizer it goes through - unlike the mender's second opinion, which is a decode
+        // of its own. A pass 2.5 re-probe reaches this with SecondOpinion null and _ctx.Transcriber
+        // already the heavier model, so it re-reads through that one without needing a branch here.
+        var upgradeLanguage = _env.SecondOpinion != null ? Language.Profile?.Language : null;
         _env.Log?.Invoke(
             $"nothing heard in the window at {FormatTimestamp(start)}, but VAD hears speech at " +
-            $"{FormatTimestamp(blip.StartSeconds)} inside its jingle - re-reading it in a shorter window");
+            $"{FormatTimestamp(blip.StartSeconds)} inside its jingle - re-reading it in a shorter " +
+            (upgradeLanguage == null ? "window" : "window with the --pass3-model recognizer"));
 
         var samples = await _env.Audio.DecodePcmAsync(
             _ctx.File, from, to - from, _ctx.Info.InputDecoder, ct);
-        var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
+        var fresh = upgradeLanguage is { } language
+            ? await _env.SecondOpinion!(samples, language, ct)
+            : await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
         _env.LogTranscript($"jingle re-read {to - from:0.0}s@{FormatTimestamp(from)}", fresh);
 
         var freshAbs = TrimLeadingNonSpeech(

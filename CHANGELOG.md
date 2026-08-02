@@ -48,6 +48,14 @@ release means the thing has become a different program.
   book is a handful at most, and the heavier model is still loaded only if something
   actually asks for it.
 
+- **`--pass3-model` also gets the second look at an announcement a window lost.** Where
+  the speech detector hears someone speaking inside a jingle that the transcript has no
+  words for, that spot is read again from a shorter window — and where a better model is
+  named, now through that one as well. An announcement quiet enough to be dropped from a
+  long window is exactly the kind a bigger model recovers, and the second read was going to
+  happen anyway, so this costs nothing beyond loading the model. `--verbose` names the
+  recognizer it used.
+
 - **`--verify` no longer replaces a whole set of marks that failed wholesale.** Where
   some marks fail the check, nothing has changed: the confirmed ones are kept and only
   the stretches around the failures are redetected. Where nearly all of them fail —

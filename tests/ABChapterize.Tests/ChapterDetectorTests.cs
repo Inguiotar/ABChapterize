@@ -376,17 +376,19 @@ public sealed class ChapterDetectorTests : IDisposable
     /// <param name="pass3Script">Scripts the pass-3 transcriber.</param>
     /// <param name="log">Collects the --verbose lines, for tests that assert on which recovery
     /// route a chapter came back through; null to run without logging.</param>
+    /// <param name="vad">Scripted voice activity, for the pass-3-model paths that only exist with a
+    /// VAD pre-pass (the jingle re-read); null runs the silence-only geometry.</param>
     private async Task<(DetectionResult Result, ScriptedTranscriber Pass2, ScriptedTranscriber Pass3)> DetectWithPass3TranscriberAsync(
         CliOptions options, List<Silence> silences,
         Action<ScriptedTranscriber> pass2Script, Action<ScriptedTranscriber> pass3Script,
-        List<string>? log = null)
+        List<string>? log = null, FakeVad? vad = null)
     {
         var audio = new FakeAudioSource { Silences = silences };
         var pass2 = new ScriptedTranscriber(audio);
         var pass3 = new ScriptedTranscriber(audio);
         pass2Script(pass2);
         pass3Script(pass3);
-        var detector = new ChapterDetector(options, audio, pass2, vad: null, pass3Transcriber: pass3);
+        var detector = new ChapterDetector(options, audio, pass2, vad, pass3Transcriber: pass3);
         var result = await detector.DetectAsync(
             _file, Info, new WorkTracker(),
             log is null ? default : new DetectionLog(log.Add, null), CancellationToken.None);
@@ -2642,6 +2644,32 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
         Assert.Contains(log, l => l.Contains("re-reading it in a shorter window"));
+    }
+
+    [Fact]
+    public async Task TheJingleReread_GoesThroughThePass3Model_WhereTheRunHasAnUpgrade()
+    {
+        // The re-read fixes the framing; where a better recognizer is available it fixes both halves
+        // of the failure at once, since an announcement quiet enough to be dropped from a long window
+        // is exactly the kind a bigger model recovers. Proven by scripting the announcement onto the
+        // pass-3 transcriber only: the pass-2 one never hears "Chapter two" at any window length, so
+        // a chapter 2 at all can only have come through the upgrade. AddWithin(30) keeps it out of
+        // reach of pass 3's own minutes-long gap chunks, and GapRemains being false means neither
+        // pass 3 nor pass 2.5 ever ran.
+        var log = new List<string>();
+        var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
+            Options("--quick-marks", "--mark-before-jingle", "--model", "base", "--pass3-model", "large"),
+            [new(610, 613)],
+            pass2 => pass2.Add(0, Seg(0.5, " Chapter one.")),
+            p3 => p3.AddWithin(30, 655, Seg(0, " Chapter two.")),
+            log,
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(654.8, 655.3), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
+        Assert.Contains(log, l => l.Contains(
+            "re-reading it in a shorter window with the --pass3-model recognizer"));
+        Assert.Contains("en", pass3.LanguageChanges);
     }
 
     [Fact]

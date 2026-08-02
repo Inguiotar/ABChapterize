@@ -365,8 +365,9 @@ use `.`, whatever the machine's locale says.
    chapter found, where there's no gap for a later pass to notice. A stretch
    that yields nothing while VAD did
    hear someone speak inside its jingle is read once more from a shorter
-   window: Whisper reads audio in 30-second chunks, and a lone announcement
-   can drop out of a window that crosses one.
+   window, through a heavier `--pass3-model` where one is named: Whisper reads
+   audio in 30-second chunks, and a lone announcement can drop out of a window
+   that crosses one.
 2b. **Mark refinement (skip with `--quick-marks`/`-Q`):** for
    the mark that still lands on the wrong spot — usually a jingle whose
    music briefly fools the voice-activity detector into sounding like speech —

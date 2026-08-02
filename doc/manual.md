@@ -144,7 +144,10 @@ window covered and the transcript has no words for that spot. Whisper reads
 audio in 30-second chunks, and a lone word inside a jingle can drop out of a
 window that crosses one while being transcribed cleanly from a shorter window
 over the same audio. The spot is therefore read once more from a window short
-enough to stay inside a single chunk, and `--verbose` says so. This needs the
+enough to stay inside a single chunk — through the model `--pass3-model` names
+where that is a better one than `--model`, since an announcement quiet enough to
+be dropped is also one a larger model is likelier to recover — and `--verbose`
+says so, naming the recognizer it used. This needs the
 pre-pass, so `--max-jingle-length 0` never does it.
 
 A number that *is* read but cannot plausibly belong where it was heard — one
@@ -739,7 +742,8 @@ so that logs and reports stay comparable regardless of regional settings.
   [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
   which often closes the gap far quicker than pass 3 would, and lets
   [pass 2](#pass-2--probing) ask it for a second reading of a chapter number
-  that cannot be right and for a second attempt at any mark it could not pin
+  that cannot be right, for a second look at an announcement its own window
+  lost, and for a second attempt at any mark it could not pin
   down. Naming a *lighter* one is read as "don't spend more time
   on the stragglers" and is the one thing that switches
   [pass 3.5](#pass-35--the-shifted-re-read) off; leaving it alone or naming a

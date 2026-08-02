@@ -661,16 +661,18 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Re-transcribes samples with the <c>--pass3-model</c> recognizer for
-    /// <see cref="SuspectNumberMender"/>, in the file's own language. Routed through
-    /// <see cref="TranscribeCountingAsync"/> like every other recognition, so the extra work shows up
-    /// in the file's Whisper statistics rather than vanishing.
+    /// Re-transcribes samples with the <c>--pass3-model</c> recognizer, in the file's own language,
+    /// for the Pass 2 steps that want a better opinion than the probing model's:
+    /// <see cref="SuspectNumberMender"/>'s re-read of an implausible chapter number and
+    /// <see cref="RegionProber.RereadJingleSpeechAsync"/>'s second look at a lost announcement.
+    /// Routed through <see cref="TranscribeCountingAsync"/> like every other recognition, so the
+    /// extra work shows up in the file's Whisper statistics rather than vanishing.
     /// <para>
-    /// This is the one place the heavier model can be reached before a gap has been declared, which
-    /// means a run that would otherwise never have loaded it may now do so (it is loaded lazily, on
-    /// first use - see <see cref="Transcription.Pass3Transcriber"/>). That is the trade the
-    /// check is: one model load against a Pass 3 over hours of audio that a misheard number would
-    /// otherwise mandate.
+    /// This is how the heavier model can be reached before a gap has been declared, which means a
+    /// run that would otherwise never have loaded it may now do so (it is loaded lazily, on first
+    /// use - see <see cref="Transcription.Pass3Transcriber"/>). That is the trade both callers
+    /// make: one model load against a Pass 3 over hours of audio that a misheard - or unheard -
+    /// announcement would otherwise mandate.
     /// </para>
     /// </summary>
     /// <param name="samples">16 kHz mono PCM of the window to re-read.</param>
