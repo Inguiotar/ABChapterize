@@ -156,7 +156,7 @@ public sealed class ChapterDetector
         var plan = BuildGapRegions(verify.Markings, info.DurationSeconds);
         return DetectCoreAsync(file, info, work, log, verify.ConfirmedChapters,
             verify.NamedMarks ?? [], plan.Regions,
-            (verify.Profile, verify.DetectedLanguage, verify.DetectedProbability),
+            new LanguageState(verify.Profile, verify.DetectedLanguage, verify.DetectedProbability),
             plan.TrailingFrom is { } from ? (from, plan.TrailingTargets) : null, ct);
     }
 
@@ -182,8 +182,8 @@ public sealed class ChapterDetector
         string file, MediaInfo info, WorkTracker work, DetectionLog log, CancellationToken ct)
     {
         SetLog(log);
-        var (profile, detectedLanguage, detectedProbability) =
-            await ResolveProfileFromMarkingsAsync(file, info, ct);
+        var language = await ResolveProfileFromMarkingsAsync(file, info, ct);
+        var profile = language.Profile;
         _transcriber.ChangeLanguage(profile.Language);
 
         // Committed markings are trusted directly, never re-probed; only their chapter number
@@ -212,8 +212,8 @@ public sealed class ChapterDetector
             })
             .ToList();
 
-        return await DetectCoreAsync(file, info, work, log, confirmed, namedSeed, regions,
-            (profile, detectedLanguage, detectedProbability), null, ct);
+        return await DetectCoreAsync(
+            file, info, work, log, confirmed, namedSeed, regions, language, null, ct);
     }
 
     /// <summary>
@@ -278,9 +278,8 @@ public sealed class ChapterDetector
     /// <param name="regions">The independent Pass 2 region(s) to probe; a single whole-file region
     /// for <see cref="DetectAsync"/>, or the gap-scoped regions <see cref="BuildGapRegions"/> built
     /// for <see cref="DetectGapsAsync"/>.</param>
-    /// <param name="known">The already-resolved language profile (from --verify) plus its own
-    /// detected-language data to carry into the result verbatim, or null to resolve it lazily from
-    /// the first probe's samples.</param>
+    /// <param name="known">The language resolution --verify already paid for, carried into the
+    /// result verbatim; null to resolve this file's own from Pass 1's speech segments.</param>
     /// <param name="trailingFallback">The trailing region's start and expected chapter numbers,
     /// when <see cref="BuildGapRegions"/> found the last checkable --verify marking unconfirmed;
     /// null otherwise (including for a fresh <see cref="DetectAsync"/> run).</param>
@@ -288,8 +287,7 @@ public sealed class ChapterDetector
     private async Task<DetectionResult> DetectCoreAsync(
         string file, MediaInfo info, WorkTracker work, DetectionLog log,
         IReadOnlyList<DetectedChapter> confirmedSeed, IReadOnlyList<DetectedMark> namedSeed,
-        IReadOnlyList<DetectionRegion> regions,
-        (LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)? known,
+        IReadOnlyList<DetectionRegion> regions, LanguageState? known,
         (double From, List<int> Targets)? trailingFallback, CancellationToken ct)
     {
         SetLog(log);
@@ -309,14 +307,14 @@ public sealed class ChapterDetector
         // and, during gap re-probes, briefly backwards - movement.
         work.BeginPhase("Pass 2", info.SizeBytes);
 
-        // With --lang auto and a fresh DetectAsync run the language is resolved once per file, from
-        // the first probe window's samples (at start 0, decoded below like any other window), then
-        // fixed via ChangeLanguage rather than re-detected per probe. A gap-scoped run already
-        // knows it from --verify, so `known` seeds it and no probe ever re-resolves it.
-        var language = new LanguageState(
-            known?.Profile, known?.DetectedLanguage, known?.DetectedProbability ?? 0.0);
-        if (language.Profile != null)
-            _transcriber.ChangeLanguage(language.Profile.Language);
+        // The language is settled here, before a single probe runs, and fixed via ChangeLanguage
+        // rather than re-detected per window - it belongs to the file, not to a region. Resolving it
+        // needs Pass 1's speech segments, which is the whole reason it happens at this exact point:
+        // sampling narration instead of the file's opening seconds is what LanguageResolver is for.
+        // A gap-scoped run already knows the answer from --verify, so `known` seeds it unprobed.
+        var language = known ?? await NewLanguageResolver().ResolveAsync(
+            file, info, LanguageResolver.SpeechPositions(speechSegments, info.DurationSeconds), ct);
+        _transcriber.ChangeLanguage(language.Profile.Language);
 
         // Confirmed markings are trusted verbatim; new finds from every region below are added to
         // the same list, so Pass 3's existing gap tail (after the region loop) sees one seamless
@@ -353,7 +351,6 @@ public sealed class ChapterDetector
             var prober = new RegionProber(
                 BuildProbeEnvironment(), pass2Ctx, region, found, namedFound, language);
             await prober.RunAsync(ct);
-            language = prober.Language;
             earlyAborted = prober.EarlyAborted;
             belowExpectedStartNumber = prober.BelowExpectedStartNumber;
             _customLimitHit |= prober.CustomLimitHit;
@@ -374,10 +371,10 @@ public sealed class ChapterDetector
         {
             if (pass2Completed)
                 chapters = await RunPass25Async(file, info, work, chapters, namedFound, jingleCeilingSeconds,
-                    allSilences, silences, nonSpeechRegions, speechSegments, bytesPerSecond, language.Profile!, ct);
+                    allSilences, silences, nonSpeechRegions, speechSegments, bytesPerSecond, language.Profile, ct);
 
             chapters = await RunPass3Async(file, info, work, chapters, allSilences, nonSpeechRegions,
-                speechSegments, bytesPerSecond, language.Profile!, trailingFallback, pass2Completed, ct);
+                speechSegments, bytesPerSecond, language.Profile, trailingFallback, pass2Completed, ct);
 
             // Last, because it is the only step that can compare what every pass made of the same
             // announcement: two passes reading one announcement under two different numbers leave
@@ -386,7 +383,7 @@ public sealed class ChapterDetector
         }
 
         return BuildDetectionResult(
-            chapters, namedFound, speechSegments, language.Profile!, language.DetectedLanguage,
+            chapters, namedFound, speechSegments, language.Profile, language.DetectedLanguage,
             language.DetectedProbability, earlyAborted, belowExpectedStartNumber);
     }
 
@@ -400,8 +397,6 @@ public sealed class ChapterDetector
     private ProbeEnvironment BuildProbeEnvironment()
         => new(_options, _audio, _vad, _log, _marks!,
             (samples, ct, transcriber) => TranscribeCountingAsync(samples, ct, transcriber),
-            ResolveLanguageAsync,
-            language => _transcriber.ChangeLanguage(language),
             LogTranscript,
             (segments, profile, mergeBoundary) => FindCappedPhraseMatches(segments, profile, mergeBoundary),
             _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
@@ -1431,8 +1426,8 @@ public sealed class ChapterDetector
         string file, MediaInfo info, WorkTracker work, DetectionLog log, CancellationToken ct)
     {
         SetLog(log);
-        var (profile, detectedLanguage, detectedProbability) =
-            await ResolveProfileFromMarkingsAsync(file, info, ct);
+        var language = await ResolveProfileFromMarkingsAsync(file, info, ct);
+        var profile = language.Profile;
         _transcriber.ChangeLanguage(profile.Language);
 
         var checkedCount = 0;
@@ -1497,38 +1492,27 @@ public sealed class ChapterDetector
         }
 
         return new VerifyResult(failed == 0, checkedCount, failed, confirmedChapters, markings,
-            profile, detectedLanguage, detectedProbability, CarryOverNamedMarkings(info, profile));
+            profile, language.DetectedLanguage, language.DetectedProbability,
+            CarryOverNamedMarkings(info, profile));
     }
 
     /// <summary>
     /// Resolves the language profile for a file from its pre-existing chapter markings, shared by
-    /// <see cref="VerifyExistingChaptersAsync"/> and <see cref="ResumeMissingMarksAsync"/>: with an
-    /// explicit --lang, <see cref="CliOptions.DefaultProfile"/> comes straight back with no decode
-    /// at all; with --lang auto, the first marking with a decodable window
-    /// (<see cref="VerifyMarginBeforeSeconds"/> before its own timestamp,
-    /// <see cref="VerifyWindowSeconds"/> long) resolves it via <see cref="ResolveLanguageAsync"/>.
-    /// Does not itself call <see cref="ITranscriber.ChangeLanguage"/> - every caller needs that
-    /// applied at a slightly different point, so it is left to them.
+    /// <see cref="VerifyExistingChaptersAsync"/> and <see cref="ResumeMissingMarksAsync"/>. Neither
+    /// path has run a VAD pre-pass, so the markings stand in for it as
+    /// <see cref="LanguageResolver"/>'s idea of where the narration is - see
+    /// <see cref="LanguageResolver.MarkingPositions"/>. Does not itself call
+    /// <see cref="ITranscriber.ChangeLanguage"/> - every caller needs that applied at a slightly
+    /// different point, so it is left to them.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task<(LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)>
-        ResolveProfileFromMarkingsAsync(string file, MediaInfo info, CancellationToken ct)
-    {
-        if (!_options.AutoLanguage)
-            return (_options.DefaultProfile, null, 0);
-        foreach (var marking in info.ExistingChapters)
-        {
-            var windowStart = Math.Max(0, marking.StartSeconds - VerifyMarginBeforeSeconds);
-            var windowLen = Math.Min(VerifyWindowSeconds, info.DurationSeconds - windowStart);
-            if (windowLen <= 0)
-                continue;
-            var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
-            return await ResolveLanguageAsync(samples, ct);
-        }
-        return (_options.DefaultProfile, null, 0);
-    }
+    private Task<LanguageState> ResolveProfileFromMarkingsAsync(
+        string file, MediaInfo info, CancellationToken ct)
+        => NewLanguageResolver().ResolveAsync(
+            file, info,
+            LanguageResolver.MarkingPositions(info.ExistingChapters, info.DurationSeconds), ct);
 
     /// <summary>
     /// Second-chance confirmation for a --verify window whose first-pass transcript missed the
@@ -1606,35 +1590,10 @@ public sealed class ChapterDetector
     private static bool TryParseExpectedNumber(string title, LanguageProfile profile, out int number)
         => MarkingTitleNumber.TryParse(title, profile, out number);
 
-    /// <summary>
-    /// Resolves the language profile to use for this file: with an explicit --lang, always
-    /// <see cref="CliOptions.DefaultProfile"/> (no detection call at all); with --lang auto,
-    /// runs Whisper's language detector on a short clip and applies
-    /// <see cref="AutoLanguageProbabilityThreshold"/>, falling back to English when the
-    /// detection is inconclusive or the clip is too short to probe.
-    /// </summary>
-    /// <param name="samples">Decoded samples of the first probe window (start of the file).</param>
-    /// <param name="ct">Cancellation token.</param>
-    private async Task<(LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)> ResolveLanguageAsync(
-        float[] samples, CancellationToken ct)
-    {
-        if (!_options.AutoLanguage)
-            return (_options.DefaultProfile, null, 0);
-
-        if (samples.Length < FfmpegClient.SampleRate / 2)
-        {
-            _log?.Invoke("language auto-detection skipped (clip too short); using en");
-            return (_options.ResolveProfile("en"), null, 0);
-        }
-
-        var (detected, probability) = await _transcriber.DetectLanguageWithProbability(samples, ct);
-        var conclusive = probability >= AutoLanguageProbabilityThreshold && !string.IsNullOrWhiteSpace(detected);
-        var effective = conclusive ? detected.ToLowerInvariant() : "en";
-        _log?.Invoke(conclusive
-            ? $"language auto-detected: {effective} (p={probability:0.00})"
-            : $"language auto-detection inconclusive ({detected ?? "?"} p={probability:0.00}); falling back to en");
-        return (_options.ResolveProfile(effective), detected, probability);
-    }
+    /// <summary>This file's language resolver, bound to the current <see cref="_log"/> so its probe
+    /// lines land in the same sinks as the rest of the file's detection log.</summary>
+    private LanguageResolver NewLanguageResolver()
+        => new(_options, _audio, _transcriber, _log);
 
     /// <summary>
     /// Transcribes decoded PCM and tallies its length toward the per-file Whisper-audio statistic

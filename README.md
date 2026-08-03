@@ -221,7 +221,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 
 | Option | What it does |
 | --- | --- |
-| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from a short clip and used for that file, falling back to `en` when the detection is inconclusive. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) and Roman numerals (`XIII`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
+| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from short samples taken inside the book — up to five, from different places, until one is confident or they can be voted on — and used for that file, falling back to `en` only when they cannot agree. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) and Roman numerals (`XIII`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `/chapter/`, localized by `--lang`). May be written per language for a mixed batch: `"[fr]/chapitre/;[en]section"`, with one entry optionally left untagged as the fallback. The same syntax works for `--title`, `--intro-title`, `--prologue-phrase`, `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`. |
 | `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `/prolog/`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
 | `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
@@ -437,7 +437,7 @@ use `.`, whatever the machine's locale says.
    wide wants a look by hand first, usually starting with
    `--max-chapter-number`. However it is eventually redone, any run that ends
    with a complete chapter sequence takes the tag back off (and, with `--debug`,
-   brings the log beside it along).
+   brings the log beside it along, replacing the earlier run's).
 
 `--custom "phrase:Title;..."` adds marks for anything else a book announces —
 an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` (with

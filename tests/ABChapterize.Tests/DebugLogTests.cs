@@ -85,13 +85,14 @@ public sealed class DebugLogTests : IDisposable
     }
 
     [Fact]
-    public void WrittenLines_AreTimestampedAndAppended()
+    public void WrittenLines_AreTimestamped_AndEachRunStartsAFreshLog()
     {
         OpenAndRead(Parse("--debug"));
         var text = OpenAndRead(Parse("--debug"));
         Assert.Matches(@"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] something happened", text);
-        // A second run must not erase the first one's record - the same bargain LogFile makes.
-        Assert.Equal(2, text.Split("something happened").Length - 1);
+        // One run per file, unlike --log-file: a debug log is read by searching it and diffed
+        // against the previous run's copy, and both stop working once one file holds two runs.
+        Assert.Equal(1, text.Split("something happened").Length - 1);
     }
 
     [Fact]
@@ -110,10 +111,10 @@ public sealed class DebugLogTests : IDisposable
     }
 
     [Fact]
-    public void FollowTo_AppendsToAnExistingLogAtTheDestination()
+    public void FollowTo_ReplacesAnExistingLogAtTheDestination()
     {
-        // The destination log is the earlier run's - the one that left the tag behind. Losing it is
-        // exactly the failure LogFile appends to avoid, and a rename must not reintroduce it.
+        // The destination log is the earlier run's - the one that left the tag behind, i.e. the run
+        // this one supersedes. Keeping it would put two runs in one file by the back door.
         using (var first = DebugLog.Open(_file, Parse("--debug"), Info))
             first.Write("the run that left the tag");
         var tagged = Path.Combine(_dir, "book.missing-marks.m4b");
@@ -124,7 +125,7 @@ public sealed class DebugLogTests : IDisposable
         }
 
         var text = File.ReadAllText(DebugLog.PathFor(_file));
-        Assert.Contains("the run that left the tag", text);
+        Assert.DoesNotContain("the run that left the tag", text);
         Assert.Contains("the run that took it off", text);
         Assert.False(File.Exists(DebugLog.PathFor(tagged)));
     }

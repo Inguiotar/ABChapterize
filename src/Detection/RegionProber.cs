@@ -33,10 +33,6 @@ namespace ABChapterize.Detection;
 /// <param name="Log">Sink for --verbose log messages, or null when not verbose.</param>
 /// <param name="Marks">The file's mark placer, shared with every other pass.</param>
 /// <param name="TranscribeCounting">The detector's statistics-counting transcribe wrapper.</param>
-/// <param name="ResolveLanguage">Resolves --lang auto from a probe window's samples, once per file.</param>
-/// <param name="ChangeLanguage">Applies a resolved language to the file's pass-2 transcriber. Always
-/// that one, even while a pass 2.5 re-probe decodes through a different model: the language belongs
-/// to the file, not to whichever recognizer a given pass borrowed.</param>
 /// <param name="LogTranscript">Logs a decoded window's transcript under --verbose.</param>
 /// <param name="FindCappedPhraseMatches">The detector's --max-chapter-number-capped phrase matcher.</param>
 /// <param name="SecondOpinion">Transcribes samples with the heavier <c>--pass3-model</c> in a given
@@ -53,8 +49,6 @@ internal sealed record ProbeEnvironment(
     Action<string>? Log,
     MarkPlacer Marks,
     Func<float[], CancellationToken, ITranscriber?, Task<List<TranscriptSegment>>> TranscribeCounting,
-    Func<float[], CancellationToken, Task<(LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability)>> ResolveLanguage,
-    Action<string> ChangeLanguage,
     Action<string, List<TranscriptSegment>> LogTranscript,
     Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> FindCappedPhraseMatches,
     Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? SecondOpinion = null);
@@ -101,16 +95,6 @@ internal readonly record struct Pass2Context(
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
     List<SpeechSegment> SpeechSegments, double EarlyAbortSeconds, int? ExpectedStartChapter,
     ITranscriber Transcriber, bool SecondGuessNumbers = true);
-
-/// <summary>The file's language resolution as it stands. A null <paramref name="Profile"/> means
-/// --lang auto has not resolved the language yet, which the next full-window decode does; an
-/// explicit --lang, and a gap-scoped run that inherits --verify's own resolution, both arrive with
-/// it already set.</summary>
-/// <param name="Profile">The resolved language profile, or null while still unresolved.</param>
-/// <param name="DetectedLanguage">What Whisper's language detector reported, if it ran.</param>
-/// <param name="DetectedProbability">Its confidence in <paramref name="DetectedLanguage"/>.</param>
-internal readonly record struct LanguageState(
-    LanguageProfile? Profile, string? DetectedLanguage, double DetectedProbability);
 
 /// <summary>One position Pass 2 may probe: the region start, a silence's end, or the start of a
 /// VAD jingle region. Exactly one of the two anchors is set, except for the region-start candidate,
@@ -309,9 +293,9 @@ internal sealed class RegionProber
     /// </summary>
     private readonly List<(ProbeCandidate Candidate, double WindowEnd)> _probedSinceLastMark = [];
 
-    /// <summary>The file's language resolution, as it stood on entry and as this region may have
-    /// advanced it (a fresh run's very first full-window decode resolves --lang auto).</summary>
-    internal LanguageState Language { get; private set; }
+    /// <summary>The file's language resolution, settled before Pass 2 started and read-only from
+    /// here - see <see cref="LanguageResolver"/>.</summary>
+    private readonly LanguageState Language;
 
     /// <summary>Whether --early-abort fired in this region: enough play time probed without a
     /// single find that further probing is pointless.</summary>
@@ -345,7 +329,7 @@ internal sealed class RegionProber
     /// <param name="region">The region to probe.</param>
     /// <param name="found">Accumulator of confirmed chapters across all regions.</param>
     /// <param name="namedFound">Accumulator of the file's prologue/epilogue marks.</param>
-    /// <param name="language">The language resolution so far.</param>
+    /// <param name="language">The file's settled language resolution.</param>
     /// <param name="progressOffsetSeconds">Offset onto the enclosing phase's time base; see
     /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
     /// <param name="sweepingSubFloorSilences">Whether this is a Pass 2.5 sub-floor sweep; see
@@ -372,9 +356,8 @@ internal sealed class RegionProber
     /// <summary>
     /// Probes every candidate of the region in chronological order, stopping early on an
     /// --early-abort or --expected-start-chapter abort. Reports its outcome through
-    /// <see cref="Language"/>, <see cref="EarlyAborted"/> and
-    /// <see cref="BelowExpectedStartNumber"/>; the marks themselves land in the accumulator this
-    /// prober was constructed with.
+    /// <see cref="EarlyAborted"/> and <see cref="BelowExpectedStartNumber"/>; the marks themselves
+    /// land in the accumulator this prober was constructed with.
     /// </summary>
     /// <param name="ct">Cancellation token.</param>
     internal async Task RunAsync(CancellationToken ct)
@@ -715,7 +698,7 @@ internal sealed class RegionProber
         // which recognizer it goes through - unlike the mender's second opinion, which is a decode
         // of its own. A pass 2.5 re-probe reaches this with SecondOpinion null and _ctx.Transcriber
         // already the heavier model, so it re-reads through that one without needing a branch here.
-        var upgradeLanguage = _env.SecondOpinion != null ? Language.Profile?.Language : null;
+        var upgradeLanguage = _env.SecondOpinion != null ? Language.Profile.Language : null;
         _env.Log?.Invoke(
             $"nothing heard in the window at {FormatTimestamp(start)}, but VAD hears speech at " +
             $"{FormatTimestamp(blip.StartSeconds)} inside its jingle - re-reading it in a shorter " +
@@ -838,14 +821,6 @@ internal sealed class RegionProber
         var decodeEnd = ExtendToPlannedSeam(plan, start);
         var samples = await _env.Audio.DecodePcmAsync(
             _ctx.File, start, decodeEnd - start, _ctx.Info.InputDecoder, ct);
-
-        if (Language.Profile == null)
-        {
-            var (profile, detected, probability) = await _env.ResolveLanguage(samples, ct);
-            Language = new LanguageState(profile, detected, probability);
-            _env.ChangeLanguage(profile.Language);
-        }
-
         var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
         var freshAbs = ShiftSegments(fresh, start);
         var cacheEnd = CacheableEnd(freshAbs, plan.End, decodeEnd);
@@ -1008,9 +983,7 @@ internal sealed class RegionProber
         if (_env.Options.IgnoreChapterNumbers)
             return marks;
 
-        // Language.Profile is resolved on the first probe, which is always a full decode (the cache
-        // is empty then), so it is non-null by the time any transcript-reuse branch can run.
-        foreach (var heard in _env.FindCappedPhraseMatches(segments, Language.Profile!, mergeBoundarySegIndex))
+        foreach (var heard in _env.FindCappedPhraseMatches(segments, Language.Profile, mergeBoundarySegIndex))
         {
             var match = heard;
             var phraseAbs = start + match.PhraseStartSeconds;
@@ -1021,7 +994,7 @@ internal sealed class RegionProber
             // did - including rejecting it.
             if (_ctx.SecondGuessNumbers &&
                 await _mender.MendAsync(
-                    match, Language.Profile!, start, windowEnd, SequenceBounds(windowLast), ct) is { } mended)
+                    match, Language.Profile, start, windowEnd, SequenceBounds(windowLast), ct) is { } mended)
                 match = match with { Number = mended };
             if (IsOutOfSequence(match, phraseAbs, windowLast))
                 continue;
@@ -1108,7 +1081,7 @@ internal sealed class RegionProber
 
         var queued = false;
         var windowLast = _lastNumber ?? 0;
-        foreach (var heard in FindUnnumberedAnnouncements(segments, Language.Profile!))
+        foreach (var heard in FindUnnumberedAnnouncements(segments, Language.Profile))
         {
             var phraseAbs = start + heard.PhraseStartSeconds;
             _env.Log?.Invoke(
@@ -1124,7 +1097,7 @@ internal sealed class RegionProber
                 continue;
             _unnumberedMends++;
             if (await _mender.ReadUnnumberedAsync(
-                    heard, Language.Profile!, start, windowEnd, SequenceBounds(windowLast), ct)
+                    heard, Language.Profile, start, windowEnd, SequenceBounds(windowLast), ct)
                 is not { } number)
                 continue;
 
@@ -1163,7 +1136,7 @@ internal sealed class RegionProber
         ProbeCandidate candidate, double start, double windowEnd, List<TranscriptSegment> segments,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
-        foreach (var match in FindNamedMatches(segments, Language.Profile!))
+        foreach (var match in FindNamedMatches(segments, Language.Profile))
         {
             if (!IsInScope(match.Phrase))
                 continue;
@@ -1175,7 +1148,7 @@ internal sealed class RegionProber
 
         // After the prologue/epilogue pass, so that a window holding both a scoped announcement and
         // a chapter still resolves the scoped one against the chapter count it had on arrival.
-        foreach (var match in FindChapterAnnouncements(segments, Language.Profile!))
+        foreach (var match in FindChapterAnnouncements(segments, Language.Profile))
             await AcceptNamedMatchAsync(match, candidate, start, windowEnd, trimmedAbs, ct);
     }
 
@@ -1211,7 +1184,7 @@ internal sealed class RegionProber
 
     /// <summary><see cref="NamedPhrase.Kind"/> of the synthetic chapter phrase, the one named kind
     /// that is exempt from the <c>--custom</c> mark cap.</summary>
-    private string ChapterKind => Language.Profile!.ChapterAnnouncement.Kind;
+    private string ChapterKind => Language.Profile.ChapterAnnouncement.Kind;
 
     /// <summary>
     /// Places, logs and records one in-scope named match - unless <see cref="ShouldDropNamedMatch"/>
@@ -1251,7 +1224,7 @@ internal sealed class RegionProber
         var (time, markSilence, markRegion) = placement;
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
-            Language.Profile!.Language);
+            Language.Profile.Language);
         time = (await _env.Marks.PlaceAsync(
             null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct))
             .TimeSeconds;
@@ -1396,11 +1369,11 @@ internal sealed class RegionProber
             return null;
         var (time, markSilence, markRegion) = placement;
 
-        var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile!.PhraseRegex,
+        var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile.PhraseRegex,
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
-            Language.Profile!.Language);
+            Language.Profile.Language);
         var placed = await _env.Marks.PlaceAsync(
-            new NumberCheck(match.Number, Language.Profile!, SequenceBounds(windowLast)),
+            new NumberCheck(match.Number, Language.Profile, SequenceBounds(windowLast)),
             time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct);
         // Placement may have re-read the number out of the refinement's own probes, so everything
         // below reports and records what those settled on rather than what the window heard.

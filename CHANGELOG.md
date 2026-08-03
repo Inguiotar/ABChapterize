@@ -11,6 +11,38 @@ using; a **minor** release brings significant new features and may change or rem
 something you relied on, so skim its notes before upgrading a script; a **major**
 release means the thing has become a different program.
 
+## [0.11.0] — unreleased
+
+### Fixed
+
+- **Automatic language detection no longer listens to the label music.** With
+  `--lang auto`, a file's language was decided from the very start of the book — which
+  on an audiobook is a label jingle, a copyright card or a title read over a bed at
+  least as often as it is narration. A book whose opening seconds said nothing useful
+  could be run in the wrong language from beginning to end, and that costs far more
+  than a mistitled chapter: the language supplies the phrase every pass searches for,
+  so a German book taken for an English one is looking for "chapter" and cannot see
+  "Kapitel" at all. Chapters go missing, and the passes that hunt for them spend a
+  long time doing it. Detection now samples narration from inside the book instead.
+
+### Changed
+
+- **A doubtful language reading is now re-checked elsewhere in the book.** One weak
+  sample is no longer acted on: a sample can land on a song, a shouted exchange or a
+  passage quoted in another language. Up to five samples are taken from different
+  parts of the file, stopping at the first confident one; if none of them is
+  confident, the language named most often wins, and only a genuine tie falls back to
+  English. Five quiet agreements that a book is German are worth more than any one of
+  them alone. Costs a few seconds per file, and only where the first sample was
+  already in doubt.
+
+- **`--debug` starts a fresh log for every run.** Previously each run appended to
+  whatever log was already beside the audiobook. One run per file makes the log
+  searchable again — a hit no longer belongs to who-knows-which run — and lets two
+  runs be compared by diffing their logs, which is the usual way of showing a change
+  moved nothing. Copy a debug log aside before re-running a book if you want to keep
+  it. `--log-file` is unchanged and still appends.
+
 ## [0.10.0] — 2026-08-03
 
 ### Changed

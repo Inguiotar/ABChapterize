@@ -83,12 +83,13 @@ public readonly record struct DetectionStats(
 /// <see cref="DetectionTuning.LowConfidenceThreshold"/> - worth a manual spot-check.</param>
 /// <param name="Profile">The language profile actually used for this file - the resolved per-file
 /// profile with <c>--lang auto</c>, else the run's fixed <see cref="CliOptions.DefaultProfile"/>.</param>
-/// <param name="DetectedLanguage">Whisper's raw language guess with <c>--lang auto</c>; null when
-/// auto-detection was not active, or was skipped because the file was too short to probe.</param>
+/// <param name="DetectedLanguage">Whisper's raw language guess with <c>--lang auto</c> - the sample
+/// that settled the file, or the strongest of the samples that failed to; null when auto-detection
+/// was not active, or found nothing decodable to probe.</param>
 /// <param name="DetectedProbability">Whisper's probability for <paramref name="DetectedLanguage"/>;
-/// 0 when that is null. May disagree with <see cref="Profile"/>'s language, when the probability
-/// fell below <see cref="DetectionTuning.AutoLanguageProbabilityThreshold"/> and the run fell back
-/// to English.</param>
+/// 0 when that is null. May disagree with <see cref="Profile"/>'s language, which is the case worth
+/// looking at: it means <see cref="LanguageResolver"/> overruled the strongest single reading, by
+/// vote or by the English fallback.</param>
 /// <param name="Stats">Per-file diagnostic statistics (min preceding silence, max jingle, total
 /// Whisper audio) for the --verbose and --summary reports.</param>
 /// <param name="EarlyAborted">True when --early-abort cut detection short because no chapter was

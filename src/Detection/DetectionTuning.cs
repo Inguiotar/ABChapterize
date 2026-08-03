@@ -750,11 +750,53 @@ internal static class DetectionTuning
     internal const double CollidingChapterMarkSeconds = NamedMarkDedupeSeconds / 2;
 
     /// <summary>
-    /// Whisper language-detection probability below which the result counts as inconclusive and
-    /// the file falls back to English, with <c>--lang auto</c>. Reuses
-    /// <see cref="LowConfidenceThreshold"/>'s cutoff for the same reason.
+    /// Whisper language-detection probability at or above which a single probe settles the file's
+    /// language outright, with <c>--lang auto</c>. Below it the sample is re-taken elsewhere in the
+    /// book (see <see cref="AutoLanguageProbeAttempts"/>) and, if nothing ever clears the bar, the
+    /// attempts are voted on.
+    /// <para>
+    /// Raised from 0.5 to 0.6 on 2026-08-03. The old value was <see cref="LowConfidenceThreshold"/>
+    /// borrowed for a question it does not really describe, and it was never the binding problem:
+    /// "Das Mutantenkorps" resolved to English off a single 0.36 answer, which fails either bar.
+    /// What changed is that falling below the bar is now cheap - it costs another probe rather than
+    /// the whole book - so the bar may as well sit where a weak answer stops being worth believing.
+    /// </para>
     /// </summary>
-    internal const double AutoLanguageProbabilityThreshold = 0.5;
+    internal const double AutoLanguageProbabilityThreshold = 0.6;
+
+    /// <summary>
+    /// How many language-detection samples one file may take before the vote decides it. Each
+    /// costs a short decode and one detector call - trivial next to a single probe window's
+    /// transcription, and the reason re-probing is affordable at all - but five spread across a
+    /// book is already enough to outvote any one unrepresentative stretch, and a sixth would be
+    /// answering a question the first five did not settle.
+    /// </summary>
+    internal const int AutoLanguageProbeAttempts = 5;
+
+    /// <summary>Length of one language-detection sample. Whisper's detector reads a single 30 s
+    /// mel window and ignores anything past it, so a longer decode would be discarded audio and a
+    /// shorter one would leave the window padded with silence.</summary>
+    internal const double AutoLanguageProbeSeconds = 30;
+
+    /// <summary>
+    /// How much of an <see cref="AutoLanguageProbeSeconds"/> window must be speech for it to be
+    /// worth sampling - half of it, which no jingle, credit roll or scene of sound effects reaches
+    /// and ordinary narration clears easily.
+    /// <para>
+    /// Measured over the window rather than demanded of one contiguous VAD run, which is the
+    /// version this replaced and was wrong in practice: raw VAD segments are sentence-sized (13779
+    /// of them in "Das Mutantenkorps", averaging 4 s), so a 20 s unbroken run is rare enough that
+    /// the search for one walked 80 minutes away from the anchor it was supposed to sample near.
+    /// A window that is half speech is what "this is narration" actually means; whether the reader
+    /// paused for breath inside it does not matter, since the detector reads the whole 30 s.
+    /// </para>
+    /// </summary>
+    internal const double AutoLanguageMinSpeechInWindowSeconds = AutoLanguageProbeSeconds / 2;
+
+    /// <summary>How far past a pre-existing chapter marking a language-detection sample starts, on
+    /// the --verify and resume paths. Clears the announcement and the jingle around it, landing the
+    /// window in the chapter's own narration.</summary>
+    internal const double AutoLanguageMarkingOffsetSeconds = 20;
 
     /// <summary>
     /// Minimum length of the leading region (file start to the first detected chapter) for pass 3

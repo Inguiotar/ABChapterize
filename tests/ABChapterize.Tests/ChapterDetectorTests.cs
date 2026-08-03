@@ -230,8 +230,21 @@ public sealed class ChapterDetectorTests : IDisposable
             return Task.FromResult(segments);
         }
 
-        /// <summary>Language auto-detection result to return; defaults to a confident "en".</summary>
+        /// <summary>Language auto-detection result to return; defaults to a confident "en". Every
+        /// call answers the same, which is what a test about anything other than language
+        /// resolution wants - see <see cref="LanguageAnswers"/> for the other case.</summary>
         public (string Language, float Probability) DetectedLanguage { get; set; } = ("en", 0.99f);
+
+        /// <summary>
+        /// Per-call language answers, consumed in order and taking precedence over
+        /// <see cref="DetectedLanguage"/> while any remain. This is what makes
+        /// <see cref="LanguageResolver"/>'s re-probing testable at all: its whole subject is a
+        /// detector that answers differently at different points in the same book, which a single
+        /// fixed answer cannot express. Running out falls back to
+        /// <see cref="DetectedLanguage"/> rather than throwing, so a script may cover just the
+        /// first few probes.
+        /// </summary>
+        public Queue<(string Language, float Probability)> LanguageAnswers { get; } = new();
 
         /// <summary>Languages this transcriber was told to switch to, in call order.</summary>
         public List<string> LanguageChanges { get; } = [];
@@ -243,7 +256,7 @@ public sealed class ChapterDetectorTests : IDisposable
         public Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct)
         {
             DetectLanguageCalls++;
-            return Task.FromResult(DetectedLanguage);
+            return Task.FromResult(LanguageAnswers.Count > 0 ? LanguageAnswers.Dequeue() : DetectedLanguage);
         }
 
         /// <inheritdoc/>
@@ -966,9 +979,11 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.EarlyAborted);
         Assert.Empty(result.Chapters);
-        // Candidates at 0 and 300 s are probed (both under the 600 s/10 min threshold);
-        // the candidate at 600 s triggers the abort before it is ever probed.
-        Assert.Equal([0.0, 300.0], audio.DecodeStarts);
+        // 720 s is the language sample LanguageResolver takes before Pass 2 begins - a fifth of the
+        // way into the file, not a candidate. After it, candidates at 0 and 300 s are probed (both
+        // under the 600 s/10 min threshold); the candidate at 600 s triggers the abort before it is
+        // ever probed.
+        Assert.Equal([720.0, 0.0, 300.0], audio.DecodeStarts);
     }
 
     [Fact]
@@ -5114,14 +5129,94 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task AutoLanguage_FallsBackToEnglish_WhenDetectionIsBelowThreshold()
+    public async Task AutoLanguage_SamplesNarration_NotTheFilesOpeningSeconds()
     {
+        // The regression this whole path exists for ("Das Mutantenkorps", 2026-08-03): the language
+        // sample used to be the first probe window, i.e. the file from 0 - which on an audiobook is
+        // label music often enough to matter. It must now come from somewhere inside the book.
+        var (_, transcriber, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.DetectedLanguage = ("de", 0.9f);
+                s.Add(0, Seg(0.5, " Erstes Kapitel."));
+            });
+
+        Assert.Equal(1, transcriber.DetectLanguageCalls);
+        Assert.Equal(0.2 * Duration, audio.DecodeStarts[0]); // the first anchor, a fifth in
+        Assert.NotEqual(0.0, audio.DecodeStarts[0]);
+    }
+
+    [Fact]
+    public async Task AutoLanguage_ReProbesElsewhere_UntilOneSampleClearsTheThreshold()
+    {
+        // Two weak answers, then a confident one. The confident one settles the file and stops the
+        // loop, so the two doubtful readings never get a vote - which is the point of re-probing
+        // rather than voting on whatever the first sample happened to say.
+        var (result, transcriber, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.LanguageAnswers.Enqueue(("en", 0.35f));
+                s.LanguageAnswers.Enqueue(("fr", 0.5f)); // still under 0.6
+                s.LanguageAnswers.Enqueue(("de", 0.88f));
+                s.Add(0, Seg(0.5, " Erstes Kapitel."));
+                s.Add(600, Seg(0.3, " Zweites Kapitel."));
+            });
+
+        Assert.Equal(3, transcriber.DetectLanguageCalls);
+        Assert.Equal("de", result.Profile.Language);
+        Assert.Equal(0.88, result.DetectedProbability, 3);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        // Three different places in the book, not three reads of the same audio.
+        Assert.Equal(3, audio.DecodeStarts.Take(3).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task AutoLanguage_StopsAfterFiveProbes_AndTakesThePluralityVote()
+    {
+        // Nothing ever clears 0.6, so all five samples vote. German leads 3-2 and wins, even though
+        // no single probe was ever confident enough to be believed on its own.
+        var (result, transcriber) = await DetectWithTranscriberAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.LanguageAnswers.Enqueue(("de", 0.4f));
+                s.LanguageAnswers.Enqueue(("en", 0.55f));
+                s.LanguageAnswers.Enqueue(("de", 0.45f));
+                s.LanguageAnswers.Enqueue(("en", 0.3f));
+                s.LanguageAnswers.Enqueue(("de", 0.5f));
+                s.LanguageAnswers.Enqueue(("de", 0.99f)); // never asked for: the cap is five
+                s.Add(0, Seg(0.5, " Erstes Kapitel."));
+                s.Add(600, Seg(0.3, " Zweites Kapitel."));
+            });
+
+        Assert.Equal(5, transcriber.DetectLanguageCalls);
+        Assert.Equal("de", result.Profile.Language);
+        Assert.Equal("Kapitel", result.Profile.Title);
+        Assert.Equal("de", result.DetectedLanguage);
+        Assert.Equal(0.5, result.DetectedProbability, 3); // the winner's best, not the vote's
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task AutoLanguage_FallsBackToEnglish_WhenTheVoteTies()
+    {
+        // Two languages level at the top: the samples disagree and nothing breaks the deadlock, so
+        // there is no signal to act on and English is all that is left.
         var (result, _) = await DetectWithTranscriberAsync(
             Options("--max-jingle-length", "0"),
             [new(595, 600)],
             s =>
             {
-                s.DetectedLanguage = ("tr", 0.3f); // below the 0.5 threshold
+                s.LanguageAnswers.Enqueue(("tr", 0.3f));
+                s.LanguageAnswers.Enqueue(("nl", 0.45f));
+                s.LanguageAnswers.Enqueue(("tr", 0.35f));
+                s.LanguageAnswers.Enqueue(("nl", 0.4f));
+                s.LanguageAnswers.Enqueue(("pl", 0.2f));
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
@@ -5129,8 +5224,29 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
         Assert.Equal("en", result.Profile.Language);
         Assert.Equal("Chapter", result.Profile.Title);
-        Assert.Equal("tr", result.DetectedLanguage); // the raw guess is still reported
-        Assert.Equal(0.3, result.DetectedProbability, 3);
+        // The strongest raw guess is still reported, disagreeing with the profile on purpose.
+        Assert.Equal("nl", result.DetectedLanguage);
+        Assert.Equal(0.45, result.DetectedProbability, 3);
+    }
+
+    [Fact]
+    public async Task AutoLanguage_UnanimousWeakSamples_StillDecideTheLanguage()
+    {
+        // The single-sample version of this was the old behaviour's worst case: one 0.36 reading
+        // was enough to run a German book as English. Five agreeing reads of the same strength now
+        // decide it, none of them individually convincing.
+        var (result, _) = await DetectWithTranscriberAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s =>
+            {
+                s.DetectedLanguage = ("de", 0.36f);
+                s.Add(0, Seg(0.5, " Erstes Kapitel."));
+                s.Add(600, Seg(0.3, " Zweites Kapitel."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
+        Assert.Equal("de", result.Profile.Language);
     }
 
     [Fact]

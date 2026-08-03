@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-using System.Text;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Errors;
@@ -24,10 +23,14 @@ namespace ABChapterize.Ui;
 /// is what makes the rest of the file interpretable.
 /// </para>
 /// <para>
-/// The I/O itself is <see cref="LogFile"/>'s, deliberately: append rather than truncate, a flush per
-/// line, and a dated header per run. A debug log is written precisely because something is going
-/// wrong, so the two failure modes that matter - losing the previous attempt's record, and losing
-/// the tail of a run that ended badly - are the ones already ruled out there.
+/// The I/O itself is <see cref="LogFile"/>'s, with a flush per line so the tail of a run that ended
+/// badly survives - but opened with <c>append: false</c>, unlike a <c>--log-file</c>. A debug log
+/// holds one run: it is read by searching it (for a timestamp, a chapter number, a phrase Whisper
+/// returned), and every one of those searches gets harder when a file holds several runs, because a
+/// hit no longer says which run it came from. Re-running a book after a change and diffing the two
+/// logs - the standard way of proving a change moved nothing - stops working entirely once the
+/// second log is the first one with more text on the end. The previous run's log is therefore
+/// overwritten, so anything worth keeping across a re-run has to be copied aside first.
 /// </para>
 /// </summary>
 public sealed class DebugLog : IDisposable
@@ -67,10 +70,10 @@ public sealed class DebugLog : IDisposable
     public void FollowTo(string file) => _moveTo = PathFor(file);
 
     /// <summary>
-    /// Performs the deferred <see cref="FollowTo"/> move. An existing log at the destination is
-    /// appended to rather than replaced: it belongs to the same book under the same name, written
-    /// by the earlier run that left the tag behind, and losing it is the one failure a debug log
-    /// must not have (the same bargain <see cref="LogFile"/> makes by appending).
+    /// Performs the deferred <see cref="FollowTo"/> move, replacing any log already at the
+    /// destination. That one was written by the earlier run which left the <c>.missing-marks</c>
+    /// tag behind - i.e. by the run this one supersedes - so keeping it would reintroduce exactly
+    /// the multi-run file the truncating open exists to avoid.
     /// </summary>
     /// <exception cref="AppError">The move failed - the destination is open in an editor, say.
     /// Reported rather than swallowed: a run asked to keep a record does not get to decide
@@ -81,15 +84,7 @@ public sealed class DebugLog : IDisposable
             return;
         try
         {
-            if (File.Exists(target))
-            {
-                File.AppendAllText(target, File.ReadAllText(_path), new UTF8Encoding(false));
-                File.Delete(_path);
-            }
-            else
-            {
-                File.Move(_path, target);
-            }
+            File.Move(_path, target, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -98,8 +93,9 @@ public sealed class DebugLog : IDisposable
     }
 
     /// <summary>
-    /// Opens (or creates) one file's debug log and writes its header: the run's own banner, the file
-    /// being processed, what ffprobe found in it, and the settings in force.
+    /// Creates one file's debug log - truncating any log left by an earlier run, see this class's
+    /// remarks - and writes its header: the run's own banner, the file being processed, what ffprobe
+    /// found in it, and the settings in force.
     /// </summary>
     /// <param name="file">Path of the audio file the log belongs to.</param>
     /// <param name="options">The run's validated options, already localized by <c>--lang</c>.</param>
@@ -110,7 +106,7 @@ public sealed class DebugLog : IDisposable
     public static DebugLog Open(string file, CliOptions options, MediaInfo info)
     {
         var path = PathFor(file);
-        var log = new DebugLog(LogFile.Open(path), path);
+        var log = new DebugLog(LogFile.Open(path, append: false), path);
         log.Write($"file: {file}");
         log.Write($"media: duration {TimeFormat.Hms(info.DurationSeconds)}, {info.SizeBytes} bytes, " +
                   $"codec {info.AudioCodec}" + (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +

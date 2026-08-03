@@ -407,9 +407,8 @@ An unnumbered tagged file is never picked up automatically, so redoing it means
 partial markings). Whichever way it happens, *any* run that ends with a
 complete chapter sequence takes the tag off again and gives the file its own
 name back — the tag records work still to be done, and there is none left.
-With `--debug`, the log written beside the file follows it to that name;
-if a log is already sitting there from the run that left the tag, the new one
-is appended to it rather than replacing it.
+With `--debug`, the log written beside the file follows it to that name,
+replacing any log already sitting there from the run that left the tag.
 
 ### Prologue and epilogue
 
@@ -916,25 +915,37 @@ language is detected independently, so a directory containing audiobooks in
 several languages is processed correctly in one run without per-file options.
 
 It happens once per file, right after the silence scan (pass 1) and before
-any transcription: the audio already decoded for the very first probe window
-(the start of the file) is also handed to Whisper's own language detector,
-which answers with a language code and a probability - so this costs no extra
-decode and no separate model. The answer is then fixed for the rest of that
-file rather than re-detected per probe, which would be slower and could
-disagree with itself partway through a book.
+any transcription. Short samples are taken from inside the book - never from
+its opening seconds, which on an audiobook are label music, a copyright card
+or a title read over a bed at least as often as they are narration - and each
+is handed to Whisper's own language detector, which answers with a language
+code and a probability. The answer is then fixed for the rest of that file
+rather than re-detected per probe, which would be slower and could disagree
+with itself partway through a book.
 
-- At or above a probability of 0.5, the detected language is used, and
-  the chapter/prologue/epilogue phrases and all title words are localized
-  for it (see [section 7](#7-languages-and-number-recognition)) exactly as an
-  explicit `--lang <code>` would, but resolved individually per file.
-- Below 0.5, or when the clip at the start of the file is too short to
-  probe (well under half a second of audio), the detection is treated as
-  inconclusive and the run falls back to `en` for that file - the same
-  0.5 cutoff used for flagging low-confidence chapter marks (see
-  [section 12](#12-output-progress-and-logging)), since Whisper itself is,
-  on average, more unsure than sure below it.
+- At or above a probability of 0.6, that sample settles the file. The
+  chapter/prologue/epilogue phrases and all title words are localized for the
+  detected language (see [section 7](#7-languages-and-number-recognition))
+  exactly as an explicit `--lang <code>` would, but resolved individually per
+  file.
+- Below 0.6, another sample is taken from a different part of the book, up to
+  five in all, stopping at the first one that clears the bar. A single weak
+  reading is not acted on: a sample can land on a song, a shouted exchange or
+  a passage quoted in another language, and re-listening elsewhere costs a
+  few seconds.
+- If none of the five clears 0.6, the language named most often across them
+  wins. This matters more than it sounds - five quiet agreements that a book
+  is German are worth more than any one of them alone.
+- Only when two languages tie for first place, or nothing decodable could be
+  sampled at all, does the file fall back to `en`.
 - An explicitly given phrase or title option always wins over the localized
   default, regardless of the detected language.
+
+Getting this wrong is worth more than a mistitled chapter: the resolved
+language supplies the phrase every pass searches for, so a German book taken
+for an English one is looking for "chapter" and cannot see "Kapitel" at all.
+If the result line's language looks wrong for a book, re-run it with an
+explicit `--lang <code>` before investigating anything else.
 
 The outcome is shown in the per-file result line, `--dry-run` listing and
 `--verbose` log:
@@ -948,13 +959,21 @@ book.m4b: 8 chapter(s) written (1-8) + intro, language: en (p=0.98)
 `--verbose` additionally logs the detection as it happens:
 
 ```
-[14:02:11] buch.m4b: language auto-detected: de (p=1.00)
+[14:02:11] buch.m4b: language auto-detected: de (p=1.00) from the sample at 1:52:18.40
 ```
 
-or, when the run fell back to English:
+or, when the first samples were doubtful and the vote decided it:
 
 ```
-[14:03:40] book.m4b: language auto-detection inconclusive (tr p=0.31); falling back to en
+[14:03:38] book.m4b: language probe at 1:41:07.10 inconclusive: de (p=0.44, below 0.60)
+[14:03:41] book.m4b: language probe at 3:47:41.85 inconclusive: en (p=0.51, below 0.60)
+[14:03:52] book.m4b: language auto-detection inconclusive after 5 probe(s) (de x3, en x2); majority vote -> de (best p=0.50)
+```
+
+or, when nothing could be agreed on at all:
+
+```
+[14:05:10] book.m4b: language auto-detection inconclusive after 5 probe(s) (tr x2, nl x2, pl x1); no majority, falling back to en
 ```
 
 Pin a fixed language with `--lang <code>` to skip per-file detection
@@ -1983,6 +2002,11 @@ It switches logging on by itself and leaves the console alone, so
 `--debug` on its own gives you a quiet run and a full file. Expect a few MB
 per audiobook.
 
+Unlike `--log-file`, each run starts its debug log over: the file holds one
+run, so a search through it cannot land on a line from a different one, and
+two runs can be compared by diffing their logs. Copy one aside before
+re-running a book if you want to keep it.
+
 This is the option to reach for when a single mark landed somewhere
 inexplicable and `-T` has not settled why — everything needed to reconstruct
 the decision after the fact is in there, which is otherwise a matter of
@@ -2019,9 +2043,10 @@ files are cleaned up on the way out.
 **"No chapter phrases found"** — run with `--verbose` and read what Whisper
 actually transcribed. Typical causes: the announcements use a different word
 (fix with `--chapter-phrase`), the language is wrong (with `--lang auto`,
-check the "language used" note in the result line - the auto-detection may
-have picked the wrong language or fallen back to `en`; pin it with an
-explicit `--lang` if so), the pauses are shorter than `--min-silence-length`
+check the "language used" note in the result line - the samples may have
+agreed on the wrong language or failed to agree at all and fallen back to
+`en`; pin it with an explicit `--lang` if so), the pauses are shorter than
+`--min-silence-length`
 (lower `-n`), or the jingle runs longer than the default 45 s ceiling (raise
 `--max-jingle-length`).
 
