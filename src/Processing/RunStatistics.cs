@@ -39,15 +39,18 @@ internal sealed class RunStatistics
     internal static string FormatTime(TimeSpan t) => TimeFormat.Duration(t);
 
     /// <summary>
-    /// Builds the ", backup kept" (or "...replaced pre-existing backup") clause appended to a
-    /// per-file summary line. A pre-existing "*.bak" is never treated as an error - see
-    /// <see cref="FfmpegClient.WriteChaptersAsync"/> - it is simply replaced, which is called
-    /// out here so it stays visible without needing --verbose.
+    /// Builds the ", backup kept" clause appended to a per-file summary line. A pre-existing "*.bak"
+    /// is never an error - see <see cref="FfmpegClient.WriteChaptersAsync"/> - it is left exactly as
+    /// it is, and the wording says so without needing --verbose. Worth the extra words on the line:
+    /// the backup then predates this run, so what it restores is not what the file looked like an
+    /// hour ago, and a user who assumes otherwise finds out only after reverting.
     /// </summary>
     /// <param name="backupEnabled">--backup itself.</param>
-    /// <param name="existingReplaced">The value <see cref="FfmpegClient.WriteChaptersAsync"/> returned.</param>
-    internal static string FormatBackupNote(bool backupEnabled, bool existingReplaced)
-        => backupEnabled ? (existingReplaced ? ", backup kept (replaced pre-existing backup)" : ", backup kept") : "";
+    /// <param name="earlierKept">The value <see cref="FfmpegClient.WriteChaptersAsync"/> returned.</param>
+    internal static string FormatBackupNote(bool backupEnabled, bool earlierKept)
+        => backupEnabled
+            ? (earlierKept ? ", earlier backup kept (predates this run)" : ", backup kept")
+            : "";
 
     /// <summary>Formats a chapter mark position as h:mm:ss.ff for the --dry-run listing.</summary>
     /// <param name="seconds">Position in seconds.</param>

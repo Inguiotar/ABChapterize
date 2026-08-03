@@ -1168,12 +1168,12 @@ public sealed partial class FileProcessor
     private async Task<string> CommitChaptersAsync(
         FileContext ctx, List<Chapter> chapters, string? renameTo, CancellationToken ct)
     {
-        var bakReplaced = await ctx.Ffmpeg.WriteChaptersAsync(
+        var earlierBakKept = await ctx.Ffmpeg.WriteChaptersAsync(
             ctx.File, chapters, ctx.Info.DurationSeconds, _options.Backup,
             BeginMuxingPhase(ctx.Work, ctx.Info), ct);
         if (renameTo != null)
             File.Move(ctx.File, renameTo, overwrite: true);
-        return FormatBackupNote(_options.Backup, bakReplaced);
+        return FormatBackupNote(_options.Backup, earlierBakKept);
     }
 
     /// <summary>Formats the indented "&lt;timestamp&gt;  &lt;title&gt;" block every --dry-run

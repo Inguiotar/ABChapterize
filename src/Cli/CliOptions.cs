@@ -1727,7 +1727,8 @@ public sealed class CliOptions
                                     of FFMETADATA for --export/--import. Requires one of them.
 
         File & backup management:
-          -b, --backup              Keep the original file with the added suffix ".bak".
+          -b, --backup              Keep the original file with the added suffix ".bak". A .bak
+                                    left by an earlier run is kept as it is, not replaced.
           -R, --revert              Restore backups: for every supported audio file with an
                                     added ".bak" suffix, delete the corresponding original and
                                     rename the .bak file back. Combinable with --recurse,

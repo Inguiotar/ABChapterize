@@ -532,11 +532,14 @@ without `--backup`, even on a crash or power failure mid-write:
    the original (within 2 seconds) and it must contain exactly the expected
    number of chapters. If verification fails, the original is untouched.
 4. Only then is the original replaced:
-   - with `--backup`: the original is renamed to `<name>.<ext>.bak`, then the
-     new file takes its place (with rollback if that rename fails);
-   - without `--backup`: the original is parked as `<name>.abchapterize.orig`,
-     the new file takes its place, and only then is the parked original
-     deleted (again with rollback on failure).
+   - with `--backup` and no `.bak` there yet: the original is renamed to
+     `<name>.<ext>.bak`, then the new file takes its place (with rollback if
+     that rename fails);
+   - without `--backup`, and with it when a `.bak` from an earlier run is
+     already there: the original is parked as `<name>.abchapterize.orig`, the
+     new file takes its place, and only then is the parked original deleted
+     (again with rollback on failure). An existing backup is never overwritten
+     — see [`--backup`](#safety-and-undo).
 
 Temporary files (`*.abchapterize.*`) are cleaned up afterwards and are always
 excluded from directory scans. If a power failure ever leaves one behind,
@@ -1118,8 +1121,12 @@ skipped (reported as "skipped").
 
 `-b`, `--backup`
 : Keep the original file as `<name>.<ext>.bak` next to the modified file.
-  A `.bak` file already left behind by an earlier run is not an error - it is
-  simply replaced, and the summary line notes that it was.
+  A `.bak` left behind by an earlier run is not an error, and is **kept
+  exactly as it is** - so however many times a book is re-run, the backup
+  stays the copy from before the first one, which is the state worth being
+  able to get back to. This run's own original is discarded instead, and the
+  summary line says `earlier backup kept (predates this run)` so it is clear
+  that `--revert` will not simply undo the last run.
 
 `-R`, `--revert`
 : Restore backups instead of processing: for every supported audio file with

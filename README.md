@@ -271,7 +271,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 
 | Option | What it does |
 | --- | --- |
-| `-b`, `--backup` | Keep the original file as `*.bak`. |
+| `-b`, `--backup` | Keep the original file as `*.bak`. A `*.bak` from an earlier run is kept as it is, never overwritten. |
 | `-R`, `--revert` | Restore all `*.bak` backups (undo). |
 | `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter`; combinable only with `--recurse` and the output options. |
 | `--ignore-progress` | Start every listed folder over instead of resuming it. While a folder is being processed, the files finished so far are recorded in an `.abchapterize-progress` file inside it, which is deleted again as soon as that folder is done — so an interrupted run resumes by itself when the same command is run again. Progress recorded under different options is discarded automatically, so this is only needed to redo files the very same command already finished. |

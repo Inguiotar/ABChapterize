@@ -442,8 +442,9 @@ public sealed partial class FfmpegClient : IAudioSource
     /// <param name="progress">Called with ffmpeg's processed play time in seconds, parsed from
     /// its "-progress" output; null to skip progress reporting.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>True when <paramref name="backup"/> is set and a "*.bak" file from an earlier
-    /// run already existed - it was replaced, not treated as an error.</returns>
+    /// <returns>True when <paramref name="backup"/> is set and a "*.bak" file from an earlier run
+    /// already existed - it is kept as it was and this file's original discarded, never an error.
+    /// See <see cref="SwapInto"/> for why that way round.</returns>
     public async Task<bool> WriteChaptersAsync(
         string file, IReadOnlyList<Chapter> chapters, double durationSeconds,
         bool backup, Action<double>? progress, CancellationToken ct)
@@ -489,19 +490,36 @@ public sealed partial class FfmpegClient : IAudioSource
     }
 
     /// <summary>
-    /// Replaces <paramref name="file"/> with <paramref name="tmpFile"/>. With backup the original
-    /// is renamed to "*.bak", replacing a pre-existing one of the same name rather than erroring
-    /// out on it (see the return value); otherwise it is parked under a temporary name and only
-    /// deleted after the new file is in place, with rollback on failure.
+    /// Replaces <paramref name="file"/> with <paramref name="tmpFile"/>. Without backup - and with
+    /// it, when the backup this run would write already exists - the original is parked under a
+    /// temporary name and only deleted once the new file is in place, with rollback on failure.
+    /// Otherwise it becomes the "*.bak".
+    /// <para>
+    /// A pre-existing "*.bak" is kept, not overwritten. It is the file as it stood before whichever
+    /// earlier run first backed it up, which is the state a user actually wants to be able to get
+    /// back to; the file being replaced here is that run's *output*, and overwriting the backup with
+    /// it would quietly turn "undo everything this tool did" into "undo the last run only" - and do
+    /// so on the second run, invisibly, exactly when a re-run means the first result was unsatisfactory.
+    /// The one-line cost is that the backup no longer pairs with this run's original, which is why
+    /// <see cref="ABChapterize.Processing.RunStatistics.FormatBackupNote"/> says so on the file's
+    /// summary line rather than leaving it to be discovered.
+    /// </para>
     /// </summary>
-    /// <returns>True when an already-existing "*.bak" file was replaced by this call.</returns>
-    private static bool SwapInto(string file, string tmpFile, bool backup)
+    /// <param name="file">Path of the file being replaced.</param>
+    /// <param name="tmpFile">The verified new file to swap in.</param>
+    /// <param name="backup">Whether --backup asked for the original to be kept.</param>
+    /// <returns>True when a "*.bak" from an earlier run was found and left alone.</returns>
+    /// <remarks>Internal for unit testing: which bytes end up where is the whole substance of
+    /// this method, and reaching it through <see cref="WriteChaptersAsync"/> would need a real
+    /// ffmpeg and a real audiobook to answer a question that is pure file shuffling.</remarks>
+    internal static bool SwapInto(string file, string tmpFile, bool backup)
     {
-        if (backup)
+        var bak = file + ".bak";
+        var earlierBakKept = backup && File.Exists(bak);
+
+        if (backup && !earlierBakKept)
         {
-            var bak = file + ".bak";
-            var existingBakReplaced = File.Exists(bak);
-            File.Move(file, bak, overwrite: true);
+            File.Move(file, bak);
             try
             {
                 File.Move(tmpFile, file);
@@ -511,24 +529,22 @@ public sealed partial class FfmpegClient : IAudioSource
                 File.Move(bak, file, overwrite: true); // roll back
                 throw;
             }
-            return existingBakReplaced;
-        }
-        else
-        {
-            var parked = file + ".abchapterize.orig";
-            File.Move(file, parked);
-            try
-            {
-                File.Move(tmpFile, file);
-            }
-            catch
-            {
-                File.Move(parked, file); // roll back
-                throw;
-            }
-            File.Delete(parked);
             return false;
         }
+
+        var parked = file + ".abchapterize.orig";
+        File.Move(file, parked);
+        try
+        {
+            File.Move(tmpFile, file);
+        }
+        catch
+        {
+            File.Move(parked, file); // roll back
+            throw;
+        }
+        File.Delete(parked);
+        return earlierBakKept;
     }
 
     /// <summary>Builds an FFMETADATA1 document containing only the chapter list.

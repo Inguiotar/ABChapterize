@@ -11,7 +11,7 @@ using; a **minor** release brings significant new features and may change or rem
 something you relied on, so skim its notes before upgrading a script; a **major**
 release means the thing has become a different program.
 
-## [0.11.0] — unreleased
+## [0.10.1] — unreleased
 
 ### Fixed
 
@@ -35,6 +35,15 @@ release means the thing has become a different program.
   English. Five quiet agreements that a book is German are worth more than any one of
   them alone. Costs a few seconds per file, and only where the first sample was
   already in doubt.
+
+- **`--backup` no longer overwrites a backup it already made.** Re-running a book with
+  `--backup` used to replace the `.bak` with the previous run's *output*, so after the
+  second run "undo" meant "undo the last run" rather than "undo everything" — and it
+  happened silently, on exactly the re-run that says the first result was not what you
+  wanted. An existing `.bak` is now left alone and this run's original discarded
+  instead, so the backup stays the copy from before the tool first touched the book.
+  The file's summary line says `earlier backup kept (predates this run)` when that
+  happens, since it changes what `--revert` gives you back.
 
 - **`--debug` starts a fresh log for every run.** Previously each run appended to
   whatever log was already beside the audiobook. One run per file makes the log
