@@ -27,6 +27,14 @@ release means the thing has become a different program.
 
 ### Changed
 
+- **`--summary` now names the books it found no chapters in.** The closing block
+  already counted them, but finding out *which* ones meant scrolling back through the
+  run — and in a batch large enough for that to matter, the per-file lines are long
+  gone (or were never printed, under `--quiet`). They now get a listing of their own
+  next to the skipped and still-incomplete ones, each with the reason it came back
+  empty-handed: no chapter phrase anywhere, an early abort, or a first chapter below
+  `--expected-start-chapter`.
+
 - **A doubtful language reading is now re-checked elsewhere in the book.** One weak
   sample is no longer acted on: a sample can land on a song, a shouted exchange or a
   passage quoted in another language. Up to five samples are taken from different

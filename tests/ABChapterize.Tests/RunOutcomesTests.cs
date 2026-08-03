@@ -8,7 +8,7 @@ using ABChapterize.Ui;
 
 namespace ABChapterize.Tests;
 
-/// <summary>Tests for <see cref="RunOutcomes"/>: the two per-file listings closing a
+/// <summary>Tests for <see cref="RunOutcomes"/>: the three per-file listings closing a
 /// <c>--summary</c> run, and the file names in them being marked as titles rather than left to the
 /// highlighter's pattern rules.</summary>
 public class RunOutcomesTests
@@ -49,6 +49,30 @@ public class RunOutcomesTests
     }
 
     [Fact]
+    public void FormatListings_NamesEveryFileNothingWasFoundIn()
+    {
+        var outcomes = new RunOutcomes();
+        outcomes.RecordNoChapters("Interview.mp3", "no chapter phrases found");
+        outcomes.RecordNoChapters("Lecture.m4b",
+            "early-abort - no chapter found within the first 20 minute(s) of play time");
+
+        Assert.Equal(
+            ["No chapters found in 2 file(s):",
+             "  Interview.mp3: no chapter phrases found",
+             "  Lecture.m4b: early-abort - no chapter found within the first 20 minute(s) of play time"],
+            Lines(outcomes));
+    }
+
+    [Fact]
+    public void NoChaptersCount_TracksTheListing()
+    {
+        var outcomes = new RunOutcomes();
+        Assert.Equal(0, outcomes.NoChaptersCount);
+        outcomes.RecordNoChapters("Interview.mp3", "no chapter phrases found");
+        Assert.Equal(1, outcomes.NoChaptersCount);
+    }
+
+    [Fact]
     public void FormatListings_CountsAndNamesTheStillMissingChapters()
     {
         var outcomes = new RunOutcomes();
@@ -75,15 +99,19 @@ public class RunOutcomesTests
     }
 
     [Fact]
-    public void FormatListings_PrintsSkippedFilesBeforeIncompleteOnes()
+    public void FormatListings_OrdersTheBlocksByHowFarEachFileGot()
     {
+        // Recorded back to front, printed not-started / empty-handed / incomplete.
         var outcomes = new RunOutcomes();
         outcomes.RecordMissingMarks("Book.missing-marks-5.m4b", [5]);
+        outcomes.RecordNoChapters("Interview.mp3", "no chapter phrases found");
         outcomes.RecordSkipped("Other.m4b", "has 3 chapter marking(s)");
 
         Assert.Equal(
             ["Skipped 1 file(s):",
              "  Other.m4b: has 3 chapter marking(s)",
+             "No chapters found in 1 file(s):",
+             "  Interview.mp3: no chapter phrases found",
              "Still missing chapter marks in 1 file(s):",
              "  Book.missing-marks-5.m4b: 1 mark(s) missing (chapter 5)"],
             Lines(outcomes));

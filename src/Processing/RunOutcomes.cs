@@ -8,16 +8,16 @@ namespace ABChapterize.Processing;
 
 /// <summary>
 /// The run's roster of per-file outcomes worth naming at the end: which files were skipped and for
-/// what reason, and which were left with chapter marks still missing. Where
-/// <see cref="RunStatistics"/> accumulates measurements, this accumulates names - the two listings
-/// <c>--summary</c> closes a run with.
+/// what reason, which came out of detection with no chapters at all, and which were left with
+/// chapter marks still missing. Where <see cref="RunStatistics"/> accumulates measurements, this
+/// accumulates names - the three listings <c>--summary</c> closes a run with.
 /// </summary>
 /// <remarks>
-/// The point of both listings is a batch of two hundred audiobooks, where the per-file result lines
-/// have long scrolled away (and under <c>--quiet</c> were never printed at all): the two questions
-/// left at the end are "which ones did you not do" and "which ones are not finished", and neither
-/// should require reading a log back. Filled one file at a time by <see cref="FileProcessor"/>, so
-/// nothing here is synchronized.
+/// The point of the listings is a batch of two hundred audiobooks, where the per-file result lines
+/// have long scrolled away (and under <c>--quiet</c> were never printed at all): the questions left
+/// at the end are "which ones did you not do", "which ones came back empty-handed" and "which ones
+/// are not finished", and none should require reading a log back. Filled one file at a time by
+/// <see cref="FileProcessor"/>, so nothing here is synchronized.
 /// </remarks>
 internal sealed class RunOutcomes
 {
@@ -25,6 +25,10 @@ internal sealed class RunOutcomes
     /// line gave (the "(use --force to redo)" hint and the like left off - in a list of two
     /// hundred it is noise, and it is the same hint on every entry).</summary>
     private readonly List<(string Name, string Reason)> _skipped = [];
+
+    /// <summary>Files detection ran on and found nothing in, each with the reason its result line
+    /// gave (early abort, first chapter below --expected-start-chapter, or no phrase at all).</summary>
+    private readonly List<(string Name, string Reason)> _noChapters = [];
 
     /// <summary>Files written with an incomplete chapter sequence, each with the chapter numbers
     /// still missing from it.</summary>
@@ -35,10 +39,21 @@ internal sealed class RunOutcomes
     /// printed under it cannot drift apart.</summary>
     internal int SkippedCount => _skipped.Count;
 
+    /// <summary>How many processed files came out with no chapters, counted from the listing for
+    /// the same reason <see cref="SkippedCount"/> is.</summary>
+    internal int NoChaptersCount => _noChapters.Count;
+
     /// <summary>Records one skipped file for the closing listing.</summary>
     /// <param name="name">The file's bare name.</param>
     /// <param name="reason">Why it was skipped, as a sentence fragment following the name.</param>
     internal void RecordSkipped(string name, string reason) => _skipped.Add((name, reason));
+
+    /// <summary>Records one file detection left unchanged for want of any chapter at all.</summary>
+    /// <param name="name">The file's bare name.</param>
+    /// <param name="reason">Why nothing was written, as a sentence fragment following the name -
+    /// the same wording the file's own result line used, so the two cannot describe the outcome
+    /// differently.</param>
+    internal void RecordNoChapters(string name, string reason) => _noChapters.Add((name, reason));
 
     /// <summary>Records one file left with an incomplete chapter sequence.</summary>
     /// <param name="name">The bare name the file carries once the run is done - i.e. the
@@ -49,14 +64,16 @@ internal sealed class RunOutcomes
         => _missingMarks.Add((name, missingNumbers));
 
     /// <summary>
-    /// Builds both closing listings, skipped files first, as lines pre-split into their pieces so
-    /// that the file names are colored as titles rather than pattern-matched as prose. Either
-    /// listing is left out entirely when nothing fell into it.
+    /// Builds the closing listings, in order of how much of the file's work got done - not started,
+    /// started and empty-handed, finished but incomplete - as lines pre-split into their pieces so
+    /// that the file names are colored as titles rather than pattern-matched as prose. Any listing
+    /// is left out entirely when nothing fell into it.
     /// </summary>
     internal List<List<SummarySegment>> FormatListings()
     {
         var lines = new List<List<SummarySegment>>();
         AppendBlock(lines, $"Skipped {_skipped.Count} file(s):", _skipped);
+        AppendBlock(lines, $"No chapters found in {_noChapters.Count} file(s):", _noChapters);
         AppendBlock(lines, $"Still missing chapter marks in {_missingMarks.Count} file(s):",
             [.. _missingMarks.Select(f => (f.Name, DescribeMissing(f.MissingNumbers)))]);
         return lines;

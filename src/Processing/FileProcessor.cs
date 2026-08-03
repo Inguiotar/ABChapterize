@@ -44,10 +44,6 @@ public sealed partial class FileProcessor
     /// <summary>Number of files that actually went through chapter detection.</summary>
     private int _processed;
 
-    /// <summary>Number of processed files where detection found no chapter phrases at all
-    /// (left unchanged), a subset of <see cref="_processed"/>.</summary>
-    private int _noChaptersFound;
-
     /// <summary>Accumulated detection time of the processed files (for the --summary average).</summary>
     private TimeSpan _processingTime;
 
@@ -55,8 +51,8 @@ public sealed partial class FileProcessor
     /// --summary reporting, accumulated across every file of the run.</summary>
     private readonly RunStatistics _runStats = new();
 
-    /// <summary>The files --summary names one by one at the end: those skipped, and those left
-    /// with chapter marks still missing.</summary>
+    /// <summary>The files --summary names one by one at the end: those skipped, those detection
+    /// found nothing in, and those left with chapter marks still missing.</summary>
     private readonly RunOutcomes _outcomes = new();
 
     /// <summary>Creates a processor for the given validated options.</summary>
@@ -419,7 +415,8 @@ public sealed partial class FileProcessor
     private void PrintRunSummary(int fileCount, TimeSpan elapsed)
     {
         var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
-        var noChaptersNote = _noChaptersFound > 0 ? $", {_noChaptersFound} with no chapters found" : "";
+        var noChapters = _outcomes.NoChaptersCount;
+        var noChaptersNote = noChapters > 0 ? $", {noChapters} with no chapters found" : "";
         _progress.AnnounceSummary(
             $"Summary: {fileCount} file(s) encountered, {_processed} processed, " +
             $"{_outcomes.SkippedCount} skipped{warningNote}{noChaptersNote}");
@@ -1026,22 +1023,33 @@ public sealed partial class FileProcessor
             _options.DryRun ? ctx.Name : Path.GetFileName(taggedPath), missingNumbers);
 
     /// <summary>Reports a detection that produced no chapters at all - the file is left
-    /// untouched - naming whichever of the three reasons applies.</summary>
+    /// untouched - naming whichever of the three reasons applies, and lists the file for
+    /// --summary's closing roster.</summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="result">The file's detection result.</param>
     private void ReportNoChaptersFound(FileContext ctx, DetectionResult result)
     {
-        _noChaptersFound++;
+        // The language hint is deliberately not carried into the listing: it says which profile the
+        // file was read with, which is per-file diagnostics rather than an answer to "why is this
+        // book on the list", and in a batch of two hundred it would repeat on nearly every entry.
+        var reason = DescribeNoChapters(result);
+        _outcomes.RecordNoChapters(ctx.Name, reason);
         var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
-        var summary = result.EarlyAborted
-            ? $"{ctx.Name}: early-abort - no chapter found within the first " +
-              $"{_options.EarlyAbortMinutes:0.#} minute(s) of play time; file unchanged{langHint}"
-            : result.BelowExpectedStartNumber is { } foundNumber
-                ? $"{ctx.Name}: first chapter found ({foundNumber}) is below --expected-start-chapter " +
-                  $"{_options.ExpectedStartChapter}; file unchanged{langHint}"
-                : $"{ctx.Name}: no chapter phrases found; file unchanged{langHint}";
-        _progress.FinishWithSummary(ctx.Work, summary);
+        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {reason}; file unchanged{langHint}");
     }
+
+    /// <summary>Which of the three ways a detection can come back empty-handed this one was, as the
+    /// fragment following the file name. One wording feeding both the file's own result line and
+    /// its --summary entry, so the two can never end up disagreeing.</summary>
+    /// <param name="result">The file's detection result.</param>
+    private string DescribeNoChapters(DetectionResult result)
+        => result.EarlyAborted
+            ? "early-abort - no chapter found within the first " +
+              $"{_options.EarlyAbortMinutes:0.#} minute(s) of play time"
+            : result.BelowExpectedStartNumber is { } foundNumber
+                ? $"first chapter found ({foundNumber}) is below --expected-start-chapter " +
+                  $"{_options.ExpectedStartChapter}"
+                : "no chapter phrases found";
 
     /// <summary>The normal, successful outcome: writes the detected chapters into the file (or,
     /// under --dry-run, lists what would be written), takes any ".missing-marks" tag back off the

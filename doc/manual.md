@@ -1282,8 +1282,9 @@ of its own; see [Custom marks](#custom-marks).
   length (over 100 % is normal — re-probed stretches are counted each time),
   and Whisper's transcription speed as a percentage of real time.
 
-  The block closes with two listings, each left out when it would be empty:
-  every file that was **skipped** and why, and every file left **still missing
+  The block closes with three listings, each left out when it would be empty:
+  every file that was **skipped** and why, every file **no chapters were found
+  in** and which of the reasons applied, and every file left **still missing
   chapter marks**, with how many are missing and — up to ten of them — which
   chapters those are. Files appear under the name they carry once the run is
   over, so a book tagged
@@ -1291,12 +1292,14 @@ of its own; see [Custom marks](#custom-marks).
   tagged name and can be found in the folder as printed.
 
   ```
-  Summary: 4 file(s) encountered, 2 processed, 2 skipped, 1 with warnings
-  Total time: 1:42:07, average per processed file: 50:31
+  Summary: 5 file(s) encountered, 3 processed, 2 skipped, 1 with warnings, 1 with no chapters found
+  Total time: 1:42:07, average per processed file: 34:02
   Confidence of written chapter marks: min 0.71, max 0.99, avg 0.94
   Skipped 2 file(s):
     Stalker.m4b: has 30 chapter marking(s)
     Wintersmith.m4b: 14 pre-existing chapter marking(s) verified correct
+  No chapters found in 1 file(s):
+    Interview.mp3: no chapter phrases found
   Still missing chapter marks in 1 file(s):
     Die Dritte Macht.missing-marks-3-7.m4b: 2 mark(s) missing (chapter 3, 7)
   ```
