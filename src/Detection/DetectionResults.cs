@@ -110,12 +110,19 @@ public readonly record struct DetectionStats(
 /// was reached and further <c>--custom</c> matches were therefore dropped. Surfaced in the file's
 /// summary line rather than kept to the --verbose log: silently discarding marks the user asked for
 /// would look exactly like a mapping that stopped matching halfway through the book.</param>
+/// <param name="SequenceRestartSkips">How many announcements were heard, numbered and then dropped
+/// because this file's chapter numbering restarts partway through (see
+/// <see cref="RegionProber.SequenceRestartSkips"/>); 0 for the ordinary book. Surfaced in the
+/// file's summary line for the same reason as <paramref name="CustomMarkLimitHit"/>: a book that
+/// stops yielding chapters halfway through looks like a detection failure until someone reads the
+/// --verbose log and finds every later announcement listed as heard and skipped.</param>
 public readonly record struct DetectionResult(
     IReadOnlyList<DetectedChapter> Chapters, IReadOnlyList<DetectedMark> NamedMarks,
     bool GapRemains, IReadOnlyList<int> MissingNumbers,
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability, DetectionStats Stats, bool EarlyAborted = false,
-    int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true, bool CustomMarkLimitHit = false);
+    int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true, bool CustomMarkLimitHit = false,
+    int SequenceRestartSkips = 0);
 
 /// <summary>Outcome of checking one pre-existing chapter marking against the audio, in file order -
 /// the raw material <see cref="GapPlanning.BuildGapRegions"/> groups into gap-scoped recovery

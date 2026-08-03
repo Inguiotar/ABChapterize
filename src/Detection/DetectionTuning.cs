@@ -277,8 +277,10 @@ internal static class DetectionTuning
     /// <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> and
     /// <see cref="PreciseMarkRefiner.FindPhraseSurvivalEdgeAsync"/> - narrow their bracket down to,
     /// and the step <see cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>'s backward scan
-    /// advances by. The first makes it the tool's onset-accuracy guarantee: a reported onset always
-    /// sits at or before the true one and never more than this far before it. Matches
+    /// advances by. The first makes it the accuracy with which the plateau's right edge is located:
+    /// the position returned confirms and the position one step later does not. That is a statement
+    /// about the plateau, not about the announcement - the two are up to half a second apart, which
+    /// is what <see cref="PreciseMarkSilenceAnchorSeconds"/> exists to close. Matches
     /// <see cref="PreciseMarkLeadInSeconds"/>'s magnitude - both are about the finest granularity
     /// worth probing at, given <see cref="PreciseMarkCheckWindowSeconds"/> - rather than some
     /// unrelated value.
@@ -472,6 +474,50 @@ internal static class DetectionTuning
     /// a genuine improvement, never as a coin flip between two near-identical spots.
     /// </summary>
     internal const double PreciseMarkQuietSnapMinImprovementDb = 6.0;
+
+    /// <summary>
+    /// How far behind a refined onset <see cref="PreciseMarkRefiner.AnchorOnsetToSilence"/> will
+    /// look for a silence to move that onset back to, i.e. how much of a gap between a silence's
+    /// end and the reported onset is still read as "that silence is where this announcement
+    /// begins" rather than as unrelated audio in between.
+    /// <para>
+    /// The correction exists because the plateau <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/>
+    /// walks does not end where the announcement starts. Its right edge is where Whisper stops
+    /// recognizing the phrase from a window cut into it, and Whisper reconstructs a clipped leading
+    /// word remarkably well: "Chapter Five" read from audio starting a third of the way into
+    /// "Chapter" still comes back as "Chapter 5". So the reported onset is biased <em>late</em>, and
+    /// a mark placed one --mark-lead before it lands on the announcement instead of in front of it.
+    /// The effect is per-narrator, not per-language: it cost nothing on the German jingle books and
+    /// broke five marks across the two English ones and the French one.
+    /// </para>
+    /// <para>
+    /// Measured over the fourteen-book run of 2026-08-03 (328 refinements that reported an onset,
+    /// debug logs replayed): the gap between a refined onset and the end of the silence in front of
+    /// it is 0.00-0.57 s for 114 marks and 4.5 s or more for the remaining 214, with nothing at all
+    /// in between - the second group being the jingle books, where music, not silence, precedes the
+    /// announcement and there is no boundary to anchor to. Any threshold from 0.75 s to 4.5 s
+    /// therefore produces the identical result on that corpus; 1 s sits in it with room on both
+    /// sides. Not one of the 328 had its onset land <em>before</em> the preceding silence ended,
+    /// which is what makes a backward-only correction the right shape.
+    /// </para>
+    /// </summary>
+    internal const double PreciseMarkSilenceAnchorSeconds = 1.0;
+
+    /// <summary>
+    /// How many announcements must be rejected as below the sequence, their own numbers ascending,
+    /// before <see cref="RegionProber.SequenceRestartSkips"/> reports the file as one whose chapter
+    /// numbering restarts (see <see cref="RegionProber.NoteOutOfSequence"/>).
+    /// <para>
+    /// A single announcement numbered below the last accepted one is the ordinary in-text mention
+    /// ("as I said in chapter three") the rejection message already guesses at; a run of them
+    /// climbing 1, 2, 3 is a book divided into parts. Measured over the fourteen-book run of
+    /// 2026-08-03: thirteen books produced no such rejection at all - every rejection they had was
+    /// a re-detection of the chapter just accepted, equal to it rather than below it - and "The
+    /// Forever War", which restarts its numbering in each of its parts, produced 27 of them in two
+    /// runs of 9 and 8. Three is a comfortable floor between those.
+    /// </para>
+    /// </summary>
+    internal const int SequenceRestartRunLength = 3;
 
     /// <summary>
     /// With --max-jingle-length auto, the resized probe window is this factor times the longest

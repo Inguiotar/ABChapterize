@@ -200,8 +200,13 @@ from — is double-checked against the audio itself, by transcribing short,
 isolated clips of it: the stretch the chapter phrase was heard in is searched,
 closing in on the announcement a few checks at a time rather than combing
 through it, and the announcement's own beginning is then
-measured to within a tenth of a second. The mark is set `--mark-lead` seconds
-ahead of it. Hearing the phrase at the mark is not by itself taken as proof that the
+measured to within a tenth of a second. Where a pause of at least half a second
+runs up to the announcement, the mark is measured from the end of that pause
+instead: a book states where its silences end far more plainly than it states
+where a word begins, and no announcement can start before the sound does. The
+mark is set `--mark-lead` seconds ahead of whichever of the two was used, so it
+carries the full lead-in you asked for rather than whatever was left of it.
+Hearing the phrase at the mark is not by itself taken as proof that the
 mark is right — a jingle is not transcribed at all, so a mark several seconds
 inside one hears the announcement just as clearly as a mark sitting on it. A
 mark that cannot be confirmed this way is searched for once more, in full, through
@@ -492,6 +497,13 @@ it a good deal quicker than a normal one.
 Use it for books whose numbering the tool cannot make sense of: one that
 restarts its count in every part, one made of several novels bound together,
 or one that announces "Chapter" and then simply reads on.
+
+An ordinary run will usually tell you when a book wants this. A restarting
+count looks, to a run that believes its numbers, like a book that stops having
+chapters partway through: the later announcements are heard and understood, and
+then dropped for repeating numbers already used. When enough of them go that
+way in ascending order, the file's summary line says how many were skipped and
+suggests this option.
 
 The prologue and epilogue keep their usual positional rules — the prologue
 before the first chapter heard, the epilogue after it — and `--custom` marks
@@ -851,8 +863,9 @@ so that logs and reports stay comparable regardless of regional settings.
   starting point `--mark-before-jingle` walks backward from — is verified by
   re-transcribing short clips of the audio it was heard in, until one of them
   hears the chapter phrase first; the announcement's beginning is then measured to
-  within a tenth of a second and the mark set `--mark-lead` seconds ahead of
-  it. A mark
+  within a tenth of a second — or taken from the end of the pause running up to
+  it, where there is one — and the mark set `--mark-lead` seconds ahead of
+  that. A mark
   that can never be confirmed this way is
   left as originally placed rather than guessed at. Whatever mark results is
   then nudged up to 0.15 seconds earlier to the quietest point in that

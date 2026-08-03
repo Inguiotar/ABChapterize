@@ -305,17 +305,24 @@ public sealed class ChapterDetectorTests : IDisposable
 
     /// <summary>
     /// Asserts the detected chapters, allowing precise marking its measurement resolution: a mark
-    /// may sit up to one <see cref="DetectionTuning.PreciseMarkFixedStepSeconds"/> <em>before</em>
-    /// the expected position but never after it.
+    /// may sit up to one <see cref="DetectionTuning.PreciseMarkFixedStepSeconds"/> plus one
+    /// <see cref="DetectionTuning.PreciseMarkSilenceAnchorSeconds"/> <em>before</em> the expected
+    /// position, but never after it.
     /// <para>
     /// The expected values are where the heuristic alone would put the mark - the phrase onset the
     /// script states, less <see cref="PinnedMarkLeadSeconds"/>. Precise marking
     /// does not trust that position; it brackets the true onset by bisection and reports the last
     /// probe that still confirmed the phrase, which lands within one step below the real edge
-    /// rather than exactly on it. Pinning these tests to the bisection's own arithmetic would make
+    /// rather than exactly on it, and then anchors that onset back onto the end of the silence in
+    /// front of it. These fixtures universally script the phrase a fraction of a second after their
+    /// silence ends - a gap real audio does not show, see
+    /// <see cref="DetectionTuning.PreciseMarkSilenceAnchorSeconds"/> - so the anchor moves nearly
+    /// every mark in this file by that fraction, which is what the second half of the tolerance
+    /// covers. Pinning these tests to the bisection's own arithmetic would make
     /// eighty-odd assertions - most of them about gap tracking or language handling, not placement -
     /// churn on every tuning change, and would assert an artifact instead of the contract precise
-    /// marking actually owes its callers.
+    /// marking actually owes its callers. What the placement steps owe exactly is asserted exactly,
+    /// by the tests named for them.
     /// </para>
     /// </summary>
     private static void AssertChapters(
@@ -342,11 +349,17 @@ public sealed class ChapterDetectorTests : IDisposable
     private static void AssertDecodedFrom(ScriptedTranscriber transcriber, double start)
         => Assert.Contains(transcriber.Audio.DecodeStarts, d => Math.Abs(d - start) < 1e-6);
 
-    /// <summary>The one-sided tolerance every mark assertion shares.</summary>
+    /// <summary>The one-sided tolerance every mark assertion shares - see
+    /// <see cref="AssertChapters"/> for what each half of it pays for. One-sided on purpose: a mark
+    /// landing <em>later</em> than the announcement is the failure every placement step exists to
+    /// prevent, so no amount of it is tolerated here.</summary>
     private static void AssertMarkTime(string what, double expected, double actual)
     {
         // A mark at 0 is clamped rather than measured, so it has no tolerance to spend.
-        var floor = expected == 0 ? 0 : expected - DetectionTuning.PreciseMarkFixedStepSeconds;
+        var floor = expected == 0
+            ? 0
+            : expected - DetectionTuning.PreciseMarkFixedStepSeconds
+                       - DetectionTuning.PreciseMarkSilenceAnchorSeconds;
         Assert.True(actual <= expected + 1e-9 && actual >= floor - 1e-9,
             $"{what}: expected a mark in [{floor}, {expected}], got {actual}");
     }
@@ -796,7 +809,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // samples are -6 dBFS, which is what the log must report next to the confidence figure.
         // Chapter 1's mark has no PCM scripted, so its all-zero window is digital silence.
         var audio = new FakeAudioSource { Silences = [new(595, 600)] };
-        audio.AddPcm(600, Enumerable.Repeat(0.5f, 4000).ToArray()); // chapter 2's finished mark
+        audio.AddPcm(599.75, Enumerable.Repeat(0.5f, 4000).ToArray()); // chapter 2's finished mark
         var transcriber = new ScriptedTranscriber(audio);
         transcriber.Add(0, Seg(0.5, " Chapter one."));
         transcriber.Add(600, Seg(0.25, " Chapter two."));
@@ -890,6 +903,66 @@ public sealed class ChapterDetectorTests : IDisposable
             l.Contains("skipped chapter 2 at 0:20:00.30") &&
             l.Contains("not above the last accepted chapter 2"));
         Assert.DoesNotContain(log, l => l.Contains("in-text mention?"));
+    }
+
+    [Fact]
+    public async Task ChapterNumbersRestartingMidFile_AreReportedAsARestartRatherThanSilentlyDropped()
+    {
+        // Real-world case ("The Forever War", 2026-08-03): the book is divided into parts and each
+        // one starts its chapters over at one, so everything after part one's chapter 15 was heard,
+        // numbered correctly, and then dropped for not topping the sequence. 27 announcements went
+        // that way and the run said nothing about it - the file simply stopped yielding chapters a
+        // quarter of the way in, which reads exactly like a detection failure.
+        //
+        // Four chapters, then a restart at one: the ascending run of rejected numbers is what tells a
+        // book in parts from the in-text mention above, and three is where SequenceRestartRunLength
+        // draws the line. Note that the run has to be built from numbers strictly *below* the
+        // sequence - a repeat that merely equals the last accepted chapter is the ordinary
+        // re-detection of an announcement two windows overlapped, and says nothing about parts.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0"),
+            [new(395, 400), new(795, 800), new(1195, 1200),
+             new(1595, 1600), new(1995, 2000), new(2395, 2400)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(400, Seg(0.4, " Chapter two."));
+                s.Add(800, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+                s.Add(1600, Seg(0.3, " Chapter one."));
+                s.Add(2000, Seg(0.3, " Chapter two."));
+                s.Add(2400, Seg(0.3, " Chapter three."));
+            });
+
+        // The dropping itself is unchanged - continuing the numbering would mean accepting a number
+        // the sequence has already used, which every misheard-number defence exists to refuse.
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Equal(3, result.SequenceRestartSkips);
+        Assert.Contains(log, l => l.Contains("the chapter numbering appears to restart"));
+        // Once, however many further announcements go the same way.
+        Assert.Single(log, l => l.Contains("the chapter numbering appears to restart"));
+    }
+
+    [Fact]
+    public async Task ASingleInTextMention_IsNotReportedAsARestartingSequence()
+    {
+        // The other side of that line: one announcement below the sequence is prose mentioning an
+        // earlier chapter, which every book does, and calling that a restart would put a misleading
+        // note on the summary line of ordinary files. Thirteen of the fourteen books measured on
+        // 2026-08-03 produced no run of these at all.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.4, " Chapter two."));
+                s.Add(1200, Seg(0.3, " Chapter three."));
+                s.Add(1800, Seg(0.3, " Chapter one."));
+            });
+
+        Assert.Equal(0, result.SequenceRestartSkips);
+        Assert.DoesNotContain(log, l => l.Contains("the chapter numbering appears to restart"));
     }
 
     [Fact]
@@ -1789,8 +1862,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // inside Whisper's 30 s decode window. Chapter 14 of "Paula Monti" (2026-07-31) vanished
         // from a 601 s chunk that read every second around it, and reappeared at p=0.94 from the
         // same chunk started 15 s later. Scripting chapter 2 as audible only below a 340 s decode
-        // reproduces that here: pass 3 reads the whole gap [0.25, 349.95] in one 349.7 s chunk and
-        // misses it, the shifted re-read's own single chunk runs 334.7 s from 15.25 and does not.
+        // reproduces that here: pass 3 reads the whole gap [0.25, 349.75] in one 349.5 s chunk and
+        // misses it, the shifted re-read's own single chunk runs 334.5 s from 15.25 and does not.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
             Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
@@ -1805,7 +1878,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 149.75), new(3, 349.95)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("pass 3.5: re-reading 0:00:00.25 - 0:05:49.95 from 0:00:15.25"));
+        Assert.Contains(log, l => l.Contains("pass 3.5: re-reading 0:00:00.25 - 0:05:49.75 from 0:00:15.25"));
         Assert.Contains(log, l => l.Contains("the shifted re-read recovered 1 chapter(s)"));
     }
 
@@ -1848,8 +1921,8 @@ public sealed class ChapterDetectorTests : IDisposable
             pass3 => { },
             log);
 
-        Assert.Contains(log, l => l.Contains("re-reading trailing region 0:10:00.25 - 1:00:00.00 " +
-                                             "from 0:10:15.25"));
+        Assert.Contains(log, l => l.Contains("re-reading trailing region 0:09:59.75 - 1:00:00.00 " +
+                                             "from 0:10:14.75"));
     }
 
     [Theory]
@@ -3150,7 +3223,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 650, 662, 700, CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, profile.Language, 650, 662, 700, [], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(655.3, result.Mark, 3);
@@ -3175,7 +3248,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            641.06, _file, null, profile.PhraseRegex, profile.Language, 645.2, 647.2, 651.7, CancellationToken.None);
+            641.06, _file, null, profile.PhraseRegex, profile.Language, 645.2, 647.2, 651.7, [], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("chapter two", 639.75, result.Mark);
@@ -3202,7 +3275,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         var result = await refiner.RefinePreciseMarkAsync(
             699, _file, null, profile.PhraseRegex, profile.Language, 699.5, 717, 700,
-            CancellationToken.None);
+            [], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("chapter two", 709.75, result.Mark);
@@ -3229,7 +3302,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         var result = await refiner.RefinePreciseMarkAsync(
             307.13, _file, null, profile.PhraseRegex, profile.Language, 295.38, 302.38, 308.98,
-            CancellationToken.None);
+            [], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("chapter two", 307.25, result.Mark);
@@ -3252,7 +3325,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         var result = await refiner.RefinePreciseMarkAsync(
             307.13, _file, null, profile.PhraseRegex, profile.Language, 295.38, 302.38, 308.98,
-            CancellationToken.None);
+            [], CancellationToken.None);
 
         Assert.False(result.PhraseHeard);
         Assert.Equal(307.13, result.Mark, 3);
@@ -3281,7 +3354,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ends within a hundredth of the segment - the tight anchor that produced the too-short
         // probes.
         var result = await refiner.RefinePreciseMarkAsync(
-            52.9, _file, null, profile.PhraseRegex, profile.Language, 52.7, 54.2, 54.19, CancellationToken.None);
+            52.9, _file, null, profile.PhraseRegex, profile.Language, 52.7, 54.2, 54.19, [], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("Zeittafel", 52.45, result.Mark);
@@ -3325,7 +3398,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         var result = await refiner.RefinePreciseMarkAsync(
-            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, CancellationToken.None);
+            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, [], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("chapter 2", 659.75, result.Mark);
@@ -3347,7 +3420,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var profile = Options().ResolveProfile("en");
 
         var result = await refiner.RefinePreciseMarkAsync(
-            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, CancellationToken.None);
+            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, [], CancellationToken.None);
         var firstAttemptDecodes = audio.DecodeWindows.Count;
 
         Assert.False(result.PhraseHeard);
@@ -3361,10 +3434,85 @@ public sealed class ChapterDetectorTests : IDisposable
             (samples, _, ct) => alsoDeaf.TranscribeAsync(samples, ct));
         audio.DecodeWindows.Clear();
         await retrying.RefinePreciseMarkAsync(
-            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, CancellationToken.None);
+            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, [], CancellationToken.None);
 
         Assert.True(audio.DecodeWindows.Count > firstAttemptDecodes,
             $"retry ran {audio.DecodeWindows.Count} decodes, single attempt {firstAttemptDecodes}");
+    }
+
+    [Fact]
+    public async Task PreciseMark_AnchorsTheOnsetOntoTheSilenceInFrontOfTheAnnouncement()
+    {
+        // Real-world failure ("The Philosopher's Stone" chapters 5, 8, 15 and 17, 2026-08-03): the
+        // plateau the onset walk converges on ends where Whisper stops recognizing the phrase from a
+        // window cut into it, and a clipped "Chapter" is something it reconstructs well - the probe
+        // starting a third of the way into the word still came back "Chapter 5 Diagon Alley". The
+        // reported onset therefore sat 0.29-0.40 s late on those four marks, and a 0.35 s mark lead
+        // subtracted from it left 0.06 s of clearance. Every one of them landed on the announcement's
+        // own first word, which is what the listener hears.
+        //
+        // Chapter 5's geometry at 1/1 scale, straight out of that run's debug log: an 8.37 s silence
+        // ending at 6238.42, the words from there, and a plateau that keeps confirming to 6238.71.
+        // The announcement is scripted at the plateau's position rather than the true onset, since
+        // what the walk converges on is exactly what a scripted recognizer can express.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(6238.71, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            6240.51, _file, null, profile.PhraseRegex, profile.Language, 6238.42, 6244.22, 6255,
+            [new(6230.05, 6238.42), new(6239.28, 6240.86)], CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        // Not merely "earlier than before": the full lead, measured from the silence the
+        // announcement starts at the end of.
+        Assert.Equal(6238.42 - PinnedMarkLeadSeconds, result.Mark, 3);
+    }
+
+    [Fact]
+    public async Task PreciseMark_LeavesTheOnsetAlone_WhenTheNearestSilenceEndsTooFarInFrontOfIt()
+    {
+        // The other side of the anchor, and what keeps it from touching a jingle book: music is not
+        // silence, so on a book that plays a jingle between the last chapter's hush and the
+        // announcement the nearest silence ends many seconds early and there is no boundary to
+        // anchor to. The mark then stays exactly where the onset walk put it, which is the behaviour
+        // 214 of the 328 marks in the 2026-08-03 corpus rely on.
+        //
+        // Same announcement as above with the silence pulled back to 6236.5, 2.2 s in front of it -
+        // twice PreciseMarkSilenceAnchorSeconds, and still an order of magnitude short of a real
+        // jingle.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(6238.71, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            6240.51, _file, null, profile.PhraseRegex, profile.Language, 6238.42, 6244.22, 6255,
+            [new(6230.05, 6236.5), new(6239.28, 6240.86)], CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        AssertMarkTime("chapter two", 6238.71 - PinnedMarkLeadSeconds, result.Mark);
+        Assert.True(result.Mark > 6236.5,
+            $"mark {result.Mark} was dragged back to the out-of-range silence at 6236.5");
+    }
+
+    [Fact]
+    public async Task PreciseMark_LeavesTheOnsetAlone_WhenItAlreadyFallsInsideASilence()
+    {
+        // An onset the walk placed *inside* a silence needs no correction - it is already in front of
+        // whatever the announcement is - and must not be dragged back to the silence before that one.
+        // Real case ("The Philosopher's Stone" chapter 10, same run): onset 15920.15 against a
+        // 9.05 s silence running to 15920.21, with the previous stored silence 15.5 s earlier.
+        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        transcriber.Add(15920.15, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            15921, _file, null, profile.PhraseRegex, profile.Language, 15920.15, 15926, 15935,
+            [new(15903.82, 15904.61), new(15911.16, 15920.21)], CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        AssertMarkTime("chapter two", 15920.15 - PinnedMarkLeadSeconds, result.Mark);
+        Assert.True(result.Mark > 15910, $"mark {result.Mark} fell back to the silence before last");
     }
 
     [Fact]
@@ -5833,7 +5981,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);
@@ -5848,7 +5996,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, CancellationToken.None);
+            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], CancellationToken.None);
 
         Assert.False(result.PhraseHeard);
         Assert.Equal(659.75, result.Mark);

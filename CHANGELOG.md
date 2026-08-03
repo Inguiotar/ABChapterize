@@ -15,6 +15,28 @@ release means the thing has become a different program.
 
 ### Fixed
 
+- **Marks no longer land on the announcement they should sit in front of.** A mark is
+  meant to start playback `--mark-lead` seconds before the narrator says "Chapter
+  five"; on some books it arrived with almost none of that lead left, so seeking to the
+  chapter dropped you into the middle of the word "chapter" and you heard the number
+  and nothing before it. The announcement's start was being measured from the point
+  where speech recognition stops recognising a phrase cut off at the front — which is
+  not quite where the phrase begins, because a clipped opening word is often still
+  recognised. Where a pause runs up to the announcement, its end is now used instead:
+  the audio says outright where it stops being quiet, and nothing can be spoken before
+  that. Affected marks move earlier by up to half a second, most of them by around a
+  tenth; books that play a jingle between the pause and the announcement are unaffected,
+  having no such pause to measure from.
+
+- **A book whose chapter numbering restarts no longer fails silently.** In a book
+  divided into parts, each part may begin again at chapter one. Those later
+  announcements were heard and read correctly, then dropped for not continuing the
+  sequence, and nothing said so — the book simply stopped producing chapters partway
+  through, which is indistinguishable from a detection that stopped working. The file's
+  summary line now reports how many announcements were skipped that way and points at
+  `--ignore-chapter-numbers`, which marks every announcement it hears regardless of its
+  number. What gets written is unchanged; only the silence about it is.
+
 - **Automatic language detection no longer listens to the label music.** With
   `--lang auto`, a file's language was decided from the very start of the book — which
   on an audiobook is a label jingle, a copyright card or a title read over a bed at

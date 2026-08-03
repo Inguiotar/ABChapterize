@@ -24,7 +24,8 @@ namespace ABChapterize.Detection;
 /// phrase for a numbered chapter, the matching prologue/epilogue phrase for a named mark. Per mark
 /// rather than per file, since a run detects all three at once and a correction that re-transcribed
 /// a prologue while looking for "chapter" could only ever fail to confirm it.</param>
-/// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk.</param>
+/// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk and for
+/// precise marking's onset anchor (<see cref="PreciseMarkRefiner.AnchorOnsetToSilence"/>).</param>
 /// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk and its
 /// verification search.</param>
 /// <param name="Transcript">The window this mark's phrase was found in - its segments in absolute
@@ -162,7 +163,7 @@ internal sealed class MarkPlacer
         {
             var refined = await _refiner.RefinePreciseMarkAsync(
                 time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.Language,
-                phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ct);
+                phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ctx.AllSilences, ct);
             (time, phraseHeard) = (refined.Mark, refined.PhraseHeard);
             if (chapter is { } check &&
                 RefinedNumberVote.Recount(

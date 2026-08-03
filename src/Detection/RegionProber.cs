@@ -310,6 +310,31 @@ internal sealed class RegionProber
     internal bool CustomLimitHit { get; private set; }
 
     /// <summary>
+    /// Every announcement this region rejected for sitting strictly below the sequence, in the
+    /// order they were heard - the raw material for <see cref="SequenceRestartSkips"/>. Numbers
+    /// only: what distinguishes a book divided into parts from an in-text mention is the shape of
+    /// the numbers over time, and nothing else about the rejected match is needed to see it.
+    /// </summary>
+    private readonly List<int> _belowSequenceNumbers = [];
+
+    /// <summary>Whether <see cref="NoteOutOfSequence"/> has already said in the log that this
+    /// region's numbering appears to restart, so the observation is reported once rather than on
+    /// every further rejection.</summary>
+    private bool _restartReported;
+
+    /// <summary>
+    /// How many announcements this region heard, numbered, and then had to drop because the file's
+    /// chapter numbering restarts partway through - zero unless that pattern is present at all (see
+    /// <see cref="NoteOutOfSequence"/>). Nothing acts on it: it exists so the run can say what
+    /// happened, since the alternative is a book that silently stops yielding chapters halfway
+    /// through with every announcement after that point plainly logged as heard.
+    /// </summary>
+    internal int SequenceRestartSkips
+        => LongestAscendingRun(_belowSequenceNumbers) >= SequenceRestartRunLength
+            ? _belowSequenceNumbers.Count
+            : 0;
+
+    /// <summary>
     /// Whether this prober is one of Pass 2.5's sub-floor silence sweeps
     /// (<see cref="ChapterDetector.SweepSubFloorSilencesAsync"/>) rather than an ordinary region
     /// probe. A sweep's <see cref="Pass2Context.Silences"/> is a single band of silences that all
@@ -1329,6 +1354,8 @@ internal sealed class RegionProber
             _env.Log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
                              $"not above the last accepted chapter {windowLast}" +
                              (match.Number < windowLast ? " (in-text mention?)" : ""));
+            if (match.Number < windowLast)
+                NoteOutOfSequence(match.Number);
             return true;
         }
         // A snapped window can, near a gap's own upper boundary, reach right up against the next
@@ -1343,6 +1370,65 @@ internal sealed class RegionProber
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Records one announcement dropped for sitting strictly below the sequence, and says so in the
+    /// log the first time enough of them have accumulated to look like a book whose chapter
+    /// numbering restarts rather than like prose mentioning an earlier chapter.
+    /// <para>
+    /// The two are told apart by shape, not by count. A book divided into parts announces "chapter
+    /// one", "chapter two", "chapter three" again after its last accepted chapter, so the rejected
+    /// numbers climb; an in-text mention is one number at one position, and several of them are
+    /// scattered rather than ordered. Hence the ascending-run test, which
+    /// <see cref="SequenceRestartRunLength"/> carries the corpus measurement behind.
+    /// </para>
+    /// <para>
+    /// Reported rather than acted on, deliberately. Continuing the numbering across a restart would
+    /// mean accepting a number the sequence has already used, which is exactly what every defence
+    /// against a misheard chapter number is built to refuse - see
+    /// <see cref="SuspectNumberMender"/> and <see cref="GapPlanning.Normalize"/>'s
+    /// longest-increasing-subsequence filter, both of which would have to be taught the difference.
+    /// Saying so plainly costs nothing and leaves the choice - normally
+    /// <c>--ignore-chapter-numbers</c>, which marks every announcement it hears and never consults
+    /// a number - with the reader.
+    /// </para>
+    /// </summary>
+    /// <param name="number">The rejected announcement's own chapter number.</param>
+    private void NoteOutOfSequence(int number)
+    {
+        _belowSequenceNumbers.Add(number);
+        if (_restartReported || SequenceRestartSkips == 0)
+            return;
+        _restartReported = true;
+        _env.Log?.Invoke(
+            "the chapter numbering appears to restart partway through this file - announcements " +
+            "below the sequence are being heard in ascending runs, which is what a book divided " +
+            "into parts looks like; --ignore-chapter-numbers marks every announcement regardless " +
+            "of its number");
+    }
+
+    /// <summary>
+    /// The length of the longest strictly ascending run in <paramref name="numbers"/>, ignoring
+    /// immediate repeats. The repeats matter: one announcement is routinely rejected more than once
+    /// - by the window that found it and again by an overlapping or re-probed one - and counting
+    /// those as a break would hide the very run being looked for.
+    /// </summary>
+    /// <param name="numbers">The rejected numbers, in the order they were heard.</param>
+    private static int LongestAscendingRun(IReadOnlyList<int> numbers)
+    {
+        var best = 0;
+        var run = 0;
+        int? previous = null;
+        foreach (var number in numbers)
+        {
+            if (number == previous)
+                continue;
+            run = previous is { } p && number > p ? run + 1 : 1;
+            previous = number;
+            best = Math.Max(best, run);
+        }
+        return best;
     }
 
     /// <summary>

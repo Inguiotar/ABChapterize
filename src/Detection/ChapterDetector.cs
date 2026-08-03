@@ -79,6 +79,11 @@ public sealed class ChapterDetector
     /// one of them. Reset per file, alongside the Whisper counters above.</summary>
     private bool _customLimitHit;
 
+    /// <summary>How many announcements the current file lost to a restarting chapter sequence,
+    /// accumulated across every <see cref="RegionProber"/> of the file for the same reason as
+    /// <see cref="_customLimitHit"/> above. Reset per file.</summary>
+    private int _sequenceRestartSkips;
+
     /// <summary>Creates a detector bound to the given tools and options.</summary>
     /// <param name="options">Validated command line options.</param>
     /// <param name="audio">Audio source used for silence detection and PCM decoding.</param>
@@ -294,6 +299,7 @@ public sealed class ChapterDetector
         _whisperAudioSeconds = 0;
         _whisperTranscribeSeconds = 0;
         _customLimitHit = false;
+        _sequenceRestartSkips = 0;
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
 
@@ -354,6 +360,7 @@ public sealed class ChapterDetector
             earlyAborted = prober.EarlyAborted;
             belowExpectedStartNumber = prober.BelowExpectedStartNumber;
             _customLimitHit |= prober.CustomLimitHit;
+            _sequenceRestartSkips += prober.SequenceRestartSkips;
 
             if (earlyAborted || belowExpectedStartNumber != null)
                 break;
@@ -1057,6 +1064,7 @@ public sealed class ChapterDetector
                 gapSecondsDone - gap.FromSeconds);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
+            _sequenceRestartSkips += prober.SequenceRestartSkips;
             await SweepSubFloorSilencesAsync(
                 env, ctx, gap, missing, found, namedFound, profile, allSilences,
                 gapSecondsDone - gap.FromSeconds, ct);
@@ -1176,6 +1184,7 @@ public sealed class ChapterDetector
                 sweepingSubFloorSilences: true);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
+            _sequenceRestartSkips += prober.SequenceRestartSkips;
 
             stillMissing = StillMissing(stillMissing, found);
             if (stillMissing.Count == 0)
@@ -1293,7 +1302,7 @@ public sealed class ChapterDetector
         return new DetectionResult(
             chapters, named, missing.Count > 0, missing, lowConfidence,
             profile, detectedLanguage, detectedProbability, stats, earlyAborted, belowExpectedStartNumber,
-            leadInHasSpeech, _customLimitHit);
+            leadInHasSpeech, _customLimitHit, _sequenceRestartSkips);
     }
 
     /// <summary>Result of <see cref="RunPass1Async"/>: every silence/VAD signal Pass 2 and Pass 3

@@ -1066,10 +1066,13 @@ public sealed partial class FileProcessor
         _runStats.AccumulateConfidence(result.Chapters);
         var (chapters, introNote) = BuildChapters(result);
         var notes = introNote + discardNote + FormatNamedMarksNote(result) + FormatLowConfidenceNote(result) +
+                    FormatSequenceRestartNote(result) +
                     FormatLanguageNote(result) + await ExportSidecarAsync(ctx, chapters, ct);
         var what = FormatWrittenCount(result);
-        // A low-confidence mark is the one thing here worth surfacing above the progress bar.
-        var important = result.LowConfidenceNumbers.Count > 0;
+        // A low-confidence mark is worth surfacing above the progress bar; so is a book that gave up
+        // most of its chapters to a restarting sequence, which is otherwise indistinguishable from
+        // one that simply ends early.
+        var important = result.LowConfidenceNumbers.Count > 0 || result.SequenceRestartSkips > 0;
         // The tag is a to-do note left on the file name, and a run that reached here left nothing
         // to do: every chapter of the sequence is present. So the file gets its own name back.
         // A *numbered* tag normally takes the resume path instead and is untagged there; what
@@ -1125,6 +1128,18 @@ public sealed partial class FileProcessor
         => result.LowConfidenceNumbers.Count > 0
             ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
               $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
+            : "";
+
+    /// <summary>Note for a file whose chapter numbering restarts partway through (see
+    /// <see cref="RegionProber.SequenceRestartSkips"/>): the announcements after the restart were
+    /// heard and understood, and dropped only because their numbers had already been used. Without
+    /// this the file just stops yielding chapters halfway through, which reads as a detection
+    /// failure. Empty for the ordinary book.</summary>
+    /// <param name="result">The file's detection result.</param>
+    private static string FormatSequenceRestartNote(DetectionResult result)
+        => result.SequenceRestartSkips > 0
+            ? $", {result.SequenceRestartSkips} announcement(s) skipped - the chapter numbering " +
+              "appears to restart partway through (a book in parts?); try --ignore-chapter-numbers"
             : "";
 
     /// <summary>With --lang auto, the note stating which language this file was actually
