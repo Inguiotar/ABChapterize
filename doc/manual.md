@@ -540,9 +540,16 @@ without `--backup`, even on a crash or power failure mid-write:
      deleted (again with rollback on failure).
 
 Temporary files (`*.abchapterize.*`) are cleaned up afterwards and are always
-excluded from directory scans. If you ever find one lying around after a
-power failure, the original file next to it is intact; just delete the stray
-temporary file.
+excluded from directory scans. If a power failure ever leaves one behind,
+check which of the two kinds it is before deleting anything:
+
+- `<name>.<ext>.abchapterize.tmp<ext>` is the half-written replacement. The
+  audiobook next to it is untouched, so this one can simply be deleted.
+- `<name>.<ext>.abchapterize.orig` **is your original**, parked for the moment
+  it takes the finished file to move into its place (step 4 above, without
+  `--backup`). If `<name>.<ext>` is missing, rename this one back to it; if the
+  audiobook is sitting there complete, the parked copy has done its job and can
+  go. Either way, look before deleting.
 
 `abchapterize -R <target>` (`--revert`) undoes a `--backup` run: for every
 supported audio file with an added `.bak` suffix, the current file is deleted

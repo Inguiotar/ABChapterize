@@ -420,7 +420,10 @@ internal sealed class RegionProber
     /// start-of-file candidate), plus every silence and - when the VAD pre-pass ran - every VAD
     /// non-speech region whose own candidate position falls inside
     /// [<see cref="DetectionRegion.FromSeconds"/>, <see cref="DetectionRegion.ToSeconds"/>), in
-    /// chronological order. A window can never decode past the region end regardless (see
+    /// chronological order - bar the region's last second, which a silence candidate is held clear
+    /// of: its window would be clamped to under a second of audio, too little to hold an
+    /// announcement and enough to cost a Whisper pass finding that out. A window can never decode
+    /// past the region end regardless (see
     /// <see cref="GapPlanning.PlanWindowEnd"/>'s duration clamp), so the region boundary alone is
     /// enough containment - no extra check is needed here for that. VAD regions only qualify when
     /// they start at their own jingle start (i.e. nothing else leads them) and are long enough to be

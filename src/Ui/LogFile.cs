@@ -63,7 +63,10 @@ public sealed class LogFile : IDisposable
     /// <param name="message">The message, without timestamp.</param>
     public void Write(string message) => WriteRaw($"[{Timestamp()}] {message}");
 
-    /// <summary>Appends a line verbatim. Thread-safe: several files' workers log concurrently.</summary>
+    /// <summary>Appends a line verbatim. Locked rather than relying on its caller: every line from
+    /// inside a run arrives under <see cref="ProgressRenderer"/>'s own lock, but the header and
+    /// footer written here do not, and a log is the last thing that should interleave badly when
+    /// something else eventually writes to one.</summary>
     /// <param name="line">The complete line to append.</param>
     private void WriteRaw(string line)
     {

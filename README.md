@@ -330,10 +330,7 @@ use `.`, whatever the machine's locale says.
    words (0-999,
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
    Seven") or precedes
-   it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). Window borders are
-   snapped to silence mid-points so no decode ever cuts
-   a word in half, and each detection is pinpointed right away — a confident
-   mark even skips the remaining windows that overlap its own. By default
+   it ("Erstes Kapitel", "2. Kapitel", "Birinci Bölüm"). By default
    (`--min-silence-length auto`), starting from the second mark found (the
    silence before the first mark is usually the intro/title silence, often
    longer than the breaks between chapters, so it's not used to tighten),
@@ -411,9 +408,7 @@ use `.`, whatever the machine's locale says.
    something you opt into.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
-   hiding are transcribed completely, in chunks whose borders snap to
-   silences too (with the transcripts bridged across each seam, so not even
-   a phrase interrupted by a pause right at a border can slip through). Pass 3
+   hiding are transcribed completely, in roughly 10-minute chunks. Pass 3
    can use a different model than pass 2 (`--pass3-model`). A chapter missing
    after the *last* one found leaves no such gap — nothing above it to notice
    its absence — which is what `--trailing-scan` is for.

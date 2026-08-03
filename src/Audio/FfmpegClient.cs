@@ -24,8 +24,10 @@ public readonly record struct Chapter(double StartSeconds, string Title);
 /// <param name="AudioCodec">Codec name of the first audio stream (e.g. "aac"), or "" if unknown.</param>
 /// <param name="AudioProfile">Codec profile of the first audio stream (e.g. "LC", "xHE-AAC"), or "" if unknown.</param>
 /// <param name="InputDecoder">Explicit ffmpeg input decoder to use for this file (e.g. "libfdk_aac"), or null for ffmpeg's default.</param>
-/// <param name="ExistingChapterList">Backing field for <see cref="ExistingChapters"/>; null when
-/// not probed for (e.g. the xHE-AAC-without-decoder early return) or when there are none.</param>
+/// <param name="ExistingChapterList">Backing field for <see cref="ExistingChapters"/>; null when the
+/// file was never probed for chapters at all (the xHE-AAC-without-decoder early return, and the
+/// instances the unit tests construct by hand), which <see cref="ExistingChapters"/> flattens to an
+/// empty list. A successful probe always supplies a list, empty or not.</param>
 public readonly record struct MediaInfo(
     double DurationSeconds, long SizeBytes, int ChapterCount,
     string AudioCodec = "", string AudioProfile = "", string? InputDecoder = null,
@@ -602,6 +604,14 @@ public sealed partial class FfmpegClient : IAudioSource
 
     /// <summary>
     /// Runs a process to completion, optionally forwarding every stdout/stderr line to a callback.
+    /// <para>
+    /// The two pipes are drained by two concurrent tasks - anything else deadlocks as soon as one
+    /// of them fills - so <paramref name="lineCallback"/> may be entered from both at once. Every
+    /// caller here gets away without a lock because ffmpeg keeps the two line kinds apart:
+    /// <c>-progress pipe:1</c> writes only to stdout and silencedetect only to stderr, so no two
+    /// threads ever touch the same captured variable. A callback that reads or writes state shared
+    /// between the two streams would need its own synchronization.
+    /// </para>
     /// </summary>
     /// <returns>Captured stdout, captured stderr and the exit code.</returns>
     private static async Task<(string Stdout, string Stderr, int ExitCode)> RunAsync(

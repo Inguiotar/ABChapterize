@@ -129,6 +129,17 @@ release means the thing has become a different program.
 
 ### Fixed
 
+- **A file left tagged as incomplete could stop a whole batch with an error.** Such a
+  file is picked up automatically by a later run, which trusts the marks already in it
+  and re-hunts only the ones the tag names — but if those marks had since been removed
+  by something else, there was nothing to trust and nothing to hunt, and the run gave
+  up on the spot with an internal error instead of moving on. The file is now simply
+  written out and given its own name back, since there is no work left in it to record.
+
+- **`--use-gpu` is now refused alongside `--revert` and `--no-op`**, which load no
+  speech model and so have no GPU to pick. Both already refused `--cpu-only`; the
+  option that names a card instead of refusing one slipped through.
+
 - **Some books quietly pulled the tool's sense of time out from under it.** An
   audiobook stitched together from separately encoded pieces — a common way of
   building an `.m4b` — hands the decoder slightly more audio at every seam than the

@@ -254,9 +254,15 @@ public sealed class CliOptions
     /// <summary>
     /// Check pre-existing chapter markings against the audio instead of trusting them
     /// blindly (--verify / -V): a short window around each marking's own timestamp is probed
-    /// with Whisper for the chapter phrase and the expected number. Markings that all check
-    /// out leave the file untouched, same as today without --force; if any fails, the
-    /// markings are discarded and the file goes through full detection, same as --force would.
+    /// with Whisper for the chapter phrase and the expected number
+    /// (<see cref="ChapterDetector.VerifyExistingChaptersAsync"/>). Three outcomes, decided by
+    /// <see cref="ABChapterize.Processing.FileProcessor.IsWholesaleFailure"/>: markings that all
+    /// check out leave the file untouched, as a skip without --force would; some of them
+    /// unconfirmed keeps the confirmed ones and gap-recovers only around the failures
+    /// (<see cref="ChapterDetector.DetectGapsAsync"/>); and failures outnumbering confirmations -
+    /// or nothing confirmed at all - leave the file completely alone with a warning, rather than
+    /// discarding a marking set that was probably never one-per-numbered-chapter to begin with.
+    /// A file with no checkable number in any marking is skipped as having nothing to verify.
     /// With --max-chapters, a file already over the threshold is still assumed bogus outright
     /// and skips verification entirely - --verify only decides borderline cases, it never
     /// makes a --max-chapters rejection stricter.
@@ -628,7 +634,7 @@ public sealed class CliOptions
     private bool AnyProcessingOptionGiven
         => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || TrailingScan || DryRun
            || Export || Import || SimpleMetadata || Verify || IgnoreProgress
-           || VadThreads != null || WhisperThreads != null
+           || UseGpu != null || VadThreads != null || WhisperThreads != null
            || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _jingleLenSet || _minSilenceSet || _earlyAbortSet || _markLeadSet || _expectedStartSet
            || _phraseSpec != null || _titleSpec != null || _introSpec != null

@@ -105,7 +105,7 @@
 
   <!-- Silero VAD model, bundled (MIT-licensed, see THIRD-PARTY-NOTICES.md) rather than
        downloaded: small enough (~2.2 MB) to embed directly into the assembly, avoiding a
-       first-run download step entirely. Loaded from assembly resources by SileroVadDetector. -->
+       first-run download step entirely. Loaded from assembly resources by SileroWorker. -->
   <ItemGroup>
     <EmbeddedResource Include="assets\silero_vad.onnx" LogicalName="ABChapterize.silero_vad.onnx" />
   </ItemGroup>
@@ -159,7 +159,7 @@
 
     <!-- Move the correct-platform OnnxRuntime natives out of the publish root and into
          runtimes\<rid>\ alongside the Whisper natives, instead of leaving them loose next to
-         the exe. SileroVadDetector registers a DllImportResolver that loads "onnxruntime" from
+         the exe. SileroWorker registers a DllImportResolver that loads "onnxruntime" from
          this exact location, so the two must be kept in sync. -->
     <ItemGroup>
       <_OnnxRuntimeNativeFile Condition="'$(RuntimeIdentifier)' == 'win-x64'"

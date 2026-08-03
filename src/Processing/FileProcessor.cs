@@ -835,20 +835,22 @@ public sealed partial class FileProcessor
         FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
     {
         var restored = StripMissingMarksPath(ctx.File);
-        var range = $"{resumed.Chapters[0].Number}-{resumed.Chapters[^1].Number}";
+        // Through FormatWrittenCount rather than indexing the chapter list directly: a tagged file
+        // whose markings have since been stripped by hand resumes with nothing to seed from and
+        // nothing to find, and reaches here with an empty list rather than a completed sequence.
+        var written = FormatWrittenCount(resumed);
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
-                $"{ctx.Name}: DRY RUN - resume complete, all chapters found; would write " +
-                $"{resumed.Chapters.Count} chapter(s) ({range})" +
+                $"{ctx.Name}: DRY RUN - resume complete, all chapters found; would write {written}" +
                 $"{introNote} and rename to {Path.GetFileName(restored)}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
         var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
-            $"{ctx.Name}: resume complete - {resumed.Chapters.Count} chapter(s) written " +
-            $"({range}){introNote}, renamed to {Path.GetFileName(restored)}{backupNote}");
+            $"{ctx.Name}: resume complete - {written} written" +
+            $"{introNote}, renamed to {Path.GetFileName(restored)}{backupNote}");
         return restored;
     }
 
