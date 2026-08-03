@@ -252,10 +252,10 @@ internal sealed class PreciseMarkRefiner
     /// </para>
     /// <para>
     /// Two cleanup steps then run on whatever the above produced. First,
-    /// <see cref="AnchorOnsetToSilence"/> moves a confirmed onset back onto the end of the silence
-    /// in front of it, which is what makes the mark carry its full <c>--mark-lead</c> instead of
-    /// however much of it the plateau's late right edge left over. Then
-    /// <see cref="SnapToQuietestPointAsync"/> nudges the resulting mark backward - never later,
+    /// <see cref="AnchorOnsetToSoundAsync"/> moves a confirmed onset back onto the point where
+    /// sound resumes after the pause in front of it, which is what makes the mark carry its full
+    /// <c>--mark-lead</c> instead of however much of it the plateau's late right edge left over.
+    /// Then <see cref="SnapToQuietestPointAsync"/> nudges the resulting mark backward - never later,
     /// which could eat into the announcement - to a quieter point within
     /// <see cref="PreciseMarkQuietSnapRadiusSeconds"/> before it, provided one is at least
     /// <see cref="PreciseMarkQuietSnapMinImprovementDb"/> quieter, so a player seeking there starts
@@ -275,7 +275,7 @@ internal sealed class PreciseMarkRefiner
     /// that bracket where it can - see <see cref="MarkContext.Transcript"/> and
     /// <see cref="LocatePhraseByShrinkingWindowAsync"/>'s ceiling for the case where it cannot.</param>
     /// <param name="silences">Every silence Pass 1 stored, chronological, for
-    /// <see cref="AnchorOnsetToSilence"/>. Empty is a valid input - a file whose audio offered no
+    /// <see cref="AnchorOnsetToSoundAsync"/>. Empty is a valid input - a file whose audio offered no
     /// silence at all, or a caller that has none to hand - and simply skips that step.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
@@ -312,11 +312,12 @@ internal sealed class PreciseMarkRefiner
             var heard = onset != null;
             if (onset is { } found)
             {
-                var anchored = AnchorOnsetToSilence(found, silences);
+                var anchored = await AnchorOnsetToSoundAsync(
+                    found, silences, file, inputDecoder, ct);
                 if (anchored != found)
                     _log?.Invoke(
                         $"onset {FormatTimestamp(found)} anchored back to {FormatTimestamp(anchored)}, " +
-                        "where the silence in front of the announcement ends");
+                        "where sound resumes after the pause in front of the announcement");
                 result = Math.Max(0, anchored - _options.MarkLeadSeconds);
                 _log?.Invoke(result == mark
                     ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
@@ -342,45 +343,118 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
-    /// Moves a located onset back onto the end of the silence immediately in front of it, when
-    /// there is one within <see cref="PreciseMarkSilenceAnchorSeconds"/>. Corrects the one error
-    /// <see cref="FindOnsetEdgeAsync"/> structurally cannot: its plateau ends where Whisper stops
-    /// recognizing the phrase from a window cut into it, not where the announcement starts, and a
-    /// clipped leading word is something Whisper reconstructs well enough that the two are not the
-    /// same position. The gap runs to about half a second, which a 0.35 s <c>--mark-lead</c> cannot
-    /// absorb - the mark then lands on the announcement's own first word.
+    /// Moves a located onset back onto the point where sound actually resumes after the pause in
+    /// front of the announcement. Corrects the one error <see cref="FindOnsetEdgeAsync"/>
+    /// structurally cannot: its plateau ends where Whisper stops recognizing a phrase cut off at
+    /// the front, not where the phrase begins, and a clipped leading word is something Whisper
+    /// reconstructs well enough that the two are up to half a second apart - which a 0.35 s
+    /// <c>--mark-lead</c> cannot absorb, so the mark lands on the announcement's own first word.
     /// <para>
-    /// Only ever moves the onset <em>earlier</em>, and only onto a boundary the audio itself
-    /// provides. Where a silence ends is not an estimate: it is where ffmpeg's silencedetect first
-    /// measured sound, so nothing spoken can precede it, and an announcement heard after it must
-    /// begin at or after it. That is what makes an unconditional snap safe rather than a trade of
-    /// one guess for another - and why the correction stays silent on the books that need it least,
-    /// since a jingle is not silence and leaves no boundary within reach (see
-    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> for the corpus split).
+    /// Two steps, and the second is what makes the first honest. The silence Pass 1 recorded gives
+    /// a floor: nothing audible precedes the end of a silence, so the announcement cannot begin
+    /// before it. But that end is only a floor. silencedetect's verdict is a fixed
+    /// <see cref="SilenceNoiseDb"/> threshold against individual samples, so a single click - a
+    /// mouth noise, a page, a chair - closes the silence while the narrator is still drawing
+    /// breath. Anchoring straight to it therefore lands early by however long that gap runs.
+    /// Measured over the fourteen-book run of 2026-08-03 (114 marks with a silence in reach, each
+    /// one's audio decoded and measured): the sound really does start within 0.1 s of the silence
+    /// end 113 times, and once - Paula Monti chapter 19, a -47 dBFS click at 3:18:50.72 with the
+    /// word "Première" not beginning until 3:18:51.13 - it starts 0.39 s later. So the scan below
+    /// walks forward from the floor to the first stretch of genuine sound, and that is the onset.
     /// </para>
     /// <para>
-    /// An onset that already falls <em>inside</em> a silence is left alone: the silence in front of
-    /// it is then a different, earlier one, far outside the tolerance. Deliberate - such an onset
-    /// is already early, and the announcement it belongs to starts later, so there is nothing to
-    /// correct and moving it would only lengthen the lead.
+    /// "Genuine" is <see cref="PreciseMarkOnsetSustainSeconds"/> of audio staying within
+    /// <see cref="PreciseMarkOnsetFloorDb"/> of the loudest thing in the window, which is the
+    /// announcement itself - a relative test, so a quietly mastered book and a loud one behave
+    /// identically and no absolute level needs calibrating. Taking the <em>first</em> such stretch
+    /// rather than the last is what keeps the pauses <em>inside</em> an announcement out of it:
+    /// "Chapter" and "Five" are separated by about a tenth of a second of near-silence, and a scan
+    /// working backward from the onset would stop there instead.
+    /// </para>
+    /// <para>
+    /// Never moves the onset later, and never runs at all without a silence to start from - which
+    /// is why the correction stays silent on the books that need it least, a jingle being music
+    /// rather than silence and leaving no floor within
+    /// <see cref="PreciseMarkSilenceAnchorSeconds"/>. An onset that already falls <em>inside</em> a
+    /// silence is likewise left alone: the last silence to close before it is then a different,
+    /// earlier one, far outside that tolerance.
     /// </para>
     /// </summary>
-    /// <param name="onset">The onset <see cref="FindOnsetEdgeAsync"/> converged on.</param>
+    /// <param name="onset">The onset <see cref="FindOnsetEdgeAsync"/> converged on; also the
+    /// latest position the scan may return.</param>
     /// <param name="silences">Every silence Pass 1 stored, chronological.</param>
-    /// <returns>The end of the last silence to close within
-    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> before <paramref name="onset"/>, or
-    /// <paramref name="onset"/> unchanged when no silence closed in that window.</returns>
-    private static double AnchorOnsetToSilence(double onset, IReadOnlyList<Silence> silences)
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Where sound resumes after the pause in front of the announcement, or
+    /// <paramref name="onset"/> unchanged when no silence closed within
+    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> before it, or when too little audio decoded
+    /// to measure.</returns>
+    private async Task<double> AnchorOnsetToSoundAsync(
+        double onset, IReadOnlyList<Silence> silences, string file, string? inputDecoder,
+        CancellationToken ct)
     {
-        var anchor = onset;
+        if (PrecedingSilenceEnd(onset, silences) is not { } floor)
+            return onset;
+
+        // Reaches past the onset so the loudest sample in the window is the announcement's own,
+        // whatever the onset itself happened to land on - the level everything below is judged
+        // against. The extra audio is never a candidate: the scan stops at the onset.
+        var samples = await _audio.DecodePcmAsync(
+            file, floor, onset - floor + PreciseMarkCheckWindowSeconds, inputDecoder, ct);
+        var frame = (int)(PreciseMarkQuietWindowSeconds * FfmpegClient.SampleRate);
+        var frames = frame > 0 ? samples.Length / frame : 0;
+        if (frames < 1)
+            return floor;
+
+        var energy = new double[frames];
+        for (var f = 0; f < frames; f++)
+        {
+            double sumSquares = 0;
+            for (var i = f * frame; i < (f + 1) * frame; i++)
+                sumSquares += (double)samples[i] * samples[i];
+            energy[f] = sumSquares / frame;
+        }
+
+        var peak = energy.Max();
+        if (peak <= 0)
+            return floor;
+        var threshold = peak / Math.Pow(10, PreciseMarkOnsetFloorDb / 10);
+        var sustain = Math.Max(1, (int)Math.Round(PreciseMarkOnsetSustainSeconds / PreciseMarkQuietWindowSeconds));
+
+        for (var f = 0; f + sustain <= frames; f++)
+        {
+            var sound = floor + f * PreciseMarkQuietWindowSeconds;
+            if (sound >= onset)
+                break;
+            var loud = true;
+            for (var k = 0; k < sustain && loud; k++)
+                loud = energy[f + k] >= threshold;
+            if (loud)
+                return Math.Round(sound, 6);
+        }
+        return onset;
+    }
+
+    /// <summary>
+    /// The end of the last silence to close within <see cref="PreciseMarkSilenceAnchorSeconds"/>
+    /// before <paramref name="onset"/> - the floor <see cref="AnchorOnsetToSoundAsync"/> scans
+    /// forward from - or null when none did, which is the ordinary case on a book that plays a
+    /// jingle into its announcements.
+    /// </summary>
+    /// <param name="onset">The onset to look behind.</param>
+    /// <param name="silences">Every silence Pass 1 stored, chronological.</param>
+    private static double? PrecedingSilenceEnd(double onset, IReadOnlyList<Silence> silences)
+    {
+        double? floor = null;
         foreach (var silence in silences)
         {
             if (silence.StartSeconds >= onset)
                 break;
             if (silence.EndSeconds <= onset && onset - silence.EndSeconds <= PreciseMarkSilenceAnchorSeconds)
-                anchor = silence.EndSeconds;
+                floor = silence.EndSeconds;
         }
-        return anchor;
+        return floor;
     }
 
     /// <summary>
@@ -678,7 +752,7 @@ internal sealed class PreciseMarkRefiner
     /// <returns>The plateau's right edge, less one lead-in: located to within
     /// <see cref="PreciseMarkFixedStepSeconds"/>, and biased late against the announcement's true
     /// onset by however far Whisper kept recognizing a clipped leading word - which is what
-    /// <see cref="AnchorOnsetToSilence"/> then takes back off.</returns>
+    /// <see cref="AnchorOnsetToSoundAsync"/> then takes back off.</returns>
     private async Task<double> FindOnsetEdgeAsync(
         double confirmed, string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
     {

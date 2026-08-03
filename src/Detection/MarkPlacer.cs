@@ -25,7 +25,7 @@ namespace ABChapterize.Detection;
 /// rather than per file, since a run detects all three at once and a correction that re-transcribed
 /// a prologue while looking for "chapter" could only ever fail to confirm it.</param>
 /// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk and for
-/// precise marking's onset anchor (<see cref="PreciseMarkRefiner.AnchorOnsetToSilence"/>).</param>
+/// precise marking's onset anchor (<see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/>).</param>
 /// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk and its
 /// verification search.</param>
 /// <param name="Transcript">The window this mark's phrase was found in - its segments in absolute

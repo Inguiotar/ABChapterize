@@ -3440,8 +3440,32 @@ public sealed class ChapterDetectorTests : IDisposable
             $"retry ran {audio.DecodeWindows.Count} decodes, single attempt {firstAttemptDecodes}");
     }
 
+    /// <summary>
+    /// Builds a stretch of PCM for the onset anchor's scan to measure: <paramref name="quietSeconds"/>
+    /// of pause at <paramref name="quiet"/>, then speech-level audio, then enough more of it to be
+    /// the window's peak. Amplitudes rather than a waveform, since every test using this asks only
+    /// which frames clear <see cref="DetectionTuning.PreciseMarkOnsetFloorDb"/> below the peak.
+    /// </summary>
+    /// <param name="quietSeconds">How long the pause runs before speech starts.</param>
+    /// <param name="totalSeconds">Length of the whole buffer.</param>
+    /// <param name="quiet">Sample amplitude during the pause.</param>
+    /// <param name="clickSeconds">Length of a louder transient at the very start - the mouth noise
+    /// or page turn that closes a silence before the narrator speaks; 0 for none.</param>
+    /// <param name="click">Sample amplitude of that transient.</param>
+    private static float[] PcmPause(
+        double quietSeconds, double totalSeconds, float quiet = 0.0005f,
+        double clickSeconds = 0, float click = 0.004f)
+    {
+        var samples = new float[(int)(totalSeconds * FfmpegClient.SampleRate)];
+        var speechFrom = (int)(quietSeconds * FfmpegClient.SampleRate);
+        var clickTo = (int)(clickSeconds * FfmpegClient.SampleRate);
+        for (var i = 0; i < samples.Length; i++)
+            samples[i] = i >= speechFrom ? 0.25f : i < clickTo ? click : quiet;
+        return samples;
+    }
+
     [Fact]
-    public async Task PreciseMark_AnchorsTheOnsetOntoTheSilenceInFrontOfTheAnnouncement()
+    public async Task PreciseMark_AnchorsTheOnsetOntoTheSoundInFrontOfTheAnnouncement()
     {
         // Real-world failure ("The Philosopher's Stone" chapters 5, 8, 15 and 17, 2026-08-03): the
         // plateau the onset walk converges on ends where Whisper stops recognizing the phrase from a
@@ -3451,11 +3475,15 @@ public sealed class ChapterDetectorTests : IDisposable
         // subtracted from it left 0.06 s of clearance. Every one of them landed on the announcement's
         // own first word, which is what the listener hears.
         //
-        // Chapter 5's geometry at 1/1 scale, straight out of that run's debug log: an 8.37 s silence
-        // ending at 6238.42, the words from there, and a plateau that keeps confirming to 6238.71.
-        // The announcement is scripted at the plateau's position rather than the true onset, since
-        // what the walk converges on is exactly what a scripted recognizer can express.
-        var transcriber = new ScriptedTranscriber(new FakeAudioSource());
+        // Chapter 5's geometry at 1/1 scale, straight out of that run's debug log and its audio: an
+        // 8.37 s silence ending at 6238.42, the announcement's own first sound 0.04 s later (that
+        // 0.04 is silencedetect's threshold, not a gap - measured at -40 dBFS rising to -12.8 within
+        // 60 ms), and a plateau that keeps confirming to 6238.71. The announcement is scripted at
+        // the plateau's position rather than the true onset, since what the walk converges on is
+        // exactly what a scripted recognizer can express.
+        var audio = new FakeAudioSource();
+        audio.AddPcm(6238.42, PcmPause(quietSeconds: 0, totalSeconds: 4.6));
+        var transcriber = new ScriptedTranscriber(audio);
         transcriber.Add(6238.71, Seg(0, " Chapter two."));
         var (refiner, profile) = MakeVerifier(transcriber);
 
@@ -3464,9 +3492,35 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(6230.05, 6238.42), new(6239.28, 6240.86)], CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
-        // Not merely "earlier than before": the full lead, measured from the silence the
-        // announcement starts at the end of.
+        // Not merely "earlier than before": the full lead, measured from where the sound starts.
         Assert.Equal(6238.42 - PinnedMarkLeadSeconds, result.Mark, 3);
+    }
+
+    [Fact]
+    public async Task PreciseMark_AnchorsPastAClickThatClosedTheSilenceEarly()
+    {
+        // Why the anchor scans for sound instead of stopping at the silence's end, and the case that
+        // settled it (Paula Monti chapter 19, 2026-08-03, verified correct by the user *before* any
+        // of this): silencedetect judges individual samples against a fixed -35 dBFS threshold, so a
+        // 20 ms mouth noise at -47 dBFS closed the pause at 3:18:50.72 while "Première" did not begin
+        // until 3:18:51.13. Anchoring to the silence end alone would have moved a good mark 0.39 s
+        // early. Over the fourteen-book run this is the one mark of 114 where the two rules disagree
+        // by more than 0.1 s - which is exactly why it is written down here.
+        //
+        // That geometry at 1/1 scale: silence ends at 11930.74, the click occupies its first 20 ms,
+        // room tone until 11931.13, speech from there, plateau confirming to 11931.31.
+        var audio = new FakeAudioSource();
+        audio.AddPcm(11930.74, PcmPause(quietSeconds: 0.39, totalSeconds: 4.6, clickSeconds: 0.02));
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(11931.31, Seg(0, " Chapter two."));
+        var (refiner, profile) = MakeVerifier(transcriber);
+
+        var result = await refiner.RefinePreciseMarkAsync(
+            11932.5, _file, null, profile.PhraseRegex, profile.Language, 11931.31, 11935.9, 11945,
+            [new(11929.34, 11930.74), new(11931.99, 11932.59)], CancellationToken.None);
+
+        Assert.True(result.PhraseHeard);
+        Assert.Equal(11931.13 - PinnedMarkLeadSeconds, result.Mark, 3);
     }
 
     [Fact]

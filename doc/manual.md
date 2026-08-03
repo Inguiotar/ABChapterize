@@ -201,11 +201,14 @@ isolated clips of it: the stretch the chapter phrase was heard in is searched,
 closing in on the announcement a few checks at a time rather than combing
 through it, and the announcement's own beginning is then
 measured to within a tenth of a second. Where a pause of at least half a second
-runs up to the announcement, the mark is measured from the end of that pause
-instead: a book states where its silences end far more plainly than it states
-where a word begins, and no announcement can start before the sound does. The
-mark is set `--mark-lead` seconds ahead of whichever of the two was used, so it
-carries the full lead-in you asked for rather than whatever was left of it.
+runs up to the announcement, that measurement is replaced by a direct one: the
+audio from the end of the pause onward is examined for the point where sound
+actually resumes, and the mark is set `--mark-lead` seconds ahead of *that*.
+Speech recognition is remarkably good at reading a word whose beginning has
+been cut off, which makes it a poor judge of where the word began; the
+waveform is not. The upshot is that a mark carries the full lead-in you asked
+for rather than whatever was left of it. Books that play a jingle straight
+into the announcement have no such pause and are marked as before.
 Hearing the phrase at the mark is not by itself taken as proof that the
 mark is right — a jingle is not transcribed at all, so a mark several seconds
 inside one hears the announcement just as clearly as a mark sitting on it. A
@@ -863,9 +866,9 @@ so that logs and reports stay comparable regardless of regional settings.
   starting point `--mark-before-jingle` walks backward from — is verified by
   re-transcribing short clips of the audio it was heard in, until one of them
   hears the chapter phrase first; the announcement's beginning is then measured to
-  within a tenth of a second — or taken from the end of the pause running up to
-  it, where there is one — and the mark set `--mark-lead` seconds ahead of
-  that. A mark
+  within a tenth of a second — or, where a pause runs up to it, read straight off
+  the waveform as the point where sound resumes — and the mark set `--mark-lead`
+  seconds ahead of that. A mark
   that can never be confirmed this way is
   left as originally placed rather than guessed at. Whatever mark results is
   then nudged up to 0.15 seconds earlier to the quietest point in that

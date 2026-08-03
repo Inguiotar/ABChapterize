@@ -21,12 +21,11 @@ release means the thing has become a different program.
   chapter dropped you into the middle of the word "chapter" and you heard the number
   and nothing before it. The announcement's start was being measured from the point
   where speech recognition stops recognising a phrase cut off at the front — which is
-  not quite where the phrase begins, because a clipped opening word is often still
-  recognised. Where a pause runs up to the announcement, its end is now used instead:
-  the audio says outright where it stops being quiet, and nothing can be spoken before
-  that. Affected marks move earlier by up to half a second, most of them by around a
-  tenth; books that play a jingle between the pause and the announcement are unaffected,
-  having no such pause to measure from.
+  not where the phrase begins, because a clipped opening word is often still recognised.
+  Where a pause runs up to the announcement, the waveform is now read directly for the
+  point where sound resumes, and the mark measured from there. Affected marks move
+  earlier by up to three tenths of a second, most of them by around a tenth; books that
+  play a jingle straight into the announcement have no such pause and are unaffected.
 
 - **A book whose chapter numbering restarts no longer fails silently.** In a book
   divided into parts, each part may begin again at chapter one. Those later

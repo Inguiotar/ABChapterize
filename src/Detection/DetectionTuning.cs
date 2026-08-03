@@ -476,10 +476,10 @@ internal static class DetectionTuning
     internal const double PreciseMarkQuietSnapMinImprovementDb = 6.0;
 
     /// <summary>
-    /// How far behind a refined onset <see cref="PreciseMarkRefiner.AnchorOnsetToSilence"/> will
-    /// look for a silence to move that onset back to, i.e. how much of a gap between a silence's
-    /// end and the reported onset is still read as "that silence is where this announcement
-    /// begins" rather than as unrelated audio in between.
+    /// How far behind a refined onset <see cref="PreciseMarkRefiner.PrecedingSilenceEnd"/> will
+    /// look for the silence <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/> scans forward
+    /// from, i.e. how much of a gap between a silence's end and the reported onset is still read as
+    /// "that pause is the one this announcement follows" rather than as unrelated audio in between.
     /// <para>
     /// The correction exists because the plateau <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/>
     /// walks does not end where the announcement starts. Its right edge is where Whisper stops
@@ -502,6 +502,35 @@ internal static class DetectionTuning
     /// </para>
     /// </summary>
     internal const double PreciseMarkSilenceAnchorSeconds = 1.0;
+
+    /// <summary>
+    /// How far below the loudest thing in its window <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/>
+    /// still counts audio as the pause rather than as the announcement. Relative to that peak - the
+    /// announcement's own level - rather than an absolute dBFS figure, so a quietly mastered book
+    /// and a loud one behave identically and nothing needs recalibrating per file. That is also why
+    /// no loudness normalization pass is wanted upstream: it would change every level in the file
+    /// and leave this test measuring exactly the same ratio.
+    /// <para>
+    /// 25 dB is a power ratio of about 300. Comfortably above the room tone a narrator's pause is
+    /// actually made of - measured at 50-58 dB below the announcement on the two cases this was
+    /// calibrated against, Paula Monti chapter 19 and The Philosopher's Stone chapter 5 - and
+    /// comfortably below the announcement's own opening consonant, which on Philosopher's Stone
+    /// chapter 5 is the affricate of "Chapter", reaching within 27 dB of the peak in its first
+    /// 10 ms.
+    /// </para>
+    /// </summary>
+    internal const double PreciseMarkOnsetFloorDb = 25;
+
+    /// <summary>
+    /// How long audio must stay above <see cref="PreciseMarkOnsetFloorDb"/> before
+    /// <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/> accepts it as the announcement
+    /// beginning rather than as a click inside the pause. The failure it exists for is on record:
+    /// silencedetect closed Paula Monti chapter 19's pause at 3:18:50.72 on a -47 dBFS mouth noise
+    /// lasting 20 ms, while "Première" did not begin until 3:18:51.13 - so a rule that stopped at
+    /// the silence's end alone put that mark 0.39 s early. Long enough to outlast such a transient,
+    /// short enough that no real speech onset is missed: a syllable runs several times this.
+    /// </summary>
+    internal const double PreciseMarkOnsetSustainSeconds = 0.05;
 
     /// <summary>
     /// How many announcements must be rejected as below the sequence, their own numbers ascending,
