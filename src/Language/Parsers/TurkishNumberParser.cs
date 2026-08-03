@@ -12,7 +12,6 @@ namespace ABChapterize.Language.Parsers;
 /// notorious dotted/dotless-I casing rules cannot bite under invariant globalization.
 /// Ordinals are understood too - "Birinci Bolum" as well as every regular -inci/-uncu
 /// form ("yirmi birinci", "yuzuncu") - since Turkish chapters are announced ordinal-first.
-/// (This source file is deliberately ASCII-only; Turkish letters appear as \uXXXX escapes.)
 /// </summary>
 public sealed class TurkishNumberParser : INumberWordParser
 {

@@ -1649,7 +1649,7 @@ internal sealed class RegionProber
     private async Task HandleSequenceGapAsync(int previousNumber, int number, CancellationToken ct)
     {
         // A probed window that heard an unreadable announcement is already queued as skipped by
-        // NoteUnnumberedAnnouncements, so it sits in both lists; taking it once keeps the re-probe
+        // RecoverUnnumberedAnnouncementsAsync, so it sits in both lists; taking it once keeps the re-probe
         // from transcribing the same audio twice and the count in the log honest.
         var widened = _probedSinceLastMark
             .Where(p => WiderWindowWouldReach(p.Candidate, p.WindowEnd) &&

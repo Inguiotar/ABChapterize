@@ -915,15 +915,13 @@ With `--lang auto` (the default - no `--lang` needed at all), each file's
 language is detected independently, so a directory containing audiobooks in
 several languages is processed correctly in one run without per-file options.
 
-Mechanically, this happens once per file, right after the silence scan
-(pass 1) and before any transcription: the samples already decoded for the
-very first probe window (the start of the file) are also handed to Whisper's
-own language detector (`WhisperProcessor.DetectLanguageWithProbability`),
-which returns a language code and Whisper's own probability for it - no
-extra decode, and no separate model. The resolved language is then fixed for
-the rest of that file via `ChangeLanguage`, rather than re-detected per
-probe, which would be both slower and could disagree with itself partway
-through a file.
+It happens once per file, right after the silence scan (pass 1) and before
+any transcription: the audio already decoded for the very first probe window
+(the start of the file) is also handed to Whisper's own language detector,
+which answers with a language code and a probability - so this costs no extra
+decode and no separate model. The answer is then fixed for the rest of that
+file rather than re-detected per probe, which would be slower and could
+disagree with itself partway through a book.
 
 - At or above a probability of 0.5, the detected language is used, and
   the chapter/prologue/epilogue phrases and all title words are localized
