@@ -1160,6 +1160,9 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--expected-start-chapter", "5"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapter-number", "50"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--cpu-only"));
+        // The other half of the same statement: --revert loads no speech model, so it has neither
+        // a GPU to refuse nor one to pick.
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--use-gpu", "gtx"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapters", "50"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--title", "Teil"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--intro-title", "Vorwort"));
@@ -1219,6 +1222,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--expected-start-chapter", "5"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--max-chapter-number", "50"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--cpu-only"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--use-gpu", "gtx"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--backup"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--verify"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--export"));

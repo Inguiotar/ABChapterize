@@ -481,7 +481,7 @@ public class JingleGeometryTests
     // ResolveDefaultPhraseOnset took it for the announcement. AdjustJingleRegion cannot trim it -
     // the probe window opens on the jingle and its transcript has no words for audio it never saw.
     //
-    // The numbers below are the file's own, measured with toolsadprobe's wholevad mode, and the
+    // The numbers below are the file's own, measured with tools\vadprobe's wholevad mode, and the
     // transcript is the one that window really produced; the announcement's true position was
     // confirmed by re-transcribing 5.25 s from each expected mark. Replaying them through the real
     // helpers is what makes this a regression test rather than a restatement of the fix.
