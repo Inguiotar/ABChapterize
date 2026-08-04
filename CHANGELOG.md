@@ -11,7 +11,7 @@ using; a **minor** release brings significant new features and may change or rem
 something you relied on, so skim its notes before upgrading a script; a **major**
 release means the thing has become a different program.
 
-## [0.10.1] — unreleased
+## [0.10.1] — 2026-08-04
 
 ### Fixed
 
