@@ -8,8 +8,10 @@ Version numbers are deliberately *not*
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html), so read them like this:
 a **patch** release brings bugfixes and new features that break nothing you were
 using; a **minor** release brings significant new features and may change or remove
-something you relied on, so skim its notes before upgrading a script; a **major**
-release means the thing has become a different program.
+something you relied on, so skim its notes before upgrading a script; and a **major**
+release is whatever felt big enough to deserve one — the program has turned into a
+different animal, or a headline feature landed, or it has simply grown up enough to
+earn a round number.
 
 ## [0.10.1] — 2026-08-04
 
