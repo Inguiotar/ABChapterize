@@ -47,4 +47,21 @@ public sealed record LanguageProfile(
     /// </summary>
     public NamedPhrase ChapterAnnouncement { get; } =
         new("chapter", PhraseRegex, Title, NamedPhraseScope.Anywhere, Repeatable: true);
+
+    /// <summary>
+    /// What the mark refinement looks for at a numbered chapter's mark: the chapter phrase, or -
+    /// under <c>--chapter-phrase none</c>, where <see cref="PhraseRegex"/> never matches anything -
+    /// a number spoken as a sentence of its own. See <see cref="AnnouncementMatcher"/> for why the
+    /// refinement cannot simply take the regex, and why the reading the match was found under has
+    /// to travel with it.
+    /// </summary>
+    /// <param name="reading">The reading this mark's own match was found under.</param>
+    public AnnouncementMatcher AnnouncementFor(NumberWordParser.BareNumberReading reading)
+        => BareNumberAnnouncements
+            ? AnnouncementMatcher.ForBareNumbers(Language, reading)
+            : _phrase;
+
+    /// <summary>The phrase matcher, built once rather than per mark - it is the same object for
+    /// every mark of a phrase-based book.</summary>
+    private readonly AnnouncementMatcher _phrase = AnnouncementMatcher.ForPhrase(PhraseRegex);
 }

@@ -7,7 +7,6 @@ using ABChapterize.Cli;
 using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Vad;
-using System.Text.RegularExpressions;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.JingleGeometry;
 using static ABChapterize.Detection.PhraseMatching;
@@ -20,10 +19,11 @@ namespace ABChapterize.Detection;
 /// </summary>
 /// <param name="File">Path of the audio file.</param>
 /// <param name="InputDecoder">Explicit input decoder to force, or null.</param>
-/// <param name="PhraseRegex">The announcement the corrections look for at the mark: the chapter
-/// phrase for a numbered chapter, the matching prologue/epilogue phrase for a named mark. Per mark
-/// rather than per file, since a run detects all three at once and a correction that re-transcribed
-/// a prologue while looking for "chapter" could only ever fail to confirm it.</param>
+/// <param name="Announcement">What the corrections look for at the mark: the chapter phrase for a
+/// numbered chapter (or a number spoken alone under <c>--chapter-phrase none</c>), the matching
+/// prologue/epilogue phrase for a named mark. Per mark rather than per file, since a run detects
+/// all three at once and a correction that re-transcribed a prologue while looking for "chapter"
+/// could only ever fail to confirm it.</param>
 /// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk and for
 /// precise marking's onset anchor (<see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/>).</param>
 /// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk and its
@@ -44,7 +44,7 @@ namespace ABChapterize.Detection;
 /// <see cref="NumberCheck.Profile"/> because a named (prologue/epilogue/<c>--custom</c>) mark has no
 /// <see cref="NumberCheck"/> and is refined exactly like a numbered one.</param>
 internal readonly record struct MarkContext(
-    string File, string? InputDecoder, Regex PhraseRegex, List<Silence> AllSilences,
+    string File, string? InputDecoder, AnnouncementMatcher Announcement, List<Silence> AllSilences,
     List<SpeechSegment> SpeechSegments, TranscriptWindow Transcript, string Language);
 
 /// <summary>
@@ -158,32 +158,85 @@ internal sealed class MarkPlacer
     /// <param name="statRegion">The jingle region preceding the phrase, or null (always null when
     /// the VAD pre-pass did not run).</param>
     /// <param name="ctx">The file's mark-placement constants.</param>
+    /// <param name="isolation">What the announcement's surroundings must look like for this mark to
+    /// be kept; <see cref="IsolationCheck.None"/> for the callers that do not ask.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The final mark position and the number to record it under.</returns>
-    internal async Task<MarkPlacement> PlaceAsync(
+    /// <returns>The final mark position and the number to record it under, or null when the
+    /// isolation check rejected the announcement - a match the caller must then drop entirely
+    /// rather than mark.</returns>
+    internal async Task<MarkPlacement?> PlaceAsync(
         NumberCheck? chapter, double defaultMark, double phraseAbs, double phraseEndAbs,
-        Silence? statSilence, NonSpeechRegion? statRegion, MarkContext ctx, CancellationToken ct)
+        Silence? statSilence, NonSpeechRegion? statRegion, MarkContext ctx,
+        IsolationCheck isolation, CancellationToken ct)
     {
         var time = defaultMark;
         var phraseHeard = false;
+        double? onset = null;
         var number = chapter?.Number;
         if (_options.PreciseMark)
         {
             var refined = await _refiner.RefinePreciseMarkAsync(
-                time, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.Language,
+                time, ctx.File, ctx.InputDecoder, ctx.Announcement, ctx.Language,
                 phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ctx.AllSilences, ct);
-            (time, phraseHeard) = (refined.Mark, refined.PhraseHeard);
+            (time, phraseHeard, onset) = (refined.Mark, refined.PhraseHeard, refined.OnsetSeconds);
             if (chapter is { } check &&
                 RefinedNumberVote.Recount(
                     refined.PhraseReadings, check.Profile, _findMatches, check.Number, check.Bounds,
                     phraseAbs, _log) is { } recounted)
                 number = recounted;
         }
+        if (!IsolationHolds(onset, isolation, number, ctx))
+            return null;
         if (_options.MarkBeforeJingle)
             time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx, ct);
         if (number is { } chapterNumber)
             Record(chapterNumber, statSilence, statRegion, phraseAbs);
         return new MarkPlacement(time, number);
+    }
+
+    /// <summary>
+    /// Runs the isolation guard on a placement: is this announcement really set off from the
+    /// narration by the pauses its kind is supposed to have (see
+    /// <see cref="AnnouncementIsolation"/>)? Sits between the refinement and everything that acts
+    /// on a mark, so a rejected match costs no <c>--mark-before-jingle</c> walk and - more
+    /// importantly - contributes nothing to the per-chapter silence/jingle measurements that steer
+    /// <c>--min-silence-length auto</c>.
+    /// <para>
+    /// Measured at the refined onset where there is one, and otherwise at
+    /// <see cref="IsolationCheck.FallbackPosition"/>. The fallback matters for two live cases:
+    /// <c>--quick-marks</c>, which skips refinement altogether, and an announcement neither model
+    /// could confirm. A caller that has no honest position to offer passes none, and its match is
+    /// then dropped rather than trusted - which is the right way round for the only matches that
+    /// reach here needing the check, namely bare numbers found in the middle of a segment, whose
+    /// entire claim to being an announcement <em>is</em> the pause around them.
+    /// </para>
+    /// </summary>
+    /// <param name="onset">The refined announcement onset, or null when none was confirmed.</param>
+    /// <param name="isolation">The check to apply.</param>
+    /// <param name="number">The chapter number, for the log line; null for a named mark.</param>
+    /// <param name="ctx">The file's mark-placement constants, for the VAD speech segments.</param>
+    /// <returns>True when the mark may be kept.</returns>
+    private bool IsolationHolds(
+        double? onset, IsolationCheck isolation, int? number, MarkContext ctx)
+    {
+        if (isolation.Rule == IsolationRule.None)
+            return true;
+        if ((onset ?? isolation.FallbackPosition) is not { } at)
+            return Reject("its announcement could not be confirmed and nothing vouches for it");
+        if (AnnouncementIsolation.Measure(at, ctx.SpeechSegments) is not { } flanks)
+            // No VAD pre-pass, so there is nothing to measure the pauses with. Not a reason to
+            // throw the mark away: the check is an extra safeguard, and a run without VAD is
+            // exactly as well off as it was before this one existed.
+            return true;
+        return AnnouncementIsolation.Satisfies(flanks, isolation.Rule)
+               || Reject($"it is not set off by a pause ({AnnouncementIsolation.Describe(flanks, isolation.Rule)})");
+
+        bool Reject(string why)
+        {
+            var what = number is { } n ? $"chapter {n}" : "the named mark";
+            _log?.Invoke($"discarded {what} at {FormatTimestamp(onset ?? isolation.FallbackPosition ?? 0)} - {why}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -268,7 +321,7 @@ internal sealed class MarkPlacer
         var verified = walked;
         if (_options.PreciseMark && !markConfirmed)
             verified = await _refiner.VerifyMarkBeforeJingleAsync(
-                walked, mark, ctx.File, ctx.InputDecoder, ctx.PhraseRegex, ctx.SpeechSegments, ct);
+                walked, mark, ctx.File, ctx.InputDecoder, ctx.Announcement, ctx.SpeechSegments, ct);
 
         var quietest = await _refiner.SnapToQuietestPointAsync(verified, ctx.File, ctx.InputDecoder, ct);
         if (quietest != verified)

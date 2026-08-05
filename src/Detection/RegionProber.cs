@@ -8,6 +8,7 @@ using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;
 using ABChapterize.Vad;
+using static ABChapterize.Language.NumberWordParser;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.DetectionTuning;
 using static ABChapterize.Detection.GapPlanning;
@@ -51,7 +52,7 @@ internal sealed record ProbeEnvironment(
     MarkPlacer Marks,
     Func<float[], CancellationToken, ITranscriber?, Task<List<TranscriptSegment>>> TranscribeCounting,
     Action<string, List<TranscriptSegment>> LogTranscript,
-    Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> FindCappedPhraseMatches,
+    Func<List<TranscriptSegment>, LanguageProfile, int?, BareNumberReading, IEnumerable<PhraseMatch>> FindCappedPhraseMatches,
     Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? SecondOpinion = null);
 
 /// <summary>
@@ -1009,7 +1010,9 @@ internal sealed class RegionProber
         if (_env.Options.IgnoreChapterNumbers)
             return marks;
 
-        foreach (var heard in _env.FindCappedPhraseMatches(segments, Language.Profile, mergeBoundarySegIndex))
+        foreach (var heard in _env.FindCappedPhraseMatches(
+                     segments, Language.Profile, mergeBoundarySegIndex,
+                     BareNumberReadingFor(WideBareNumberReading)))
         {
             var match = heard;
             var phraseAbs = start + match.PhraseStartSeconds;
@@ -1058,6 +1061,23 @@ internal sealed class RegionProber
     internal NumberBounds SequenceBounds(int windowLast)
         => new(windowLast > 0 ? windowLast : (_env.Options.ExpectedStartChapter ?? 1) - 1,
                _gapAbove ?? _region.UpperNumber);
+
+    /// <summary>
+    /// Whether this window is hunting known missing numbers inside a stretch the sequence closes
+    /// from above - a sequence-gap re-probe (<see cref="_gapAbove"/>), a Pass 2.5 or --verify gap
+    /// region (<see cref="DetectionRegion.UpperNumber"/>) - rather than scanning forward into a book
+    /// whose next chapter number is whatever comes next.
+    /// <para>
+    /// This is what decides how hard <c>--chapter-phrase none</c> looks at a transcript. The two
+    /// questions are the same question: the wider reading is affordable exactly where the hole
+    /// already says which numbers may appear, because a wrong one is then rejected before any work
+    /// is spent on it, and unaffordable on the forward scan, where every number spoken in the prose
+    /// of an 18-hour book would buy itself a refinement. It also decides whether
+    /// <see cref="AnnouncementIsolation"/> then has to vouch for the position, so the licence and
+    /// the check that pays for it can never be enabled apart.
+    /// </para>
+    /// </summary>
+    private bool WideBareNumberReading => (_gapAbove ?? _region.UpperNumber) != null;
 
     /// <summary>
     /// Reports the announcements this window heard but could not number, queues the window for the
@@ -1251,9 +1271,16 @@ internal sealed class RegionProber
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
             Language.Profile.Language);
-        time = (await _env.Marks.PlaceAsync(
-            null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct))
-            .TimeSeconds;
+        // The prologue and epilogue must sit behind a real pause, in every pass rather than only in
+        // the late ones a bare number's check is reserved for. They are cheap to guard - the check
+        // is Pass 1 geometry, no decoding - and they need it most: nothing bounds where they may
+        // fall the way the chapter sequence bounds a number, and at most one of each exists per
+        // book, so a false match does not merely add a mark, it replaces the real one.
+        if (await _env.Marks.PlaceAsync(
+                null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion,
+                markCtx, NamedIsolationFor(match.Phrase, phraseAbs), ct) is not { } placed)
+            return;
+        time = placed.TimeSeconds;
 
         // Second dedupe pass, now against the placed time. The pre-placement one compares phrase
         // times, which two probes of the same announcement can easily disagree about by more than
@@ -1283,6 +1310,28 @@ internal sealed class RegionProber
                          await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
                          $"){LowConfidenceNote(match.Confidence)}");
     }
+
+    /// <summary>
+    /// The isolation check for a named (prologue/epilogue/<c>--custom</c>) mark:
+    /// <see cref="IsolationRule.LeadIn"/> for the two the language profile flags, nothing at all for
+    /// a <c>--custom</c> mapping. See <see cref="NamedPhrase.RequiresLeadIn"/> for why they differ.
+    /// </summary>
+    /// <param name="phrase">The phrase that matched.</param>
+    /// <param name="phraseAbs">Absolute start of the segment it was found in - the position to
+    /// measure at when no refinement onset is available, which for a heading word opening its own
+    /// segment is the announcement itself.</param>
+    internal static IsolationCheck NamedIsolationFor(NamedPhrase phrase, double phraseAbs)
+        => phrase.RequiresLeadIn
+            ? new IsolationCheck(IsolationRule.LeadIn, phraseAbs)
+            : IsolationCheck.None;
+
+    /// <summary>Which <c>--chapter-phrase none</c> reading a pass gets, from the one flag that also
+    /// decides whether <see cref="AnnouncementIsolation"/> vets the result; see
+    /// <see cref="WideBareNumberReading"/>. Shared with <see cref="ChapterDetector"/>'s own passes so
+    /// the two spell the pairing the same way.</summary>
+    /// <param name="wide">Whether this pass hunts known numbers inside a bounded stretch.</param>
+    internal static BareNumberReading BareNumberReadingFor(bool wide)
+        => wide ? BareNumberReading.LeadingASentence : BareNumberReading.SpokenAloneAtSegmentStart;
 
     /// <summary>
     /// Whether an in-scope named match is to be passed over without becoming a mark. Two reasons,
@@ -1456,12 +1505,18 @@ internal sealed class RegionProber
             return null;
         var (time, markSilence, markRegion) = placement;
 
-        var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, Language.Profile.PhraseRegex,
+        var reading = BareNumberReadingFor(WideBareNumberReading);
+        var markCtx = new MarkContext(
+            _ctx.File, _ctx.Info.InputDecoder, Language.Profile.AnnouncementFor(reading),
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
             Language.Profile.Language);
-        var placed = await _env.Marks.PlaceAsync(
-            new NumberCheck(match.Number, Language.Profile, SequenceBounds(windowLast)),
-            time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx, ct);
+        if (await _env.Marks.PlaceAsync(
+                new NumberCheck(match.Number, Language.Profile, SequenceBounds(windowLast)),
+                time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx,
+                AnnouncementIsolation.ForChapter(
+                    Language.Profile, match, phraseAbs, WideBareNumberReading),
+                ct) is not { } placed)
+            return null;
         // Placement may have re-read the number out of the refinement's own probes, so everything
         // below reports and records what those settled on rather than what the window heard.
         time = placed.TimeSeconds;

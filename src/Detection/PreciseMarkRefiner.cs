@@ -4,9 +4,9 @@
 
 using ABChapterize.Audio;
 using ABChapterize.Cli;
+using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Vad;
-using System.Text.RegularExpressions;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.DetectionTuning;
 
@@ -31,8 +31,15 @@ namespace ABChapterize.Detection;
 /// behind those answers are the closest, most narrowly framed look at the announcement anything in
 /// the run gets - typically five of them, sometimes seventeen - and reading a chapter
 /// <em>number</em> out of them costs nothing extra (<see cref="RefinedNumberVote"/>).</param>
+/// <param name="OnsetSeconds">Where the announcement itself was found to begin - the anchored
+/// onset the mark was derived from, before <c>--mark-lead</c> and the quiet snap moved it; null
+/// whenever <paramref name="PhraseHeard"/> is false. Carried separately from
+/// <paramref name="Mark"/> because <see cref="AnnouncementIsolation"/> measures the pauses around
+/// the <em>announcement</em>, and a mark deliberately sits a fraction of a second inside the pause
+/// in front of it.</param>
 internal readonly record struct PreciseMarkResult(
-    double Mark, bool PhraseHeard, IReadOnlyList<List<TranscriptSegment>> PhraseReadings);
+    double Mark, bool PhraseHeard, IReadOnlyList<List<TranscriptSegment>> PhraseReadings,
+    double? OnsetSeconds = null);
 
 /// <summary>Implements the precise marking correction (<see cref="CliOptions.PreciseMark"/>):
 /// verifies a default-mode mark by directly asking Whisper whether the chapter phrase starts
@@ -101,7 +108,7 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
-    /// Checks whether <paramref name="phraseRegex"/>'s announcement is really the first thing heard
+    /// Checks whether <paramref name="announcement"/> is really the first thing heard
     /// starting at <paramref name="start"/>, by transcribing a short, isolated window there
     /// directly - the precise marking correction's basic building block (see
     /// <see cref="RefinePreciseMarkAsync"/>), used both for the mark itself and for every
@@ -115,12 +122,13 @@ internal sealed class PreciseMarkRefiner
     /// <param name="start">Absolute position to check.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
-    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
+    /// <param name="announcement">The announcement to look for: the chapter phrase for a numbered
+    /// chapter, a number spoken alone under <c>--chapter-phrase none</c>, or the matching
+    /// prologue/epilogue phrase for a named mark.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>True when the first non-blank transcribed segment contains the chapter phrase.</returns>
     private async Task<bool> PreciseMarkPhraseFoundAsync(
-        double start, string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
+        double start, string file, string? inputDecoder, AnnouncementMatcher announcement, CancellationToken ct)
     {
         // The bisection reaches a probe position by repeated halving and the sweep by repeated
         // addition, so an unrounded position accumulates binary-float dust (0.24999999999999997
@@ -135,7 +143,7 @@ internal sealed class PreciseMarkRefiner
         // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
         // *non-blank* segment is what actually starts at or after the checked position.
         var first = transcript.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Text));
-        var found = first.Text != null && phraseRegex.IsMatch(first.Text);
+        var found = first.Text != null && announcement.Matches(first.Text);
         if (found)
             _phraseReadings?.Add(transcript);
         LogProbe($"onset probe {length:0.00}s@{FormatTimestamp(decodeStart)} " +
@@ -265,8 +273,9 @@ internal sealed class PreciseMarkRefiner
     /// <param name="mark">The mark <see cref="JingleGeometry.RefineDefaultMark"/> already computed.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
-    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
+    /// <param name="announcement">The announcement to look for: the chapter phrase for a numbered
+    /// chapter, a number spoken alone under <c>--chapter-phrase none</c>, or the matching
+    /// prologue/epilogue phrase for a named mark.</param>
     /// <param name="language">The file's resolved language, for the upgrade-model retry.</param>
     /// <param name="phraseAbs">Absolute start of the transcript segment(s) the phrase was matched
     /// in - the search bracket, together with the two that follow.</param>
@@ -282,7 +291,7 @@ internal sealed class PreciseMarkRefiner
     /// left as given when neither model could confirm it), quiet-snapped as a final step, paired
     /// with whether the phrase was ever actually heard - see <see cref="PreciseMarkResult"/>.</returns>
     internal async Task<PreciseMarkResult> RefinePreciseMarkAsync(
-        double mark, string file, string? inputDecoder, Regex phraseRegex, string language,
+        double mark, string file, string? inputDecoder, AnnouncementMatcher announcement, string language,
         double phraseAbs, double phraseEndAbs, double transcriptEnd,
         IReadOnlyList<Silence> silences, CancellationToken ct)
     {
@@ -291,7 +300,7 @@ internal sealed class PreciseMarkRefiner
         try
         {
             var onset = await LocateOnsetAsync(
-                mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
+                mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, announcement, ct);
             if (onset == null && _transcribeUpgraded is { } upgraded)
             {
                 _log?.Invoke($"could not confirm the phrase near {FormatTimestamp(mark)} - " +
@@ -300,7 +309,7 @@ internal sealed class PreciseMarkRefiner
                 try
                 {
                     onset = await LocateOnsetAsync(
-                        mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
+                        mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, announcement, ct);
                 }
                 finally
                 {
@@ -309,11 +318,13 @@ internal sealed class PreciseMarkRefiner
             }
 
             double result;
+            double? anchoredOnset = null;
             var heard = onset != null;
             if (onset is { } found)
             {
                 var anchored = await AnchorOnsetToSoundAsync(
                     found, silences, file, inputDecoder, ct);
+                anchoredOnset = anchored;
                 if (anchored != found)
                     _log?.Invoke(
                         $"onset {FormatTimestamp(found)} anchored back to {FormatTimestamp(anchored)}, " +
@@ -334,7 +345,7 @@ internal sealed class PreciseMarkRefiner
             var quietest = await SnapToQuietestPointAsync(result, file, inputDecoder, ct);
             if (quietest != result)
                 _log?.Invoke($"nudged {FormatTimestamp(result)} to quieter {FormatTimestamp(quietest)}");
-            return new PreciseMarkResult(quietest, heard, readings);
+            return new PreciseMarkResult(quietest, heard, readings, anchoredOnset);
         }
         finally
         {
@@ -474,17 +485,17 @@ internal sealed class PreciseMarkRefiner
     /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="announcement">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The announcement's onset, or null when nothing could be confirmed.</returns>
     private async Task<double?> LocateOnsetAsync(
         double mark, double phraseAbs, double phraseEndAbs, double transcriptEnd, string file,
-        string? inputDecoder, Regex phraseRegex, CancellationToken ct)
+        string? inputDecoder, AnnouncementMatcher announcement, CancellationToken ct)
     {
         var confirmed = await LocatePhraseByShrinkingWindowAsync(
-            mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, phraseRegex, ct);
+            mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, announcement, ct);
         return confirmed is { } hit
-            ? await FindOnsetEdgeAsync(hit, file, inputDecoder, phraseRegex, ct)
+            ? await FindOnsetEdgeAsync(hit, file, inputDecoder, announcement, ct)
             : null;
     }
 
@@ -536,8 +547,9 @@ internal sealed class PreciseMarkRefiner
     /// <see cref="MarkBeforeJingleVerifyMinGapSeconds"/> guard.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for: the chapter phrase for a numbered
-    /// chapter, or the matching prologue/epilogue phrase for a named mark.</param>
+    /// <param name="announcement">The announcement to look for: the chapter phrase for a numbered
+    /// chapter, a number spoken alone under <c>--chapter-phrase none</c>, or the matching
+    /// prologue/epilogue phrase for a named mark.</param>
     /// <param name="speechSegments">Raw VAD speech segments for the whole file, chronological;
     /// empty when the VAD pre-pass did not run, in which case there is nothing to search beyond
     /// <paramref name="walked"/> itself.</param>
@@ -547,7 +559,7 @@ internal sealed class PreciseMarkRefiner
     /// no backward candidate ever cleared the check.</returns>
     internal async Task<double> VerifyMarkBeforeJingleAsync(
         double walked, double originalMark, string file, string? inputDecoder,
-        Regex phraseRegex, List<SpeechSegment> speechSegments, CancellationToken ct)
+        AnnouncementMatcher announcement, List<SpeechSegment> speechSegments, CancellationToken ct)
     {
         // The probe window at `walked` reaches forward far enough to hear the announcement the walk
         // retreated from, so a "still audible" reading there would be structurally guaranteed
@@ -560,7 +572,7 @@ internal sealed class PreciseMarkRefiner
             return walked;
         }
 
-        if (!await PreciseMarkPhraseFoundAsync(walked, file, inputDecoder, phraseRegex, ct))
+        if (!await PreciseMarkPhraseFoundAsync(walked, file, inputDecoder, announcement, ct))
             return walked;
 
         var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
@@ -573,7 +585,7 @@ internal sealed class PreciseMarkRefiner
         foreach (var candidate in candidates)
         {
             ct.ThrowIfCancellationRequested();
-            if (!await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
+            if (!await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, announcement, ct))
             {
                 _log?.Invoke(
                     $"--mark-before-jingle: verification moved {FormatTimestamp(walked)} " +
@@ -748,28 +760,28 @@ internal sealed class PreciseMarkRefiner
     /// and only ever moves later, since the plateau extends forward to the onset.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="announcement">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The plateau's right edge, less one lead-in: located to within
     /// <see cref="PreciseMarkFixedStepSeconds"/>, and biased late against the announcement's true
     /// onset by however far Whisper kept recognizing a clipped leading word - which is what
     /// <see cref="AnchorOnsetToSoundAsync"/> then takes back off.</returns>
     private async Task<double> FindOnsetEdgeAsync(
-        double confirmed, string file, string? inputDecoder, Regex phraseRegex, CancellationToken ct)
+        double confirmed, string file, string? inputDecoder, AnnouncementMatcher announcement, CancellationToken ct)
     {
         // Measured from the position the search set out from, not from wherever a resumed walk
         // restarts, so no number of resumes can add up to walking into the next chapter.
         var limit = confirmed + _options.MaxJingleSeconds + PhraseMarginSeconds;
-        var edge = await WalkPlateauEdgeAsync(confirmed, limit, file, inputDecoder, phraseRegex, ct);
+        var edge = await WalkPlateauEdgeAsync(confirmed, limit, file, inputDecoder, announcement, ct);
 
         for (var resumes = 0; resumes < PreciseMarkPlateauResumeLimit; resumes++)
         {
-            if (await FindResumedPlateauAsync(edge, limit, file, inputDecoder, phraseRegex, ct)
+            if (await FindResumedPlateauAsync(edge, limit, file, inputDecoder, announcement, ct)
                 is not { } resumed)
                 break;
             _log?.Invoke($"phrase heard again at {FormatTimestamp(resumed)}, past the edge at " +
                          $"{FormatTimestamp(edge)} - resuming the onset walk there");
-            edge = await WalkPlateauEdgeAsync(resumed, limit, file, inputDecoder, phraseRegex, ct);
+            edge = await WalkPlateauEdgeAsync(resumed, limit, file, inputDecoder, announcement, ct);
         }
         return OnsetOf(edge);
     }
@@ -784,11 +796,11 @@ internal sealed class PreciseMarkRefiner
     /// <param name="limit">Absolute position the walk may not probe beyond.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="announcement">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The last probe position that still heard the phrase.</returns>
     private async Task<double> WalkPlateauEdgeAsync(
-        double from, double limit, string file, string? inputDecoder, Regex phraseRegex,
+        double from, double limit, string file, string? inputDecoder, AnnouncementMatcher announcement,
         CancellationToken ct)
     {
         var lo = from;
@@ -798,7 +810,7 @@ internal sealed class PreciseMarkRefiner
         {
             ct.ThrowIfCancellationRequested();
             var probe = Math.Round(from + delta, 6);
-            if (!await PreciseMarkPhraseFoundAsync(probe, file, inputDecoder, phraseRegex, ct))
+            if (!await PreciseMarkPhraseFoundAsync(probe, file, inputDecoder, announcement, ct))
             {
                 hi = probe;
                 break;
@@ -813,7 +825,7 @@ internal sealed class PreciseMarkRefiner
         {
             ct.ThrowIfCancellationRequested();
             var mid = Math.Round((lo + failed) / 2, 6);
-            if (await PreciseMarkPhraseFoundAsync(mid, file, inputDecoder, phraseRegex, ct))
+            if (await PreciseMarkPhraseFoundAsync(mid, file, inputDecoder, announcement, ct))
                 lo = mid;
             else
                 failed = mid;
@@ -838,13 +850,13 @@ internal sealed class PreciseMarkRefiner
     /// <param name="limit">Absolute position no probe may be placed beyond.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="announcement">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The furthest position past <paramref name="edge"/> at which the phrase is still the
     /// first thing heard, or null when none is - the ordinary case, in which
     /// <paramref name="edge"/> really was the onset.</returns>
     private async Task<double?> FindResumedPlateauAsync(
-        double edge, double limit, string file, string? inputDecoder, Regex phraseRegex,
+        double edge, double limit, string file, string? inputDecoder, AnnouncementMatcher announcement,
         CancellationToken ct)
     {
         double? resumed = null;
@@ -854,7 +866,7 @@ internal sealed class PreciseMarkRefiner
             if (probe > limit)
                 break;
             ct.ThrowIfCancellationRequested();
-            if (await PreciseMarkPhraseFoundAsync(probe, file, inputDecoder, phraseRegex, ct))
+            if (await PreciseMarkPhraseFoundAsync(probe, file, inputDecoder, announcement, ct))
                 resumed = probe;
         }
         return resumed;
@@ -944,13 +956,13 @@ internal sealed class PreciseMarkRefiner
     /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="announcement">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>A position at which the phrase is the first thing heard, or null when the search
     /// found no edge or no backoff behind it could be confirmed.</returns>
     private async Task<double?> LocatePhraseByShrinkingWindowAsync(
         double mark, double phraseAbs, double phraseEndAbs, double transcriptEnd, string file,
-        string? inputDecoder, Regex phraseRegex, CancellationToken ct)
+        string? inputDecoder, AnnouncementMatcher announcement, CancellationToken ct)
     {
         // The bracket the announcement has to lie in: the segment(s) it was matched in, a phrase
         // margin either side for a timestamp that reported them slightly narrow, and normally no
@@ -1007,7 +1019,7 @@ internal sealed class PreciseMarkRefiner
 
         var origin = Math.Clamp(mark, Math.Min(segmentFloor, ceiling), ceiling);
         if (await FindPhraseSurvivalEdgeAsync(
-                origin, floor, ceiling, file, inputDecoder, phraseRegex, ct)
+                origin, floor, ceiling, file, inputDecoder, announcement, ct)
             is not { } survival)
         {
             _log?.Invoke($"the phrase was not heard anywhere from {FormatTimestamp(floor)} on - " +
@@ -1026,7 +1038,7 @@ internal sealed class PreciseMarkRefiner
         {
             var candidate = Math.Round(Math.Max(0, aim - backoff), 6);
             ct.ThrowIfCancellationRequested();
-            if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, phraseRegex, ct))
+            if (await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, announcement, ct))
                 return candidate;
             if (candidate == 0)
                 break;
@@ -1040,7 +1052,7 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
-    /// Finds the last position from which <paramref name="phraseRegex"/> still survives being cut
+    /// Finds the last position from which <paramref name="announcement"/> still survives being cut
     /// off at the front - the step edge <see cref="LocatePhraseByShrinkingWindowAsync"/> aims by.
     /// Every probe transcribes from the position asked about to a <em>fixed</em> end past the
     /// announcement, so the predicate is monotone and a bracket can be halved; see that method for
@@ -1086,7 +1098,7 @@ internal sealed class PreciseMarkRefiner
     /// <param name="ceiling">Latest position it can be at, and the window's end anchor.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="announcement">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The furthest position the phrase is known to survive from, and whether that is the
     /// edge itself. <c>IsEdge</c> holds in the ordinary case, where the next step failed and the
@@ -1099,14 +1111,14 @@ internal sealed class PreciseMarkRefiner
     /// own failure reports.</returns>
     private async Task<(double Position, bool IsEdge)?> FindPhraseSurvivalEdgeAsync(
         double origin, double floor, double ceiling, string file, string? inputDecoder,
-        Regex phraseRegex, CancellationToken ct)
+        AnnouncementMatcher announcement, CancellationToken ct)
     {
         var end = ceiling;
 
         async Task<bool> SurvivesAsync(double from)
         {
             ct.ThrowIfCancellationRequested();
-            var found = await PhraseSurvivesFromAsync(from, end, file, inputDecoder, phraseRegex, ct);
+            var found = await PhraseSurvivesFromAsync(from, end, file, inputDecoder, announcement, ct);
             if (!found)
                 end = Math.Min(end, from + PhraseMarginSeconds);
             return found;
@@ -1163,7 +1175,7 @@ internal sealed class PreciseMarkRefiner
     }
 
     /// <summary>
-    /// Asks whether <paramref name="phraseRegex"/> is still found anywhere between
+    /// Asks whether <paramref name="announcement"/> is still found anywhere between
     /// <paramref name="from"/> and <paramref name="until"/> - the monotone question
     /// <see cref="FindPhraseSurvivalEdgeAsync"/> bisects on.
     /// <para>
@@ -1186,11 +1198,11 @@ internal sealed class PreciseMarkRefiner
     /// the decode reaches, not a cap on it.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="phraseRegex">The announcement to look for.</param>
+    /// <param name="announcement">The announcement to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>True when some transcribed segment of that stretch matches the phrase.</returns>
     private async Task<bool> PhraseSurvivesFromAsync(
-        double from, double until, string file, string? inputDecoder, Regex phraseRegex,
+        double from, double until, string file, string? inputDecoder, AnnouncementMatcher announcement,
         CancellationToken ct)
     {
         from = Math.Round(Math.Max(0, from), 6);
@@ -1199,7 +1211,7 @@ internal sealed class PreciseMarkRefiner
         var length = Math.Round(Math.Max(until - from, PreciseMarkMinSurvivalSeconds), 6);
         var samples = await _audio.DecodePcmAsync(file, from, length, inputDecoder, ct);
         var transcript = await _transcribe(samples, ct);
-        var survives = transcript.Any(s => s.Text != null && phraseRegex.IsMatch(s.Text));
+        var survives = transcript.Any(s => s.Text != null && announcement.Matches(s.Text));
         if (survives)
             _phraseReadings?.Add(transcript);
         LogProbe($"survival probe {length:0.00}s@{FormatTimestamp(from)} " +

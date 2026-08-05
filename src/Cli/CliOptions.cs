@@ -1533,9 +1533,11 @@ public sealed class CliOptions
     {
         var named = new List<NamedPhrase>();
         Add("prologue", _prologuePhraseSpec?.For(language) ?? defaults.ProloguePhrase,
-            _prologueTitleSpec?.For(language) ?? defaults.PrologueTitle, NamedPhraseScope.BeforeFirstChapter);
+            _prologueTitleSpec?.For(language) ?? defaults.PrologueTitle,
+            NamedPhraseScope.BeforeFirstChapter, requiresLeadIn: true);
         Add("epilogue", _epiloguePhraseSpec?.For(language) ?? defaults.EpiloguePhrase,
-            _epilogueTitleSpec?.For(language) ?? defaults.EpilogueTitle, NamedPhraseScope.AfterFirstChapter);
+            _epilogueTitleSpec?.For(language) ?? defaults.EpilogueTitle,
+            NamedPhraseScope.AfterFirstChapter, requiresLeadIn: true);
         for (var i = 0; i < _customMappings.Count; i++)
         {
             // A mapping tagged for another language is left out entirely rather than compiled and
@@ -1551,13 +1553,13 @@ public sealed class CliOptions
         return named;
 
         void Add(string kind, string phrase, string markTitle, NamedPhraseScope scope,
-            bool repeatable = false)
+            bool repeatable = false, bool requiresLeadIn = false)
         {
             if (phrase.Length == 0)
                 return;
             var regex = CompilePhraseRegex(phrase, kind).Regex;
             ValidateTitleGroupRefs(kind, phrase, markTitle, regex);
-            named.Add(new NamedPhrase(kind, regex, markTitle, scope, repeatable));
+            named.Add(new NamedPhrase(kind, regex, markTitle, scope, repeatable, requiresLeadIn));
         }
     }
 

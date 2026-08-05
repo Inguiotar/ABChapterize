@@ -13,6 +13,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Text;
+using static ABChapterize.Language.NumberWordParser;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.DetectionTuning;
 using static ABChapterize.Detection.GapPlanning;
@@ -121,7 +122,11 @@ public sealed class ChapterDetector
             _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
                 ? SecondOpinionAsync
                 : null,
-            FindCappedPhraseMatches);
+            // The refinement's number re-read looks at probe windows that open on the announcement
+            // itself, so the narrow --chapter-phrase none reading is the one that fits: the wider
+            // one would only offer it numbers from the surrounding prose.
+            (segments, profile, mergeBoundary) => FindCappedPhraseMatches(
+                segments, profile, mergeBoundary, BareNumberReading.SpokenAloneAtSegmentStart));
     }
 
     /// <summary>
@@ -405,7 +410,8 @@ public sealed class ChapterDetector
         => new(_options, _audio, _vad, _log, _marks!,
             (samples, ct, transcriber) => TranscribeCountingAsync(samples, ct, transcriber),
             LogTranscript,
-            (segments, profile, mergeBoundary) => FindCappedPhraseMatches(segments, profile, mergeBoundary),
+            (segments, profile, mergeBoundary, reading) =>
+                FindCappedPhraseMatches(segments, profile, mergeBoundary, reading),
             _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
                 ? SecondOpinionAsync
                 : null);
@@ -1612,7 +1618,8 @@ public sealed class ChapterDetector
         var phraseEndAbs = windowStart + match.PhraseEndSeconds;
         var refined = await _marks!.Refiner.RefinePreciseMarkAsync(
             Math.Max(0, phraseAbs - _options.MarkLeadSeconds), file, info.InputDecoder,
-            profile.PhraseRegex, language, phraseAbs, phraseEndAbs, windowStart + windowLen,
+            profile.AnnouncementFor(BareNumberReading.SpokenAloneAtSegmentStart),
+            language, phraseAbs, phraseEndAbs, windowStart + windowLen,
             [], ct);
         var shift = Math.Abs(refined.Mark - marking.StartSeconds);
         if (shift < VerifyFixMinShiftSeconds)
@@ -1870,7 +1877,8 @@ public sealed class ChapterDetector
             // Unlike Pass 2 there is no window-relative timing rule here, so matching simply
             // runs in absolute file time: a match's PhraseStartSeconds is already absolute.
             foreach (var match in FindCappedPhraseMatches(matchSegments, profile,
-                         carried.Count > 0 ? carried.Count : null))
+                         carried.Count > 0 ? carried.Count : null,
+                         RegionProber.BareNumberReadingFor(remaining is not null)))
             {
                 var phraseAbs = match.PhraseStartSeconds;
                 // A match entirely inside the carried tail was already found (and reported) by
@@ -2019,7 +2027,9 @@ public sealed class ChapterDetector
             var retryAbs = TrimLeadingNonSpeech(
                 ShiftSegments(segments, retryStart), allSilences, nonSpeechRegions, _vad != null);
 
-            foreach (var match in FindCappedPhraseMatches(retryAbs, profile))
+            foreach (var match in FindCappedPhraseMatches(
+                         retryAbs, profile, null,
+                         RegionProber.BareNumberReadingFor(remaining is not null)))
             {
                 var wanted = remaining is null
                     ? IsAboveEveryKnownChapter(match.Number, knownChapters, found)
@@ -2115,12 +2125,19 @@ public sealed class ChapterDetector
             statSilence = anchor;
         }
         var markCtx = new MarkContext(
-            file, inputDecoder, profile.PhraseRegex, allSilences, speechSegments, transcript,
-            profile.Language);
-        var placed = await _marks!.PlaceAsync(
-            new NumberCheck(match.Number, profile,
-                BracketingBounds(phraseAbs, knownChapters, found, _options.ExpectedStartChapter)),
-            time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx, ct);
+            file, inputDecoder,
+            profile.AnnouncementFor(RegionProber.BareNumberReadingFor(remaining is not null)),
+            allSilences, speechSegments, transcript, profile.Language);
+        // Pass 3 only ever reads a bare number under the wider reading where the gap it is filling
+        // has an expected-number list - the same condition RegionProber.WideBareNumberReading
+        // expresses for the probing passes - so the isolation check is asked for on exactly those.
+        if (await _marks!.PlaceAsync(
+                new NumberCheck(match.Number, profile,
+                    BracketingBounds(phraseAbs, knownChapters, found, _options.ExpectedStartChapter)),
+                time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx,
+                AnnouncementIsolation.ForChapter(profile, match, phraseAbs, remaining is not null),
+                ct) is not { } placed)
+            return;
         // The refinement's own probes may have re-read the number (see RefinedNumberVote), so the
         // gap's remaining-numbers bookkeeping has to follow what they settled on.
         time = placed.TimeSeconds;
@@ -2244,7 +2261,9 @@ public sealed class ChapterDetector
                 var subAbs = TrimLeadingNonSpeech(
                     ShiftSegments(subSegments, subStart), allSilences, nonSpeechRegions, _vad != null);
 
-                foreach (var match in FindCappedPhraseMatches(subAbs, profile))
+                foreach (var match in FindCappedPhraseMatches(
+                             subAbs, profile, null,
+                             RegionProber.BareNumberReadingFor(remaining is not null)))
                 {
                     var wanted = remaining is null
                         ? IsAboveEveryKnownChapter(match.Number, knownChapters, found)
@@ -2300,10 +2319,14 @@ public sealed class ChapterDetector
     /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
     /// <param name="mergeBoundarySegIndex">Passed straight through to
     /// <see cref="PhraseMatching.FindPhraseMatches"/>.</param>
+    /// <param name="reading">The same, and defaulted the same: a caller that says nothing gets the
+    /// narrow <c>--chapter-phrase none</c> reading, which is the safe answer for every pass that
+    /// has no bounded hole to justify the wider one.</param>
     private IEnumerable<PhraseMatch> FindCappedPhraseMatches(
-        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null)
+        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null,
+        BareNumberReading reading = BareNumberReading.SpokenAloneAtSegmentStart)
     {
-        foreach (var match in FindPhraseMatches(segments, profile, mergeBoundarySegIndex))
+        foreach (var match in FindPhraseMatches(segments, profile, mergeBoundarySegIndex, reading))
         {
             if (_options.EffectiveMaxChapterNumber is { } cap && match.Number > cap)
             {

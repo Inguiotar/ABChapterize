@@ -5,6 +5,7 @@
 using ABChapterize.Cli;
 using ABChapterize.Language;
 using ABChapterize.Transcription;
+using static ABChapterize.Language.NumberWordParser;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.DetectionTuning;
 using static ABChapterize.Detection.GapPlanning;
@@ -430,7 +431,11 @@ internal sealed class SuspectNumberMender
         List<TranscriptSegment> segments, LanguageProfile profile, double frameStart, double phraseAbs,
         NumberBounds bounds)
     {
-        var candidates = _env.FindCappedPhraseMatches(segments, profile, null)
+        // Re-reads a window framed on an announcement already accepted, so the number is at the head
+        // of its segment where the narrow reading finds it; the wider one would only add in-text
+        // numbers from the surrounding prose to a ranking that is about *this* announcement.
+        var candidates = _env
+            .FindCappedPhraseMatches(segments, profile, null, BareNumberReading.SpokenAloneAtSegmentStart)
             .Select(m => (m.Number, Distance: Math.Abs(frameStart + m.PhraseStartSeconds - phraseAbs)))
             .Where(m => m.Distance <= PhraseMarginSeconds)
             .OrderByDescending(m => bounds.Admits(m.Number))

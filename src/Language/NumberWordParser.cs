@@ -152,6 +152,117 @@ public static class NumberWordParser
         return tokens.Count == 1 && TryParseRoman(tokens[0], out number);
     }
 
+    /// <summary>Which readings of a transcript segment count as a bare-number announcement under
+    /// <c>--chapter-phrase none</c>; see <see cref="FindBareNumberAnnouncement"/>.</summary>
+    public enum BareNumberReading
+    {
+        /// <summary>
+        /// The segment's opening sentence must <em>be</em> the number. What Pass 2's forward scan
+        /// uses: it walks the whole book with no upper bound on the sequence and nothing vets its
+        /// finds afterwards, so a false accept there displaces real chapters.
+        /// <para>
+        /// The strictness is measured rather than cautious. Over the 15345 transcript segments one
+        /// 18-hour Italian run logged (2026-08-05), this reading finds all 65 chapter numbers plus
+        /// five implausible extras (150, 600, 1947, 2059, 2068), every one of them out of sequence.
+        /// Merely requiring the segment to <em>start</em> with a number instead doubles the hits to
+        /// 1797 and floods the plausible range: Italian "un"/"una"/"uno" all parse as 1, and prose
+        /// such as "12 il capitano Fan Castro spostò lo sguardo" or "25 Perfino con un reattore
+        /// spento" is then indistinguishable from an announcement at the right sequence position.
+        /// </para>
+        /// </summary>
+        SpokenAloneAtSegmentStart,
+
+        /// <summary>
+        /// A sentence that is nothing but the number, but anywhere in the text rather than only at
+        /// its start. What the mark refinement asks of its own probes under a
+        /// <see cref="SpokenAloneAtSegmentStart"/> match: a refinement probe decodes a few seconds
+        /// with a lead-in, so the transcript routinely opens with a fragment of whatever preceded
+        /// the announcement and the number lands in the second sentence. Just as strict as
+        /// <see cref="SpokenAloneAtSegmentStart"/> about what a number has to look like, which is
+        /// what a Pass 2 mark needs: nothing vets where that refinement puts it.
+        /// </summary>
+        SpokenAloneAnywhere,
+
+        /// <summary>
+        /// Any sentence of the segment, and it need only <em>begin</em> with the number. For the
+        /// passes that hunt specific missing numbers inside a bounded stretch, where the hole says
+        /// which numbers may appear and
+        /// <see cref="ABChapterize.Detection.AnnouncementIsolation"/> vets the position afterwards -
+        /// so nothing about Whisper's output has to be trusted, neither its segmentation nor its
+        /// punctuation.
+        /// <para>
+        /// The punctuation half is why this cannot just be the reading above applied to every
+        /// sentence. Whisper's period after a heading number is not dependable, and specifically not
+        /// dependable <em>across machines</em>: the same window at 12:25:23 of the same book came
+        /// back as "45. Zhang Mingoua lanciò…" on one GPU and "45 Zangmingoa lanciò…" on another
+        /// (2026-08-05; see the cross-machine reproducibility note in the project docs). A rule
+        /// hinging on that period quietly finds different chapters on different hardware.
+        /// </para>
+        /// </summary>
+        LeadingASentence,
+    }
+
+    /// <summary>A bare-number announcement read out of one transcript segment.</summary>
+    /// <param name="Number">The number that was spoken.</param>
+    /// <param name="SpokenAlone">Whether <see cref="BareNumberReading.SpokenAloneAtSegmentStart"/> would
+    /// have found this one too. The distinction survives into
+    /// <see cref="ABChapterize.Detection.PhraseMatching.PhraseMatch"/> because it is what a mark
+    /// falls back on when the isolation guard cannot run: a number the strict reading also accepts
+    /// stands on its own evidence, while one only the wide reading found stands on the guard alone
+    /// and must not be kept without it.</param>
+    public readonly record struct BareNumberAnnouncement(int Number, bool SpokenAlone);
+
+    /// <summary>
+    /// Reads a <c>--chapter-phrase none</c> announcement out of one transcript segment.
+    /// <para>
+    /// The unit is a <em>sentence</em>, not the segment, and that is the entire point. Until
+    /// 2026-08-05 this asked whether the segment <em>was</em> a number start to finish, on the
+    /// reasoning that Whisper ends a segment where the speaking stops and so brackets a number
+    /// spoken alone. It does not, reliably: on "Corsa nello spazio" (18 h, 65 chapters, build 244)
+    /// it glued the announcement onto the first sentence of the chapter - "45. Zhang Mingoua
+    /// lanciò un'occhiata…" - for ten of them, and every one was then discarded despite having been
+    /// transcribed correctly, chapter 53 six separate times across two models.
+    /// </para>
+    /// <para>
+    /// The split deliberately requires whitespace after the sentence mark, so "2.179" stays one
+    /// token rather than yielding a spurious "2" - a real case from the same book, whose epilogue
+    /// is followed by the year 2179.
+    /// </para>
+    /// <para>
+    /// <see cref="BareNumberReading"/> then decides how much of Whisper's own formatting is being
+    /// leaned on. Both levels are calibrated against that book's logged transcripts rather than
+    /// chosen; see the two values for the counts.
+    /// </para>
+    /// </summary>
+    /// <param name="text">One transcript segment's text.</param>
+    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="reading">How much of the segment counts; see <see cref="BareNumberReading"/>.</param>
+    /// <returns>The announcement, or null when no sentence in scope carries one.</returns>
+    public static BareNumberAnnouncement? FindBareNumberAnnouncement(
+        string text, string language, BareNumberReading reading)
+    {
+        var sentences = SentenceBreak.Split(text);
+        for (var i = 0; i < sentences.Length; i++)
+        {
+            // The three readings are nested, so one walk serves all of them - and SpokenAlone can
+            // report whether the strictest would also have taken this, without a second pass.
+            if (TryParseWholeText(sentences[i], language, out var whole))
+                return new BareNumberAnnouncement(whole, SpokenAlone: i == 0);
+            if (reading == BareNumberReading.SpokenAloneAtSegmentStart)
+                return null;
+            if (reading == BareNumberReading.LeadingASentence &&
+                TryExtractNumber(sentences[i], language, out var leading))
+                return new BareNumberAnnouncement(leading, SpokenAlone: false);
+        }
+        return null;
+    }
+
+    /// <summary>Splits a segment at its sentence boundaries: a sentence-ending punctuation mark
+    /// followed by whitespace. The whitespace is what keeps a decimal or dotted number
+    /// ("2.179") in one piece - see <see cref="FindBareNumberAnnouncement"/>.</summary>
+    private static readonly Regex SentenceBreak =
+        new(@"(?<=[.!?…])\s+", RegexOptions.CultureInvariant);
+
     /// <summary>
     /// Finds an unambiguous Roman numeral anywhere in <paramref name="text"/>, rather than only at
     /// the end nearest a chapter phrase. Written for a pre-existing marking's <em>title</em>

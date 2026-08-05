@@ -48,8 +48,18 @@ public enum NamedPhraseScope
 /// and epilogue, of which a book has at most one each, so a later match replaces an earlier one;
 /// true for <c>--custom</c> mappings, where a book may well hold a dozen "Zwischenspiel"s and each
 /// deserves its own entry.</param>
+/// <param name="RequiresLeadIn">Whether a match must be preceded by a real pause to become a mark
+/// (<see cref="ABChapterize.Detection.IsolationRule.LeadIn"/>). True for the prologue and epilogue,
+/// where the phrase is a heading word at a section boundary and a mid-sentence match is always
+/// wrong - Italian "riepilogo" contains "epilogo", and one such match destroyed a book's real
+/// epilogue mark (2026-08-05), a non-repeatable phrase's later detection replacing its earlier one.
+/// False for <c>--custom</c>: those name whatever recurring element the user says they do, at
+/// whatever position, and second-guessing that is not this code's business. Deliberately a flag of
+/// its own rather than an inference from <paramref name="Repeatable"/>, which happens to divide the
+/// same way today for an unrelated reason.</param>
 public sealed record NamedPhrase(
-    string Kind, Regex Regex, string Title, NamedPhraseScope Scope, bool Repeatable = false)
+    string Kind, Regex Regex, string Title, NamedPhraseScope Scope, bool Repeatable = false,
+    bool RequiresLeadIn = false)
 {
     /// <summary>Matches a <c>$1</c>, <c>$12</c> or <c>${name}</c> group reference in a title
     /// template. <c>$$</c> (the escape for a literal <c>$</c>) is not one, and neither is a lone

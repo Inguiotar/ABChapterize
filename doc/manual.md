@@ -439,11 +439,18 @@ hunt, `--verify` check or ".missing-marks" tag ever concerns itself with
 them. At most one of each is written per file.
 
 Because "prologue" and "epilogue" are ordinary words that also occur in
-ordinary prose, each is only accepted where it can plausibly be an
-announcement: the prologue only *before* the first chapter has been found,
-the epilogue only *after* at least one has. Within that window the last
-occurrence wins — front matter frequently lists what is coming ("read by …,
-contains a prologue") before the narrator actually announces it.
+ordinary prose — and sometimes inside longer words, Italian "riepilogo"
+containing "epilogo" — each is only accepted where it can plausibly be an
+announcement. Three things have to hold: the prologue is only looked for
+*before* the first chapter has been found and the epilogue only *after* at
+least one has; the match must be preceded by at least a second of silence or
+jingle, since a heading is spoken at a section boundary and never mid-sentence;
+and within that window the last occurrence wins — front matter frequently lists
+what is coming ("read by …, contains a prologue") before the narrator actually
+announces it.
+
+Nothing is required of what *follows* the announcement: narrators routinely
+read straight on from "Epilogue" into the epilogue's first sentence.
 
 Both are switched off by passing an empty phrase, e.g.
 `--prologue-phrase "" --epilogue-phrase ""`.
@@ -461,7 +468,9 @@ A phrase is a plain word or a `/regexp/`, exactly as for `--chapter-phrase`,
 and no number is parsed or expected. Unlike the prologue and epilogue, a
 custom phrase is accepted at **any point** in the file and **as often as it
 occurs** — a book with an interlude between every chapter gets a mark for each
-of them.
+of them — and it is exempt from the surrounding-pause requirement they are
+held to. A custom mapping names whatever recurring element you say it does,
+wherever you say it is.
 
 What it is *not* is a full-text search: a custom phrase has to be **announced**,
 and is held to exactly the same standard as a chapter phrase for deciding
@@ -737,7 +746,16 @@ narrator simply says "Seventeen." and reads on. What counts as an announcement
 is then a **number spoken alone** — one with a pause on either side of it,
 rather than one occurring inside a sentence. "Seventeen." is an announcement;
 "Seventeen men stood at the gate" is not, and neither is a year, a price or a
-house number read out in the prose.
+house number read out in the prose. A number that ends its sentence still
+counts even when the recognizer runs it together with what follows
+("Seventeen. He was late again."), which is common and no longer costs the
+chapter.
+
+Later passes look harder than the first one does, and then check their work
+against the pauses the file actually has: an announcement they turn up is only
+marked if at least a second of silence or jingle precedes it and half a second
+follows. A run's `--verbose` output says so when a candidate is dropped for
+that reason.
 
 Everything else about a run is unaffected: the prologue, the epilogue and every
 `--custom` mapping still match their own phrases as usual, and marks are placed

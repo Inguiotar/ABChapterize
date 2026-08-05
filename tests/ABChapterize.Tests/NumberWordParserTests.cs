@@ -169,8 +169,9 @@ public class NumberWordParserTests
         Assert.Equal(expected, n);
     }
 
-    /// <summary>The distinction the whole mode rests on: a number that merely opens a sentence is
-    /// prose, not an announcement.</summary>
+    /// <summary>What this particular helper is strict about: the text must be nothing but the
+    /// number. The mode built on it splits a segment into sentences first, so a number opening a
+    /// sentence still counts - see <see cref="NumberWordParser.FindBareNumberAnnouncement"/>.</summary>
     [Theory]
     [InlineData("Seventeen men stood at the gate.", "en")]
     [InlineData("Chapter seventeen.", "en")]
@@ -201,4 +202,120 @@ public class NumberWordParserTests
         Assert.True(NumberWordParser.TryExtractNumber(text, language, out var n));
         Assert.Equal(expected, n);
     }
+    /// <summary>
+    /// The reading that recovers a glued announcement: Whisper writes "45. Zhang Mingoua lanciò
+    /// un'occhiata…" as one segment, and the number is still a sentence of its own inside it. Each
+    /// of these is a real transcript line from "Corsa nello spazio" (build 244, 2026-08-05), where
+    /// the old whole-segment rule threw ten chapters away.
+    /// </summary>
+    [Theory]
+    [InlineData("45. Zhang Mingoua lanciò un'occhiata alla lettura della data.", "it", 45)]
+    [InlineData("16. Becca tirò avanti tutta la notte a caffè.", "it", 16)]
+    [InlineData("2. Era in ritardo. Terribilmente in ritardo.", "it", 2)]
+    [InlineData("Two. He was late.", "en", 2)]
+    [InlineData("Twenty-one. The reckoning began.", "en", 21)]
+    [InlineData("XIII. The shaking of the sheets.", "en", 13)]
+    [InlineData("53.", "it", 53)]
+    [InlineData("Cinquantasette", "it", 57)]
+    public void BareNumberAnnouncement_ReadsANumberThatOpensItsSegment(
+        string text, string language, int expected)
+    {
+        var announced = NumberWordParser.FindBareNumberAnnouncement(
+            text, language, NumberWordParser.BareNumberReading.SpokenAloneAtSegmentStart);
+        Assert.NotNull(announced);
+        Assert.Equal(expected, announced!.Value.Number);
+        Assert.True(announced.Value.SpokenAlone);
+    }
+
+    /// <summary>
+    /// What the two strict readings refuse, and have to: a number that merely begins a sentence
+    /// without ending it. All four are real lines from the same book, and the first is the one that
+    /// makes the point - chapter 1's announcement reads "1. 9 febbraio 2066…", so had the "1." been
+    /// dropped the date behind it must not become chapter 9. Pass 2's forward scan sees only these
+    /// readings, which is why it can walk a whole book unsupervised.
+    /// </summary>
+    [Theory]
+    [InlineData("9 febbraio 2066. Da 10 km di distanza.", "it")]
+    [InlineData("1000 km sopra le macchinazioni di Washington.", "it")]
+    [InlineData("Seventeen men stood at the gate.", "en")]
+    [InlineData("Siebzehn Jahre später kam er zurück.", "de")]
+    public void BareNumberAnnouncement_RejectsANumberThatOnlyOpensASentence(string text, string language)
+    {
+        Assert.Null(NumberWordParser.FindBareNumberAnnouncement(
+            text, language, NumberWordParser.BareNumberReading.SpokenAloneAtSegmentStart));
+        Assert.Null(NumberWordParser.FindBareNumberAnnouncement(
+            text, language, NumberWordParser.BareNumberReading.SpokenAloneAnywhere));
+    }
+
+    /// <summary>
+    /// The most permissive reading does take those, deliberately - it is only ever used where the
+    /// hole being filled says which numbers may appear and
+    /// <see cref="AnnouncementIsolation"/> then has to vouch for the position. What it must never
+    /// do is claim they stand on their own evidence, so every one comes back
+    /// <c>SpokenAlone: false</c>, which is what denies it the guard's fallback.
+    /// </summary>
+    [Theory]
+    [InlineData("9 febbraio 2066. Da 10 km di distanza.", "it", 9)]
+    [InlineData("Seventeen men stood at the gate.", "en", 17)]
+    public void BareNumberAnnouncement_WidestReadingTakesThemButFlagsThem(
+        string text, string language, int expected)
+    {
+        var wide = NumberWordParser.FindBareNumberAnnouncement(
+            text, language, NumberWordParser.BareNumberReading.LeadingASentence);
+        Assert.NotNull(wide);
+        Assert.Equal(expected, wide!.Value.Number);
+        Assert.False(wide.Value.SpokenAlone);
+    }
+
+    /// <summary>
+    /// Why the widest reading exists at all: Whisper's period after a heading number is not
+    /// dependable, and specifically not across machines. The same probe window at 12:25:23 of
+    /// "Corsa nello spazio" came back as the first of these on one GPU and the second on another
+    /// (2026-08-05) - so a rule resting on that period finds different chapters on different
+    /// hardware, and only the reading that ignores punctuation entirely sees both.
+    /// </summary>
+    [Fact]
+    public void BareNumberAnnouncement_WidestReadingSurvivesAMissingPeriod()
+    {
+        const string withPeriod = "45. Zhang Mingoua lanciò un'occhiata alla lettura della data.";
+        const string without = "45 Zangmingoa lanciò un'occhiata alla lettura della data.";
+        var strict = NumberWordParser.BareNumberReading.SpokenAloneAtSegmentStart;
+        var widest = NumberWordParser.BareNumberReading.LeadingASentence;
+
+        Assert.Equal(45, NumberWordParser.FindBareNumberAnnouncement(withPeriod, "it", strict)!.Value.Number);
+        Assert.Null(NumberWordParser.FindBareNumberAnnouncement(without, "it", strict));
+        Assert.Equal(45, NumberWordParser.FindBareNumberAnnouncement(without, "it", widest)!.Value.Number);
+    }
+
+    /// <summary>
+    /// The two readings differ on exactly one thing: a number Whisper buried behind the tail of the
+    /// previous chapter. The narrow reading (Pass 2's forward scan) passes it over, the wide one
+    /// takes it and flags that it did not open the segment - which is what makes
+    /// <see cref="AnnouncementIsolation"/>'s verdict, rather than the segmentation, decisive.
+    /// </summary>
+    [Fact]
+    public void BareNumberAnnouncement_WideReadingReachesPastTheFirstSentence()
+    {
+        const string text = "ha trovato un'astronave aliena. 3. Il presidente Amanda Santeros.";
+        Assert.Null(NumberWordParser.FindBareNumberAnnouncement(
+            text, "it", NumberWordParser.BareNumberReading.SpokenAloneAtSegmentStart));
+
+        var wide = NumberWordParser.FindBareNumberAnnouncement(
+            text, "it", NumberWordParser.BareNumberReading.SpokenAloneAnywhere);
+        Assert.NotNull(wide);
+        Assert.Equal(3, wide!.Value.Number);
+        Assert.False(wide.Value.SpokenAlone);
+    }
+
+    /// <summary>
+    /// The sentence split needs whitespace after the period, or a dotted number falls apart into a
+    /// spurious announcement. "Epilogo. 2.179. Spazio profondo." is the real line behind this - the
+    /// epilogue of "Corsa nello spazio" is followed by the year 2179, and splitting on the period
+    /// alone would have offered chapter 2 at the very end of the book.
+    /// </summary>
+    [Fact]
+    public void BareNumberAnnouncement_DoesNotSplitADottedNumber()
+        => Assert.Null(NumberWordParser.FindBareNumberAnnouncement(
+            "Epilogo. 2.179. Spazio profondo.", "it",
+            NumberWordParser.BareNumberReading.LeadingASentence));
 }

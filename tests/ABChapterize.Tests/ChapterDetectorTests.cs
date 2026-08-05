@@ -1484,6 +1484,110 @@ public sealed class ChapterDetectorTests : IDisposable
             result);
     }
 
+    /// <summary>
+    /// The regression that cost "Corsa nello spazio" ten chapters (build 244, 2026-08-05): Whisper
+    /// glues the announcement onto the first sentence of the chapter it announces, and the old rule
+    /// - the whole transcript segment must be a number - threw every one of them away despite
+    /// having read the number correctly. Pass 2's own forward scan has to take these.
+    /// </summary>
+    [Fact]
+    public async Task BareNumbers_AcceptANumberGluedToTheSentenceAfterIt()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " One."));
+                s.Add(1200, Seg(0.2, " Two. He was late. Terribly late, though he did not much care."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+    }
+
+    /// <summary>
+    /// What Pass 2's forward scan must still refuse. Both lines are real transcript from the same
+    /// book, and the first is the reason the rule cannot simply be "the segment starts with a
+    /// number": chapter 1's announcement reads "1. 9 febbraio 2066…", so a dropped "1." must not
+    /// hand chapter 9 to the date behind it.
+    /// </summary>
+    [Fact]
+    public async Task BareNumbers_StillIgnoreANumberOpeningASentence()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " One."));
+                s.Add(1200, Seg(0.2, " Two hundred men stood at the gate."));
+            });
+
+        AssertChapters([new(1, 0.25)], result.Chapters);
+    }
+
+    /// <summary>
+    /// The false epilogue that destroyed a real one (2026-08-05): Italian "riepilogo" contains
+    /// "epilogo", so the default <c>/epilogo/</c> matched mid-sentence four and a half hours before
+    /// the book's actual epilogue - and the epilogue being non-repeatable, the later <em>detection</em>
+    /// replaced the earlier one, whatever their positions. The lead-in guard settles it from Pass 1
+    /// geometry alone: the match sits inside continuous speech, so it never becomes a mark.
+    /// </summary>
+    [Fact]
+    public async Task NamedMarks_RejectAPhraseMatchedInsideContinuousSpeech()
+    {
+        var vad = new FakeVad
+        {
+            // Narration up to 1199.5, a 3 s pause, the epilogue announcement, then the text: the
+            // real geometry of a section boundary. The decoy at 600 sits mid-sentence instead.
+            Speech =
+            [
+                new(0, 599.9), new(600.2, 610), new(1100, 1199.5), new(1202.5, 1203.2), new(1205, 1300),
+            ],
+        };
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.2, " The details are deleted entirely from the recap epilogue."));
+                s.Add(1200, Seg(2.5, " Epilogue."));
+            },
+            vad);
+
+        AssertNamed([("epilogue", "Epilogue", 1202.5)], result);
+        Assert.Contains(log, l => l.Contains("discarded the named mark") &&
+                                  l.Contains("not set off by a pause"));
+    }
+
+    /// <summary>
+    /// Why the prologue and epilogue are asked for a leading pause only, and <c>--custom</c> for
+    /// nothing at all. A heading word is routinely run straight into the text behind it - Gruelfin's
+    /// "Zeittafel" has 0.16 s there and "I Shall Wear Midnight"'s epilogue 0.44 s, both genuine - so
+    /// a trailing requirement would cost real marks, and a --custom mapping names whatever the user
+    /// says it does, wherever they say it is.
+    /// </summary>
+    [Fact]
+    public async Task NamedMarks_KeepAHeadingRunStraightIntoItsText()
+    {
+        var vad = new FakeVad
+        {
+            Speech = [new(0, 599.9), new(603, 603.6), new(603.76, 700)],
+        };
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--custom", "timeline:Timeline"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(600, Seg(3, " Timeline."));
+                s.Add(1200, Seg(0.2, " Chapter one."));
+            },
+            vad);
+
+        AssertNamed([("custom 1", "Timeline", 603)], result);
+    }
+
     [Fact]
     public async Task ChapterCount_HuntsTheChaptersAfterTheLastOneDetected()
     {

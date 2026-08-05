@@ -44,10 +44,15 @@ earn a round number.
   the tool had nothing to look for in such a book. This mode drops the phrase entirely and
   takes a number spoken *alone*, with a pause on either side of it, as the announcement.
   A number inside a sentence is not one, so the years, prices and house numbers in the
-  prose are left alone. Since the number is then the only evidence there is, what rejects a
-  false one is that it does not continue the chapter sequence — which is why this cannot be
-  combined with `--ignore-chapter-numbers`. Per language, like every other value of the
-  option.
+  prose are left alone; a number that ends its own sentence still counts even where the
+  recognizer runs it straight into what follows ("Seventeen. He was late again."), which
+  is common enough that not allowing it would lose chapters outright. The later recovery
+  passes look harder still, and then check what they find against the file's own pauses:
+  a candidate is only marked with at least a second of silence or jingle in front of it
+  and half a second behind, and `--verbose` says so when one is dropped for that reason.
+  Since the number is otherwise the only evidence there is, what rejects a false one is
+  that it does not continue the chapter sequence — which is why this cannot be combined
+  with `--ignore-chapter-numbers`. Per language, like every other value of the option.
 
 - **The silence threshold now adapts to the recording, and `--noise-floor` sets it by
   hand.** Finding chapters starts with finding the pauses, and a pause has always been
@@ -85,6 +90,21 @@ earn a round number.
   It prints what it is about to do and waits for a "yes"; `--yes` answers that in advance
   for a scripted cleanup, and is required where there is no console to ask at. Add
   `--revert` to restore the backups over their files instead of deleting them.
+
+### Fixed
+
+- **A prologue or epilogue is no longer marked on a word that merely contains the phrase.**
+  "Prologue" and "epilogue" are ordinary words, and in some languages they hide inside
+  longer ones — Italian "riepilogo" ("summary") contains "epilogo" — so a narrator reading
+  an ordinary sentence could plant the book's epilogue mark hours before the epilogue. It
+  did more damage than an extra mark: only one of each is written per file, so the false
+  match displaced the real one, which had already been found correctly. Both are now
+  required to sit behind a real pause, as a spoken heading always does and a word in
+  mid-sentence never can. Nothing is asked about what follows the announcement, since
+  narrators routinely read straight on from "Epilogue" into the first sentence of it, and
+  `--custom` phrases are exempt from the check entirely — they name whatever recurring
+  element you say they do, wherever you say it is.
+
 
 ## [0.10.1] — 2026-08-04
 

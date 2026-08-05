@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ABChapterize.Language;
 using ABChapterize.Transcription;
+using static ABChapterize.Language.NumberWordParser;
 
 namespace ABChapterize.Detection;
 
@@ -26,9 +27,15 @@ internal static class PhraseMatching
     /// <param name="SpansMerge">True when the text actually used to find the phrase and parse its
     /// number straddles a Pass 2 overlap's cache/fresh boundary - see <see cref="FindPhraseMatches"/>'s
     /// <c>mergeBoundarySegIndex</c> parameter.</param>
+    /// <param name="SpokenAlone">Whether the announcement opened the transcript segment it was
+    /// found in. Only ever false under <c>--chapter-phrase none</c>'s wider reading
+    /// (<see cref="NumberWordParser.BareNumberReading.LeadingASentence"/>), and carried because it is
+    /// what such a match falls back on when <see cref="AnnouncementIsolation"/> cannot be run: an
+    /// opening number is one the stricter reading would have taken anyway, a later one rests
+    /// entirely on the isolation check and must not be kept without it.</param>
     internal readonly record struct PhraseMatch(
         int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
-        bool SpansMerge = false);
+        bool SpansMerge = false, bool SpokenAlone = true);
 
     /// <summary>A non-numbered announcement (prologue, epilogue or a <c>--custom</c> mapping) found
     /// inside a transcribed window.</summary>
@@ -60,14 +67,18 @@ internal static class PhraseMatching
     /// than the reused cache; null for a window that is entirely one or the other (a plain probe,
     /// a fully-reused window, a gap chunk, or a --verify window). Used only to flag
     /// <see cref="PhraseMatch.SpansMerge"/> - it does not affect which matches are found.</param>
+    /// <param name="reading">How far into a transcript segment a <c>--chapter-phrase none</c>
+    /// announcement may sit; ignored entirely for a phrase-based book. See
+    /// <see cref="FindBareNumbers"/>.</param>
     internal static IEnumerable<PhraseMatch> FindPhraseMatches(
-        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null)
+        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null,
+        BareNumberReading reading = BareNumberReading.SpokenAloneAtSegmentStart)
     {
         if (segments.Count == 0)
             yield break;
         if (profile.BareNumberAnnouncements)
         {
-            foreach (var match in FindBareNumbers(segments, profile))
+            foreach (var match in FindBareNumbers(segments, profile, reading))
                 yield return match;
             yield break;
         }
@@ -91,20 +102,33 @@ internal static class PhraseMatching
 
     /// <summary>
     /// The <c>--chapter-phrase none</c> reading of a window: a chapter is announced by speaking its
-    /// number and nothing else, so what is looked for is a transcript segment that <em>is</em> a
-    /// number, start to finish.
+    /// number and nothing else, so what is looked for is a <em>sentence</em> that is a number and
+    /// nothing besides.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// "And nothing else" is doing all the work here, and it is deliberately taken from the
-    /// segmentation rather than from the words. Whisper ends a segment where the speaking stops, so
-    /// a segment containing a number and nothing besides is a number that was spoken alone, with a
-    /// pause on either side - which is exactly the shape of an announcement this mode exists for,
-    /// and exactly what an ordinary number in prose is not. Without that requirement every year,
-    /// price and street number in the book would become a chapter mark.
+    /// "And nothing else" is what keeps every year, price and house number in the prose out, and it
+    /// is the sentence boundary - not Whisper's segmentation - that establishes it. Until
+    /// 2026-08-05 the test was that the whole transcript <em>segment</em> be a number, on the
+    /// reasoning that Whisper ends a segment where the speaking stops. It does not reliably: see
+    /// <see cref="NumberWordParser.FindBareNumberAnnouncement"/> for the ten chapters that cost on
+    /// one book, all of them glued to the first sentence of their own chapter.
     /// </para>
     /// <para>
-    /// It also means this mode leans on the chapter-number sequence far more heavily than the
+    /// <paramref name="reading"/> then decides how far into a segment to look, and the two levels
+    /// buy different things at different prices.
+    /// <see cref="BareNumberReading.SpokenAloneAtSegmentStart"/> is what Pass 2's forward scan uses: it costs
+    /// nothing over the old rule and recovers the glued announcements, while keeping a cheap
+    /// second signal ("Whisper opened a segment here") for a scan that walks the whole book with no
+    /// upper bound on the sequence. <see cref="BareNumberReading.LeadingASentence"/> drops even that and
+    /// is reserved for the passes that hunt named missing numbers inside a bounded stretch, where
+    /// the hole itself says which numbers may appear and
+    /// <see cref="AnnouncementIsolation"/> vets the position afterwards. Turning the wider reading
+    /// loose on the forward scan instead would mean paying a refinement for every number spoken in
+    /// the prose of an entire book.
+    /// </para>
+    /// <para>
+    /// Either way this mode leans on the chapter-number sequence far more heavily than the
     /// phrase-based one does - a lone "Seventeen." in dialogue is indistinguishable from an
     /// announcement by any amount of local evidence, and only its number being out of sequence
     /// rejects it. That is why <c>--ignore-chapter-numbers</c>, which switches that check off, is
@@ -113,13 +137,19 @@ internal static class PhraseMatching
     /// </remarks>
     /// <param name="segments">The window's transcript segments, in the caller's time base.</param>
     /// <param name="profile">Language profile supplying the number grammar.</param>
+    /// <param name="reading">How far into each segment to look.</param>
     private static IEnumerable<PhraseMatch> FindBareNumbers(
-        List<TranscriptSegment> segments, LanguageProfile profile)
+        List<TranscriptSegment> segments, LanguageProfile profile, BareNumberReading reading)
     {
         foreach (var segment in segments)
-            if (NumberWordParser.TryParseWholeText(segment.Text, profile.Language, out var number))
+            if (NumberWordParser.FindBareNumberAnnouncement(
+                    segment.Text, profile.Language, reading) is { } announced)
+                // The segment's own span stays the match's time base even when the number sits
+                // further in: it is the bracket the refinement searches, and it must contain the
+                // announcement rather than start exactly on it.
                 yield return new PhraseMatch(
-                    number, segment.StartSeconds, segment.EndSeconds, segment.Probability);
+                    announced.Number, segment.StartSeconds, segment.EndSeconds, segment.Probability,
+                    SpokenAlone: announced.SpokenAlone);
     }
 
     /// <summary>
