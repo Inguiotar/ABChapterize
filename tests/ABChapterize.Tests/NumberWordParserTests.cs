@@ -153,6 +153,44 @@ public class NumberWordParserTests
             Assert.Equal(language.Code, language.NumberParser.LanguageCode);
     }
 
+    /// <summary>What <c>--chapter-phrase none</c> accepts as an announcement: text that is a
+    /// number and nothing else, in any of the notations a transcript writes one in.</summary>
+    [Theory]
+    [InlineData("Seventeen.", "en", 17)]
+    [InlineData(" 17. ", "en", 17)]
+    [InlineData("Twenty-one", "en", 21)]
+    [InlineData("Einundzwanzig.", "de", 21)]
+    [InlineData("\"Vingt et un.\"", "fr", 21)]
+    [InlineData("XIII.", "en", 13)]
+    [InlineData("2nd", "en", 2)]
+    public void WholeText_AcceptsANumberStandingAlone(string text, string language, int expected)
+    {
+        Assert.True(NumberWordParser.TryParseWholeText(text, language, out var n));
+        Assert.Equal(expected, n);
+    }
+
+    /// <summary>The distinction the whole mode rests on: a number that merely opens a sentence is
+    /// prose, not an announcement.</summary>
+    [Theory]
+    [InlineData("Seventeen men stood at the gate.", "en")]
+    [InlineData("Chapter seventeen.", "en")]
+    [InlineData("Siebzehn Jahre spater.", "de")]
+    [InlineData("It was over.", "en")]
+    [InlineData("", "en")]
+    [InlineData("   ", "en")]
+    public void WholeText_RejectsANumberInsideASentence(string text, string language)
+        => Assert.False(NumberWordParser.TryParseWholeText(text, language, out _));
+
+    /// <summary>The one-letter Roman guard applies here too: a lone "I" is a pronoun far more
+    /// often than it is chapter one, and only the heading period settles it.</summary>
+    [Fact]
+    public void WholeText_KeepsTheOneLetterRomanGuard()
+    {
+        Assert.False(NumberWordParser.TryParseWholeText("I", "en", out _));
+        Assert.True(NumberWordParser.TryParseWholeText("I.", "en", out var n));
+        Assert.Equal(1, n);
+    }
+
     [Theory]
     [InlineData("\"vingt et un\", dit-il", "fr", 21)]
     [InlineData("(siete)", "es", 7)]

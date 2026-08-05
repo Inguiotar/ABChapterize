@@ -32,6 +32,29 @@ public sealed class CliOptions
     public bool Revert { get; private set; }
 
     /// <summary>
+    /// Housekeeping instead of processing (--cleanup): undo the traces a previous run left in the
+    /// selected folder(s) - leftover temporary files, ".bak" backups, ".debug.log" logs, batch
+    /// progress files and ".missing-marks" name tags. See
+    /// <see cref="ABChapterize.Processing.CleanupRunner"/> for exactly what goes and what does not.
+    /// <para>
+    /// Combines with <see cref="Revert"/>, which flips the backups from "delete" to "restore" and
+    /// is the one combination needing no confirmation, nothing being thrown away. On its own it
+    /// requires <see cref="AssumeYes"/> or an interactive answer. Deliberately without a short
+    /// form, as is --yes: the single letters belong to options people reach for daily, and neither
+    /// of these should be quick to type.
+    /// </para>
+    /// </summary>
+    public bool Cleanup { get; private set; }
+
+    /// <summary>
+    /// Answers --cleanup's confirmation prompt in advance (--yes), for a scripted or scheduled
+    /// cleanup that has no console to be asked at. Meaningless anywhere else, and rejected there
+    /// rather than ignored - an option that reads as "do not ask me anything" must not look like it
+    /// covers more than it does.
+    /// </summary>
+    public bool AssumeYes { get; private set; }
+
+    /// <summary>
     /// Lists every file that would be processed, then exits without loading a Whisper model,
     /// invoking ffmpeg or touching any file (--no-op / -O). Requires --filter - the whole
     /// point is checking that a --filter regexp or extension list actually matches the
@@ -252,6 +275,52 @@ public sealed class CliOptions
     public int? ExpectedStartChapter { get; private set; }
 
     /// <summary>
+    /// How many numbered chapters this book has, exactly (--chapter-count). Null (the default)
+    /// means no expectation, which is where a plain run starts from: it accepts whatever the last
+    /// number it hears turns out to be.
+    /// <para>
+    /// This closes the one hole in the whole detection pipeline that nothing else structurally can.
+    /// A missing chapter is normally spotted as a hole in the number sequence, which needs a known
+    /// chapter on each side of it - so a chapter missing <em>after</em> the last one found has
+    /// nothing above it to compare against, and the file is written out looking complete (see
+    /// <see cref="TrailingScan"/>, which brute-forces the same case by transcribing the whole tail
+    /// on spec). Told how many chapters there are, the run knows exactly which numbers are still
+    /// owed and hunts only those, stopping the moment they turn up.
+    /// </para>
+    /// <para>
+    /// Restricted to a single file named on the command line, because it is a statement about one
+    /// specific book and would be nonsense applied to every file of a directory. It is the count,
+    /// not the highest number: with <see cref="ExpectedStartChapter"/> the two differ, and
+    /// <see cref="LastExpectedChapter"/> is where they meet.
+    /// </para>
+    /// <para>
+    /// What it deliberately does <em>not</em> do is end the search early once the count is reached.
+    /// A book's numbered chapters are not necessarily the last thing in it - an epilogue, or any
+    /// <c>--custom</c> phrase, may well follow - and stopping at the last number would silently cost
+    /// those marks.
+    /// </para>
+    /// </summary>
+    public int? ChapterCount { get; private set; }
+
+    /// <summary>
+    /// The highest chapter number this book is declared to have: <see cref="ChapterCount"/> counted
+    /// from <see cref="ExpectedStartChapter"/> (1 when not given, the same anchor
+    /// <see cref="ABChapterize.Detection.GapPlanning.MissingNumbersInGap"/> falls back to). Null
+    /// when no count was given. This, rather than the count itself, is what detection reasons in -
+    /// both as the cap on a plausible number and as the upper end of the trailing hunt.
+    /// </summary>
+    public int? LastExpectedChapter
+        => ChapterCount is { } count ? (ExpectedStartChapter ?? 1) + count - 1 : null;
+
+    /// <summary>
+    /// The highest chapter number a match may carry and still be believed: whichever of
+    /// <see cref="MaxChapterNumber"/> and <see cref="LastExpectedChapter"/> was given (never both -
+    /// <see cref="Parse"/> rejects the combination as two answers to one question), or null for no
+    /// cap at all.
+    /// </summary>
+    public int? EffectiveMaxChapterNumber => MaxChapterNumber ?? LastExpectedChapter;
+
+    /// <summary>
     /// Check pre-existing chapter markings against the audio instead of trusting them
     /// blindly (--verify / -V): a short window around each marking's own timestamp is probed
     /// with Whisper for the chapter phrase and the expected number
@@ -268,6 +337,20 @@ public sealed class CliOptions
     /// makes a --max-chapters rejection stricter.
     /// </summary>
     public bool Verify { get; private set; }
+
+    /// <summary>
+    /// Lets --verify correct a marking instead of only reporting on it (--fix): where a marking's
+    /// announcement is confirmed but sits a little away from where the marking is, the marking is
+    /// moved onto it and the file rewritten. Requires --verify, and does nothing on its own.
+    /// <para>
+    /// Only ever a nudge, and deliberately so - see
+    /// <see cref="DetectionTuning.VerifyFixMinShiftSeconds"/> and
+    /// <see cref="DetectionTuning.VerifyFixMaxShiftSeconds"/> for the two bounds. A marking that
+    /// could not be confirmed at all is not "fixed" by this; it goes to the gap recovery --verify
+    /// already runs, exactly as before.
+    /// </para>
+    /// </summary>
+    public bool Fix { get; private set; }
 
     /// <summary>
     /// Maximum number of unconfirmed --verify markings a file may have and still get the
@@ -399,12 +482,57 @@ public sealed class CliOptions
     public double MinSilenceSeconds { get; private set; } = 1.5;
 
     /// <summary>
+    /// Level below which Pass 1's scan counts audio as silence, in dBFS (--noise-floor). Always
+    /// the level actually scanned with; see <see cref="AutoNoiseFloor"/> for the default, where
+    /// this holds the starting point a per-file measurement may move.
+    /// </summary>
+    public double NoiseFloorDb { get; private set; } = DetectionTuning.DefaultSilenceNoiseDb;
+
+    /// <summary>
+    /// True (the default) unless --noise-floor was given an explicit level: each file's own
+    /// levels are measured before Pass 1 and <see cref="NoiseFloorDb"/> is moved only where the
+    /// default would fall outside that master's gap between room tone and narration - see
+    /// <see cref="ABChapterize.Detection.SilenceThresholdProbe"/>, which also explains why the
+    /// answer for an ordinary book is the default unchanged. "auto" can also be given explicitly
+    /// for clarity.
+    /// </summary>
+    public bool AutoNoiseFloor { get; private set; } = true;
+
+    /// <summary>
     /// True (the default) unless --min-silence-length was given an explicit numeric value:
     /// the silence scan (Pass 1) still uses the 1.5 s floor, but <see cref="ChapterDetector"/>
     /// self-tightens the probing threshold after each chapter mark instead of probing every
     /// silence found. "auto" can also be given explicitly for clarity.
     /// </summary>
     public bool AutoMinSilence { get; private set; } = true;
+
+    /// <summary>
+    /// Whether a long enough silence is by itself a reason to probe - true for every value of
+    /// <see cref="MinSilenceSeconds"/> except 0, which says to probe only where the
+    /// voice-activity pre-pass found a jingle. For a book whose chapters all open with one, that
+    /// removes the hundreds of ordinary in-narration pauses each of which otherwise costs a Whisper
+    /// probe; for a book whose chapters do not, it removes the only way of finding them, which is
+    /// why it is off by default and why 0 is refused together with <c>--max-jingle-length 0</c>.
+    /// <para>
+    /// Only <em>probing</em> is affected. The silence scan itself still runs and still keeps
+    /// everything down to <see cref="StoredSilenceFloorSeconds"/>: window seams, transcript
+    /// timestamps, jingle anchors and mark refinement all read that list, and switching it off
+    /// would degrade every mark rather than merely finding fewer of them.
+    /// </para>
+    /// </summary>
+    public bool ProbeSilences => MinSilenceSeconds > 0;
+
+    /// <summary>
+    /// The shortest silence Pass 1 retains - normally <see cref="DetectionTuning.MinStoredSilenceSeconds"/>,
+    /// or <see cref="MinSilenceSeconds"/> where the user asked for something shorter still. Never
+    /// follows <see cref="MinSilenceSeconds"/> down to 0: a scan with no minimum length reports
+    /// every sample under the threshold as its own silence, and the list this floor governs is one
+    /// mark placement depends on rather than one probing does.
+    /// </summary>
+    public double StoredSilenceFloorSeconds
+        => ProbeSilences
+            ? Math.Min(MinSilenceSeconds, DetectionTuning.MinStoredSilenceSeconds)
+            : DetectionTuning.MinStoredSilenceSeconds;
 
     /// <summary>Suppress per-file output; warnings and errors are still shown (--quiet / -q).</summary>
     public bool Quiet { get; private set; }
@@ -614,7 +742,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet;
+    private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet;
 
     // The phrase and title options, each holding what was given for every language, per language,
     // or nothing at all when the option was not given - in which case the language's own default
@@ -622,6 +750,17 @@ public sealed class CliOptions
     // left worth tracking separately.
     private LocalizedOption? _phraseSpec, _titleSpec, _introSpec;
     private LocalizedOption? _prologuePhraseSpec, _prologueTitleSpec, _epiloguePhraseSpec, _epilogueTitleSpec;
+
+    /// <summary>
+    /// True when <c>--chapter-phrase none</c> was given for any language - the bare-number mode of
+    /// <see cref="LanguageProfile.BareNumberAnnouncements"/>. Asked of the whole spec rather than of
+    /// the language this run happens to resolve to, because a mixed-language batch may only reach
+    /// the language that named it on its two-hundredth file, and a rule that fires there and not on
+    /// file one is worse than one that fires on the command line.
+    /// </summary>
+    private bool UsesBareNumberPhrase
+        => _phraseSpec is { } spec &&
+           spec.Values.Any(p => p.Equals(BareNumberPhrase, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True when any option was given that only means something for a run that actually detects
@@ -633,10 +772,11 @@ public sealed class CliOptions
     /// </summary>
     private bool AnyProcessingOptionGiven
         => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || TrailingScan || DryRun
-           || Export || Import || SimpleMetadata || Verify || IgnoreProgress
+           || Export || Import || SimpleMetadata || Verify || Fix || IgnoreProgress
            || UseGpu != null || VadThreads != null || WhisperThreads != null
            || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _jingleLenSet || _minSilenceSet || _earlyAbortSet || _markLeadSet || _expectedStartSet
+           || _chapterCountSet || _noiseFloorSet
            || _phraseSpec != null || _titleSpec != null || _introSpec != null
            || _prologuePhraseSpec != null || _prologueTitleSpec != null
            || _epiloguePhraseSpec != null || _epilogueTitleSpec != null
@@ -679,9 +819,11 @@ public sealed class CliOptions
                 $"model={Model}", $"pass3={Pass3Model}",
                 $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
                 $"earlyabort={EarlyAbortMinutes}", $"expectedstart={ExpectedStartChapter}",
-                $"trailingscan={TrailingScan}", $"verify={Verify}", $"verifythreshold={VerifyFailThreshold}",
+                $"chaptercount={ChapterCount}",
+                $"trailingscan={TrailingScan}", $"verify={Verify}/{Fix}", $"verifythreshold={VerifyFailThreshold}",
                 $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}", $"marklead={MarkLeadSeconds}",
                 $"maxjingle={MaxJingleSeconds}/{AutoMaxJingle}", $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
+                $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
             ]);
@@ -793,13 +935,28 @@ public sealed class CliOptions
 
         // Semantic validation.
         if (o.Revert && o.AnyProcessingOptionGiven)
-            throw new CliError("--revert can only be combined with --recurse, --filter and the output options.");
+            throw new CliError("--revert can only be combined with --cleanup, --recurse, --filter and the output options.");
+
+        if (o.Cleanup && o.AnyProcessingOptionGiven)
+            throw new CliError("--cleanup can only be combined with --revert, --yes, --recurse, --filter and the output options.");
+
+        // --yes reads as a blanket "stop asking me things", so letting it stand where nothing asks
+        // anything would leave the user believing they had covered a prompt they had not.
+        if (o.AssumeYes && !o.Cleanup)
+            throw new CliError("--yes answers --cleanup's confirmation prompt and has no meaning without it.");
 
         if (o.NoOp && o.FilterRegex == null && o.FilterExtensions == null)
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
-        if (o.NoOp && (o.Revert || o.AnyProcessingOptionGiven))
+        if (o.NoOp && (o.Revert || o.Cleanup || o.AnyProcessingOptionGiven))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
+
+        // The two options that decide what Pass 2 probes at all. Switching both off leaves it with
+        // no candidates whatsoever, so the run could only ever report that the book has no chapters.
+        if (!o.ProbeSilences && o.MaxJingleSeconds == 0)
+            throw new CliError(
+                "--min-silence-length 0 leaves only the jingles to probe, and --max-jingle-length 0 " +
+                "says there are none: together they would give the search nothing to look at.");
 
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
@@ -811,13 +968,14 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify || o._titleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o.MarkBeforeJingle || o.QuickMarks || o.TrailingScan || o.Verify || o._titleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
-                "--mark-before-jingle, --quick-marks, --mark-lead, --max-jingle-length, --min-silence-length, --early-abort, " +
-                "--expected-start-chapter, --max-chapter-number, --trailing-scan, --verify, --title, " +
-                "--intro-title, --prologue-title and --epilogue-title " +
+                "--mark-before-jingle, --quick-marks, --mark-lead, --max-jingle-length, --min-silence-length, " +
+                "--noise-floor, --early-abort, " +
+                "--expected-start-chapter, --max-chapter-number, --chapter-count, --trailing-scan, --verify, " +
+                "--title, --intro-title, --prologue-title and --epilogue-title " +
                 "have no effect and cannot be combined with it.");
 
         // --ignore-chapter-numbers removes the chapter-number sequence detection is otherwise built
@@ -826,17 +984,37 @@ public sealed class CliOptions
         // never form an opinion about, so accepting it would promise something that cannot happen.
         // --chapter-phrase and --title stay legal - the phrase is still what is listened for and the
         // title word is still what the mark is called.
+        // A bare number is recognized as an announcement only by being in sequence - see
+        // PhraseMatching's FindBareNumbers - and --ignore-chapter-numbers is exactly the switch that
+        // takes that check away, leaving every number spoken alone anywhere in the book a chapter
+        // mark. Rejected rather than merely inadvisable.
+        if (o.IgnoreChapterNumbers && o.UsesBareNumberPhrase)
+            throw new CliError(
+                "--chapter-phrase none recognizes an announcement by its number being in sequence, " +
+                "so --ignore-chapter-numbers - which forms no opinion about the numbers - would " +
+                "leave nothing to tell an announcement from any other number spoken alone.");
+
         if (o.IgnoreChapterNumbers && (o._pass3ModelSet || o._expectedStartSet ||
-                                       o._maxChapterNumberSet || o.TrailingScan || o.Verify))
+                                       o._maxChapterNumberSet || o._chapterCountSet ||
+                                       o.TrailingScan || o.Verify))
             throw new CliError(
                 "--ignore-chapter-numbers forms no opinion about chapter numbers, so --pass3-model, " +
-                "--expected-start-chapter, --max-chapter-number, --trailing-scan and --verify have " +
-                "nothing to act on and cannot be combined with it.");
+                "--expected-start-chapter, --max-chapter-number, --chapter-count, --trailing-scan and " +
+                "--verify have nothing to act on and cannot be combined with it.");
 
         if (o.MaxChapterNumber is { } cap && o.ExpectedStartChapter is { } start && cap < start)
             throw new CliError(
                 $"--max-chapter-number ({cap}) is below --expected-start-chapter ({start}): " +
                 "no chapter could ever be accepted.");
+
+        // Both name the highest number this book may have, so accepting both would mean deciding
+        // which of two contradictory answers to believe. --chapter-count is the stronger statement
+        // anyway: it also says the numbers up to it are all expected to be there.
+        if (o.ChapterCount != null && o.MaxChapterNumber != null)
+            throw new CliError(
+                "--chapter-count and --max-chapter-number both cap the chapter numbers this book " +
+                "may have; give one or the other. --chapter-count also hunts for the chapters " +
+                "below the cap that are missing.");
 
         if (o.Force && o.Verify)
             throw new CliError(
@@ -845,6 +1023,9 @@ public sealed class CliOptions
 
         if (o.VerifyFailThreshold != null && !o.Verify)
             throw new CliError("--verify-threshold requires --verify.");
+
+        if (o.Fix && !o.Verify)
+            throw new CliError("--fix corrects what --verify checked and requires it.");
 
         if (o.SimpleMetadata && !o.Export && !o.Import)
             throw new CliError("--simple-metadata requires --export or --import.");
@@ -877,6 +1058,15 @@ public sealed class CliOptions
             throw new CliError("The epilogue title must not be empty (use --epilogue-phrase \"\" to switch epilogue detection off).");
 
         o.ResolveTargets(targetArgs);
+
+        // A statement about one book cannot be made about a whole folder of them, and silently
+        // applying "this book has 20 chapters" to every file of a library would tag most of them as
+        // incomplete. Checked after the targets are resolved, so that naming a directory is caught
+        // here rather than becoming a run that hunts for chapters no file has.
+        if (o.ChapterCount != null && (o._targets.Count != 1 || o._targets[0].IsDirectory))
+            throw new CliError(
+                "--chapter-count states how many chapters one particular book has, so it takes " +
+                "exactly one file - not a directory, and not several files.");
 
         // With an explicit --lang this localizes the chapter phrase, title word and intro title
         // (unless given explicitly) for every file; with auto-detection it is only the English
@@ -968,6 +1158,8 @@ public sealed class CliOptions
             case "--recurse": Recurse = true; return true;
             case "--backup": Backup = true; return true;
             case "--revert": Revert = true; return true;
+            case "--cleanup": Cleanup = true; return true;
+            case "--yes": AssumeYes = true; return true;
             case "--no-op": NoOp = true; return true;
             case "--cpu-only": CpuOnly = true; return true;
             case "--force": Force = true; return true;
@@ -987,6 +1179,7 @@ public sealed class CliOptions
             case "--import": Import = true; return true;
             case "--simple-metadata": SimpleMetadata = true; return true;
             case "--verify": Verify = true; return true;
+            case "--fix": Fix = true; return true;
             case "--ignore-progress": IgnoreProgress = true; return true;
             case "--ignore-chapter-numbers": IgnoreChapterNumbers = true; return true;
             default: return false;
@@ -1013,6 +1206,7 @@ public sealed class CliOptions
             case "--max-chapter-number": MaxChapterNumber = ParseMaxChapterNumber(nextParam()); _maxChapterNumberSet = true; return true;
             case "--early-abort": EarlyAbortMinutes = ParseEarlyAbort(nextParam()); _earlyAbortSet = true; return true;
             case "--expected-start-chapter": ExpectedStartChapter = ParseExpectedStartChapter(nextParam()); _expectedStartSet = true; return true;
+            case "--chapter-count": ChapterCount = ParseChapterCount(nextParam()); _chapterCountSet = true; return true;
             case "--verify-threshold": VerifyFailThreshold = ParseNonNegativeInt("--verify-threshold", nextParam()); return true;
             case "--title": Title = nextParam(); _titleSpec = new(Title, name); return true;
             case "--intro-title": IntroTitle = nextParam(); _introSpec = new(IntroTitle, name); return true;
@@ -1025,6 +1219,7 @@ public sealed class CliOptions
             case "--filter": ParseFilter(nextParam()); return true;
             case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
+            case "--noise-floor": (NoiseFloorDb, AutoNoiseFloor) = ParseNoiseFloor(nextParam()); _noiseFloorSet = true; return true;
             case "--mark-lead": MarkLeadSeconds = ParseMarkLead(nextParam()); _markLeadSet = true; return true;
             case "--vad-threads": VadThreads = ParseThreadCount("--vad-threads", nextParam()); return true;
             case "--whisper-threads": WhisperThreads = ParseThreadCount("--whisper-threads", nextParam()); return true;
@@ -1099,17 +1294,35 @@ public sealed class CliOptions
     }
 
     /// <summary>
-    /// Parses the --min-silence-length parameter into a positive number of seconds, or "auto".
-    /// "auto" resolves to the 1.5 s floor plus <see cref="AutoMinSilence"/> set, telling
+    /// Parses the --min-silence-length parameter into a positive number of seconds, 0 (no
+    /// silence-triggered probing at all - see <see cref="ProbeSilences"/>), or "auto". "auto"
+    /// resolves to the 1.5 s floor plus <see cref="AutoMinSilence"/> set, telling
     /// <see cref="ChapterDetector"/> to self-tighten the threshold as chapters are found.
     /// </summary>
     private static (double Seconds, bool Auto) ParseMinSilence(string value)
     {
         if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
             return (1.5, true);
-        if (!NumberCulture.TryParseDecimal(value, out var s) || s < 0.1 || s > 60)
-            throw new CliError($"Invalid --min-silence-length value \"{value}\": expected seconds between 0.1 and 60, or \"auto\".");
+        if (!NumberCulture.TryParseDecimal(value, out var s) || (s != 0 && (s < 0.1 || s > 60)))
+            throw new CliError($"Invalid --min-silence-length value \"{value}\": expected 0, seconds between 0.1 and 60, or \"auto\".");
         return (s, false);
+    }
+
+    /// <summary>
+    /// Parses the --noise-floor parameter into a level in dBFS, or "auto". Bounded well inside
+    /// the digital range rather than at it: 0 dBFS is full scale, so a threshold anywhere near it
+    /// calls the entire book silent, and one below -90 is under the noise of 16-bit audio and calls
+    /// none of it silent.
+    /// </summary>
+    private static (double Db, bool Auto) ParseNoiseFloor(string value)
+    {
+        if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return (DetectionTuning.DefaultSilenceNoiseDb, true);
+        if (!NumberCulture.TryParseDecimal(value, out var db) || db < -90 || db > -5)
+            throw new CliError(
+                $"Invalid --noise-floor value \"{value}\": expected a level in dBFS between -90 " +
+                "and -5 (negative, 0 being full scale), or \"auto\".");
+        return (db, false);
     }
 
     /// <summary>Parses the --color parameter into a <see cref="ColorMode"/>.</summary>
@@ -1274,6 +1487,16 @@ public sealed class CliOptions
         return n;
     }
 
+    /// <summary>Parses the --chapter-count parameter into a count of 1 or higher. Zero is rejected
+    /// rather than read as "no chapters at all": a book with none is one this tool has nothing to
+    /// do to, and the value would only ever be a typo for a real count.</summary>
+    private static int ParseChapterCount(string value)
+    {
+        if (!int.TryParse(value, out var n) || n < 1)
+            throw new CliError($"Invalid --chapter-count value \"{value}\": expected a chapter count of 1 or higher.");
+        return n;
+    }
+
     /// <summary>
     /// Resolves the chapter phrase, title word and intro title for the given language: an
     /// explicit --chapter-phrase/--title/--intro-title always wins; otherwise the localized
@@ -1289,9 +1512,10 @@ public sealed class CliOptions
         var phrase = _phraseSpec?.For(language) ?? defaults.ChapterPhrase;
         var title = _titleSpec?.For(language) ?? defaults.ChapterTitle;
         var intro = _introSpec?.For(language) ?? defaults.IntroTitle;
-        var (regex, hasGroup) = CompilePhraseRegex(phrase);
+        var (regex, hasGroup, bareNumbers) = CompilePhraseRegex(phrase);
         return new LanguageProfile(
-            language, phrase, regex, hasGroup, title, intro, ResolveNamedPhrases(language, defaults));
+            language, phrase, regex, hasGroup, title, intro,
+            ResolveNamedPhrases(language, defaults), bareNumbers);
     }
 
     /// <summary>
@@ -1379,9 +1603,14 @@ public sealed class CliOptions
     /// same "/regexp/" spelling; only <see cref="LanguageProfile.PhraseHasNumberGroup"/> is
     /// meaningless for them, since they parse no number.</param>
     /// <exception cref="CliError">Thrown for an invalid regexp.</exception>
-    private static (Regex Regex, bool HasNumberGroup) CompilePhraseRegex(
+    private static (Regex Regex, bool HasNumberGroup, bool BareNumbers) CompilePhraseRegex(
         string chapterPhrase, string kind = "chapter")
     {
+        // Only the chapter phrase: a prologue or a --custom mapping parses no number, so "none"
+        // would name nothing there and is taken as the literal word it is.
+        if (kind == "chapter" && chapterPhrase.Equals(BareNumberPhrase, StringComparison.OrdinalIgnoreCase))
+            return (NeverMatches, false, true);
+
         if (chapterPhrase.Length > 2 && chapterPhrase.StartsWith('/') && chapterPhrase.EndsWith('/'))
         {
             Regex regex;
@@ -1393,12 +1622,22 @@ public sealed class CliOptions
             {
                 throw new CliError($"Invalid {kind} phrase regexp: {ex.Message}");
             }
-            return (regex, regex.GetGroupNumbers().Length > 1);
+            return (regex, regex.GetGroupNumbers().Length > 1, false);
         }
 
         var pattern = Regex.Escape(chapterPhrase);
-        return (new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), false);
+        return (new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), false, false);
     }
+
+    /// <summary>The --chapter-phrase value that says a chapter is announced by its number alone;
+    /// see <see cref="LanguageProfile.BareNumberAnnouncements"/>.</summary>
+    private const string BareNumberPhrase = "none";
+
+    /// <summary>Stands in for the chapter-phrase expression under <see cref="BareNumberPhrase"/>,
+    /// where nothing is matched by pattern at all. A regex that cannot succeed is better than a
+    /// null: every consumer keeps working, and one that forgot to check the flag finds nothing
+    /// rather than throwing halfway through a book.</summary>
+    private static readonly Regex NeverMatches = new(@"(?!)", RegexOptions.CultureInvariant);
 
     /// <summary>OS-specific note about where ffmpeg/ffprobe are searched (part of the usage info).</summary>
     private static string FfmpegNote => OperatingSystem.IsWindows()
@@ -1426,6 +1665,7 @@ public sealed class CliOptions
         Usage:
           abchapterize [options] <file-or-directory>...
           abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
+          abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
           abchapterize --help | -?
 
@@ -1479,6 +1719,14 @@ public sealed class CliOptions
                                     what it did. The same syntax works for --title, --intro-title,
                                     --prologue-phrase, --prologue-title, --epilogue-phrase,
                                     --epilogue-title and --custom.
+                                    The value "none" says this book announces a chapter by
+                                    speaking its number and nothing else ("Seventeen."), with no
+                                    phrase at all: a number heard standing alone between two
+                                    pauses is then the announcement. Since the number is the only
+                                    signal there is, such a mark is accepted only where it
+                                    continues the chapter sequence - which is why "none" cannot be
+                                    combined with --ignore-chapter-numbers. Per language like any
+                                    other value, e.g. "[en]none;chapitre".
           -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: /prolog/,
                                     localized by --lang). Accepts a "/regexp/" like
                                     --chapter-phrase, but parses no number: a match becomes one
@@ -1521,8 +1769,8 @@ public sealed class CliOptions
                                     and 3 never run and no file is tagged ".missing-marks". For
                                     books that restart their count per part, or number nothing at
                                     all. Cannot be combined with --pass3-model,
-                                    --expected-start-chapter, --max-chapter-number, --trailing-scan
-                                    or --verify.
+                                    --expected-start-chapter, --max-chapter-number,
+                                    --chapter-count, --trailing-scan or --verify.
           -m, --model <name>        Whisper model: tiny, base, small, medium, turbo or large
                                     (default: turbo), or "custom:<path>" for a GGML model file of
                                     your own, e.g. -m custom:~/models/my-finetune.bin. A custom
@@ -1627,7 +1875,28 @@ public sealed class CliOptions
                                     probes without a fixed guess. An explicit numeric value
                                     disables this and probes every such silence instead -
                                     useful if the breaks are known to vary a lot, or for
-                                    troubleshooting.
+                                    troubleshooting. 0 says not to probe silences at all,
+                                    leaving only the jingles the voice-activity pre-pass
+                                    finds - a large saving on a book whose every chapter
+                                    opens with one, and a way to miss every chapter that
+                                    does not. The silence scan itself still runs either
+                                    way: marks are placed and refined against it. Cannot be
+                                    combined with --max-jingle-length 0, which would leave
+                                    nothing to probe at all.
+              --noise-floor <dBFS|auto>
+                                    How quiet audio has to be to count as a pause, in dBFS
+                                    (default: auto; 0 is full scale, so this is negative).
+                                    With "auto", each file's own levels are sampled before
+                                    the silence scan and the threshold is only moved where
+                                    the usual -35 would fall outside that recording's gap
+                                    between room tone and speech - which on an ordinary
+                                    audiobook it does not, so nothing changes. It matters
+                                    on an unusual master: one with audible hiss never drops
+                                    below -35 at all, so no pause is ever found and no
+                                    chapter with it, while one mastered very quietly puts
+                                    the narration itself under -35, so every gap between
+                                    two words looks like a chapter break. An explicit level
+                                    fixes the threshold for the whole run.
 
         Detection safety nets:
           -a, --early-abort <minutes>
@@ -1670,6 +1939,21 @@ public sealed class CliOptions
                                     be confused with --max-chapters, which counts a file's
                                     pre-existing markings rather than the numbers heard in the
                                     audio.
+              --chapter-count <n>   How many numbered chapters this book has, exactly (default:
+                                    none - whatever the last number heard turns out to be). Takes
+                                    exactly one file, never a directory: it is a statement about
+                                    one particular book. A chapter missing after the last one
+                                    found is the one thing nothing else here can notice - a gap is
+                                    spotted as a hole in the number sequence, and a hole at the
+                                    very end has nothing above it to compare against. Told the
+                                    count, the run knows which numbers are still owed and hunts
+                                    only those, stopping the moment they turn up; --trailing-scan
+                                    answers the same question by transcribing the whole tail on
+                                    spec. Any chapter numbered above the count is discarded as a
+                                    mishearing, so this replaces --max-chapter-number rather than
+                                    combining with it. Reaching the count does not end the
+                                    search: an epilogue or a --custom phrase may still follow.
+                                    Counted from --expected-start-chapter where that is given.
           -V, --verify              Check pre-existing chapter markings against the audio
                                     instead of trusting them blindly: a short window around
                                     each marking is probed for the chapter phrase and the
@@ -1681,6 +1965,22 @@ public sealed class CliOptions
                                     something other than one numbered chapter each. A file
                                     already rejected by --max-chapters skips verification and
                                     stays bogus. Cannot be combined with --force or --import.
+              --fix                 Requires --verify. Where a marking's announcement is confirmed
+                                    but the marking sits a little away from it, move the marking
+                                    onto it and rewrite the file, instead of only reporting that
+                                    it checked out. Only a nudge: a marking already within a
+                                    quarter of a second is left alone (rewriting a whole audiobook
+                                    for that is not worth it), and one more than 30 seconds from
+                                    its announcement is left alone too and reported - a mark that
+                                    far out is not one that drifted but one that means something
+                                    else, and dragging it onto the nearest matching phrase would
+                                    destroy information rather than correct it. Markings that
+                                    could not be confirmed at all are not affected; those still go
+                                    to --verify's usual gap recovery. Marks are placed by
+                                    re-transcribing the audio at them, which is a shade less exact
+                                    than a full detection run - it has no silence scan to anchor
+                                    against - so a chapter that matters to the last tenth of a
+                                    second still wants --force without --verify.
           -h, --verify-threshold <n>
                                     Requires --verify. Sets the "nearly all failed" line
                                     explicitly: more than <n> failures leaves the file
@@ -1719,10 +2019,11 @@ public sealed class CliOptions
                                     --epilogue-phrase, --custom, --custom-file,
                                     --ignore-chapter-numbers, --model, --pass3-model,
                                     --mark-before-jingle, --quick-marks, --mark-lead,
-                                    --max-jingle-length, --min-silence-length, --early-abort,
+                                    --max-jingle-length, --min-silence-length, --noise-floor,
+                                    --early-abort,
                                     --expected-start-chapter, --max-chapter-number,
-                                    --trailing-scan and --verify. Also mutually exclusive with
-                                    --export, --revert and --no-op.
+                                    --chapter-count, --trailing-scan and --verify. Also mutually
+                                    exclusive with --export, --revert, --cleanup and --no-op.
           -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
                                     of FFMETADATA for --export/--import. Requires one of them.
 
@@ -1731,8 +2032,28 @@ public sealed class CliOptions
                                     left by an earlier run is kept as it is, not replaced.
           -R, --revert              Restore backups: for every supported audio file with an
                                     added ".bak" suffix, delete the corresponding original and
-                                    rename the .bak file back. Combinable with --recurse,
-                                    --filter and the output options, but nothing else.
+                                    rename the .bak file back. Combinable with --cleanup,
+                                    --recurse, --filter and the output options, but nothing else.
+              --cleanup             Housekeeping instead of processing: undo the traces earlier
+                                    runs left in the selected folder(s), printing a line for
+                                    every change. Leftover temporary files are deleted (an
+                                    original left parked by an interrupted write is put back
+                                    instead), ".debug.log" logs and the progress files of
+                                    interrupted batch runs are deleted, files tagged
+                                    ".missing-marks-..." are renamed back, and ".bak" backups
+                                    are deleted - but only where the file they back up is
+                                    sitting next to them and runs the same length, so this can
+                                    never throw away the only copy of anything. Add --revert to
+                                    restore the backups over their files instead of deleting
+                                    them. Nothing is touched before you have seen the list and
+                                    confirmed it; --yes confirms in advance. Combinable with
+                                    --revert, --yes, --recurse, --filter and the output options,
+                                    but nothing else.
+              --yes                 Answer --cleanup's confirmation prompt with "yes" in
+                                    advance, for a scripted cleanup with no console to ask at.
+                                    Required there, since a cleanup that cannot ask and was not
+                                    told refuses to run. Not needed with --cleanup --revert,
+                                    which throws nothing away.
           -O, --no-op               List every file --filter (and --recurse) would select, then
                                     exit without loading a Whisper model, invoking ffmpeg or
                                     touching any file. A quick way to check that a --filter

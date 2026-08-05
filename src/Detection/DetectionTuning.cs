@@ -15,8 +15,75 @@ namespace ABChapterize.Detection;
 /// </summary>
 internal static class DetectionTuning
 {
-    /// <summary>Level below which ffmpeg's silencedetect counts audio as silence, in dBFS.</summary>
-    internal const int SilenceNoiseDb = -35;
+    /// <summary>
+    /// Level below which ffmpeg's silencedetect counts audio as silence, in dBFS - the default of
+    /// <c>--noise-floor</c>, and the value <see cref="SilenceThresholdProbe"/>'s automatic mode
+    /// keeps unless a master's own levels argue against it.
+    /// <para>
+    /// Measured over the fourteen-book corpus of 2026-08-05 (eight 20 s excerpts per book, 50 ms
+    /// RMS frames): -35 sits inside every one of those books' gap between room tone and speech,
+    /// with room to spare at both ends. The quietest sustained speech was "I Shall Wear Midnight"
+    /// at -25.1 dBFS (p75 of its frames) and the loudest room tone "The Philosopher's Stone" at
+    /// -50.1 (p5), so the narrowest margins the value actually had were 9.9 dB below speech and
+    /// 15.1 dB above hiss. Those two numbers are where <see cref="SpeechHeadroomDb"/> and
+    /// <see cref="NoiseFloorHeadroomDb"/> come from, each rounded down for slack.
+    /// </para>
+    /// </summary>
+    internal const double DefaultSilenceNoiseDb = -35;
+
+    /// <summary>How many excerpts <see cref="SilenceThresholdProbe"/> decodes to judge a file's
+    /// levels, spread evenly between the 5% and 95% marks of its play time - a book's opening
+    /// label jingle and closing credits are not what its body sounds like. Eight 20 s excerpts cost
+    /// about a second of ffmpeg seeking on a 15-hour .m4b (measured 2026-08-05), which is nothing
+    /// beside the full decode Pass 1 is about to do anyway.</summary>
+    internal const int NoiseProbeExcerpts = 8;
+
+    /// <summary>Length of one <see cref="NoiseProbeExcerpts"/> excerpt, in seconds. Eight of these
+    /// yield 3200 frames at <see cref="NoiseProbeFrameSeconds"/>, enough for the percentiles below
+    /// to be stable.</summary>
+    internal const double NoiseProbeExcerptSeconds = 20;
+
+    /// <summary>Length of one RMS frame in the level histogram. Short enough that the pauses
+    /// between words register as their own frames rather than being averaged into the speech
+    /// around them, which is the whole point of measuring in frames at all.</summary>
+    internal const double NoiseProbeFrameSeconds = 0.05;
+
+    /// <summary>Percentile of the frame levels taken for the master's room tone. Low enough to be
+    /// about the pauses rather than the speech, high enough not to be dominated by whatever
+    /// stretches of true digital silence the file happens to contain.</summary>
+    internal const int NoiseProbeFloorPercentile = 5;
+
+    /// <summary>Percentile of the frame levels taken for "sustained speech" - a level continuous
+    /// narration reliably exceeds. Not a peak: what has to stay above the threshold is the body of
+    /// the speech, since silencedetect only declares silence after a run of quiet frames.</summary>
+    internal const int NoiseProbeSpeechPercentile = 75;
+
+    /// <summary>How far above the measured room tone the silence threshold must sit, in dB. Below
+    /// this the hiss itself never counts as silence and the file yields no candidates at all.</summary>
+    /// <remarks>
+    /// The corpus's noisiest master ("The Philosopher's Stone", room tone -50.1 dBFS) left the
+    /// default exactly 15.1 dB of room, so 15 is the largest value that would leave every reference
+    /// book untouched - and a tenth of a decibel of margin is no margin at all, since re-measuring
+    /// the same book from different excerpts moves the reading by more than that. Rounded down to
+    /// 14 for a full decibel of slack. The same reasoning, in the other direction, gives
+    /// <see cref="SpeechHeadroomDb"/>.
+    /// </remarks>
+    internal const double NoiseFloorHeadroomDb = 14;
+
+    /// <summary>How far below sustained speech the silence threshold must sit, in dB. Above this
+    /// the narration itself reads as silence and the file yields thousands of spurious candidates.
+    /// The corpus's quietest speech ("I Shall Wear Midnight", p75 -25.1 dBFS) allowed at most 9.9;
+    /// 8 for the margin, as <see cref="NoiseFloorHeadroomDb"/> explains.</summary>
+    internal const double SpeechHeadroomDb = 8;
+
+    /// <summary>The range an automatically chosen silence threshold is confined to, whatever the
+    /// measurement says. A reading far outside it means the excerpts were unrepresentative (an
+    /// entirely silent stretch, a corrupt decode) rather than that the book really is like that,
+    /// and the fixed default has a far better record than an outlier would.</summary>
+    internal const double MinAutoSilenceNoiseDb = -60;
+
+    /// <inheritdoc cref="MinAutoSilenceNoiseDb"/>
+    internal const double MaxAutoSilenceNoiseDb = -20;
 
     /// <summary>Probe window length in seconds when --max-jingle-length is 0 (no jingle
     /// expected). Above 0, the window is --max-jingle-length plus
@@ -889,6 +956,25 @@ internal static class DetectionTuning
     /// <summary>Total length of the --verify probe window, starting
     /// <see cref="VerifyMarginBeforeSeconds"/> before the marking.</summary>
     internal const double VerifyWindowSeconds = 60;
+
+    /// <summary>
+    /// How far off a confirmed marking has to be before <c>--verify --fix</c> bothers moving it.
+    /// Rewriting an audiobook remuxes the whole file, so a correction has to be worth that: a tenth
+    /// of a second is inside the accuracy the refinement itself claims, and moving a mark by it
+    /// would be shuffling noise. Set at a quarter of a second, comfortably under the
+    /// <see cref="DefaultMarkLeadSeconds"/> lead a listener would actually notice losing.
+    /// </summary>
+    internal const double VerifyFixMinShiftSeconds = 0.25;
+
+    /// <summary>
+    /// The largest correction <c>--verify --fix</c> will apply. Beyond this the marking is left
+    /// alone and reported: a mark tens of seconds from its announcement is not a mark that drifted,
+    /// it is a mark that means something else - a retailer's grouping, a different edition's
+    /// numbering - and quietly dragging it onto the nearest matching phrase would destroy
+    /// information rather than correct it. Half the <see cref="VerifyWindowSeconds"/> window, which
+    /// is also the furthest a confirmation can be found from the marking in either direction.
+    /// </summary>
+    internal const double VerifyFixMaxShiftSeconds = 30;
 
     /// <summary>
     /// Minimum length for a gap between transcribed segments (or before the first/after the last)

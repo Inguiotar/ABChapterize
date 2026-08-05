@@ -32,7 +32,7 @@ public interface IAudioSource
     /// <param name="ct">Cancellation token.</param>
     /// <returns>All detected silence periods in chronological order.</returns>
     Task<List<Silence>> DetectSilencesAsync(
-        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        string file, double durationSeconds, double minSilenceSeconds, double noiseDb,
         Action<double>? progress, string? inputDecoder, CancellationToken ct);
 
     /// <summary>
@@ -70,7 +70,7 @@ public interface IAudioSource
     /// <param name="ct">Cancellation token.</param>
     /// <returns>All detected silence periods in chronological order.</returns>
     Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
-        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        string file, double durationSeconds, double minSilenceSeconds, double noiseDb,
         Func<IAsyncEnumerable<float[]>, CancellationToken, Task> consumePcm,
         Action<double>? progress, string? inputDecoder, CancellationToken ct);
 }

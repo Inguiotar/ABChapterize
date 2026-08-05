@@ -123,6 +123,14 @@ internal sealed class MarkPlacer
     }
 
     /// <summary>
+    /// The refinement itself, for the one caller that wants it without the rest of a placement:
+    /// <c>--verify --fix</c>, which is correcting a mark whose chapter number is already settled by
+    /// the marking's own title (so no <see cref="RefinedNumberVote"/>) and which is not part of a
+    /// detection run (so no per-chapter statistics to record).
+    /// </summary>
+    internal PreciseMarkRefiner Refiner => _refiner;
+
+    /// <summary>
     /// Finishes one chapter's mark: precise marking corrects the default-mode position by direct
     /// re-transcription (unless --quick-marks turned it off), --mark-before-jingle then walks the
     /// result back to the jingle's leading edge, and the chapter's silence/jingle measurements are

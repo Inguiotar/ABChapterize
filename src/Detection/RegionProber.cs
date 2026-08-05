@@ -22,7 +22,8 @@ namespace ABChapterize.Detection;
 /// created it: the tools it probes with, and the detector-owned operations that must stay the
 /// detector's (recognition that tallies toward the file's Whisper statistics, the once-per-file
 /// language resolution, the --verbose transcript log, the
-/// <see cref="CliOptions.MaxChapterNumber"/>-capped phrase matcher and the shared mark placer).
+/// <see cref="CliOptions.EffectiveMaxChapterNumber"/>-capped phrase matcher and the shared mark
+/// placer).
 /// Bundled so a prober's constructor is about the region it probes rather than about plumbing;
 /// one instance serves every region of one file.
 /// </summary>

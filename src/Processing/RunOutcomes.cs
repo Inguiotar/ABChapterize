@@ -99,10 +99,10 @@ internal sealed class RunOutcomes
     }
 
     /// <summary>The note following an unfinished book's name: how many marks it is still short of,
-    /// and - through the same cut-off <see cref="FileProcessor.MissingMarksPath"/> applies to the
+    /// and - through the same cut-off <see cref="MissingMarksTag.PathFor"/> applies to the
     /// file name it announces - which chapters those are.</summary>
     /// <param name="missingNumbers">The chapter numbers still missing.</param>
     private static string DescribeMissing(IReadOnlyList<int> missingNumbers)
         => $"{missingNumbers.Count} mark(s) missing " +
-           $"(chapter {FileProcessor.FormatMissingList(missingNumbers)})";
+           $"(chapter {MissingMarksTag.FormatList(missingNumbers)})";
 }

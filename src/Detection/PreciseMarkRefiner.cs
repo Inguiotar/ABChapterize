@@ -352,8 +352,9 @@ internal sealed class PreciseMarkRefiner
     /// <para>
     /// Two steps, and the second is what makes the first honest. The silence Pass 1 recorded gives
     /// a floor: nothing audible precedes the end of a silence, so the announcement cannot begin
-    /// before it. But that end is only a floor. silencedetect's verdict is a fixed
-    /// <see cref="SilenceNoiseDb"/> threshold against individual samples, so a single click - a
+    /// before it. But that end is only a floor. silencedetect's verdict is one
+    /// fixed level (<see cref="DefaultSilenceNoiseDb"/>, or whatever <c>--noise-floor</c> resolved
+    /// to) against individual samples, so a single click - a
     /// mouth noise, a page, a chair - closes the silence while the narrator is still drawing
     /// breath. Anchoring straight to it therefore lands early by however long that gap runs.
     /// Measured over the fourteen-book run of 2026-08-03 (114 marks with a silence in reach, each

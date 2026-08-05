@@ -4,7 +4,6 @@
 
 using System.Diagnostics;
 using System.Text;
-using System.Text.RegularExpressions;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Concurrency;
@@ -33,7 +32,7 @@ namespace ABChapterize.Processing;
 /// <see cref="ABChapterize.Vad.SileroVadDetector"/>) instead of competing with three other files
 /// for one.
 /// </remarks>
-public sealed partial class FileProcessor
+public sealed class FileProcessor
 {
     private readonly CliOptions _options;
     private readonly ProgressRenderer _progress;
@@ -64,10 +63,18 @@ public sealed partial class FileProcessor
         _progress = progress;
     }
 
-    /// <summary>Runs the tool in the mode selected by the options (revert, --no-op or abchapterize).</summary>
+    /// <summary>Runs the tool in the mode selected by the options (cleanup, revert, --no-op or
+    /// abchapterize).</summary>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     public async Task RunAsync(CancellationToken ct)
     {
+        // Before the --revert branch: --cleanup --revert is one mode, not two, and the restoring
+        // has to happen in the order CleanupRunner plans it in rather than ahead of everything.
+        if (_options.Cleanup)
+        {
+            await new CleanupRunner(_options, _progress).RunAsync(ct);
+            return;
+        }
         if (_options.Revert)
         {
             RunRevert(ct);
@@ -492,100 +499,6 @@ public sealed partial class FileProcessor
     }
 
     /// <summary>
-    /// The most chapter numbers <see cref="MissingMarksPath"/> spells out in a file name before
-    /// falling back to the unnumbered ".missing-marks" tag. A file missing this many chapters or
-    /// fewer is worth naming them all - beyond that the name grows unwieldy (and can hit the
-    /// platform's path length limit), and a gap that large is a sign that detection went off the
-    /// rails rather than a shortlist worth resuming from.
-    /// </summary>
-    internal const int MaxNamedMissingNumbers = 10;
-
-    /// <summary>
-    /// Builds the name a file is renamed to when pass 3 leaves an unresolved chapter-sequence gap:
-    /// the original name with a ".missing-marks-&lt;n&gt;-&lt;n&gt;-..." tag (the still-missing
-    /// chapter numbers, "-"-delimited) inserted before the extension, e.g.
-    /// "Book.m4b" with chapters 3 and 7 missing becomes "Book.missing-marks-3-7.m4b". Beyond
-    /// <see cref="MaxNamedMissingNumbers"/> missing chapters the numbers are left out entirely
-    /// ("Book.missing-marks.m4b"), which also takes the file out of
-    /// <see cref="HasMissingMarksTag"/>'s auto-resume scope on purpose: a gap that wide is
-    /// something to look at by hand, not to hand straight back to another automatic run. Any such
-    /// tag already present is replaced rather than stacked, in either form. Internal for unit
-    /// testing.
-    /// </summary>
-    /// <param name="file">Path of the file being renamed.</param>
-    /// <param name="missingNumbers">The chapter numbers still missing after pass 3.</param>
-    internal static string MissingMarksPath(string file, IReadOnlyList<int> missingNumbers)
-    {
-        var dir = Path.GetDirectoryName(file) ?? "";
-        var stem = StripMissingMarksTag(Path.GetFileNameWithoutExtension(file));
-        var ext = Path.GetExtension(file);
-        var tag = missingNumbers.Count is > 0 and <= MaxNamedMissingNumbers
-            ? $".missing-marks-{string.Join("-", missingNumbers)}"
-            : ".missing-marks";
-        return Path.Combine(dir, $"{stem}{tag}{ext}");
-    }
-
-    /// <summary>Removes a trailing ".missing-marks" tag - with or without its number list - from a
-    /// file stem, so re-tagging an already-tagged file replaces the tag instead of appending a
-    /// second one.</summary>
-    /// <param name="stem">File name without directory or extension.</param>
-    private static string StripMissingMarksTag(string stem)
-        => MissingMarksTagRegex().Replace(stem, "");
-
-    /// <summary>Matches a trailing ".missing-marks" tag in either form, numbered or bare.</summary>
-    [GeneratedRegex(@"\.missing-marks(-[0-9-]+)?$", RegexOptions.CultureInvariant)]
-    private static partial Regex MissingMarksTagRegex();
-
-    /// <summary>True when a file name still carries a numbered ".missing-marks-&lt;n&gt;-..." tag
-    /// (see <see cref="MissingMarksPath"/>) - i.e. a previous run left it with an unresolved
-    /// chapter-sequence gap small enough to name, and it is a candidate for
-    /// <see cref="ProcessOneAsync"/>'s auto-resume branch. The unnumbered ".missing-marks" form
-    /// deliberately does not qualify; see <see cref="MissingMarksPath"/>. Internal for unit
-    /// testing.</summary>
-    /// <param name="file">Path of the file being considered.</param>
-    internal static bool HasMissingMarksTag(string file)
-        => NumberedMissingMarksTagRegex().IsMatch(Path.GetFileNameWithoutExtension(file));
-
-    /// <summary>Matches only the numbered form of the tag, the one an auto-resume can act on.</summary>
-    [GeneratedRegex(@"\.missing-marks-[0-9-]+$", RegexOptions.CultureInvariant)]
-    private static partial Regex NumberedMissingMarksTagRegex();
-
-    /// <summary>True when a file name carries a ".missing-marks" tag in either form. Unlike
-    /// <see cref="HasMissingMarksTag"/> this asks "is this file still flagged?" rather than "can a
-    /// resume act on it", which is the question both when deciding whether a completed run has a
-    /// tag to take off again and when telling the two rename directions apart. Internal for unit
-    /// testing.</summary>
-    /// <param name="file">Path of the file being considered.</param>
-    internal static bool HasAnyMissingMarksTag(string file)
-        => MissingMarksTagRegex().IsMatch(Path.GetFileNameWithoutExtension(file));
-
-    /// <summary>The file's own original name, with any ".missing-marks-..." tag stripped - what a
-    /// resumed file is renamed back to once every previously-missing chapter is found.</summary>
-    /// <param name="file">Path of the tagged file.</param>
-    private static string StripMissingMarksPath(string file)
-    {
-        var dir = Path.GetDirectoryName(file) ?? "";
-        var stem = StripMissingMarksTag(Path.GetFileNameWithoutExtension(file));
-        var ext = Path.GetExtension(file);
-        return Path.Combine(dir, stem + ext);
-    }
-
-    /// <summary>
-    /// Formats still-missing chapter numbers for a summary line, listing at most
-    /// <see cref="MaxNamedMissingNumbers"/> of them and summarizing the rest as a count - the same
-    /// cut-off <see cref="MissingMarksPath"/> applies to the file name, so the message and the name
-    /// it announces stay in step. Internal for unit testing.
-    /// </summary>
-    /// <param name="missingNumbers">The chapter numbers still missing.</param>
-    internal static string FormatMissingList(IReadOnlyList<int> missingNumbers)
-    {
-        if (missingNumbers.Count <= MaxNamedMissingNumbers)
-            return string.Join(", ", missingNumbers);
-        return string.Join(", ", missingNumbers.Take(MaxNamedMissingNumbers)) +
-               $" and {missingNumbers.Count - MaxNamedMissingNumbers} more";
-    }
-
-    /// <summary>
     /// The per-file plumbing every stage of <see cref="ProcessOneAsync"/> needs, bundled so each
     /// stage takes one parameter instead of five. <see cref="Ffmpeg"/> is the run's shared client
     /// rather than anything file-specific; it rides along purely so the write paths need not be
@@ -669,7 +582,7 @@ public sealed partial class FileProcessor
         // The debug log belongs beside the audiobook under the book's own name, so it follows the
         // file back when the tag comes off - but not when one is put on, where the untagged name it
         // already has is the right one (see DebugLog.PathFor).
-        if (renamedTo != null && !HasAnyMissingMarksTag(renamedTo))
+        if (renamedTo != null && !MissingMarksTag.IsTagged(renamedTo))
             debug?.FollowTo(renamedTo);
         return renamedTo;
     }
@@ -693,7 +606,7 @@ public sealed partial class FileProcessor
         // The resume path is entirely about chapter numbers the tag names, so a run that forms no
         // opinion about them re-detects the file from scratch instead - the tag is simply not this
         // run's business.
-        if (!_options.Force && !_options.IgnoreChapterNumbers && HasMissingMarksTag(ctx.File))
+        if (!_options.Force && !_options.IgnoreChapterNumbers && MissingMarksTag.IsResumable(ctx.File))
             return await ProcessResumeAsync(ctx, detector, watch, ct);
 
         if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
@@ -763,7 +676,7 @@ public sealed partial class FileProcessor
 
     /// <summary>
     /// The auto-resume path for a file still carrying a numbered ".missing-marks" tag (see
-    /// <see cref="HasMissingMarksTag"/>): the detector re-probes only the gap(s) the tag names,
+    /// <see cref="MissingMarksTag.IsResumable"/>): the detector re-probes only the gap(s) the tag names,
     /// and the outcome is committed either as a re-tagged partial write or - when every missing
     /// chapter turned up - as a full write under the file's original name.
     /// </summary>
@@ -800,8 +713,8 @@ public sealed partial class FileProcessor
         FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
     {
         _warnings++;
-        var retarget = MissingMarksPath(ctx.File, resumed.MissingNumbers);
-        var stillMissing = FormatMissingList(resumed.MissingNumbers);
+        var retarget = MissingMarksTag.PathFor(ctx.File, resumed.MissingNumbers);
+        var stillMissing = MissingMarksTag.FormatList(resumed.MissingNumbers);
         RecordStillMissing(ctx, retarget, resumed.MissingNumbers);
         if (_options.DryRun)
         {
@@ -831,7 +744,7 @@ public sealed partial class FileProcessor
     private async Task<string?> ReportCompleteResumeAsync(
         FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
     {
-        var restored = StripMissingMarksPath(ctx.File);
+        var restored = MissingMarksTag.StripFrom(ctx.File);
         // Through FormatWrittenCount rather than indexing the chapter list directly: a tagged file
         // whose markings have since been stripped by hand resumes with nothing to seed from and
         // nothing to find, and reaches here with an empty list rather than a completed sequence.
@@ -912,6 +825,10 @@ public sealed partial class FileProcessor
         var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
         if (verify.Checked == 0 || verify.Passed)
         {
+            // --fix may have found marks worth moving even where every one of them checked out;
+            // that is the point of it, and the file then gets rewritten rather than skipped.
+            if (verify.Markings.Any(m => m.CorrectedStartSeconds != null))
+                return await ApplyMarkingFixesAsync(ctx, verify, ct);
             var verifyNote = verify.Checked > 0
                 ? $"{verify.Checked} pre-existing chapter marking(s) verified correct"
                 : $"has {ctx.Info.ChapterCount} chapter marking(s) (none had a checkable number)";
@@ -938,6 +855,53 @@ public sealed partial class FileProcessor
         var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
                           $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
         return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct), trustedNote);
+    }
+
+    /// <summary>
+    /// The <c>--verify --fix</c> outcome for a file whose markings all check out but some of which
+    /// sit away from their announcements: the file's existing marking list is written back with the
+    /// corrected timestamps and nothing else touched.
+    /// </summary>
+    /// <remarks>
+    /// Built from the markings themselves rather than through <see cref="BuildChapters"/>, which is
+    /// what every detection path uses. That is deliberate: this mode's whole promise is that it
+    /// moves marks and changes nothing else, so it must not be able to rename one, drop one it did
+    /// not recognize, or invent an intro entry the file never had. Matching the corrections back by
+    /// timestamp is exact - <see cref="VerifyMarkingOutcome.StartSeconds"/> is a verbatim copy of
+    /// the marking's own, not a recomputed figure.
+    /// </remarks>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="verify">The verification result carrying the corrections.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Always null: the file is finished here, and the caller's detection path must not
+    /// run for it.</returns>
+    private async Task<(DetectionResult Result, string DiscardNote)?> ApplyMarkingFixesAsync(
+        FileContext ctx, VerifyResult verify, CancellationToken ct)
+    {
+        var corrections = verify.Markings
+            .Where(m => m.CorrectedStartSeconds != null)
+            .ToDictionary(m => m.StartSeconds, m => m.CorrectedStartSeconds!.Value);
+        var chapters = ctx.Info.ExistingChapters
+            .Select(c => corrections.TryGetValue(c.StartSeconds, out var fixedStart)
+                ? c with { StartSeconds = fixedStart }
+                : c)
+            .OrderBy(c => c.StartSeconds)
+            .ToList();
+        var largest = corrections.Max(kv => Math.Abs(kv.Value - kv.Key));
+        var what = $"{corrections.Count} of {verify.Checked} verified marking(s) nudged onto their " +
+                   $"announcements (largest correction {largest:0.##} s)";
+
+        _processed++;
+        if (_options.DryRun)
+        {
+            _progress.FinishWithSummary(ctx.Work,
+                $"{ctx.Name}: DRY RUN - would write {what}:" +
+                $"{Environment.NewLine}{FormatChapterListing(chapters)}");
+            return null;
+        }
+        var backupNote = await CommitChaptersAsync(ctx, chapters, null, ct);
+        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {what}{backupNote}");
+        return null;
     }
 
     /// <summary>
@@ -990,8 +954,8 @@ public sealed partial class FileProcessor
         _warnings++;
         _runStats.AccumulateConfidence(result.Chapters);
         var (chapters, introNote) = BuildChapters(result);
-        var target = MissingMarksPath(ctx.File, result.MissingNumbers);
-        var missingList = FormatMissingList(result.MissingNumbers);
+        var target = MissingMarksTag.PathFor(ctx.File, result.MissingNumbers);
+        var missingList = MissingMarksTag.FormatList(result.MissingNumbers);
         RecordStillMissing(ctx, target, result.MissingNumbers);
         if (_options.DryRun)
         {
@@ -1078,7 +1042,7 @@ public sealed partial class FileProcessor
         // A *numbered* tag normally takes the resume path instead and is untagged there; what
         // reaches this point is the unnumbered form, which no resume picks up, or either form under
         // --force, which redetects the whole file from scratch.
-        var restored = HasAnyMissingMarksTag(ctx.File) ? StripMissingMarksPath(ctx.File) : null;
+        var restored = MissingMarksTag.IsTagged(ctx.File) ? MissingMarksTag.StripFrom(ctx.File) : null;
         var renameNote = restored != null ? $", renamed to {Path.GetFileName(restored)}" : "";
 
         if (_options.DryRun)

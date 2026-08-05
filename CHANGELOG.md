@@ -13,6 +13,79 @@ release is whatever felt big enough to deserve one — the program has turned in
 different animal, or a headline feature landed, or it has simply grown up enough to
 earn a round number.
 
+## [0.10.2] — unreleased
+
+### Added
+
+- **`--min-silence-length 0` searches the jingles and nothing else.** On a book whose every
+  chapter opens with a jingle, the hundreds of ordinary pauses in the narration are so much
+  dead weight — each one a candidate, each candidate a Whisper probe. Setting the length to
+  zero drops them all and leaves only the jingles, which on such a book is the largest
+  saving available anywhere in the tool. It is not a default and never will be: on a book
+  whose chapters open with a plain pause instead, it removes the only way of finding them.
+  (For the same reason it cannot be combined with `--max-jingle-length 0`, which would
+  leave nothing at all to look at.) What it does not switch off is the silence scan itself,
+  which marks are still placed and refined against — so a chapter found this way lands in
+  exactly the same place it otherwise would.
+
+- **`--verify --fix` corrects a misplaced mark instead of only reporting it.** `--verify`
+  could tell you that a mark's chapter really is announced right there — and then, if the
+  mark sat half a second off, leave you re-running the whole book with `--force` to move
+  it. With `--fix`, a confirmed mark is nudged onto its announcement and the file
+  rewritten. Only a nudge, and both ends are bounded: a mark already within a quarter of a
+  second is left alone, since remuxing an audiobook to move it that far is not worth doing;
+  and one more than 30 seconds from its announcement is left alone too, because a mark that
+  far out is not a mark that drifted but one that means something else. Marks that could
+  not be confirmed at all are untouched and still go to the usual gap recovery, and nothing
+  but the timestamps changes — no mark is renamed, dropped or added.
+
+- **`--chapter-phrase none`, for books that announce a chapter by its number alone.**
+  Some narrators say "Seventeen." and read on, with no "chapter" anywhere — and until now
+  the tool had nothing to look for in such a book. This mode drops the phrase entirely and
+  takes a number spoken *alone*, with a pause on either side of it, as the announcement.
+  A number inside a sentence is not one, so the years, prices and house numbers in the
+  prose are left alone. Since the number is then the only evidence there is, what rejects a
+  false one is that it does not continue the chapter sequence — which is why this cannot be
+  combined with `--ignore-chapter-numbers`. Per language, like every other value of the
+  option.
+
+- **The silence threshold now adapts to the recording, and `--noise-floor` sets it by
+  hand.** Finding chapters starts with finding the pauses, and a pause has always been
+  defined as audio quieter than a fixed −35 dBFS. That figure sits comfortably between
+  the room tone and the narration of any ordinary audiobook — but not of one recorded
+  with audible hiss, which never drops below it, so no pause and therefore no chapter is
+  ever found; nor of one mastered very quietly, where the narration itself falls below it
+  and every gap between two words looks like a chapter break. Neither could be fixed from
+  the command line, and no amount of adjusting `--min-silence-length` helped, the problem
+  never having been the length of the pauses. Each file's own levels are now sampled
+  before the scan (about a second, even on a long book) and the threshold moved only
+  where the usual one would not fit — on a normal master it does, and nothing changes.
+  `--noise-floor` overrides the whole thing with a fixed level in dBFS.
+
+- **`--chapter-count`: tell it how many chapters the book has.** A missing chapter is
+  normally spotted as a hole in the numbering, which needs a known chapter on either side
+  of it — so one missing *after* the last chapter found was the one case nothing noticed,
+  and the file came out looking complete. `--trailing-scan` has always closed that hole by
+  transcribing the whole tail on spec, on every file, whether or not anything was wrong.
+  Given the count instead, the run knows precisely which numbers are still owed, hunts
+  only those, stops the moment they turn up, and does nothing at all when the count was
+  already reached. It also caps the numbering, so a misheard "chapter five hundred" cannot
+  invent five hundred missing chapters — which is `--max-chapter-number`'s job, and why the
+  two cannot be combined. Takes one file at a time, being a statement about one particular
+  book, and reaching the count does not end the search: an epilogue or a `--custom` phrase
+  may still follow.
+
+- **`--cleanup`: one command to sweep up after a run.** Finishing a library used to
+  leave a trail — `.bak` backups, `.debug.log` files, half-written temporary files from
+  an interrupted run, and books still carrying a `.missing-marks-...` tag in their name —
+  and clearing it out by hand meant knowing which of those were safe to delete. This does
+  it for you: leftovers and logs go, name tags come off, and backups are deleted only
+  where the file they back up is sitting next to them and runs the same length, so it can
+  never throw away the only copy of anything. A backup it declines to delete says why.
+  It prints what it is about to do and waits for a "yes"; `--yes` answers that in advance
+  for a scripted cleanup, and is required where there is no console to ask at. Add
+  `--revert` to restore the backups over their files instead of deleting them.
+
 ## [0.10.1] — 2026-08-04
 
 ### Fixed

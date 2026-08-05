@@ -56,7 +56,12 @@ public sealed class DebugLog : IDisposable
     /// audiobook when that tag is dropped again.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
-    public static string PathFor(string file) => file + ".debug.log";
+    public static string PathFor(string file) => file + Suffix;
+
+    /// <summary>The suffix <see cref="PathFor"/> appends, named separately because
+    /// <c>--cleanup</c> has to recognize these logs without having an audio file to derive the
+    /// name from.</summary>
+    public const string Suffix = ".debug.log";
 
     /// <summary>
     /// Asks this log to move itself next to the audiobook's new name once it is closed, which is
@@ -136,6 +141,12 @@ public sealed class DebugLog : IDisposable
     /// header nobody reads.
     /// </summary>
     /// <param name="o">The run's validated options.</param>
+    private static string DescribeMinSilence(CliOptions o)
+        => !o.ProbeSilences ? "0 (jingles only)"
+            : o.AutoMinSilence ? $"auto (floor {o.MinSilenceSeconds:0.##} s)"
+            : $"{o.MinSilenceSeconds:0.##} s";
+
+    /// <param name="o">The run's validated options.</param>
     private static IEnumerable<string> DescribeSettings(CliOptions o)
     {
         yield return $"model {o.Model}, pass3-model {o.Pass3Model}, lang {o.Language}";
@@ -148,7 +159,8 @@ public sealed class DebugLog : IDisposable
         foreach (var mapping in o.CustomMappings)
             yield return $"custom {(mapping.Language is { } code ? $"[{code}] " : "")}" +
                          $"{mapping.Phrase} -> \"{mapping.Title}\"";
-        yield return $"min-silence-length {(o.AutoMinSilence ? $"auto (floor {o.MinSilenceSeconds:0.##} s)" : $"{o.MinSilenceSeconds:0.##} s")}, " +
+        yield return $"noise-floor {(o.AutoNoiseFloor ? "auto" : $"{o.NoiseFloorDb:0.#} dBFS")}";
+        yield return $"min-silence-length {DescribeMinSilence(o)}, " +
                      $"max-jingle-length {(o.AutoMaxJingle ? $"auto (ceiling {o.MaxJingleSeconds:0.#} s)" : $"{o.MaxJingleSeconds:0.#} s")}, " +
                      $"mark-lead {o.MarkLeadSeconds:0.##} s";
         yield return $"vad-pre-pass {(o.RunVadPrePass ? "on" : "off")}, " +
@@ -157,6 +169,7 @@ public sealed class DebugLog : IDisposable
         yield return $"early-abort {(o.EarlyAbortMinutes > 0 ? $"{o.EarlyAbortMinutes:0.#} min" : "off")}, " +
                      $"expected-start-chapter {o.ExpectedStartChapter?.ToString() ?? "-"}, " +
                      $"max-chapter-number {o.MaxChapterNumber?.ToString() ?? "-"}, " +
+                     $"chapter-count {o.ChapterCount?.ToString() ?? "-"}, " +
                      $"trailing-scan {(o.TrailingScan ? "on" : "off")}";
         yield return $"ignore-chapter-numbers {(o.IgnoreChapterNumbers ? "on" : "off")}, " +
                      $"verify {(o.Verify ? "on" : "off")}, force {(o.Force ? "on" : "off")}, " +

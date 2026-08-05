@@ -93,10 +93,16 @@ source. Only what affects using the tool is covered here.
 
 ffmpeg's `silencedetect` filter finds every silence of at least
 `--min-silence-length` seconds (default, and floor with `auto`: 1.5) below
-−35 dBFS, in one quick decode pass over the whole file. Chapter announcements
-in audiobooks practically always follow such a pause. If the scan ends
-prematurely (e.g. because of a damaged file), the file is aborted with an
-error instead of silently reporting "no chapters".
+`--noise-floor` dBFS (normally −35), in one quick decode pass over the whole
+file. Chapter announcements in audiobooks practically always follow such a
+pause. If the scan ends prematurely (e.g. because of a damaged file), the file
+is aborted with an error instead of silently reporting "no chapters".
+
+Before that scan, a few short excerpts from across the file are decoded to
+check that the threshold suits this particular recording — see
+[`--noise-floor`](#detection-behaviour). It costs about a second even on a
+long book, and on an ordinary master it confirms the usual −35 dBFS and
+changes nothing.
 
 `silencedetect` is amplitude-only: a jingle (a short music sting) that abuts
 the narration with no detectable gap around it produces no silence at all, so
@@ -359,9 +365,11 @@ taken as-is, not searched past.
 A chapter missing *after* the last one found is the one case none of this can
 notice: a gap is a hole in the number sequence, which needs a known chapter on
 either side of it, and there is nothing above the last one to compare against.
-`--trailing-scan` transcribes that stretch anyway — from the last chapter found
-through to the end of the file — at the price of doing so on every file, every
-run, whether or not anything is wrong. See
+Two options close it. `--chapter-count` says how many numbered chapters the book
+has, so the run knows which numbers are still owed and hunts only those, and only
+when some are; `--trailing-scan` transcribes the stretch anyway — from the last
+chapter found through to the end of the file — at the price of doing so on every
+file, every run, whether or not anything is wrong. See
 [Detection behaviour](#detection-behaviour).
 
 ### Pass 3.5 — the shifted re-read
@@ -566,14 +574,18 @@ check which of the two kinds it is before deleting anything:
   it takes the finished file to move into its place (step 4 above, without
   `--backup`). If `<name>.<ext>` is missing, rename this one back to it; if the
   audiobook is sitting there complete, the parked copy has done its job and can
-  go. Either way, look before deleting.
+  go. Either way, look before deleting — or let
+  [`--cleanup`](#cleaning-up-after-a-run) look for you, which is exactly the
+  distinction it is built around.
 
 `abchapterize -R <target>` (`--revert`) undoes a `--backup` run: for every
 supported audio file with an added `.bak` suffix, the current file is deleted
 and the backup renamed back. `--revert` can be combined with `--recurse`, with
 `--filter` (the filter then selects which backups are restored) and with the
 output options (`--quiet`, `--summary`), but with no detection or safety
-options.
+options. To undo everything else a run leaves behind as well — its logs, its
+name tags, its leftovers — see
+[Cleaning up after a run](#cleaning-up-after-a-run).
 
 ## 5. What is kept and what is stripped
 
@@ -614,6 +626,7 @@ ffmpeg afterwards.
 ```
 abchapterize [options] <file-or-directory>...
 abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
+abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
 abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
 abchapterize --help | -?
 abchapterize --version
@@ -656,7 +669,7 @@ so that logs and reports stay comparable regardless of regional settings.
   - `"ext1,ext2"` — a comma-separated list of extensions (with or without
     dots), e.g. `--filter mp3,m4b`. Only supported extensions are allowed.
 
-  The filter also applies to `--revert` (it selects which backups are
+  The filter also applies to `--revert` and `--cleanup` (it selects which backups are
   restored) and to directory scans in general. A single file named directly
   as the target is *also* subject to the filter.
 
@@ -693,6 +706,9 @@ so that logs and reports stay comparable regardless of regional settings.
     If the regexp contains a capturing group, the group must capture the
     chapter number as digits; without a group, the number is parsed from the
     surrounding words as with a literal phrase.
+  - The word `none`, for a book that announces a chapter by speaking its
+    number and nothing else — see [Bare numbers](#bare-numbers-as-announcements)
+    below.
 
   For a batch run over books in more than one language, the value may also be
   written **per language**: entries separated by `;`, each opened by a `[xx]`
@@ -714,11 +730,37 @@ so that logs and reports stay comparable regardless of regional settings.
   works for `--title`, `--intro-title`, `--prologue-phrase`,
   `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`.
 
+#### Bare numbers as announcements
+
+`--chapter-phrase none` says this book has no chapter phrase at all: the
+narrator simply says "Seventeen." and reads on. What counts as an announcement
+is then a **number spoken alone** — one with a pause on either side of it,
+rather than one occurring inside a sentence. "Seventeen." is an announcement;
+"Seventeen men stood at the gate" is not, and neither is a year, a price or a
+house number read out in the prose.
+
+Everything else about a run is unaffected: the prologue, the epilogue and every
+`--custom` mapping still match their own phrases as usual, and marks are placed
+and refined exactly as they are for a phrase-based book.
+
+Two things are worth knowing before reaching for it:
+
+- **It leans entirely on the chapter numbering.** With a phrase there are two
+  independent signals, and a stray number in the prose fails the first of them.
+  Here the number is all there is, and what rejects a false one is that it does
+  not continue the sequence. `--ignore-chapter-numbers`, which switches that
+  check off, is therefore refused in combination with it — the pair would mark
+  every number spoken alone anywhere in the book.
+- **It is per language,** like every other value of this option, so a batch may
+  hold one series announcing "Kapitel 17" and another just saying "Seventeen":
+  `--chapter-phrase "[en]none;[de]/kapitel/"`.
+
 `-p`, `--prologue-phrase <p>`
 : The word or phrase that announces a prologue (default: `/prolog/`,
   localized by `--lang`). Takes the same literal and `/regexp/` forms as
-  `--chapter-phrase`, but no number is parsed or expected. Only accepted
-  before the first chapter has been found; see
+  `--chapter-phrase`, but no number is parsed or expected — including `none`,
+  which is just the word here, there being no number for it to stand in for.
+  Only accepted before the first chapter has been found; see
   [Prologue and epilogue](#prologue-and-epilogue). An empty string switches
   prologue detection off.
 
@@ -795,7 +837,7 @@ so that logs and reports stay comparable regardless of regional settings.
   [Picking a GPU on a multi-GPU machine](#picking-a-gpu-on-a-multi-gpu-machine).
 
 `-n`, `--min-silence-length <seconds|auto>`
-: Minimum silence duration (0.1–60, default: `auto`) that counts as a
+: Minimum silence duration (0, or 0.1–60, default: `auto`) that counts as a
   potential chapter break; the silence scan always uses this as its floor
   (1.5 by default, and as `auto`'s floor). By default (`auto`), pass 2
   self-tightens the probing threshold to 75% of the *shortest* anchor
@@ -811,6 +853,57 @@ so that logs and reports stay comparable regardless of regional settings.
   heavier `--pass3-model` will usually rescue the run anyway: a gap it leaves
   behind is swept for pauses down to half a second under whatever this says
   (see [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model)).
+
+  **`0` switches silence-triggered probing off entirely**, leaving only the
+  jingles the voice-activity pre-pass finds. For a book whose every chapter
+  opens with one, that is the largest saving available anywhere in this tool:
+  the hundreds of ordinary in-narration pauses that each cost a Whisper probe
+  simply stop being candidates, and every jingle becomes one instead — including
+  the ones led by a silence, which are normally left to that silence's own
+  candidate. For a book whose chapters do not open with a jingle it removes the
+  only way of finding them, which is why it is not a default and why it is
+  refused together with `--max-jingle-length 0` (the two of them would leave the
+  search nothing at all to look at).
+
+  What `0` does **not** switch off is the silence scan itself. Pass 1 still runs
+  and still keeps every silence it finds: window seams snap to them, transcript
+  timestamps are corrected against them, and mark placement and refinement are
+  anchored to them. Turning that off would make every mark worse rather than
+  merely find fewer of them — so a chapter found in this mode lands in exactly
+  the same place it would in an ordinary run. `--verbose` says so explicitly,
+  reporting how many silences were found and that none were probed.
+
+`--noise-floor <dBFS|auto>`
+: How quiet audio has to be before it counts as a pause at all, in dBFS
+  (-90 to -5, default: `auto`). Where `--min-silence-length` above is about
+  *how long* a pause has to be, this is about *how quiet* — the other half of
+  the same question, and the one that has no answer on the command line until
+  now. Levels are negative because 0 dBFS is a full-scale signal. No short form.
+
+  On an ordinary audiobook there is a wide gap between the room tone in the
+  pauses and the narration itself, and the usual threshold of -35 dBFS sits in
+  the middle of it with room to spare either side. `auto` samples a few short
+  excerpts from across each file before the silence scan, works out where that
+  file's own gap actually lies, and moves the threshold **only** if -35 would
+  fall outside it — which on a normal master it does not, so the automatic mode
+  changes nothing at all and every book behaves exactly as it always has.
+
+  What it is for is the master that is not normal, where no amount of fiddling
+  with `--min-silence-length` could help because the problem was never the
+  length:
+
+  - **Audible hiss.** If the quiet stretches never drop below -35, no pause is
+    ever detected — and with no pause there is nothing to probe, so the file
+    yields no chapters at all. The threshold rises to clear the hiss.
+  - **A very quietly mastered book.** If the narration itself sits under -35,
+    every gap between two words looks like a chapter break and the scan returns
+    thousands of candidates, each of which costs a Whisper probe. The threshold
+    drops below the narration.
+
+  An explicit level fixes the threshold for the whole run, which is what to
+  reach for when a book is known to need one — or to reproduce an older run
+  exactly. `--verbose` prints the threshold in use and, under `auto`, the two
+  levels it was derived from.
 
 `-j`, `--mark-before-jingle`
 : Anchor the chapter mark to the end of the previous
@@ -1057,10 +1150,41 @@ skipped (reported as "skipped").
   [pass 3.5](#pass-35--the-shifted-re-read), whatever `--pass3-model` says, so
   the price is two passes over it rather than one. Does nothing when no
   chapter was found at all — there is no "last chapter" to scan from — nor
-  after an `--early-abort` or `--expected-start-chapter` abort.
+  after an `--early-abort` or `--expected-start-chapter` abort. If you happen to
+  know how many chapters the book has, `--chapter-count` answers the same
+  question for a fraction of the time.
+
+`--chapter-count <n>`
+: How many numbered chapters this book has, exactly (default: no expectation).
+  Takes exactly one file, never a directory or several files — it is a
+  statement about one particular book, and applied to a library it would tag
+  most of it as incomplete. No short form.
+
+  This is the informed version of `--trailing-scan` above, aimed at the same
+  blind spot: a chapter missing after the last one found has nothing above it
+  to make its absence visible. Told the count, the run knows exactly which
+  numbers are still owed, hunts only those, and stops the moment they turn up —
+  where `--trailing-scan` has to transcribe the whole tail on spec, every time,
+  even on a book that was already complete. When the count is reached, nothing
+  is transcribed at all. When it is not, the chapters still missing are named
+  and the file is tagged `.missing-marks-…` like any other unresolved gap.
+
+  It is a cap as well: a chapter numbered above the count is discarded as a
+  mishearing, which is `--max-chapter-number`'s whole job — so the two cannot
+  be combined, and `--chapter-count` is the one to reach for when you know the
+  number rather than merely an upper bound.
+
+  What it does **not** do is end the search once the count is reached. A book's
+  numbered chapters are rarely the last thing in it: an epilogue, or any
+  `--custom` phrase, may still follow, and those are still looked for through
+  to the end of the file.
+
+  With `--expected-start-chapter` it counts from there, so a split-book part
+  starting at chapter 5 with `--chapter-count 3` runs 5 to 7.
 
 `-N`, `--max-chapter-number <n>`
-: The highest chapter number this book plausibly has (default: no limit). A
+: The highest chapter number this book plausibly has (default: no limit; see
+  `--chapter-count` above for when the exact figure is known). A
   detected chapter numbered above `<n>` is discarded on the spot as a
   mishearing rather than becoming a mark. Worth setting whenever you know the
   chapter count roughly: a single "chapter five hundred and ten" misheard in a
@@ -1125,6 +1249,39 @@ skipped (reported as "skipped").
   confirmed mark, with any lower one that failed confirmation shown as a
   `(-N)` gap.
 
+`--fix`
+: Requires `--verify`. Lets it *correct* a mark instead of only reporting on
+  it: where a mark's announcement is confirmed but the mark sits a little
+  away from it, the mark is moved onto the announcement and the file
+  rewritten. Without this, a mark that is confirmed-but-misplaced needs a
+  full `--force` re-run of the whole book to move by half a second. No short
+  form.
+
+  It only ever nudges, and the two bounds say what that means:
+
+  - A mark **already within a quarter of a second** is left where it is.
+    Rewriting an audiobook remuxes the entire file, and that is not worth
+    doing to move a mark by less than the placement's own accuracy.
+  - A mark **more than 30 seconds** from its announcement is left alone too,
+    and reported. A mark that far out did not drift; it means something else
+    — a retailer's grouping, another edition's numbering — and dragging it
+    onto the nearest matching phrase would destroy that information rather
+    than correct it.
+
+  Marks that could not be confirmed at all are untouched by this: they go to
+  the gap recovery described above, exactly as they do without `--fix`. What
+  gets written is the file's own mark list with corrected timestamps —
+  nothing is renamed, dropped or added, and no intro entry is invented.
+
+  One caveat worth knowing. Marks are located here by re-transcribing the
+  audio at them, which is the same machinery a full run uses to pin every
+  mark — but a full run then anchors the result against the silence scan of
+  [pass 1](#pass-1--silence-scan-and-vad-pre-pass), which `--verify` never
+  runs. A fixed mark can therefore sit a fraction of a second later than the
+  same chapter would land in a from-scratch run. Against a mark that was
+  seconds out that is not the problem; if a book's marks matter to the last
+  tenth of a second, `--force` without `--verify` is still the answer.
+
 `-h`, `--verify-threshold <n>`
 : Requires `--verify`. Draws the "failed wholesale" line above by hand: more
   than `<n>` failed marks in a file leaves it untouched with a warning,
@@ -1153,6 +1310,21 @@ skipped (reported as "skipped").
   options are rejected. An audio file named directly has its own `.bak`
   neighbour restored, so the suffix need not be typed out.
 
+`--cleanup`
+: Housekeeping instead of processing — see
+  [Cleaning up after a run](#cleaning-up-after-a-run) for what it removes and
+  what it refuses to. Combinable with `--revert`, `--yes`, `--recurse`,
+  `--filter` and the output options; all detection and safety options are
+  rejected, as they are for `--revert`. No short form, deliberately.
+
+`--yes`
+: Answers `--cleanup`'s confirmation prompt in advance. Required for a
+  scripted or scheduled cleanup, which has no console to be asked at: a
+  cleanup that can neither ask nor has been told refuses to run rather than
+  guess. Not needed with `--cleanup --revert`, which throws nothing away.
+  Rejected without `--cleanup` — an option reading "stop asking me things"
+  must not look like it covers prompts it does not. No short form.
+
 `-O`, `--no-op`
 : Lists every file `--filter` (and `--recurse`) would select, then exits
   without loading a Whisper model, invoking ffmpeg or touching any file - a
@@ -1161,6 +1333,62 @@ skipped (reported as "skipped").
   `--filter`; combinable only with `--recurse` and the output options
   (`--quiet` suppresses the listing itself, leaving just `--summary`'s
   count), the same restriction `--revert` has.
+
+### Cleaning up after a run
+
+`abchapterize --cleanup <target>` puts a folder back the way it was before this
+tool was let loose on it. Nothing is transcribed, no model is loaded, and a line
+is printed for every change:
+
+- **Leftover temporary files** are deleted. The one exception is an original
+  parked by a write that was killed at the wrong moment (see
+  [How chapters are written](#4-how-chapters-are-written--file-safety)): if the
+  audiobook is missing, that parked copy *is* the audiobook, and it is renamed
+  back instead of deleted.
+- **`.debug.log` troubleshooting logs** are deleted.
+- **Progress files of interrupted batch runs** are deleted, so the next run
+  starts those directories over. Only when no `--filter` is in play: a filter
+  selects books, a progress file belongs to a directory, and quietly throwing
+  away an interrupted batch's resume point is not something a narrowed cleanup
+  should do.
+- **`.missing-marks-...` name tags** are taken off, leaving each file under its
+  original name. The chapter marks already written into it stay. A tag is left
+  on where the original name is taken by something else — those marks are real
+  work, and overwriting an unrelated file with them would be a poor trade for a
+  tidier listing.
+- **`.bak` backups** are deleted — but only where the file they back up is
+  sitting next to them *and* runs the same length (within two seconds, the
+  tolerance a remux can shift a duration by). A backup whose file is gone, or
+  which turns out to be a different recording, is left alone with a line saying
+  why. This is what makes the mode safe to point at a library: it can never
+  throw away the only copy of anything.
+
+With **`--revert`** the last point flips: every `.bak` is restored over the file
+beside it, exactly as plain `--revert` does, and the rest of the cleanup happens
+around it. The original comes back under the book's *plain* name even if it was
+tagged, the tag having been added after the backup was taken.
+
+Nothing is touched before you have seen what would happen:
+
+```
+--cleanup is about to:
+  rename ".missing-marks" files back to their original names: 2 file(s)
+  delete ".bak" backups whose file is present and of matching length: 5 file(s)
+  delete ".debug.log" troubleshooting logs: 7 file(s)
+This cannot be undone. Are you sure? Type "yes" to proceed:
+```
+
+Anything other than `yes` (or `y`) leaves the folder untouched — which doubles
+as a preview, and is why `--dry-run` is not accepted here. `--yes` answers the
+prompt in advance, and is **required** when there is no interactive console to
+ask at; without it such a run refuses rather than guesses. `--cleanup --revert`
+never asks, nothing being thrown away.
+
+Files this tool did not create are never touched — cover images, sidecars from
+`--export`, stray text files, audiobooks themselves. A step that fails (a file
+held open by a player, say) is reported and the remaining ones still run, but
+the run then ends with exit code 1 so a script cannot mistake a partial cleanup
+for a complete one.
 
 `--ignore-progress`
 : Start every listed directory over instead of resuming it, ignoring (and
@@ -1185,8 +1413,10 @@ The details worth knowing:
   each is removed as soon as that particular directory is done.
 - A file named directly on the command line has no directory to keep a record
   in, so it is never checkpointed.
-- `--dry-run`, `--no-op` and `--revert` never write one either — nothing they
-  do is worth not doing twice.
+- `--dry-run`, `--no-op`, `--revert` and `--cleanup` never write one either —
+  nothing they do is worth not doing twice. `--cleanup` does *delete* the ones
+  it finds, unless a `--filter` narrows it; see
+  [Cleaning up after a run](#cleaning-up-after-a-run).
 - The record notes which options the run used. Change any option that affects
   the outcome and the stale record is discarded rather than misapplied;
   options that only change the output's appearance (`--quiet`, `--verbose`,

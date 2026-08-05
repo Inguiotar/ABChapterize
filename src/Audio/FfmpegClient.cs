@@ -55,6 +55,23 @@ public sealed partial class FfmpegClient : IAudioSource
     /// <summary>Sample rate of decoded PCM audio; Whisper requires 16 kHz.</summary>
     public const int SampleRate = 16000;
 
+    /// <summary>
+    /// Infix of the remux target <see cref="WriteChaptersAsync"/> writes before swapping it in
+    /// (the file's own extension follows, so ffmpeg picks the muxer from it). Named here rather
+    /// than spelled out at the one place it is built, because <c>--cleanup</c> has to recognize
+    /// one left behind by a run that was killed before its <c>finally</c> could delete it, and a
+    /// housekeeping mode that no longer matches what the writer produces is worse than none.
+    /// </summary>
+    public const string TempInfix = ".abchapterize.tmp";
+
+    /// <summary>
+    /// Suffix the original is parked under while <see cref="SwapInto"/> moves the new file into
+    /// place. Recognized by <c>--cleanup</c> for the same reason as <see cref="TempInfix"/> - but
+    /// note that an orphaned one is the audiobook itself rather than a scratch file, so cleanup
+    /// puts it back instead of deleting it.
+    /// </summary>
+    public const string ParkedSuffix = ".abchapterize.orig";
+
     /// <summary>Creates a client using the given executable paths (see <see cref="FfmpegLocator"/>).</summary>
     /// <param name="ffmpegPath">Full path of ffmpeg.exe.</param>
     /// <param name="ffprobePath">Full path of ffprobe.exe.</param>
@@ -154,7 +171,7 @@ public sealed partial class FfmpegClient : IAudioSource
     /// <inheritdoc/>
     /// <remarks>Uses ffmpeg's silencedetect filter in a full decode pass over the file.</remarks>
     public async Task<List<Silence>> DetectSilencesAsync(
-        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        string file, double durationSeconds, double minSilenceSeconds, double noiseDb,
         Action<double>? progress, string? inputDecoder, CancellationToken ct)
     {
         var silences = new List<Silence>();
@@ -171,7 +188,7 @@ public sealed partial class FfmpegClient : IAudioSource
                 // immediate EOF would otherwise end the whole run after a fraction of
                 // a second, silently skipping the rest of the file.
                 "-vn", "-sn", "-dn",
-                "-af", $"silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}",
+                "-af", $"silencedetect=noise={noiseDb.ToString(CultureInfo.InvariantCulture)}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}",
                 "-progress", "pipe:1",
                 "-f", "null", "-"
             ]);
@@ -292,7 +309,7 @@ public sealed partial class FfmpegClient : IAudioSource
 
     /// <inheritdoc/>
     public async Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
-        string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+        string file, double durationSeconds, double minSilenceSeconds, double noiseDb,
         Func<IAsyncEnumerable<float[]>, CancellationToken, Task> consumePcm,
         Action<double>? progress, string? inputDecoder, CancellationToken ct)
     {
@@ -322,7 +339,7 @@ public sealed partial class FfmpegClient : IAudioSource
                 // frames it is handed.
                 "-filter_complex",
                 "[0:a]asplit=2[sd][pcm];" +
-                $"[sd]silencedetect=noise={noiseDb}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}[sdout];" +
+                $"[sd]silencedetect=noise={noiseDb.ToString(CultureInfo.InvariantCulture)}dB:d={minSilenceSeconds.ToString(CultureInfo.InvariantCulture)}[sdout];" +
                 $"[pcm]aresample={SampleRate}:async=1:first_pts=0" +
                 $":min_hard_comp={PcmResyncToleranceSeconds.ToString(CultureInfo.InvariantCulture)}," +
                 "aformat=sample_fmts=flt:channel_layouts=mono[pcmout]",
@@ -450,7 +467,7 @@ public sealed partial class FfmpegClient : IAudioSource
         bool backup, Action<double>? progress, CancellationToken ct)
     {
         var metaFile = Path.Combine(Path.GetTempPath(), $"abchapterize-{Guid.NewGuid():N}.ffmeta");
-        var tmpFile = file + ".abchapterize.tmp" + Path.GetExtension(file);
+        var tmpFile = file + TempInfix + Path.GetExtension(file);
         try
         {
             await File.WriteAllTextAsync(metaFile, BuildFfMetadata(chapters, durationSeconds), new UTF8Encoding(false), ct);
@@ -532,7 +549,7 @@ public sealed partial class FfmpegClient : IAudioSource
             return false;
         }
 
-        var parked = file + ".abchapterize.orig";
+        var parked = file + ParkedSuffix;
         File.Move(file, parked);
         try
         {

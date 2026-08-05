@@ -65,6 +65,12 @@ internal static class PhraseMatching
     {
         if (segments.Count == 0)
             yield break;
+        if (profile.BareNumberAnnouncements)
+        {
+            foreach (var match in FindBareNumbers(segments, profile))
+                yield return match;
+            yield break;
+        }
 
         var (text, segStartChar) = Flatten(segments);
         var mergeBoundaryChar = mergeBoundarySegIndex is { } idx && idx > 0 && idx < segments.Count
@@ -81,6 +87,39 @@ internal static class PhraseMatching
                 number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
                 segments[segIndex].Probability, spansMerge);
         }
+    }
+
+    /// <summary>
+    /// The <c>--chapter-phrase none</c> reading of a window: a chapter is announced by speaking its
+    /// number and nothing else, so what is looked for is a transcript segment that <em>is</em> a
+    /// number, start to finish.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// "And nothing else" is doing all the work here, and it is deliberately taken from the
+    /// segmentation rather than from the words. Whisper ends a segment where the speaking stops, so
+    /// a segment containing a number and nothing besides is a number that was spoken alone, with a
+    /// pause on either side - which is exactly the shape of an announcement this mode exists for,
+    /// and exactly what an ordinary number in prose is not. Without that requirement every year,
+    /// price and street number in the book would become a chapter mark.
+    /// </para>
+    /// <para>
+    /// It also means this mode leans on the chapter-number sequence far more heavily than the
+    /// phrase-based one does - a lone "Seventeen." in dialogue is indistinguishable from an
+    /// announcement by any amount of local evidence, and only its number being out of sequence
+    /// rejects it. That is why <c>--ignore-chapter-numbers</c>, which switches that check off, is
+    /// refused in combination with it.
+    /// </para>
+    /// </remarks>
+    /// <param name="segments">The window's transcript segments, in the caller's time base.</param>
+    /// <param name="profile">Language profile supplying the number grammar.</param>
+    private static IEnumerable<PhraseMatch> FindBareNumbers(
+        List<TranscriptSegment> segments, LanguageProfile profile)
+    {
+        foreach (var segment in segments)
+            if (NumberWordParser.TryParseWholeText(segment.Text, profile.Language, out var number))
+                yield return new PhraseMatch(
+                    number, segment.StartSeconds, segment.EndSeconds, segment.Probability);
     }
 
     /// <summary>
@@ -124,7 +163,9 @@ internal static class PhraseMatching
     internal static IEnumerable<UnnumberedAnnouncement> FindUnnumberedAnnouncements(
         List<TranscriptSegment> segments, LanguageProfile profile)
     {
-        if (segments.Count == 0)
+        // With --chapter-phrase none there is no such thing: the number *is* the announcement, so an
+        // announcement whose number could not be read was never recognized as one in the first place.
+        if (segments.Count == 0 || profile.BareNumberAnnouncements)
             yield break;
 
         var (text, segStartChar) = Flatten(segments);
@@ -210,7 +251,9 @@ internal static class PhraseMatching
     internal static IEnumerable<NamedMatch> FindChapterAnnouncements(
         List<TranscriptSegment> segments, LanguageProfile profile)
     {
-        if (segments.Count == 0)
+        // Unreachable with --chapter-phrase none, which CliOptions refuses to combine with
+        // --ignore-chapter-numbers - see FindBareNumbers for why that pairing has no safety net.
+        if (segments.Count == 0 || profile.BareNumberAnnouncements)
             yield break;
 
         var (text, segStartChar) = Flatten(segments);

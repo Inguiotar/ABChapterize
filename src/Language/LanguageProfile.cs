@@ -24,9 +24,16 @@ namespace ABChapterize.Language;
 /// phrase - the prologue, the epilogue and every <c>--custom</c> mapping - each with the title its
 /// mark is written under. Empty when the prologue and epilogue were both switched off with an empty
 /// <c>--prologue-phrase</c>/<c>--epilogue-phrase</c> and no <c>--custom</c> mapping was given.</param>
+/// <param name="BareNumberAnnouncements">True for <c>--chapter-phrase none</c>: this language's
+/// books announce a chapter by speaking its number and nothing else, so there is no phrase to match
+/// and <paramref name="PhraseRegex"/> is a regex that never matches anything. See
+/// <see cref="ABChapterize.Detection.PhraseMatching.FindPhraseMatches"/> for what is looked for
+/// instead. Per language rather than per run, because a mixed-language batch may well hold one
+/// series that announces "Kapitel 17" and another that just says "Seventeen".</param>
 public sealed record LanguageProfile(
     string Language, string ChapterPhrase, Regex PhraseRegex, bool PhraseHasNumberGroup,
-    string Title, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases)
+    string Title, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases,
+    bool BareNumberAnnouncements = false)
 {
     /// <summary>
     /// The chapter phrase dressed up as a <see cref="NamedPhrase"/>, for

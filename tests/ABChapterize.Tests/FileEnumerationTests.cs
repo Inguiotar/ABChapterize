@@ -122,7 +122,7 @@ public sealed class FileEnumerationTests : IDisposable
     [Fact]
     public void MissingMarksPath_TagsTheStillMissingChapters_BeforeTheExtension()
     {
-        var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.m4b"), [3, 7, 8]);
+        var path = MissingMarksTag.PathFor(Path.Combine("lib", "Book.m4b"), [3, 7, 8]);
         Assert.Equal(Path.Combine("lib", "Book.missing-marks-3-7-8.m4b"), path);
     }
 
@@ -131,27 +131,27 @@ public sealed class FileEnumerationTests : IDisposable
     {
         // Re-tagging an already-tagged file (e.g. after a second incomplete run) must not produce
         // "Book.missing-marks-3-7.missing-marks-7.m4b".
-        var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.missing-marks-3-7.m4b"), [7]);
+        var path = MissingMarksTag.PathFor(Path.Combine("lib", "Book.missing-marks-3-7.m4b"), [7]);
         Assert.Equal(Path.Combine("lib", "Book.missing-marks-7.m4b"), path);
     }
 
     [Fact]
     public void HasMissingMarksTag_RecognizesATaggedFileName()
     {
-        Assert.True(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.missing-marks-3-7-8.m4b")));
+        Assert.True(MissingMarksTag.IsResumable(Path.Combine("lib", "Book.missing-marks-3-7-8.m4b")));
     }
 
     [Fact]
     public void HasMissingMarksTag_IsFalse_ForAnOrdinaryFileName()
     {
-        Assert.False(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.m4b")));
+        Assert.False(MissingMarksTag.IsResumable(Path.Combine("lib", "Book.m4b")));
     }
 
     [Fact]
     public void MissingMarksPath_OmitsTheNumbers_WhenTooManyChaptersAreMissing()
     {
         // Eleven missing chapters is one past the cap - the name must not spell any of them out.
-        var path = FileProcessor.MissingMarksPath(
+        var path = MissingMarksTag.PathFor(
             Path.Combine("lib", "Book.m4b"), [.. Enumerable.Range(5, 11)]);
         Assert.Equal(Path.Combine("lib", "Book.missing-marks.m4b"), path);
     }
@@ -159,15 +159,15 @@ public sealed class FileEnumerationTests : IDisposable
     [Fact]
     public void MissingMarksPath_StillNamesExactlyTheCappedCount()
     {
-        var path = FileProcessor.MissingMarksPath(
-            Path.Combine("lib", "Book.m4b"), [.. Enumerable.Range(5, FileProcessor.MaxNamedMissingNumbers)]);
+        var path = MissingMarksTag.PathFor(
+            Path.Combine("lib", "Book.m4b"), [.. Enumerable.Range(5, MissingMarksTag.MaxNamedNumbers)]);
         Assert.Equal(Path.Combine("lib", "Book.missing-marks-5-6-7-8-9-10-11-12-13-14.m4b"), path);
     }
 
     [Fact]
     public void MissingMarksPath_ReplacesAnUnnumberedTag_RatherThanStackingIt()
     {
-        var path = FileProcessor.MissingMarksPath(Path.Combine("lib", "Book.missing-marks.m4b"), [7]);
+        var path = MissingMarksTag.PathFor(Path.Combine("lib", "Book.missing-marks.m4b"), [7]);
         Assert.Equal(Path.Combine("lib", "Book.missing-marks-7.m4b"), path);
     }
 
@@ -176,7 +176,7 @@ public sealed class FileEnumerationTests : IDisposable
     {
         // The unnumbered form is deliberately outside the auto-resume scope: a gap that wide
         // wants a human look, not another automatic run.
-        Assert.False(FileProcessor.HasMissingMarksTag(Path.Combine("lib", "Book.missing-marks.m4b")));
+        Assert.False(MissingMarksTag.IsResumable(Path.Combine("lib", "Book.missing-marks.m4b")));
     }
 
     [Theory]
@@ -188,20 +188,20 @@ public sealed class FileEnumerationTests : IDisposable
     [InlineData("Book.m4b", false)]
     public void HasAnyMissingMarksTag_RecognizesBothFormsOfTheTag(string name, bool expected)
     {
-        Assert.Equal(expected, FileProcessor.HasAnyMissingMarksTag(Path.Combine("lib", name)));
+        Assert.Equal(expected, MissingMarksTag.IsTagged(Path.Combine("lib", name)));
     }
 
     [Fact]
     public void FormatMissingList_ListsEverythingUpToTheCap()
     {
-        Assert.Equal("3, 7, 8", FileProcessor.FormatMissingList([3, 7, 8]));
+        Assert.Equal("3, 7, 8", MissingMarksTag.FormatList([3, 7, 8]));
     }
 
     [Fact]
     public void FormatMissingList_SummarizesTheRest_BeyondTheCap()
     {
         Assert.Equal("1, 2, 3, 4, 5, 6, 7, 8, 9, 10 and 2 more",
-            FileProcessor.FormatMissingList([.. Enumerable.Range(1, 12)]));
+            MissingMarksTag.FormatList([.. Enumerable.Range(1, 12)]));
     }
 
     /// <summary>Runs --no-op against the temp directory and returns everything written to

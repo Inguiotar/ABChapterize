@@ -69,7 +69,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         /// <inheritdoc/>
         public Task<List<Silence>> DetectSilencesAsync(
-            string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+            string file, double durationSeconds, double minSilenceSeconds, double noiseDb,
             Action<double>? progress, string? inputDecoder, CancellationToken ct)
             => Task.FromResult(Silences);
 
@@ -89,7 +89,7 @@ public sealed class ChapterDetectorTests : IDisposable
         /// consumer callback must still be invoked, exactly as the real ffmpeg-backed
         /// implementation does, so FakeVad.CallCount reflects reality.</remarks>
         public async Task<List<Silence>> DetectSilencesAndStreamPcmAsync(
-            string file, double durationSeconds, double minSilenceSeconds, int noiseDb,
+            string file, double durationSeconds, double minSilenceSeconds, double noiseDb,
             Func<IAsyncEnumerable<float[]>, CancellationToken, Task> consumePcm,
             Action<double>? progress, string? inputDecoder, CancellationToken ct)
         {
@@ -278,12 +278,28 @@ public sealed class ChapterDetectorTests : IDisposable
     /// </summary>
     private const double PinnedMarkLeadSeconds = 0.25;
 
-    /// <summary>Builds validated options with the temp file as target, at
-    /// <see cref="PinnedMarkLeadSeconds"/> unless the test asks for a lead of its own.</summary>
+    /// <summary>
+    /// Builds validated options with the temp file as target, at
+    /// <see cref="PinnedMarkLeadSeconds"/> unless the test asks for a lead of its own, and with
+    /// <c>--noise-floor</c> pinned to the default level.
+    /// <para>
+    /// The noise floor is pinned for a different reason than the lead: not because its value would
+    /// churn expectations, but because its <em>automatic</em> mode decodes excerpts from across the
+    /// file before pass 1 runs, and a good many tests below count decodes or assert that a given
+    /// stretch was never read. Those excerpts would show up in every one of them while saying
+    /// nothing about what the test is checking. What the measurement itself decides is
+    /// <see cref="SilenceThresholdProbeTests"/>'s subject instead.
+    /// </para>
+    /// </summary>
     private CliOptions Options(params string[] args)
-        => CliOptions.Parse(args.Contains("--mark-lead") || args.Contains("-k")
-            ? [.. args, _file]
-            : [.. args, "--mark-lead", $"{PinnedMarkLeadSeconds}", _file])!;
+    {
+        string[] withFloor = args.Contains("--noise-floor")
+            ? args
+            : [.. args, "--noise-floor", $"{DetectionTuning.DefaultSilenceNoiseDb}"];
+        return CliOptions.Parse(args.Contains("--mark-lead") || args.Contains("-k")
+            ? [.. withFloor, _file]
+            : [.. withFloor, "--mark-lead", $"{PinnedMarkLeadSeconds}", _file])!;
+    }
 
     /// <summary>The named marks reduced to what these tests are actually about - which phrase
     /// produced what title, where - so that a bookkeeping field like
@@ -1397,6 +1413,197 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task BareNumbers_AreAnnouncementsWithChapterPhraseNone()
+    {
+        // A book that names its chapters by number alone. Each number is its own transcript
+        // segment, which is what says it was spoken between two pauses rather than inside a
+        // sentence.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " One."));
+                s.Add(1200, Seg(0.2, " Two."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task BareNumbers_IgnoreANumberInsideASentence()
+    {
+        // The one thing standing between this mode and a mark on every year, price and street
+        // number in the book: an announcement is a segment that is a number and nothing else.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " One."));
+                s.Add(1200, Seg(0.2, " Two hundred men stood at the gate."));
+            });
+
+        AssertChapters([new(1, 0.25)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task BareNumbers_AcceptASpelledOutNumberOfSeveralWords()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Twenty-one."));
+                s.Add(1200, Seg(0.2, " Twenty two."));
+            });
+
+        AssertChapters([new(21, 0.25), new(22, 1199.95)], result.Chapters);
+    }
+
+    /// <summary>The chapter phrase is gone, but everything else about a run is not: a prologue or
+    /// a --custom mapping still matches its own phrase as usual.</summary>
+    [Fact]
+    public async Task BareNumbers_LeaveTheNamedPhrasesAlone()
+    {
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Prologue."));
+                s.Add(600, Seg(0.3, " One."));
+                s.Add(1200, Seg(0.2, " Two."));
+                s.Add(1800, Seg(0.4, " Epilogue."));
+            });
+
+        AssertChapters([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+        AssertNamed(
+            [("prologue", "Prologue", 0.25), ("epilogue", "Epilogue", 1800.15)],
+            result);
+    }
+
+    [Fact]
+    public async Task ChapterCount_HuntsTheChaptersAfterTheLastOneDetected()
+    {
+        // The same hole --trailing-scan brute-forces, told exactly what is missing instead: chapter
+        // 3 is announced past everything pass 2 found, with no chapter above it to make its absence
+        // visible as a sequence gap.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--chapter-count", "3"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1789.95, Seg(10, " Chapter three.")); // trailing chunk 2, phrase at 1799.95
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95), new(3, 1799.7)], result.Chapters);
+        Assert.False(result.GapRemains);
+        // Knowing what it was after, the hunt stopped at chapter 3 rather than carrying on to the
+        // end of the file the way an open-ended --trailing-scan has to.
+        Assert.Contains(1199.95, audio.DecodeStarts);
+        Assert.DoesNotContain(audio.DecodeWindows, w => w.Start > 2900);
+    }
+
+    [Fact]
+    public async Task ChapterCount_TranscribesNoTail_WhenTheCountIsAlreadyReached()
+    {
+        // Two chapters declared, two found: nothing is owed, so the tail is never touched - which is
+        // the whole difference from --trailing-scan, whose sweep is paid for on every file.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--max-jingle-length", "0", "--chapter-count", "2"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1789.95, Seg(10, " Chapter three."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        Assert.False(result.GapRemains);
+        Assert.All(audio.DecodeWindows, w => Assert.True(w.Duration is null or <= 60));
+    }
+
+    [Fact]
+    public async Task ChapterCount_ReportsTheTrailingChaptersItCouldNotFind()
+    {
+        // Nothing beyond chapter 2 is in the audio at all. Without a declared count the file would
+        // be written out looking complete; with one it is tagged, which is the point.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-count", "4"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        Assert.True(result.GapRemains);
+        Assert.Equal([3, 4], result.MissingNumbers);
+    }
+
+    [Fact]
+    public async Task ChapterCount_DiscardsANumberAboveTheDeclaredLast()
+    {
+        // A count is also a cap, the same one --max-chapter-number provides: without it a misheard
+        // "chapter thirty" in a three-chapter book leaves twenty-seven chapters "missing".
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--chapter-count", "3"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter thirty."));
+            });
+
+        AssertChapters([new(1, 0.25)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("discarded chapter 30") && l.Contains("--chapter-count"));
+    }
+
+    [Fact]
+    public async Task ChapterCount_CountsFromExpectedStartChapter()
+    {
+        // A split-book part starting at chapter 5 with three chapters in it runs 5 to 7, not 1 to 3.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-count", "3",
+                    "--expected-start-chapter", "5"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter five."));
+                s.Add(1200, Seg(0.2, " Chapter six."));
+            });
+
+        AssertChapters([new(5, 0.25), new(6, 1199.95)], result.Chapters);
+        Assert.Equal([7], result.MissingNumbers);
+    }
+
+    [Fact]
+    public async Task ChapterCount_DoesNotEndTheSearchAtTheLastChapter()
+    {
+        // The declared count says when the *numbered* chapters run out, not when the book does: an
+        // epilogue (or any --custom phrase) may still follow, and stopping at the count would cost
+        // that mark silently.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--chapter-count", "2"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1800, Seg(0.4, " Epilogue."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        AssertNamed([("epilogue", "Epilogue", 1800.15)], result);
+    }
+
+    [Fact]
     public async Task ANumberLeavingALargeGap_IsReReadWithThePass3Model()
     {
         // BARDIOC.m4b, 2026-07-30: "neunzehn" (19) came back as 90 right after chapter 18, declaring
@@ -2072,6 +2279,73 @@ public sealed class ChapterDetectorTests : IDisposable
         // figures equal the overall ones here - only chapter 2 was measurable either way.
         Assert.Equal(4.0, result.Stats.MinInterChapterSilenceSeconds!.Value, 3);
         Assert.Equal(9.0, result.Stats.MaxInterChapterJingleSeconds!.Value, 3);
+    }
+
+    /// <summary>With silence probing off, a chapter whose transition is a jingle is still found -
+    /// and found through the jingle, even though a silence leads it. Without the option that VAD
+    /// region is dropped as a duplicate of its leading silence's candidate; with it there is no
+    /// such candidate to be a duplicate of.</summary>
+    [Fact]
+    public async Task MinSilenceZero_StillProbesJingles()
+    {
+        var (result, _, _) = await DetectFullAsync(
+            Options("--min-silence-length", "0"),
+            [new(638, 642), new(648, 650)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(640, Seg(10, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 640), new(651, 3600)] }); // non-speech region 640-651
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+    }
+
+    /// <summary>The other half of the bargain: an ordinary pause is no longer a reason to look, so
+    /// a chapter announced after one and nothing else is not found at all.</summary>
+    [Fact]
+    public async Task MinSilenceZero_DoesNotProbeAPlainSilence()
+    {
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--min-silence-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 3600)] }); // speech throughout: no jingle anywhere
+
+        // Only the region-start candidate at 0 was probed, which is where chapter 1 is.
+        AssertChapters([new(1, 0.25)], result.Chapters);
+        Assert.DoesNotContain(1200.0, audio.DecodeStarts);
+    }
+
+    /// <summary>The silence scan itself keeps running: marks are placed and refined against it,
+    /// so switching it off would degrade every mark rather than merely finding fewer of them.</summary>
+    [Fact]
+    public async Task MinSilenceZero_StillScansForSilences()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s => s.Add(0, Seg(0.5, " Chapter one.")),
+            vad: new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Contains(log, l => l.Contains("Pass 1: 2 silence(s) found, none probed"));
+    }
+
+    /// <summary>Nothing about a run without the option may change - the whole existing suite is
+    /// the real evidence for that, and this pins the one figure the option reads.</summary>
+    [Fact]
+    public void MinSilenceZero_LeavesTheStoredSilenceFloorAlone()
+    {
+        Assert.Equal(DetectionTuning.MinStoredSilenceSeconds,
+            Options("--min-silence-length", "0").StoredSilenceFloorSeconds);
+        Assert.Equal(DetectionTuning.MinStoredSilenceSeconds,
+            Options("--min-silence-length", "1.5").StoredSilenceFloorSeconds);
+        // Only a floor below the stored one lowers it, exactly as before.
+        Assert.Equal(0.2, Options("--min-silence-length", "0.2").StoredSilenceFloorSeconds, 3);
     }
 
     [Fact]
@@ -5507,6 +5781,70 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.True(result.Passed);
         Assert.Equal(2, result.Checked);
         Assert.Equal(0, result.Failed);
+    }
+
+    /// <summary>--fix's whole point: a marking whose announcement checks out but sits well away
+    /// from it is moved onto it, instead of the run only reporting that it checked out.</summary>
+    [Fact]
+    public async Task VerifyFix_MovesAConfirmedMarkingOntoItsAnnouncement()
+    {
+        // Marking at 10 s, window [0, 60), the announcement actually at 40 s.
+        var result = await VerifyAsync(
+            Options("--max-jingle-length", "0", "--verify", "--fix"),
+            [new Chapter(10, "Chapter 1")],
+            s => s.Add(0, Seg(40, " Chapter 1.")));
+
+        Assert.True(result.Passed);
+        var marking = Assert.Single(result.Markings);
+        Assert.NotNull(marking.CorrectedStartSeconds);
+        Assert.Equal(40 - PinnedMarkLeadSeconds, marking.CorrectedStartSeconds!.Value, 2);
+        // The confirmed chapter is handed on at the corrected position, so a run that also
+        // gap-recovers writes the fixed marks rather than the old ones.
+        Assert.Equal(40 - PinnedMarkLeadSeconds, Assert.Single(result.ConfirmedChapters).TimeSeconds, 2);
+    }
+
+    /// <summary>Rewriting a whole audiobook to move a mark by a tenth of a second is not worth
+    /// it, and the figure being moved is inside the refinement's own accuracy anyway.</summary>
+    [Fact]
+    public async Task VerifyFix_LeavesAMarkingAlreadyCloseEnoughAlone()
+    {
+        var result = await VerifyAsync(
+            Options("--max-jingle-length", "0", "--verify", "--fix"),
+            [new Chapter(10, "Chapter 1")],
+            s => s.Add(0, Seg(10.1, " Chapter 1.")));
+
+        Assert.True(result.Passed);
+        Assert.Null(Assert.Single(result.Markings).CorrectedStartSeconds);
+    }
+
+    /// <summary>A mark tens of seconds from its announcement is not one that drifted - it means
+    /// something else, and dragging it onto the nearest matching phrase would destroy that.</summary>
+    [Fact]
+    public async Task VerifyFix_LeavesAMarkingTooFarFromItsAnnouncementAlone()
+    {
+        var (result, _, _) = await VerifyWithTranscriberAsync(
+            Options("--max-jingle-length", "0", "--verify", "--fix"),
+            [new Chapter(10, "Chapter 1")],
+            s => s.Add(0, Seg(55, " Chapter 1.")));
+
+        Assert.True(result.Passed);
+        Assert.Null(Assert.Single(result.Markings).CorrectedStartSeconds);
+        Assert.Equal(10, Assert.Single(result.ConfirmedChapters).TimeSeconds);
+    }
+
+    /// <summary>Without --fix, --verify reports and changes nothing - the behaviour every
+    /// existing use of it relies on.</summary>
+    [Fact]
+    public async Task Verify_WithoutFix_NeverCorrectsAMarking()
+    {
+        var result = await VerifyAsync(
+            Options("--max-jingle-length", "0", "--verify"),
+            [new Chapter(10, "Chapter 1")],
+            s => s.Add(0, Seg(40, " Chapter 1.")));
+
+        Assert.True(result.Passed);
+        Assert.Null(Assert.Single(result.Markings).CorrectedStartSeconds);
+        Assert.Equal(10, Assert.Single(result.ConfirmedChapters).TimeSeconds);
     }
 
     [Fact]

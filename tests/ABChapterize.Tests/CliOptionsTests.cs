@@ -1464,6 +1464,117 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void MinSilenceLengthZero_SwitchesSilenceProbingOff()
+    {
+        var o = ParseFile("--min-silence-length", "0")!;
+        Assert.False(o.ProbeSilences);
+        Assert.False(o.AutoMinSilence);
+        Assert.True(ParseFile()!.ProbeSilences);
+        Assert.True(ParseFile("--min-silence-length", "2")!.ProbeSilences);
+    }
+
+    /// <summary>The two options that decide what pass 2 probes at all; switching both off would
+    /// leave the search with nothing to look at.</summary>
+    [Fact]
+    public void MinSilenceLengthZero_WithMaxJingleLengthZero_IsRejected()
+    {
+        Assert.Throws<CliError>(() =>
+            ParseFile("--min-silence-length", "0", "--max-jingle-length", "0"));
+        Assert.NotNull(ParseFile("--min-silence-length", "0", "--max-jingle-length", "30"));
+    }
+
+    [Fact]
+    public void ChapterPhraseNone_TurnsOnBareNumberAnnouncements()
+    {
+        var o = ParseFile("--chapter-phrase", "none")!;
+        Assert.True(o.DefaultProfile.BareNumberAnnouncements);
+        Assert.False(o.DefaultProfile.PhraseHasNumberGroup);
+        // The expression is inert rather than absent, so a consumer that forgot to check the flag
+        // finds nothing instead of throwing.
+        Assert.DoesNotMatch(o.DefaultProfile.PhraseRegex, "chapter seventeen none");
+    }
+
+    /// <summary>Per language like any other value: one series announces "Kapitel 17", another just
+    /// says "Seventeen".</summary>
+    [Fact]
+    public void ChapterPhraseNone_WorksPerLanguage()
+    {
+        var o = ParseFile("--chapter-phrase", "[en]none;[de]/kapitel/")!;
+        Assert.True(o.ResolveProfile("en").BareNumberAnnouncements);
+        Assert.False(o.ResolveProfile("de").BareNumberAnnouncements);
+    }
+
+    /// <summary>"none" names the bare-number mode for the chapter phrase alone; for a prologue,
+    /// which parses no number, it is just the word.</summary>
+    [Fact]
+    public void ProloguePhraseNone_IsTakenLiterally()
+    {
+        var profile = ParseFile("--prologue-phrase", "none")!.DefaultProfile;
+        Assert.False(profile.BareNumberAnnouncements);
+        Assert.Matches(profile.NamedPhrases.First(p => p.Kind == "prologue").Regex, "and none of it");
+    }
+
+    [Fact]
+    public void ChapterPhraseNone_WithIgnoreChapterNumbers_IsRejected()
+        => Assert.Throws<CliError>(() => ParseFile("--chapter-phrase", "none", "--ignore-chapter-numbers"));
+
+    [Fact]
+    public void ChapterCount_DefaultsToNull_AndCapsNothing()
+    {
+        var o = ParseFile()!;
+        Assert.Null(o.ChapterCount);
+        Assert.Null(o.LastExpectedChapter);
+        Assert.Null(o.EffectiveMaxChapterNumber);
+    }
+
+    [Fact]
+    public void ChapterCount_IsParsed_AndBecomesTheCap()
+    {
+        var o = ParseFile("--chapter-count", "20")!;
+        Assert.Equal(20, o.ChapterCount);
+        Assert.Equal(20, o.LastExpectedChapter);
+        Assert.Equal(20, o.EffectiveMaxChapterNumber);
+    }
+
+    [Fact]
+    public void ChapterCount_IsCountedFromExpectedStartChapter()
+    {
+        var o = ParseFile("--chapter-count", "3", "--expected-start-chapter", "5")!;
+        Assert.Equal(3, o.ChapterCount);
+        Assert.Equal(7, o.LastExpectedChapter);
+    }
+
+    [Fact]
+    public void InvalidChapterCount_IsRejected()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--chapter-count", "0"));
+        Assert.Throws<CliError>(() => ParseFile("--chapter-count", "-1"));
+        Assert.Throws<CliError>(() => ParseFile("--chapter-count", "twenty"));
+    }
+
+    /// <summary>Both name the highest number the book may have; accepting both would mean picking
+    /// which of two contradictory answers to believe.</summary>
+    [Fact]
+    public void ChapterCount_WithMaxChapterNumber_IsRejected()
+        => Assert.Throws<CliError>(() => ParseFile("--chapter-count", "20", "--max-chapter-number", "20"));
+
+    /// <summary>It says how many chapters *this book* has, which is not a thing that can be said
+    /// about a folder of them.</summary>
+    [Fact]
+    public void ChapterCount_NeedsExactlyOneFile()
+    {
+        Assert.Throws<CliError>(() => CliOptions.Parse(["--chapter-count", "20", _dir]));
+        var second = Path.Combine(_dir, "other.m4b");
+        File.WriteAllText(second, "x");
+        Assert.Throws<CliError>(() => CliOptions.Parse(["--chapter-count", "20", _file, second]));
+        Assert.NotNull(ParseFile("--chapter-count", "20"));
+    }
+
+    [Fact]
+    public void ChapterCount_WithIgnoreChapterNumbers_IsRejected()
+        => Assert.Throws<CliError>(() => ParseFile("--chapter-count", "20", "--ignore-chapter-numbers"));
+
+    [Fact]
     public void LiteralChapterPhrase_IsEscapedAndCaseInsensitive()
     {
         var o = ParseFile("-c", "part (a)")!;

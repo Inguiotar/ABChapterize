@@ -120,6 +120,39 @@ public static class NumberWordParser
     }
 
     /// <summary>
+    /// Whether <paramref name="text"/> is a number and nothing else - "Seventeen.", "17.",
+    /// "einundzwanzig", "XIII." - which is what <c>--chapter-phrase none</c> reads as a chapter
+    /// announcement. Every token must be consumed, so "Seventeen men stood there" is not one; that
+    /// is the whole difference from <see cref="TryExtractNumber"/>, which only wants the text to
+    /// <em>begin</em> with a number because a chapter phrase already established what it is.
+    /// </summary>
+    /// <param name="text">The text to test, typically one whole transcript segment.</param>
+    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="number">Receives the parsed number on success.</param>
+    /// <returns>True when the text is nothing but a number.</returns>
+    public static bool TryParseWholeText(string text, string language, out int number)
+    {
+        number = 0;
+        // Generous enough for the longest spelled-out number any supported language writes
+        // ("neunhundertneunundneunzig" is one token, but "nine hundred and ninety-nine" is four),
+        // and still short enough that a sentence cannot be mistaken for one.
+        var tokens = Tokenize(text, limit: 8);
+        if (tokens.Count == 0)
+            return false;
+        if (tokens.Count == 1 && TryParseDigits(tokens[0].Text, out number))
+            return true;
+
+        var parser = LanguageRegistry.For(language).NumberParser;
+        if (parser.TryParse(Words(tokens), out number, out var consumed) && consumed == tokens.Count)
+            return true;
+
+        // Roman last, for the collision reason TryExtractNumber explains - and only for a lone
+        // token, an isolated announcement being one numeral rather than a sequence of them.
+        number = 0;
+        return tokens.Count == 1 && TryParseRoman(tokens[0], out number);
+    }
+
+    /// <summary>
     /// Finds an unambiguous Roman numeral anywhere in <paramref name="text"/>, rather than only at
     /// the end nearest a chapter phrase. Written for a pre-existing marking's <em>title</em>
     /// (<see cref="ABChapterize.Detection.MarkingTitleNumber"/>), where the number can sit behind a

@@ -132,7 +132,17 @@ public readonly record struct DetectionResult(
 /// its title had none (e.g. a prelude/intro entry) - such a marking counts neither as confirmed
 /// nor as a gap boundary and is skipped when regions are built.</param>
 /// <param name="Confirmed">True when Whisper found the expected phrase near this marking.</param>
-public readonly record struct VerifyMarkingOutcome(double StartSeconds, int? ExpectedNumber, bool Confirmed);
+/// <param name="CorrectedStartSeconds">Where <c>--fix</c> worked out this marking really belongs,
+/// or null when it was not asked to, could not confirm the marking, or found it already close
+/// enough to be worth leaving alone (see
+/// <see cref="DetectionTuning.VerifyFixMinShiftSeconds"/>).</param>
+public readonly record struct VerifyMarkingOutcome(
+    double StartSeconds, int? ExpectedNumber, bool Confirmed, double? CorrectedStartSeconds = null)
+{
+    /// <summary>Where this marking should sit: the correction <c>--fix</c> computed, or the
+    /// position it already has.</summary>
+    public double FixedStartSeconds => CorrectedStartSeconds ?? StartSeconds;
+}
 
 /// <summary>Outcome of checking pre-existing chapter markings against the audio (--verify).</summary>
 /// <param name="Passed">True when every checkable marking was confirmed; also true when none of the

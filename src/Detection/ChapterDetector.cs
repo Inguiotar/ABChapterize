@@ -166,7 +166,7 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Auto-resumes a file <see cref="FileProcessor.MissingMarksPath"/> tagged after a previous run
+    /// Auto-resumes a file <see cref="MissingMarksTag.PathFor"/> tagged after a previous run
     /// left a chapter-sequence gap unresolved. The committed markings are trusted verbatim, with no
     /// --verify-style re-check against the audio: unlike <see cref="DetectGapsAsync"/>'s confirmed
     /// markings these were never in doubt in the first place - they are exactly what pass 3 settled
@@ -927,13 +927,16 @@ public sealed class ChapterDetector
     /// <item><description>the --verify fallback, for a gap-scoped <see cref="DetectGapsAsync"/> run
     /// whose last checkable marking was unconfirmed: it knows exactly which numbers it is after, so
     /// it is skipped entirely once they have all turned up elsewhere;</description></item>
+    /// <item><description>--chapter-count, which states how many numbered chapters the book has and
+    /// therefore names exactly which ones above the last find are still owed;</description></item>
     /// <item><description>--trailing-scan, which sweeps from the last detected chapter to the end of
     /// the file with no expectation of what it will find - the only way to catch a chapter after the
-    /// last one detected, which nothing bounds from above.</description></item>
+    /// last one detected when nothing has said how many there are.</description></item>
     /// </list>
-    /// --trailing-scan subsumes the fallback when both apply: an open-ended scan accepts everything
-    /// the targeted one would and starts no later, so the two are merged into a single sweep rather
-    /// than transcribing the tail twice.
+    /// --trailing-scan subsumes the other two when it applies: an open-ended scan accepts everything
+    /// a targeted one would and starts no later, so they are merged into a single sweep rather than
+    /// transcribing the tail twice. The two targeted kinds merge with each other instead, since each
+    /// knows numbers the other does not.
     /// </summary>
     /// <param name="verifyFallback">The --verify fallback's region start and expected numbers, or
     /// null when this is not a gap-scoped run (or its last marking was confirmed).</param>
@@ -950,10 +953,42 @@ public sealed class ChapterDetector
         // trailing region", which is Pass 2's job, not this one's.
         if (_options.TrailingScan && trailingScanAllowed && chapters.Count > 0)
             return (Math.Min(chapters[^1].TimeSeconds, verifyFallback?.From ?? double.MaxValue), null);
-        if (verifyFallback is not { } tf)
-            return null;
-        var stillMissing = tf.Targets.Where(n => !chapters.Any(c => c.Number == n)).ToList();
-        return stillMissing.Count > 0 ? (tf.From, stillMissing) : null;
+
+        var targets = new List<int>();
+        var from = double.MaxValue;
+        if (verifyFallback is { } tf)
+        {
+            var stillMissing = tf.Targets.Where(n => chapters.All(c => c.Number != n)).ToList();
+            if (stillMissing.Count > 0)
+            {
+                targets.AddRange(stillMissing);
+                from = tf.From;
+            }
+        }
+        var declared = DeclaredTrailingNumbers(chapters);
+        if (declared.Count > 0)
+        {
+            targets.AddRange(declared);
+            from = Math.Min(from, chapters[^1].TimeSeconds);
+        }
+        return targets.Count > 0 ? (from, targets.Distinct().Order().ToList()) : null;
+    }
+
+    /// <summary>
+    /// The chapter numbers --chapter-count says this book has and detection has not reached: every
+    /// number from just above the last find up to <see cref="CliOptions.LastExpectedChapter"/>.
+    /// Everything above the last find is missing by definition, the chapter list being sorted and
+    /// free of duplicates by the time it gets here.
+    /// </summary>
+    /// <param name="chapters">Everything detected so far, in chronological order.</param>
+    /// <returns>The still-owed numbers, or an empty list when no count was given, nothing was found
+    /// to count from, or the declared last chapter has already been reached.</returns>
+    private List<int> DeclaredTrailingNumbers(List<DetectedChapter> chapters)
+    {
+        if (_options.LastExpectedChapter is not { } last || chapters.Count == 0)
+            return [];
+        var highest = chapters[^1].Number;
+        return highest < last ? [.. Enumerable.Range(highest + 1, last - highest)] : [];
     }
 
     /// <summary>
@@ -1157,7 +1192,7 @@ public sealed class ChapterDetector
         var spent = 0;
 
         foreach (var (min, max) in SubFloorSweepBands(
-                     _options.MinSilenceSeconds, Math.Min(_options.MinSilenceSeconds, MinStoredSilenceSeconds)))
+                     _options.MinSilenceSeconds, _options.StoredSilenceFloorSeconds))
         {
             var band = SilencesInBand(allSilences, gap, min, max);
             if (band.Count == 0)
@@ -1260,6 +1295,11 @@ public sealed class ChapterDetector
         for (var i = 1; i < chapters.Count; i++)
             for (var n = chapters[i - 1].Number + 1; n < chapters[i].Number; n++)
                 missing.Add(n);
+        // The trailing end, which only --chapter-count can speak for: a chapter after the last one
+        // found is invisible to every other check here, nothing above it being available to compare
+        // against. A run that found nothing at all is left out - such a file is reported as having
+        // no chapters rather than as missing all of them.
+        missing.AddRange(DeclaredTrailingNumbers(chapters));
 
         var lowConfidence = chapters
             .Where(c => c.Confidence < LowConfidenceThreshold)
@@ -1343,7 +1383,16 @@ public sealed class ChapterDetector
         // still) so short silences are available for overlap-border snapping (see
         // FindOverlapSplitPoint). allSilences holds all of those; `silences` keeps only the ones at
         // or above --min-silence-length.
-        var storedSilenceFloor = Math.Min(_options.MinSilenceSeconds, MinStoredSilenceSeconds);
+        var storedSilenceFloor = _options.StoredSilenceFloorSeconds;
+        // Before the scan, because the scan is what the answer is needed for. The measurement
+        // decodes a few short excerpts and costs about a second even on a 15-hour book, against the
+        // full decode that follows it.
+        var reading = _options.AutoNoiseFloor
+            ? await SilenceThresholdProbe.MeasureAsync(
+                _audio, file, info.DurationSeconds, info.InputDecoder, ct)
+            : (SilenceThresholdProbe.Reading?)null;
+        var noiseDb = reading?.ThresholdDb ?? _options.NoiseFloorDb;
+        _log?.Invoke("Pass 1: " + SilenceThresholdProbe.Describe(reading, noiseDb));
         List<Silence> allSilences;
         var nonSpeechRegions = new List<NonSpeechRegion>();
         // The raw VAD speech segments behind nonSpeechRegions, kept for the anchor-time jingle
@@ -1353,7 +1402,7 @@ public sealed class ChapterDetector
         if (_vad is { } vad)
         {
             allSilences = await _audio.DetectSilencesAndStreamPcmAsync(
-                file, info.DurationSeconds, storedSilenceFloor, SilenceNoiseDb,
+                file, info.DurationSeconds, storedSilenceFloor, noiseDb,
                 async (pcm, innerCt) => speechSegments = await vad.DetectSpeechAsync(pcm, innerCt),
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
             nonSpeechRegions = ComputeNonSpeechRegions(speechSegments);
@@ -1361,14 +1410,22 @@ public sealed class ChapterDetector
         else
         {
             allSilences = await _audio.DetectSilencesAsync(
-                file, info.DurationSeconds, storedSilenceFloor, SilenceNoiseDb,
+                file, info.DurationSeconds, storedSilenceFloor, noiseDb,
                 seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
         }
-        var silences = allSilences
-            .Where(s => s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds).ToList();
+        // Empty rather than "everything at or above 0" when silence probing is off: this list is
+        // Pass 2's candidate set and nothing else, so emptying it is exactly what the option asks
+        // for - and it is also what makes every jingle a candidate, since a VAD region is otherwise
+        // dropped as a duplicate of the silence leading it (see RegionProber's BuildCandidates).
+        var silences = _options.ProbeSilences
+            ? allSilences.Where(s => s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds).ToList()
+            : [];
 
-        _log?.Invoke($"Pass 1: {silences.Count} silence(s) of >= " +
-                     $"{_options.MinSilenceSeconds:0.#} s found" + (_options.AutoMinSilence ? " (adaptive threshold)" : ""));
+        _log?.Invoke(_options.ProbeSilences
+            ? $"Pass 1: {silences.Count} silence(s) of >= {_options.MinSilenceSeconds:0.#} s found" +
+              (_options.AutoMinSilence ? " (adaptive threshold)" : "")
+            : $"Pass 1: {allSilences.Count} silence(s) found, none probed " +
+              "(--min-silence-length 0 - jingles only)");
         if (_vad != null)
             // The speech-segment count carries no extra information (a non-speech region is just
             // the gap between two consecutive speech segments), so only the regions are logged.
@@ -1407,7 +1464,8 @@ public sealed class ChapterDetector
         foreach (var s in allSilences)
             debug($"  silence {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +
                   $"({s.EndSeconds - s.StartSeconds:0.00} s)" +
-                  (s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds ? " *" : ""));
+                  (_options.ProbeSilences && s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds
+                      ? " *" : ""));
         foreach (var s in speechSegments)
             debug($"  speech {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +
                   $"({s.EndSeconds - s.StartSeconds:0.00} s)");
@@ -1482,18 +1540,25 @@ public sealed class ChapterDetector
             LogTranscript($"verify @{FormatTimestamp(marking.StartSeconds)}", segments);
 
             checkedCount++;
-            var confirmed = FindCappedPhraseMatches(segments, profile).Any(m => m.Number == expected);
-            if (!confirmed)
-                confirmed = await TryConfirmViaGapRetranscribeAsync(
-                    file, info, windowStart, windowLen, segments, profile, expected, ct);
+            // The match itself rather than a yes/no, because --fix corrects the marking to where the
+            // announcement was actually heard.
+            PhraseMatch? match = FindCappedPhraseMatches(segments, profile)
+                .Cast<PhraseMatch?>().FirstOrDefault(m => m!.Value.Number == expected);
+            match ??= await TryConfirmViaGapRetranscribeAsync(
+                file, info, windowStart, windowLen, segments, profile, expected, ct);
+            var confirmed = match != null;
             _log?.Invoke(confirmed
                 ? $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} confirmed"
                 : $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
-            markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, expected, confirmed));
+            var corrected = confirmed && _options.Fix
+                ? await ComputeMarkingFixAsync(
+                    file, info, marking, windowStart, windowLen, match!.Value, profile, language.Profile.Language, ct)
+                : null;
+            markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, expected, confirmed, corrected));
             if (!confirmed)
                 failed++;
             else
-                confirmedChapters.Add(new DetectedChapter(expected, marking.StartSeconds));
+                confirmedChapters.Add(new DetectedChapter(expected, corrected ?? marking.StartSeconds));
             var (highest, missingNumbers) = ChapterProgress(confirmedChapters, _options.ExpectedStartChapter);
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
@@ -1503,6 +1568,66 @@ public sealed class ChapterDetector
         return new VerifyResult(failed == 0, checkedCount, failed, confirmedChapters, markings,
             profile, language.DetectedLanguage, language.DetectedProbability,
             CarryOverNamedMarkings(info, profile));
+    }
+
+    /// <summary>
+    /// Works out where a confirmed marking really belongs (<c>--verify --fix</c>): the announcement
+    /// this window found, put through the same re-transcription refinement a detection run gives
+    /// every mark, minus <c>--mark-lead</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The refinement is the right machinery to borrow because it needs nothing but the audio at the
+    /// mark - it locates the announcement's onset by re-transcribing shrinking windows around it,
+    /// which is exactly what makes it usable here, where no Pass 1 has run and there is no silence
+    /// list, no VAD and no jingle geometry to place a mark against. What that costs is the waveform
+    /// anchor a full run applies on top (see
+    /// <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/>, which needs those silences and is
+    /// simply skipped here): a fixed mark can therefore sit a fraction of a second later than the
+    /// same chapter would land in a from-scratch run. That is the honest bargain of this mode -
+    /// against a mark that was seconds out, a tenth of a second is not the problem, and a user who
+    /// wants the last tenth wants a real run.
+    /// </para>
+    /// <para>
+    /// A correction is only offered inside <see cref="DetectionTuning.VerifyFixMinShiftSeconds"/>
+    /// and <see cref="DetectionTuning.VerifyFixMaxShiftSeconds"/> - see those for why each bound
+    /// exists.
+    /// </para>
+    /// </remarks>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="marking">The pre-existing marking being corrected.</param>
+    /// <param name="windowStart">Absolute start of the window the announcement was confirmed in.</param>
+    /// <param name="windowLen">Length of that window in seconds.</param>
+    /// <param name="match">The confirming match, in that window's own time base.</param>
+    /// <param name="profile">The file's resolved language profile.</param>
+    /// <param name="language">Its language code, for the refinement's upgrade-model retry.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The corrected position, or null to leave the marking where it is.</returns>
+    private async Task<double?> ComputeMarkingFixAsync(
+        string file, MediaInfo info, Chapter marking, double windowStart, double windowLen,
+        PhraseMatch match, LanguageProfile profile, string language, CancellationToken ct)
+    {
+        var phraseAbs = windowStart + match.PhraseStartSeconds;
+        var phraseEndAbs = windowStart + match.PhraseEndSeconds;
+        var refined = await _marks!.Refiner.RefinePreciseMarkAsync(
+            Math.Max(0, phraseAbs - _options.MarkLeadSeconds), file, info.InputDecoder,
+            profile.PhraseRegex, language, phraseAbs, phraseEndAbs, windowStart + windowLen,
+            [], ct);
+        var shift = Math.Abs(refined.Mark - marking.StartSeconds);
+        if (shift < VerifyFixMinShiftSeconds)
+            return null;
+        if (shift > VerifyFixMaxShiftSeconds)
+        {
+            _log?.Invoke(
+                $"marking at {FormatTimestamp(marking.StartSeconds)} left alone - its announcement " +
+                $"is {shift:0.#} s away at {FormatTimestamp(refined.Mark)}, too far to be a mark " +
+                "that merely drifted");
+            return null;
+        }
+        _log?.Invoke($"marking at {FormatTimestamp(marking.StartSeconds)} corrected to " +
+                     $"{FormatTimestamp(refined.Mark)} ({refined.Mark - marking.StartSeconds:+0.##;-0.##} s)");
+        return refined.Mark;
     }
 
     /// <summary>
@@ -1544,7 +1669,9 @@ public sealed class ChapterDetector
     /// <param name="profile">Language profile for phrase/number matching.</param>
     /// <param name="expected">The chapter number this marking is expected to confirm.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task<bool> TryConfirmViaGapRetranscribeAsync(
+    /// <returns>The confirming match in the outer window's own time base, or null when the phrase
+    /// was not found - the position being what <c>--verify --fix</c> corrects a marking to.</returns>
+    private async Task<PhraseMatch?> TryConfirmViaGapRetranscribeAsync(
         string file, MediaInfo info, double windowStart, double windowLen,
         List<TranscriptSegment> segments, LanguageProfile profile, int expected, CancellationToken ct)
     {
@@ -1580,11 +1707,21 @@ public sealed class ChapterDetector
                 var gapSamples = await _audio.DecodePcmAsync(file, absStart, len, info.InputDecoder, ct);
                 var gapSegments = await _transcriber.TranscribeAsync(gapSamples, ct);
                 LogTranscript($"verify gap retry {len:0.0}s@{FormatTimestamp(absStart)}", gapSegments);
-                if (FindCappedPhraseMatches(gapSegments, profile).Any(m => m.Number == expected))
-                    return true;
+                foreach (var m in FindCappedPhraseMatches(gapSegments, profile))
+                {
+                    if (m.Number != expected)
+                        continue;
+                    // Sub-chunk time back to the outer window's, which is what the caller's own
+                    // matches are expressed in and what a correction is measured from.
+                    return m with
+                    {
+                        PhraseStartSeconds = chunkStart + m.PhraseStartSeconds,
+                        PhraseEndSeconds = chunkStart + m.PhraseEndSeconds,
+                    };
+                }
             }
         }
-        return false;
+        return null;
     }
 
     /// <summary>
@@ -2150,13 +2287,13 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// <see cref="PhraseMatching.FindPhraseMatches"/> with <see cref="CliOptions.MaxChapterNumber"/>
-    /// applied: a match whose parsed number sits above the cap is dropped (and logged under
-    /// --verbose) rather than handed on. Every pass funnels its matching through here - Pass 2,
-    /// Pass 3, the gap chunk scan and --verify alike - so an implausible number can enter the
-    /// chapter sequence by no route, neither as a mark of its own nor as the upper bound that turns
-    /// everything below it into a gap to hunt for. Without a cap this is exactly
-    /// <see cref="PhraseMatching.FindPhraseMatches"/>.
+    /// <see cref="PhraseMatching.FindPhraseMatches"/> with
+    /// <see cref="CliOptions.EffectiveMaxChapterNumber"/> applied: a match whose parsed number sits
+    /// above the cap is dropped (and logged under --verbose) rather than handed on. Every pass
+    /// funnels its matching through here - Pass 2, Pass 3, the gap chunk scan and --verify alike -
+    /// so an implausible number can enter the chapter sequence by no route, neither as a mark of its
+    /// own nor as the upper bound that turns everything below it into a gap to hunt for. Without a
+    /// cap this is exactly <see cref="PhraseMatching.FindPhraseMatches"/>.
     /// </summary>
     /// <param name="segments">The transcript segments to search, in whatever time base the caller
     /// works in (this method neither reads nor rewrites the timings).</param>
@@ -2168,9 +2305,10 @@ public sealed class ChapterDetector
     {
         foreach (var match in FindPhraseMatches(segments, profile, mergeBoundarySegIndex))
         {
-            if (_options.MaxChapterNumber is { } cap && match.Number > cap)
+            if (_options.EffectiveMaxChapterNumber is { } cap && match.Number > cap)
             {
-                _log?.Invoke($"discarded chapter {match.Number} - above the --max-chapter-number cap of {cap}");
+                var option = _options.MaxChapterNumber != null ? "--max-chapter-number" : "--chapter-count";
+                _log?.Invoke($"discarded chapter {match.Number} - above the {option} cap of {cap}");
                 continue;
             }
             yield return match;
