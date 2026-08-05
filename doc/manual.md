@@ -443,8 +443,9 @@ ordinary prose — and sometimes inside longer words, Italian "riepilogo"
 containing "epilogo" — each is only accepted where it can plausibly be an
 announcement. Three things have to hold: the prologue is only looked for
 *before* the first chapter has been found and the epilogue only *after* at
-least one has; the match must be preceded by at least a second of silence or
-jingle, since a heading is spoken at a section boundary and never mid-sentence;
+least one has; the match must be preceded by a real pause — roughly a second of
+silence or jingle — since a heading is spoken at a section boundary and never
+mid-sentence;
 and within that window the last occurrence wins — front matter frequently lists
 what is coming ("read by …, contains a prologue") before the narrator actually
 announces it.
@@ -753,9 +754,9 @@ chapter.
 
 Later passes look harder than the first one does, and then check their work
 against the pauses the file actually has: an announcement they turn up is only
-marked if at least a second of silence or jingle precedes it and half a second
-follows. A run's `--verbose` output says so when a candidate is dropped for
-that reason.
+marked if a real pause precedes it — roughly a second of silence or jingle —
+and a shorter one follows. A run's `--verbose` output names the measurement and
+the thresholds when a candidate is dropped for that reason.
 
 Everything else about a run is unaffected: the prologue, the epilogue and every
 `--custom` mapping still match their own phrases as usual, and marks are placed

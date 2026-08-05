@@ -116,8 +116,10 @@ internal static class AnnouncementIsolation
                  && flanks.LeadOutSeconds >= AnnouncementLeadOutSeconds,
         };
 
-    /// <summary>The "0.70 s before, 3.23 s after (need 1.0/0.5)" clause a rejection logs - the
-    /// whole point being that the numbers behind a dropped mark are visible without a re-run.</summary>
+    /// <summary>The "0.70 s before, 3.23 s after; need 0.85/0.3" clause a rejection logs - the
+    /// whole point being that the numbers behind a dropped mark are visible without a re-run. The
+    /// thresholds print at two decimals rather than one because they are not round numbers, and a
+    /// log line reading "need 0.9" against a measured 0.87 would look like a contradiction.</summary>
     /// <param name="flanks">The measurement that failed.</param>
     /// <param name="rule">The rule it was judged against.</param>
     internal static string Describe(AnnouncementFlanks flanks, IsolationRule rule)
@@ -126,8 +128,8 @@ internal static class AnnouncementIsolation
             ? "nothing after"
             : $"{flanks.LeadOutSeconds:0.00} s after";
         var need = rule == IsolationRule.LeadIn
-            ? $"need {AnnouncementLeadInSeconds:0.0} before"
-            : $"need {AnnouncementLeadInSeconds:0.0}/{AnnouncementLeadOutSeconds:0.0}";
+            ? $"need {AnnouncementLeadInSeconds:0.##} before"
+            : $"need {AnnouncementLeadInSeconds:0.##}/{AnnouncementLeadOutSeconds:0.##}";
         return $"{flanks.LeadInSeconds:0.00} s before, {after}; {need}";
     }
 }
@@ -168,8 +170,8 @@ internal enum IsolationRule
     /// on into the text after it. Measured over the fourteen-book corpus (2026-08-05): the twelve
     /// genuine prologue/epilogue/<c>--custom</c> marks all have at least 1.56 s in front, while two
     /// of them - Gruelfin's "Zeittafel" at 0.16 s and "I Shall Wear Midnight"'s epilogue at 0.44 s -
-    /// have almost nothing behind, so requiring a trailing pause would have thrown away real
-    /// marks.</summary>
+    /// have almost nothing behind, so requiring a trailing pause would throw away real marks for
+    /// nothing: no false positive on record survives the lead-in test.</summary>
     LeadIn,
 
     /// <summary>Both flanks. What a bare number gets, and what the mode's whole premise rests on:

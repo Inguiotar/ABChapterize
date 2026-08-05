@@ -1564,9 +1564,8 @@ public sealed class ChapterDetectorTests : IDisposable
     /// <summary>
     /// Why the prologue and epilogue are asked for a leading pause only, and <c>--custom</c> for
     /// nothing at all. A heading word is routinely run straight into the text behind it - Gruelfin's
-    /// "Zeittafel" has 0.16 s there and "I Shall Wear Midnight"'s epilogue 0.44 s, both genuine - so
-    /// a trailing requirement would cost real marks, and a --custom mapping names whatever the user
-    /// says it does, wherever they say it is.
+    /// "Zeittafel" leaves 0.16 s there, genuine - so a trailing requirement would cost real marks,
+    /// and a --custom mapping names whatever the user says it does, wherever they say it is.
     /// </summary>
     [Fact]
     public async Task NamedMarks_KeepAHeadingRunStraightIntoItsText()

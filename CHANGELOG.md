@@ -48,8 +48,9 @@ earn a round number.
   recognizer runs it straight into what follows ("Seventeen. He was late again."), which
   is common enough that not allowing it would lose chapters outright. The later recovery
   passes look harder still, and then check what they find against the file's own pauses:
-  a candidate is only marked with at least a second of silence or jingle in front of it
-  and half a second behind, and `--verbose` says so when one is dropped for that reason.
+  a candidate is only marked with a real pause in front of it — roughly a second of silence
+  or jingle — and a shorter one behind, and `--verbose` names the measurement and the
+  thresholds when one is dropped for that reason.
   Since the number is otherwise the only evidence there is, what rejects a false one is
   that it does not continue the chapter sequence — which is why this cannot be combined
   with `--ignore-chapter-numbers`. Per language, like every other value of the option.

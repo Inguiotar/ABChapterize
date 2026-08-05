@@ -83,7 +83,7 @@ public class AnnouncementIsolationTests
     }
 
     /// <summary>Chapter 20 of the same book, the tightest genuine trailing pause measured there at
-    /// 0.99 s, against a threshold of 0.5.</summary>
+    /// 0.99 s, against a threshold set well below it.</summary>
     [Fact]
     public void Satisfies_AcceptsTheTightestRealChapter()
     {
@@ -108,18 +108,33 @@ public class AnnouncementIsolationTests
     }
 
     /// <summary>
-    /// Why the prologue and epilogue are asked for a leading pause only. Gruelfin's "Zeittafel" has
-    /// 0.16 s behind it and "I Shall Wear Midnight"'s epilogue 0.44 s, both genuine: a heading word
-    /// is routinely run straight into the text that follows it, unlike a number spoken alone.
+    /// Why the prologue and epilogue are asked for a leading pause only. Gruelfin's "Zeittafel"
+    /// leaves 0.16 s behind it, genuine: a heading word is routinely run straight into the text
+    /// that follows it, unlike a number spoken alone.
     /// </summary>
-    [Theory]
-    [InlineData(0.16)]
-    [InlineData(0.44)]
-    public void Satisfies_LeadInIgnoresAHeadingRunIntoItsText(double trailing)
+    [Fact]
+    public void Satisfies_LeadInIgnoresAHeadingRunIntoItsText()
     {
-        var flanks = AnnouncementIsolation.Measure(13.0, Speech((0, 10), (13.0, 13.7), (13.7 + trailing, 30)));
+        var flanks = AnnouncementIsolation.Measure(13.0, Speech((0, 10), (13.0, 13.7), (13.86, 30)));
         Assert.True(AnnouncementIsolation.Satisfies(flanks!.Value, IsolationRule.LeadIn));
         Assert.False(AnnouncementIsolation.Satisfies(flanks.Value, IsolationRule.Both));
+    }
+
+    /// <summary>
+    /// The lead-in threshold sits between the tightest genuine announcement the corpus has (1.56 s,
+    /// "The Forever War"'s epilogue) and the false positive it exists to reject (0.64 s, the
+    /// "riepilogo" match), and low in that window rather than midway - a chapter dropped for want of
+    /// a pause is lost outright, while the false positives on record are nowhere near the line.
+    /// </summary>
+    [Theory]
+    [InlineData(1.56, true)]
+    [InlineData(0.90, true)]
+    [InlineData(0.84, false)]
+    [InlineData(0.64, false)]
+    public void Satisfies_LeadInSitsBetweenTheTightestRealMarkAndTheFalseOne(double leadIn, bool expected)
+    {
+        var flanks = AnnouncementIsolation.Measure(13.0, Speech((0, 13.0 - leadIn), (13.0, 13.7), (16, 30)));
+        Assert.Equal(expected, AnnouncementIsolation.Satisfies(flanks!.Value, IsolationRule.LeadIn));
     }
 
     /// <summary>The check a numbered chapter is placed under: nothing at all unless the book
@@ -158,9 +173,9 @@ public class AnnouncementIsolationTests
     public void Describe_NamesTheMeasurementAndTheThreshold()
     {
         var flanks = new AnnouncementFlanks(0.64, 0.73, 16.41);
-        Assert.Equal("0.64 s before, 0.73 s after; need 1.0/0.5",
+        Assert.Equal("0.64 s before, 0.73 s after; need 0.85/0.3",
             AnnouncementIsolation.Describe(flanks, IsolationRule.Both));
-        Assert.Equal("0.64 s before, 0.73 s after; need 1.0 before",
+        Assert.Equal("0.64 s before, 0.73 s after; need 0.85 before",
             AnnouncementIsolation.Describe(flanks, IsolationRule.LeadIn));
     }
 

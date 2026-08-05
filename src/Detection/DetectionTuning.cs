@@ -267,31 +267,39 @@ internal static class DetectionTuning
     /// <see cref="AnnouncementIsolation"/> accepts it: the pause (or jingle) separating it from the
     /// previous section's narration. Applies to a bare number and to the prologue/epilogue.
     /// <para>
-    /// Calibrated 2026-08-05 against the fourteen-book corpus, replaying the guard over each run's
-    /// own Pass 1 speech segments. Every genuine announcement measured clears this with room:
+    /// Bounded by measurement 2026-08-05, replaying the guard over each run's own Pass 1 speech
+    /// segments across the fourteen-book corpus. Every genuine announcement clears it with room:
     /// "Corsa nello spazio"'s 65 bare numbers sit at 3.0-3.9 s, and the corpus's twelve genuine
     /// prologue/epilogue/<c>--custom</c> marks range from 1.56 s ("The Forever War"'s epilogue, the
     /// tightest) to 36 s. The false positive this exists to stop - <c>/epilogo/</c> matching inside
-    /// Italian "riepilogo" mid-sentence - measures 0.64 s. So the threshold sits between 0.64 and
-    /// 1.56 rather than being fitted to either.
+    /// Italian "riepilogo" mid-sentence - measures 0.64 s. So anything in (0.64, 1.56) is defensible
+    /// and this sits low in that window: the corpus is fourteen books, the tightest genuine mark in
+    /// it is one data point, and an announcement dropped for want of a pause is a chapter lost
+    /// outright, whereas the false positives this catches are all far below 0.64 s rather than
+    /// clustered just under the line.
     /// </para>
     /// </summary>
-    internal const double AnnouncementLeadInSeconds = 1.0;
+    internal const double AnnouncementLeadInSeconds = 0.85;
 
     /// <summary>
     /// Non-speech a <em>bare number</em> announcement must have after it as well
     /// (<see cref="IsolationRule.Both"/>). Only bare numbers: the number is spoken alone, so the
     /// pause behind it is as much a part of its shape as the one in front, and on "Corsa nello
-    /// spazio" every chapter measured 1.0-2.2 s there against 0.73 s for the false epilogue.
+    /// spazio" every chapter measured 1.0-2.2 s there - the tightest being chapter 20 at 0.99 s -
+    /// against 0.73 s for the false epilogue. Set well below that tightest real measurement rather
+    /// than just below it, for the same reason as the lead-in: one book's narrator sets the pace of
+    /// these pauses, and another's need not be so generous.
     /// <para>
     /// Deliberately <em>not</em> asked of the prologue and epilogue, and not of <c>--custom</c> at
-    /// all. A heading word is routinely run straight into the text that follows it: Gruelfin's
-    /// "Zeittafel" has 0.16 s behind it and "I Shall Wear Midnight"'s epilogue 0.44 s, both
-    /// genuine, so requiring this of them would cost real marks to catch nothing extra - the
-    /// lead-in alone already rejects every mid-sentence false positive on record.
+    /// all. A heading word is routinely run straight into the text that follows it, and the corpus
+    /// has it both ways round: Gruelfin's "Zeittafel" leaves 0.16 s behind it and "I Shall Wear
+    /// Midnight"'s epilogue 0.44 s, both genuine, so at this threshold the first would still be
+    /// thrown away and the second only just survives. The lead-in alone already rejects every
+    /// mid-sentence false positive on record, so there is nothing to buy here and a real mark to
+    /// lose.
     /// </para>
     /// </summary>
-    internal const double AnnouncementLeadOutSeconds = 0.5;
+    internal const double AnnouncementLeadOutSeconds = 0.3;
 
     /// <summary>
     /// How far past a VAD speech segment's end an announcement onset may still be counted as
