@@ -1721,14 +1721,17 @@ public sealed class CliOptions
                                     what it did. The same syntax works for --title, --intro-title,
                                     --prologue-phrase, --prologue-title, --epilogue-phrase,
                                     --epilogue-title and --custom.
-                                    The value "none" says this book announces a chapter by
-                                    speaking its number and nothing else ("Seventeen."), with no
-                                    phrase at all: a number heard standing alone between two
-                                    pauses is then the announcement. Since the number is the only
-                                    signal there is, such a mark is accepted only where it
-                                    continues the chapter sequence - which is why "none" cannot be
-                                    combined with --ignore-chapter-numbers. Per language like any
-                                    other value, e.g. "[en]none;chapitre".
+                                    [EXPERIMENTAL] The value "none" says this book announces a
+                                    chapter by speaking its number and nothing else
+                                    ("Seventeen."), with no phrase at all: a number heard standing
+                                    alone between two pauses is then the announcement. Since the
+                                    number is the only signal there is, such a mark is accepted
+                                    only where it continues the chapter sequence - which is why
+                                    "none" cannot be combined with --ignore-chapter-numbers. Per
+                                    language like any other value, e.g. "[en]none;chapitre".
+                                    Experimental because it has been calibrated against a single
+                                    book so far: expect to check its results, and expect the rules
+                                    behind them to keep moving.
           -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: /prolog/,
                                     localized by --lang). Accepts a "/regexp/" like
                                     --chapter-phrase, but parses no number: a match becomes one

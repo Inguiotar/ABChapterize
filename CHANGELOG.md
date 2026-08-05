@@ -39,10 +39,12 @@ earn a round number.
   not be confirmed at all are untouched and still go to the usual gap recovery, and nothing
   but the timestamps changes — no mark is renamed, dropped or added.
 
-- **`--chapter-phrase none`, for books that announce a chapter by its number alone.**
-  Some narrators say "Seventeen." and read on, with no "chapter" anywhere — and until now
-  the tool had nothing to look for in such a book. This mode drops the phrase entirely and
-  takes a number spoken *alone*, with a pause on either side of it, as the announcement.
+- **`--chapter-phrase none`, for books that announce a chapter by its number alone**
+  (experimental — calibrated against a single book so far, so check its results and expect
+  the rules behind them to keep moving). Some narrators say "Seventeen." and read on, with
+  no "chapter" anywhere — and until now the tool had nothing to look for in such a book.
+  This mode drops the phrase entirely and takes a number spoken *alone*, with a pause on
+  either side of it, as the announcement.
   A number inside a sentence is not one, so the years, prices and house numbers in the
   prose are left alone; a number that ends its own sentence still counts even where the
   recognizer runs it straight into what follows ("Seventeen. He was late again."), which

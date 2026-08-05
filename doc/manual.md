@@ -716,9 +716,9 @@ so that logs and reports stay comparable regardless of regional settings.
     If the regexp contains a capturing group, the group must capture the
     chapter number as digits; without a group, the number is parsed from the
     surrounding words as with a literal phrase.
-  - The word `none`, for a book that announces a chapter by speaking its
-    number and nothing else — see [Bare numbers](#bare-numbers-as-announcements)
-    below.
+  - The word `none` (**experimental**), for a book that announces a chapter by
+    speaking its number and nothing else — see
+    [Bare numbers](#bare-numbers-as-announcements) below.
 
   For a batch run over books in more than one language, the value may also be
   written **per language**: entries separated by `;`, each opened by a `[xx]`
@@ -741,6 +741,11 @@ so that logs and reports stay comparable regardless of regional settings.
   `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`.
 
 #### Bare numbers as announcements
+
+**Experimental.** This mode has been calibrated against a single book so far.
+It works and it is meant to be used, but check what it produces rather than
+trusting it the way you would a phrase-based run, and expect the rules behind it
+to keep moving between releases.
 
 `--chapter-phrase none` says this book has no chapter phrase at all: the
 narrator simply says "Seventeen." and reads on. What counts as an announcement
