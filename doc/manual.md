@@ -1701,7 +1701,7 @@ Both counts are recorded in the `--verbose` log at the start of a run, together
 with what the machine actually has:
 
 ```
-[14:32:07] threads: Whisper 12, voice-activity pre-pass 12 (12 physical core(s), 24 logical)
+[14:32:07] threads: Whisper 12, voice-activity pre-pass 12 (cores: 12 physical, 24 logical)
 ```
 
 ### Miscellaneous

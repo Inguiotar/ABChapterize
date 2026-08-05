@@ -316,7 +316,7 @@ public sealed class FileProcessor
     private void LogThreadBudget(SileroVadDetector? vad)
         => _progress.Log($"threads: Whisper {_options.EffectiveWhisperThreads}" +
                          (vad != null ? $", voice-activity pre-pass {vad.Workers}" : ", no voice-activity pre-pass") +
-                         $" ({ProcessorTopology.PhysicalCoreCount} physical core(s), " +
+                         $" (cores: {ProcessorTopology.PhysicalCoreCount} physical, " +
                          $"{Environment.ProcessorCount} logical)");
 
     /// <summary>
