@@ -1618,7 +1618,12 @@ public sealed class ChapterDetector
         var phraseEndAbs = windowStart + match.PhraseEndSeconds;
         var refined = await _marks!.Refiner.RefinePreciseMarkAsync(
             Math.Max(0, phraseAbs - _options.MarkLeadSeconds), file, info.InputDecoder,
-            profile.AnnouncementFor(BareNumberReading.SpokenAloneAtSegmentStart),
+            // The marking being corrected already asserts which chapter this is, so a bare-number
+            // refinement may take that number and no other - the tightest bound available anywhere,
+            // and the one that keeps the onset walk off a year or quantity in the chapter's own
+            // first sentence.
+            profile.AnnouncementFor(
+                BareNumberReading.SpokenAloneAtSegmentStart, n => n == match.Number),
             language, phraseAbs, phraseEndAbs, windowStart + windowLen,
             [], ct);
         var shift = Math.Abs(refined.Mark - marking.StartSeconds);
@@ -2124,16 +2129,20 @@ public sealed class ChapterDetector
             time = Math.Max(0, phraseAbs - _options.MarkLeadSeconds);
             statSilence = anchor;
         }
+        // Built before the context, because the refinement's own matcher is held to the same
+        // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
+        var check = new NumberCheck(match.Number, profile,
+            BracketingBounds(phraseAbs, knownChapters, found, _options.ExpectedStartChapter));
         var markCtx = new MarkContext(
             file, inputDecoder,
-            profile.AnnouncementFor(RegionProber.BareNumberReadingFor(remaining is not null)),
+            profile.AnnouncementFor(
+                RegionProber.BareNumberReadingFor(remaining is not null), check.AdmitsAsAnnouncement),
             allSilences, speechSegments, transcript, profile.Language);
         // Pass 3 only ever reads a bare number under the wider reading where the gap it is filling
         // has an expected-number list - the same condition RegionProber.WideBareNumberReading
         // expresses for the probing passes - so the isolation check is asked for on exactly those.
         if (await _marks!.PlaceAsync(
-                new NumberCheck(match.Number, profile,
-                    BracketingBounds(phraseAbs, knownChapters, found, _options.ExpectedStartChapter)),
+                check,
                 time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx,
                 AnnouncementIsolation.ForChapter(profile, match, phraseAbs, remaining is not null),
                 ct) is not { } placed)

@@ -39,6 +39,14 @@ internal readonly record struct AnnouncementFlanks(
 /// with real room on both sides rather than being fitted to one number.
 /// </para>
 /// <para>
+/// What this cannot do is tell an announcement from the sentence after it. A chapter's first
+/// sentence is flanked by pauses too - that is what a sentence is - so a mark left one sentence
+/// late passes here honestly, and on the build-249 re-run of the same book two of them did, at
+/// -92 dBFS. That failure belongs to the refinement's own matcher and is fixed there; see
+/// <see cref="NumberCheck.AdmitsAsAnnouncement"/>. Tightening a threshold below is the wrong
+/// lever for it.
+/// </para>
+/// <para>
 /// Deliberately measured at the <em>refined</em> onset. Five of that run's marks would have failed
 /// the check at the position they were actually written to, every one of them a mark left seconds
 /// late because refinement was broken (chapter 6 landed 2.2 s past its announcement, chapter 3

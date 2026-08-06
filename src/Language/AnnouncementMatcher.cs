@@ -24,14 +24,18 @@ namespace ABChapterize.Language;
 /// misheard-number defences dead in exactly the mode that leans hardest on chapter numbering.
 /// </para>
 /// <para>
-/// The bare-number matcher deliberately accepts <em>any</em> number rather than the one the
-/// detecting window read. That is what keeps the number itself refinable: Whisper's notation for
-/// one announcement fluctuates between probes - "45", "quarantacinque" and "XLV" are all readings
-/// of the same audio, and the same probe series has been seen writing a number as digits once and
-/// as words the next time - so a matcher pinned to one reading would reject the announcement it is
-/// standing on. Matching any number lets the search converge on the onset and leaves
-/// <see cref="ABChapterize.Detection.RefinedNumberVote"/> to settle which number was actually
-/// spoken, exactly as it does for a phrase-based book.
+/// The bare-number matcher accepts any number <em>the chapter sequence can hold at that point</em>
+/// rather than only the one the detecting window read, and that is what keeps the number itself
+/// refinable: Whisper's notation for one announcement fluctuates between probes - "45",
+/// "quarantacinque" and "XLV" are all readings of the same audio, and the same probe series has
+/// been seen writing a number as digits once and as words the next time - so a matcher pinned to
+/// one reading would reject the announcement it is standing on. Leaving the range open altogether
+/// is what the first version did, and it cost four marks on the same book by letting the onset
+/// walk climb onto a year or a quantity in the chapter's own opening sentence; see
+/// <see cref="NumberWordParser.FindBareNumberAnnouncement"/> for the four. Bounding it by the
+/// sequence admits every notation of the right number and nothing belonging to the prose, and
+/// leaves <see cref="ABChapterize.Detection.RefinedNumberVote"/> to settle which number was
+/// actually spoken, exactly as it does for a phrase-based book.
 /// </para>
 /// </summary>
 public sealed class AnnouncementMatcher
@@ -79,12 +83,17 @@ public sealed class AnnouncementMatcher
     /// </summary>
     /// <param name="language">Two-letter language code steering number-word parsing.</param>
     /// <param name="reading">The reading this mark's own match was found under.</param>
+    /// <param name="admits">Which numbers this stretch of the chapter sequence can hold - see
+    /// <see cref="ABChapterize.Detection.NumberCheck"/>, which is where the rule lives. Required
+    /// rather than optional because every caller has the bounds in hand and an unbounded matcher
+    /// is the defect this parameter exists to prevent.</param>
     public static AnnouncementMatcher ForBareNumbers(
-        string language, NumberWordParser.BareNumberReading reading) =>
+        string language, NumberWordParser.BareNumberReading reading, Func<int, bool> admits) =>
         new(text => NumberWordParser.FindBareNumberAnnouncement(
             text,
             language,
             reading == NumberWordParser.BareNumberReading.LeadingASentence
                 ? NumberWordParser.BareNumberReading.LeadingASentence
-                : NumberWordParser.BareNumberReading.SpokenAloneAnywhere) != null);
+                : NumberWordParser.BareNumberReading.SpokenAloneAnywhere,
+            admits) != null);
 }

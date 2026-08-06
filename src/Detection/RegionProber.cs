@@ -1506,12 +1506,16 @@ internal sealed class RegionProber
         var (time, markSilence, markRegion) = placement;
 
         var reading = BareNumberReadingFor(WideBareNumberReading);
+        // Built before the context, because the refinement's own matcher is held to the same
+        // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
+        var check = new NumberCheck(match.Number, Language.Profile, SequenceBounds(windowLast));
         var markCtx = new MarkContext(
-            _ctx.File, _ctx.Info.InputDecoder, Language.Profile.AnnouncementFor(reading),
+            _ctx.File, _ctx.Info.InputDecoder,
+            Language.Profile.AnnouncementFor(reading, check.AdmitsAsAnnouncement),
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
             Language.Profile.Language);
         if (await _env.Marks.PlaceAsync(
-                new NumberCheck(match.Number, Language.Profile, SequenceBounds(windowLast)),
+                check,
                 time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx,
                 AnnouncementIsolation.ForChapter(
                     Language.Profile, match, phraseAbs, WideBareNumberReading),

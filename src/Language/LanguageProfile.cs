@@ -56,9 +56,12 @@ public sealed record LanguageProfile(
     /// to travel with it.
     /// </summary>
     /// <param name="reading">The reading this mark's own match was found under.</param>
-    public AnnouncementMatcher AnnouncementFor(NumberWordParser.BareNumberReading reading)
+    /// <param name="admits">Which numbers may be taken for this announcement; ignored by a
+    /// phrase-based book, whose phrase already says what it is looking for.</param>
+    public AnnouncementMatcher AnnouncementFor(
+        NumberWordParser.BareNumberReading reading, Func<int, bool> admits)
         => BareNumberAnnouncements
-            ? AnnouncementMatcher.ForBareNumbers(Language, reading)
+            ? AnnouncementMatcher.ForBareNumbers(Language, reading, admits)
             : _phrase;
 
     /// <summary>The phrase matcher, built once rather than per mark - it is the same object for

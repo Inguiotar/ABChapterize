@@ -228,12 +228,117 @@ public class AnnouncementIsolationTests
         Assert.True(Matcher(strict: false).Matches(noPeriod));
     }
 
+    /// <summary>
+    /// The four marks that landed seconds late on "Corsa nello spazio" (build 249, 2026-08-06),
+    /// each one the onset walk climbing off the announcement onto the first number in the
+    /// chapter's own opening sentence. Nothing here is contrived: two of the four are a date line,
+    /// one is a distance and one is the word "tre". Each case is the probe text the run's debug log
+    /// records at the position the mark was wrongly corrected to, with the sequence bounds that
+    /// pass was actually holding.
+    /// </summary>
+    [Fact]
+    public void BareNumberMatcher_IgnoresANumberTheSequenceCannotHold()
+    {
+        // Chapter 1 opens "1. 9 febbraio 2066." - the walk settled on the year, 3.9 s late.
+        Reject("9 Feb. 2066.", strict: true, new NumberBounds(0), detected: 1);
+        Reject("2066. Da 10 km di distanza.", strict: true, new NumberBounds(0), detected: 1);
+        // Chapter 20 opens "20. 27 luglio 2067." - both the year and its fragments matched.
+        Reject("2067.", strict: false, new NumberBounds(19, 22), detected: 20);
+        Reject("27 luglio 2067.", strict: false, new NumberBounds(19, 22), detected: 20);
+        // Chapter 4's first words are "mille chilometri", which Whisper writes as "1000 km".
+        Reject("1000 km sopra le macchinazioni di Washington.",
+            strict: false, new NumberBounds(3, 5), detected: 4);
+        // Chapter 11's are "Tre di loro", and Italian "tre" parses as 3.
+        Reject("Tre di loro non erano mai stati su.",
+            strict: false, new NumberBounds(10, 12), detected: 11);
+    }
+
+    /// <summary>
+    /// The other half, and the reason the filter is the sequence rather than the number itself:
+    /// Whisper's notation for one announcement fluctuates between probes, so every reading of the
+    /// right number has to survive. All four texts are from the same run's logs.
+    /// </summary>
+    [Fact]
+    public void BareNumberMatcher_KeepsEveryNotationOfTheAnnouncement()
+    {
+        Accept("45.", strict: true, new NumberBounds(44, 46), detected: 45);
+        Accept("Quarantacinque.", strict: true, new NumberBounds(44, 46), detected: 45);
+        Accept("XLV.", strict: true, new NumberBounds(44, 46), detected: 45);
+        // Glued to the chapter's first sentence, which is why the unit is a sentence.
+        Accept("45. Zhang Mingoua lanciò un'occhiata.", strict: true, new NumberBounds(44, 46), 45);
+        // And the announcement of chapter 20 itself, in the same breath as the date that fooled it.
+        Accept("20. 27 luglio 2067", strict: false, new NumberBounds(19, 22), detected: 20);
+    }
+
+    /// <summary>
+    /// A number the bounds reject still refines when it is the one the detecting window read -
+    /// <see cref="NumberCheck.AdmitsAsAnnouncement"/>'s second half. Without it a mark whose number
+    /// <see cref="SuspectNumberMender"/> could not mend would fail every probe and keep its
+    /// unrefined default-mode position, which is the failure bare-number mode started out with.
+    /// </summary>
+    [Fact]
+    public void BareNumberMatcher_StillTakesTheNumberTheWindowRead()
+    {
+        var check = new NumberCheck(90, Profile(bareNumbers: true), new NumberBounds(18, 20));
+        Assert.False(check.Bounds.Admits(90));
+        Assert.True(check.AdmitsAsAnnouncement(90));
+        Assert.True(check.AdmitsAsAnnouncement(19));
+        Assert.False(check.AdmitsAsAnnouncement(2066));
+    }
+
+    /// <summary>
+    /// A sentence whose number the bounds reject must not end the scan: the announcement can sit in
+    /// a later one, which is exactly the shape a refinement probe with a lead-in produces.
+    /// </summary>
+    [Fact]
+    public void BareNumberMatcher_KeepsScanningPastARejectedSentence()
+        => Accept("Tre di loro non erano mai stati su. 11.",
+            strict: false, new NumberBounds(10, 12), detected: 11);
+
+    /// <summary>Asserts the matcher takes <paramref name="text"/> under those bounds.</summary>
+    /// <param name="text">The probe transcript text.</param>
+    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <param name="bounds">The sequence bounds the pass was holding.</param>
+    /// <param name="detected">The number the detecting window read.</param>
+    private static void Accept(string text, bool strict, NumberBounds bounds, int detected)
+        => Assert.True(Matcher(strict, bounds, detected).Matches(text), text);
+
+    /// <summary>Asserts the matcher rejects <paramref name="text"/> under those bounds, and that it
+    /// would have taken it unbounded - so the test fails if the text stops being a number at
+    /// all.</summary>
+    /// <param name="text">The probe transcript text.</param>
+    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <param name="bounds">The sequence bounds the pass was holding.</param>
+    /// <param name="detected">The number the detecting window read.</param>
+    private static void Reject(string text, bool strict, NumberBounds bounds, int detected)
+    {
+        Assert.True(Matcher(strict).Matches(text), $"unbounded matcher should still take: {text}");
+        Assert.False(Matcher(strict, bounds, detected).Matches(text), text);
+    }
+
     /// <summary>A bare-number matcher for the reading a Pass 2 match respectively a gap hunt's
-    /// match would have been found under.</summary>
+    /// match would have been found under, holding any number at all - which is what the readings
+    /// alone are worth testing against.</summary>
+    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
     private static AnnouncementMatcher Matcher(bool strict)
-        => AnnouncementMatcher.ForBareNumbers("it", strict
+        => AnnouncementMatcher.ForBareNumbers("it", Reading(strict), _ => true);
+
+    /// <summary>The same matcher as the refinement actually builds it: held to what the chapter
+    /// sequence can hold at this mark.</summary>
+    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <param name="bounds">The sequence bounds the pass was holding.</param>
+    /// <param name="detected">The number the detecting window read.</param>
+    private static AnnouncementMatcher Matcher(bool strict, NumberBounds bounds, int detected)
+        => AnnouncementMatcher.ForBareNumbers(
+            "it", Reading(strict),
+            new NumberCheck(detected, Profile(bareNumbers: true), bounds).AdmitsAsAnnouncement);
+
+    /// <summary>Which reading a Pass 2 match respectively a gap hunt's match is refined under.</summary>
+    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    private static NumberWordParser.BareNumberReading Reading(bool strict)
+        => strict
             ? NumberWordParser.BareNumberReading.SpokenAloneAtSegmentStart
-            : NumberWordParser.BareNumberReading.LeadingASentence);
+            : NumberWordParser.BareNumberReading.LeadingASentence;
 
     /// <summary>A language profile for the two flavours, built the way CliOptions builds one.</summary>
     private static LanguageProfile Profile(bool bareNumbers)

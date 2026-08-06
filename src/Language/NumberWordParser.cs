@@ -233,29 +233,55 @@ public static class NumberWordParser
     /// leaned on. Both levels are calibrated against that book's logged transcripts rather than
     /// chosen; see the two values for the counts.
     /// </para>
+    /// <para>
+    /// <paramref name="admits"/> is the other half, and it is what the mark refinement leans on
+    /// rather than the reading. Any number can open a sentence, so a refinement probe reading
+    /// "2066." or "Tre di loro" answers "found" as readily as one reading the chapter's own number,
+    /// and the onset walk then climbs off the announcement onto the chapter's first sentence.
+    /// Every misplaced mark in that book's build-249 re-run was exactly this, and the shapes are
+    /// worth knowing because none of them is unusual: chapters 1 and 20 open with a date line
+    /// ("1. 9 febbraio 2066.", "20. 27 luglio 2067.") and the walk settled on the year, four
+    /// seconds late; chapter 4's first words are "mille chilometri", which Whisper writes as
+    /// "1000 km"; chapter 11's are "Tre di loro", and Italian "tre" parses as 3. Filtering by what
+    /// the chapter sequence can hold at that point removes all four while keeping every reading of
+    /// the announcement itself, notation changes included.
+    /// </para>
     /// </summary>
     /// <param name="text">One transcript segment's text.</param>
     /// <param name="language">Two-letter language code steering number-word parsing.</param>
     /// <param name="reading">How much of the segment counts; see <see cref="BareNumberReading"/>.</param>
+    /// <param name="admits">Which numbers may be taken for an announcement here, or null for any.
+    /// The mark refinement passes the chapter sequence's own view of what can sit at this point
+    /// (see <see cref="ABChapterize.Detection.NumberCheck"/>); detection passes nothing, because a
+    /// number the sequence rejects is precisely what
+    /// <see cref="ABChapterize.Detection.SuspectNumberMender"/> exists to re-read rather than
+    /// discard. A rejected sentence does not end the scan - the announcement may be in a later
+    /// one.</param>
     /// <returns>The announcement, or null when no sentence in scope carries one.</returns>
     public static BareNumberAnnouncement? FindBareNumberAnnouncement(
-        string text, string language, BareNumberReading reading)
+        string text, string language, BareNumberReading reading, Func<int, bool>? admits = null)
     {
         var sentences = SentenceBreak.Split(text);
         for (var i = 0; i < sentences.Length; i++)
         {
             // The three readings are nested, so one walk serves all of them - and SpokenAlone can
             // report whether the strictest would also have taken this, without a second pass.
-            if (TryParseWholeText(sentences[i], language, out var whole))
+            if (TryParseWholeText(sentences[i], language, out var whole) && Admitted(whole, admits))
                 return new BareNumberAnnouncement(whole, SpokenAlone: i == 0);
             if (reading == BareNumberReading.SpokenAloneAtSegmentStart)
                 return null;
             if (reading == BareNumberReading.LeadingASentence &&
-                TryExtractNumber(sentences[i], language, out var leading))
+                TryExtractNumber(sentences[i], language, out var leading) && Admitted(leading, admits))
                 return new BareNumberAnnouncement(leading, SpokenAlone: false);
         }
         return null;
     }
+
+    /// <summary>Whether a number just parsed out of a sentence passes the caller's filter; no
+    /// filter admits everything.</summary>
+    /// <param name="number">The parsed number.</param>
+    /// <param name="admits">The filter, or null for "any number".</param>
+    private static bool Admitted(int number, Func<int, bool>? admits) => admits?.Invoke(number) ?? true;
 
     /// <summary>Splits a segment at its sentence boundaries: a sentence-ending punctuation mark
     /// followed by whitespace. The whitespace is what keeps a decimal or dotted number

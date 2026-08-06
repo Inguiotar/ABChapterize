@@ -57,7 +57,23 @@ internal readonly record struct MarkContext(
 /// refinement's probe transcripts.</param>
 /// <param name="Bounds">Where in the chapter sequence this announcement sits, which is what a
 /// corrected number still has to satisfy to be adopted.</param>
-internal readonly record struct NumberCheck(int Number, LanguageProfile Profile, NumberBounds Bounds);
+internal readonly record struct NumberCheck(int Number, LanguageProfile Profile, NumberBounds Bounds)
+{
+    /// <summary>
+    /// Which numbers the refinement may take for this announcement when the book has no chapter
+    /// phrase and the number <em>is</em> the announcement: one the sequence can hold here, or the
+    /// one the detecting window already read.
+    /// <para>
+    /// The second half is not redundant. A number the bounds reject can still reach here, having
+    /// survived <see cref="SuspectNumberMender"/> unmended because no re-framing read anything
+    /// better; without it the refinement would reject the very announcement it was called to pin
+    /// down, every probe would answer "no", and the mark would keep its unrefined default-mode
+    /// position - the exact failure that made bare-number mode unrefinable in the first place.
+    /// </para>
+    /// </summary>
+    /// <param name="number">A number read out of one refinement probe's transcript.</param>
+    internal bool AdmitsAsAnnouncement(int number) => number == Number || Bounds.Admits(number);
+}
 
 /// <summary>The outcome of placing one mark.</summary>
 /// <param name="TimeSeconds">The final mark position.</param>
