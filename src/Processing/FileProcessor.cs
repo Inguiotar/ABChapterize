@@ -1030,13 +1030,15 @@ public sealed class FileProcessor
         _runStats.AccumulateConfidence(result.Chapters);
         var (chapters, introNote) = BuildChapters(result);
         var notes = introNote + discardNote + FormatNamedMarksNote(result) + FormatLowConfidenceNote(result) +
-                    FormatSequenceRestartNote(result) +
+                    FormatSequenceRestartNote(result) + FormatUnverifiedNumbersNote(result) +
                     FormatLanguageNote(result) + await ExportSidecarAsync(ctx, chapters, ct);
         var what = FormatWrittenCount(result);
         // A low-confidence mark is worth surfacing above the progress bar; so is a book that gave up
         // most of its chapters to a restarting sequence, which is otherwise indistinguishable from
-        // one that simply ends early.
-        var important = result.LowConfidenceNumbers.Count > 0 || result.SequenceRestartSkips > 0;
+        // one that simply ends early, and so is a number nothing could corroborate, whose whole
+        // point is that the output looks clean.
+        var important = result.LowConfidenceNumbers.Count > 0 || result.SequenceRestartSkips > 0 ||
+                        result.UnverifiedNumbers is { Count: > 0 };
         // The tag is a to-do note left on the file name, and a run that reached here left nothing
         // to do: every chapter of the sequence is present. So the file gets its own name back.
         // A *numbered* tag normally takes the resume path instead and is untagged there; what
@@ -1092,6 +1094,19 @@ public sealed class FileProcessor
         => result.LowConfidenceNumbers.Count > 0
             ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
               $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
+            : "";
+
+    /// <summary>Note naming the chapter numbers that were heard, marked, and never corroborated
+    /// (see <see cref="DetectedChapter.NumberUnverified"/>). The one note here that reports something
+    /// the output cannot show: such a mark is written like any other, and the searching that would
+    /// normally follow a hole of that size was deliberately not done. Empty for the ordinary
+    /// file.</summary>
+    /// <param name="result">The file's detection result.</param>
+    private static string FormatUnverifiedNumbersNote(DetectionResult result)
+        => result.UnverifiedNumbers is { Count: > 0 } numbers
+            ? $", {numbers.Count} number(s) nothing could corroborate " +
+              $"(chapter {string.Join(", ", numbers)}) - marked as heard, and the chapters under " +
+              "them not searched for; see --verbose"
             : "";
 
     /// <summary>Note for a file whose chapter numbering restarts partway through (see

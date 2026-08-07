@@ -1938,10 +1938,12 @@ public sealed class CliOptions
           -N, --max-chapter-number <n>
                                     Highest chapter number this book plausibly has (default: none).
                                     A detected chapter numbered above <n> is discarded on the spot
-                                    as a mishearing - without it, a single "chapter 510" heard in a
-                                    twelve-chapter book leaves a 500-chapter hole for pass 3 to
-                                    hunt through and a file tagged as missing all of them. Not to
-                                    be confused with --max-chapters, which counts a file's
+                                    as a mishearing. Without it, a single "chapter 510" heard in a
+                                    twelve-chapter book still becomes a mark of its own and pushes
+                                    the real chapters behind it out of the sequence - it no longer
+                                    leaves a 500-chapter hole to hunt through, but the mark is
+                                    written and only the summary line says anything is wrong. Not
+                                    to be confused with --max-chapters, which counts a file's
                                     pre-existing markings rather than the numbers heard in the
                                     audio.
               --chapter-count <n>   How many numbered chapters this book has, exactly (default:

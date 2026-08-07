@@ -371,7 +371,7 @@ public sealed class ChapterDetector
                 break;
         }
 
-        var chapters = await ReconcileSequenceAsync(found, pass2Ctx, language.Profile, ct);
+        var chapters = await ReconcileSequenceAsync(found, namedFound, pass2Ctx, language.Profile, ct);
         _log?.Invoke("Pass 2 finished");
 
         // Passes 2.5 and 3 exist only to close holes in the chapter-number sequence, so with
@@ -391,7 +391,8 @@ public sealed class ChapterDetector
             // Last, because it is the only step that can compare what every pass made of the same
             // announcement: two passes reading one announcement under two different numbers leave
             // two marks on top of each other, and only now are both of them in the same list.
-            chapters = await ReconcileCollidingMarksAsync(chapters, pass2Ctx, language.Profile, ct);
+            chapters = await ReconcileCollidingMarksAsync(
+                chapters, namedFound, pass2Ctx, language.Profile, ct);
         }
 
         return BuildDetectionResult(
@@ -419,9 +420,18 @@ public sealed class ChapterDetector
     /// <summary>
     /// The pipeline stage between Pass 2 and Pass 2.5: hands
     /// <see cref="RepairSequenceOutliersAsync"/> a re-read backed by this file's decoder and
-    /// recognizer. Everything the stage actually decides lives there.
+    /// recognizer, then clears out <see cref="DropNamedMarkEchoes"/>'s phantoms. Everything either
+    /// step actually decides lives there.
+    /// <para>
+    /// The echo sweep runs here as well as after Pass 3 because this is the last moment it is free:
+    /// a phantom left in the sequence at this point is what gap planning measures the book against,
+    /// and one implausible number is enough to commit Pass 2.5 and Pass 3 to transcribing everything
+    /// behind it.
+    /// </para>
     /// </summary>
     /// <param name="found">Pass 2's raw detections, in any order.</param>
+    /// <param name="named">The file's prologue/epilogue/--custom marks, complete once Pass 2 has
+    /// finished every region.</param>
     /// <param name="ctx">The file's Pass 2 context, for the re-read's decoding and recognition.</param>
     /// <param name="profile">The file's resolved language profile, or null when --lang auto never
     /// got as far as resolving one (nothing was probed, so nothing was transcribed). The repair's
@@ -429,23 +439,36 @@ public sealed class ChapterDetector
     /// since there is no phrase to look for.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The ascending chapter sequence, including whatever was repaired back into it.</returns>
-    private Task<List<DetectedChapter>> ReconcileSequenceAsync(
-        List<DetectedChapter> found, Pass2Context ctx, LanguageProfile? profile, CancellationToken ct)
+    private async Task<List<DetectedChapter>> ReconcileSequenceAsync(
+        List<DetectedChapter> found, IReadOnlyList<DetectedMark> named, Pass2Context ctx,
+        LanguageProfile? profile, CancellationToken ct)
+    {
+        var repaired = await RepairSequenceOutliersAsync(
+            found, _options.ExpectedStartChapter, _log, ReReadAtMark(ctx, profile), ct);
+        return DropNamedMarkEchoes(repaired, named, _options.ExpectedStartChapter, _log);
+    }
+
+    /// <summary>
+    /// The "ask the audio what number this mark really carries" delegate both reconciliation stages
+    /// hand their rule, bound to this file's decoder and recognizer. A whole-file region: the
+    /// re-framings clip themselves to it, a mark in doubt can sit anywhere, and what actually
+    /// constrains a re-read is the bounds passed per mark.
+    /// </summary>
+    /// <param name="ctx">The file's Pass 2 context, for decoding and recognition.</param>
+    /// <param name="profile">The file's resolved language profile, or null when nothing was ever
+    /// transcribed - there is then no phrase to look for, so the delegate answers nothing and the
+    /// stages fall back on sequence arithmetic alone.</param>
+    private Func<DetectedChapter, NumberBounds, CancellationToken, Task<int?>> ReReadAtMark(
+        Pass2Context ctx, LanguageProfile? profile)
     {
         if (profile is not { } resolved)
-            return RepairSequenceOutliersAsync(
-                found, _options.ExpectedStartChapter, _log, (_, _, _) => Task.FromResult((int?)null), ct);
+            return (_, _, _) => Task.FromResult((int?)null);
 
-        // Spans the whole file: the re-framings clip themselves to the region, and an outlier can
-        // sit anywhere. What actually constrains a re-read is the bounds handed to it per outlier.
         var mender = new SuspectNumberMender(
             BuildProbeEnvironment(), ctx,
             new DetectionRegion(0, ctx.Info.DurationSeconds, 0, null));
-        return RepairSequenceOutliersAsync(
-            found, _options.ExpectedStartChapter, _log,
-            (outlier, bounds, token) => mender.ReReadAtMarkAsync(
-                outlier.TimeSeconds, _options.MarkLeadSeconds, resolved, bounds, outlier.Number, token),
-            ct);
+        return (mark, bounds, token) => mender.ReReadAtMarkAsync(
+            mark.TimeSeconds, _options.MarkLeadSeconds, resolved, bounds, mark.Number, token);
     }
 
     /// <summary>
@@ -454,26 +477,21 @@ public sealed class ChapterDetector
     /// <see cref="ReconcileSequenceAsync"/> does for the sequence repair.
     /// </summary>
     /// <param name="chapters">The chapter sequence every pass has finished with.</param>
+    /// <param name="named">The file's prologue/epilogue/--custom marks.</param>
     /// <param name="ctx">The file's Pass 2 context, for the re-read's decoding and recognition.</param>
     /// <param name="profile">The file's resolved language profile, or null when nothing was ever
     /// transcribed - in which case there is no phrase to re-read and the confidence tiebreak decides
     /// alone.</param>
     /// <param name="ct">Cancellation token.</param>
-    private Task<List<DetectedChapter>> ReconcileCollidingMarksAsync(
-        List<DetectedChapter> chapters, Pass2Context ctx, LanguageProfile? profile, CancellationToken ct)
+    private async Task<List<DetectedChapter>> ReconcileCollidingMarksAsync(
+        List<DetectedChapter> chapters, IReadOnlyList<DetectedMark> named, Pass2Context ctx,
+        LanguageProfile? profile, CancellationToken ct)
     {
-        if (profile is not { } resolved)
-            return SettleCollidingMarksAsync(
-                chapters, _options.ExpectedStartChapter, _log, (_, _, _) => Task.FromResult((int?)null), ct);
-
-        var mender = new SuspectNumberMender(
-            BuildProbeEnvironment(), ctx,
-            new DetectionRegion(0, ctx.Info.DurationSeconds, 0, null));
-        return SettleCollidingMarksAsync(
-            chapters, _options.ExpectedStartChapter, _log,
-            (mark, bounds, token) => mender.ReReadAtMarkAsync(
-                mark.TimeSeconds, _options.MarkLeadSeconds, resolved, bounds, mark.Number, token),
-            ct);
+        var settled = await SettleCollidingMarksAsync(
+            chapters, _options.ExpectedStartChapter, _log, ReReadAtMark(ctx, profile), ct);
+        // Again rather than only before Pass 2.5, because Pass 3 places marks of its own and a gap
+        // reaching into a named announcement is exactly where it would place one.
+        return DropNamedMarkEchoes(settled, named, _options.ExpectedStartChapter, _log);
     }
 
     /// <summary>
@@ -566,6 +584,88 @@ public sealed class ChapterDetector
             i--;
         }
         return settled;
+    }
+
+    /// <summary>
+    /// Drops a chapter mark that is no chapter at all but a line of a named announcement's own
+    /// heading: one sitting within <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> of a
+    /// prologue, epilogue or <c>--custom</c> mark and carrying a number the chapters around it
+    /// cannot hold.
+    /// <para>
+    /// Both halves are load-bearing. Proximity alone would take a real first chapter that follows a
+    /// short prologue; an ill-fitting number alone is what every other defence already works on, and
+    /// one that survives all of them is likelier a real chapter with several undetected ones in front
+    /// of it than a phantom - which is why such a mark is otherwise kept (see
+    /// <see cref="DetectedChapter.NumberUnverified"/>). Together they say something much narrower: a
+    /// book does not start a chapter three seconds into its epilogue, and if it did, that chapter's
+    /// number would continue the sequence.
+    /// </para>
+    /// <para>
+    /// The case on record is "Corsa nello spazio" (build 251, 2026-08-06), whose epilogue is headed
+    /// "Epilogo / 2179 / Spazio profondo". Under <c>--chapter-phrase none</c> a year spoken alone is
+    /// an announcement by definition, and a well-formed one - set off by real pauses, read as 2179 by
+    /// every probe that saw it - so it reached the written file as "Capitolo 2179", 2.86 s after the
+    /// epilogue's own mark. Nothing about the number gives it away; the geometry does, exactly as it
+    /// does for two numbered marks on one announcement (<see cref="SettleCollidingMarksAsync"/>),
+    /// and it borrows that rule's threshold for the same reason: five seconds sits far above the
+    /// spread between two lines of one heading and far below the shortest chapter anyone writes.
+    /// </para>
+    /// <para>
+    /// The sequence's own first chapter is never dropped, however badly it fits. Its lower bound is
+    /// an assumption rather than a chapter - <c>--expected-start-chapter</c>, or 1 - so a book
+    /// legitimately beginning at chapter 12 fails <see cref="NumberBounds.Admits"/> on that
+    /// assumption alone, and the split-book parts this tool is routinely pointed at are exactly that
+    /// case.
+    /// </para>
+    /// <para>
+    /// Pure arithmetic and geometry: no audio is consulted, so this needs neither a decoder nor a
+    /// recognizer to test. Internal for that reason.
+    /// </para>
+    /// </summary>
+    /// <param name="chapters">The chapter sequence, ascending in time.</param>
+    /// <param name="named">The file's prologue/epilogue/--custom marks, in any order.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null.</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <returns>The sequence with its named-mark echoes removed.</returns>
+    internal static List<DetectedChapter> DropNamedMarkEchoes(
+        List<DetectedChapter> chapters, IReadOnlyList<DetectedMark> named, int? expectedStartChapter,
+        Action<string>? log)
+    {
+        if (named.Count == 0)
+            return chapters;
+
+        var kept = new List<DetectedChapter>(chapters.Count);
+        for (var i = 0; i < chapters.Count; i++)
+        {
+            var chapter = chapters[i];
+            // Judged against every other chapter, so a phantom can never vouch for itself.
+            var others = chapters.Where((_, index) => index != i).ToList();
+            if (!others.Any(c => c.TimeSeconds <= chapter.TimeSeconds) ||
+                NamedMarkBeside(chapter.TimeSeconds, named) is not { } mark ||
+                BracketingBounds(chapter.TimeSeconds, others, [], expectedStartChapter)
+                    .Admits(chapter.Number))
+            {
+                kept.Add(chapter);
+                continue;
+            }
+            log?.Invoke(
+                $"chapter {chapter.Number} at {FormatTimestamp(chapter.TimeSeconds)} is " +
+                $"{Math.Abs(chapter.TimeSeconds - mark.TimeSeconds):0.00} s from the {mark.Kind} mark " +
+                "and fits nowhere in the sequence - dropping it as part of that announcement");
+        }
+        return kept;
+    }
+
+    /// <summary>The named mark a chapter mark is close enough to be another line of the same heading
+    /// as, or null when there is none.</summary>
+    /// <param name="timeSeconds">The chapter mark's position.</param>
+    /// <param name="named">The file's named marks.</param>
+    private static DetectedMark? NamedMarkBeside(double timeSeconds, IReadOnlyList<DetectedMark> named)
+    {
+        foreach (var mark in named)
+            if (Math.Abs(mark.TimeSeconds - timeSeconds) < CollidingChapterMarkSeconds)
+                return mark;
+        return null;
     }
 
     /// <summary>
@@ -993,7 +1093,10 @@ public sealed class ChapterDetector
     {
         if (_options.LastExpectedChapter is not { } last || chapters.Count == 0)
             return [];
-        var highest = chapters[^1].Number;
+        // Counted from the last number that stands for something: an unverified one would otherwise
+        // satisfy any --chapter-count at all simply by being large (see
+        // DetectedChapter.NumberUnverified), which is the exact opposite of what the option is for.
+        var highest = chapters.LastOrDefault(c => !c.NumberUnverified, chapters[^1]).Number;
         return highest < last ? [.. Enumerable.Range(highest + 1, last - highest)] : [];
     }
 
@@ -1294,13 +1397,19 @@ public sealed class ChapterDetector
         // Final consistency check: internal gaps that remain are fatal for this file, and so is a
         // leading gap Pass 3 above could not fully close - but only when --expected-start-chapter
         // actually named a number to hold it to; without that, there is nothing to be missing.
+        // Both loops skip a number nothing could corroborate, for the reason
+        // GapPlanning.FindGaps does: this is the answer the ".missing-marks" tag is built from, and
+        // a spoken year must not be able to declare two thousand chapters lost (see
+        // DetectedChapter.NumberUnverified).
         var missing = new List<int>();
-        if (_options.ExpectedStartChapter is { } expectedStart && chapters.Count > 0)
+        if (_options.ExpectedStartChapter is { } expectedStart && chapters.Count > 0 &&
+            !chapters[0].NumberUnverified)
             for (var n = expectedStart; n < chapters[0].Number; n++)
                 missing.Add(n);
         for (var i = 1; i < chapters.Count; i++)
-            for (var n = chapters[i - 1].Number + 1; n < chapters[i].Number; n++)
-                missing.Add(n);
+            if (!chapters[i].NumberUnverified)
+                for (var n = chapters[i - 1].Number + 1; n < chapters[i].Number; n++)
+                    missing.Add(n);
         // The trailing end, which only --chapter-count can speak for: a chapter after the last one
         // found is invisible to every other check here, nothing above it being available to compare
         // against. A run that found nothing at all is left out - such a file is reported as having
@@ -1311,6 +1420,8 @@ public sealed class ChapterDetector
             .Where(c => c.Confidence < LowConfidenceThreshold)
             .Select(c => c.Number)
             .ToList();
+
+        var unverified = chapters.Where(c => c.NumberUnverified).Select(c => c.Number).ToList();
 
         // A file that yielded no chapter at all is left unchanged by FileProcessor, and a lone
         // prologue or epilogue must not be what makes it worth rewriting: a book whose chapter
@@ -1348,7 +1459,8 @@ public sealed class ChapterDetector
         return new DetectionResult(
             chapters, named, missing.Count > 0, missing, lowConfidence,
             profile, detectedLanguage, detectedProbability, stats, earlyAborted, belowExpectedStartNumber,
-            leadInHasSpeech, _customLimitHit, _sequenceRestartSkips);
+            leadInHasSpeech, _customLimitHit, _sequenceRestartSkips,
+            unverified.Count > 0 ? unverified : null);
     }
 
     /// <summary>Result of <see cref="RunPass1Async"/>: every silence/VAD signal Pass 2 and Pass 3

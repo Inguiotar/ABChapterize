@@ -938,6 +938,13 @@ internal static class DetectionTuning
     /// Chapitre 13 - and dropping either one at random would be a coin toss over which number the
     /// book carries from there on.
     /// </para>
+    /// <para>
+    /// <see cref="ChapterDetector.DropNamedMarkEchoes"/> borrows it for a third question - is this
+    /// chapter mark another line of a named announcement's heading? - on the strength of the same
+    /// "well below the shortest chapter anyone writes" half. The spread it has to cover there is
+    /// between two lines of one heading rather than between two readings of one onset, measured at
+    /// 2.86 s on "Corsa nello spazio"'s "Epilogo / 2179 / Spazio profondo" (2026-08-06).
+    /// </para>
     /// </summary>
     internal const double CollidingChapterMarkSeconds = NamedMarkDedupeSeconds / 2;
 

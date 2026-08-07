@@ -984,8 +984,13 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task ChapterNumberAboveTheCap_IsAccepted_WithoutTheCap()
     {
-        // The same script without --max-chapter-number: the mishearing becomes a chapter of its
-        // own and turns everything below it into a gap - exactly what the cap exists to prevent.
+        // The same script without --max-chapter-number: the mishearing becomes a chapter of its own
+        // and displaces the real chapter 2 behind it, which is now "not above the last accepted
+        // chapter 510" - exactly what the cap exists to prevent.
+        //
+        // What it no longer does is declare 2..509 missing. Nothing corroborated the 510, so the
+        // sequence refuses to measure the book by it (see DetectedChapter.NumberUnverified) and no
+        // pass goes hunting behind it; the summary line says so instead.
         var result = await DetectAsync(
             Options("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
@@ -997,7 +1002,9 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.Contains(result.Chapters, c => c.Number == 510);
-        Assert.True(result.GapRemains);
+        Assert.DoesNotContain(result.Chapters, c => c.Number == 2);
+        Assert.False(result.GapRemains);
+        Assert.Equal([510], result.UnverifiedNumbers);
     }
 
     [Fact]
@@ -5671,6 +5678,169 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(13, 100), new(40, 150), new(16, 200), new(17, 300)], _ => 16);
 
         Assert.Equal([13, 16, 17], chapters.Select(c => c.Number));
+    }
+
+    /// <summary>Runs the named-mark echo sweep, collecting its log.</summary>
+    /// <param name="chapters">The sequence, ascending in time.</param>
+    /// <param name="named">The file's named marks.</param>
+    private static (List<DetectedChapter> Chapters, List<string> Log) DropEchoes(
+        List<DetectedChapter> chapters, List<DetectedMark> named, int? expectedStartChapter = null)
+    {
+        var log = new List<string>();
+        return (ChapterDetector.DropNamedMarkEchoes(chapters, named, expectedStartChapter, log.Add), log);
+    }
+
+    /// <summary>An epilogue mark for the echo-sweep tests.</summary>
+    /// <param name="timeSeconds">Where it sits.</param>
+    private static DetectedMark Epilogue(double timeSeconds)
+        => new("epilogue", "Epilogue", timeSeconds);
+
+    [Fact]
+    public void NamedMarkEchoes_DropTheYearThatHeadsAnEpilogue()
+    {
+        // "Corsa nello spazio" (2026-08-06) in miniature: its epilogue is headed "Epilogo / 2179 /
+        // Spazio profondo", and under --chapter-phrase none the year is an announcement by
+        // definition. Nothing about the number gives it away - it was heard perfectly, by every
+        // probe - so it reached the written file as a chapter mark 2.86 s behind the epilogue's own.
+        var (chapters, log) = DropEchoes(
+            [new(64, 63524), new(65, 63780), new(2179, 65939.97)], [Epilogue(65937.11)]);
+
+        Assert.Equal([64, 65], chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("chapter 2179 at 18:18:59.97 is 2.86 s from the epilogue mark") &&
+                                  l.Contains("dropping it as part of that announcement"));
+    }
+
+    [Fact]
+    public void NamedMarkEchoes_KeepAChapterThatContinuesTheSequence()
+    {
+        // Proximity alone proves nothing. A book may well start its next chapter seconds after a
+        // prologue ends, and that chapter's number says so by continuing the sequence.
+        var (chapters, log) = DropEchoes(
+            [new(1, 100), new(2, 1202)], [new("prologue", "Prologue", 1200)]);
+
+        Assert.Equal([1, 2], chapters.Select(c => c.Number));
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public void NamedMarkEchoes_KeepANumberThatMerelyFitsNowhere()
+    {
+        // The other half. An implausible number away from any named mark is the ordinary mishearing
+        // every other defence works on, and one that survived all of them is likelier a real chapter
+        // with undetected ones in front of it than a phantom - so it keeps its mark.
+        var (chapters, log) = DropEchoes([new(1, 100), new(90, 1202)], [Epilogue(3000)]);
+
+        Assert.Equal([1, 90], chapters.Select(c => c.Number));
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public void NamedMarkEchoes_NeverDropTheSequencesOwnFirstChapter()
+    {
+        // A split-book part legitimately starting at chapter 12 has no chapter below it, so its
+        // lower bound is the assumption "1" rather than a measurement - and every such book would
+        // fail the fit test on that alone.
+        var (chapters, _) = DropEchoes([new(12, 1202), new(13, 2000)], [new("prologue", "Prologue", 1200)]);
+
+        Assert.Equal([12, 13], chapters.Select(c => c.Number));
+    }
+
+    [Fact]
+    public void NamedMarkEchoes_LeaveAFileWithoutNamedMarksUntouched()
+    {
+        List<DetectedChapter> found = [new(1, 100), new(90, 1202)];
+        var (chapters, log) = DropEchoes(found, []);
+
+        Assert.Same(found, chapters);
+        Assert.Empty(log);
+    }
+
+    [Fact]
+    public void FindGaps_OpensNoGapBeneathAnUnverifiedNumber()
+    {
+        // The 25 minutes "Corsa nello spazio" spent transcribing the stretch between its last real
+        // chapter and a spoken year. A number the mender could not corroborate keeps its mark but
+        // does not get to say that everything under it is missing.
+        List<DetectedChapter> chapters =
+            [new(1, 100), new(2, 200), new(2179, 3000, 1.0, NumberUnverified: true)];
+
+        Assert.Empty(GapPlanning.FindGaps(chapters, Duration));
+        var (highest, missing) = GapPlanning.ChapterProgress(chapters);
+        Assert.Equal(2, highest);
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public void ChapterProgress_ReportsNothingMissing_WhenNothingAtAllIsCorroborated()
+    {
+        // Measured on a 38-minute clip of "Corsa nello spazio" (2026-08-07): Pass 2 found the year
+        // heading the epilogue and nothing else, so there was no corroborated span for anything to
+        // be missing from - and the progress line still announced 2114 missing chapters. The number
+        // is reported, because a mark really was written under it; the shortfall is not.
+        var (highest, missing) = GapPlanning.ChapterProgress(
+            [new(2179, 2189, 1.0, NumberUnverified: true)], expectedStartChapter: 65);
+
+        Assert.Equal(2179, highest);
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public void FindGaps_StillOpensTheGapsAroundAnUnverifiedNumber()
+    {
+        // Skipped, not filtered out: the entry is a real position in the book, so its neighbours
+        // must not be paired across it either. The genuine hole at 3 is still raised.
+        List<DetectedChapter> chapters =
+            [new(2, 200), new(4, 400), new(2179, 3000, 1.0, NumberUnverified: true), new(2180, 3200)];
+
+        Assert.Equal([new GapPlanning.GapRegion(200, 400)], GapPlanning.FindGaps(chapters, Duration));
+    }
+
+    [Fact]
+    public async Task ANumberNothingCouldMend_KeepsItsMark_AndDeclaresNothingMissing()
+    {
+        // Every re-framing hears "Chapter ninety" too, so the mender has nothing better to offer and
+        // leaves the reading alone. Before this, the sequence took that at face value and committed
+        // Pass 3 to transcribing everything between chapters 1 and 90 in search of the 88 it thought
+        // were missing.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--quick-marks"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(2.5, " Chapter ninety."));
+            });
+
+        AssertChapters([new(1, 0.25), new(90, 602.25)], result.Chapters);
+        Assert.False(result.GapRemains);
+        Assert.Empty(result.MissingNumbers);
+        Assert.Contains(log, l => l.Contains("no number continuing the sequence could be read there"));
+        Assert.Contains(log, l => l.Contains("chapter 90 still does not fit the sequence after re-reading it") &&
+                                  l.Contains("not counting the chapters under it as missing"));
+    }
+
+    [Fact]
+    public async Task AChapterMarkOnAnEpiloguesOwnHeading_IsDroppedByTheRealPipeline()
+    {
+        // The unit tests above settle the rule; this one settles the wiring, which they cannot -
+        // that the file's named marks are in hand at both the stage before Pass 2.5 and the one
+        // after Pass 3. Scripted as "Corsa nello spazio" reads: the epilogue's heading runs on into
+        // a number, and under a bare-number reading that number is an announcement by definition.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--max-jingle-length", "0", "--quick-marks"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.4, " Chapter two."));
+                s.Add(1200, Seg(2.5, " Epilogue."), Seg(4.0, " Chapter 2179."));
+            });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Single(result.NamedMarks);
+        Assert.False(result.GapRemains);
+        Assert.Contains(log, l => l.Contains("from the epilogue mark") &&
+                                  l.Contains("dropping it as part of that announcement"));
     }
 
     [Fact]

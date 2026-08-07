@@ -1530,7 +1530,19 @@ internal sealed class RegionProber
             _env.Log?.Invoke($"chapter {number} detection spans the reused/fresh transcript " +
                              "merge from Pass 2's overlap reuse - worth a spot check");
 
-        _found.Add(new DetectedChapter(number, time, match.Confidence));
+        // Everything reaching this point is already above the sequence and below whatever bounds it
+        // from the far side, so the one way Admits can still say no is the implausible-hole case -
+        // exactly what SuspectNumberMender was asked about a few lines up and could not mend.
+        // Re-derived from the number placement settled on rather than from the one the window heard,
+        // since the refinement vote may have replaced it with one that does fit. Recorded on the
+        // mark rather than acted on here; see DetectedChapter.NumberUnverified for what it costs.
+        var unverified = _ctx.SecondGuessNumbers && !SequenceBounds(windowLast).Admits(number);
+        if (unverified)
+            _env.Log?.Invoke(
+                $"chapter {number} still does not fit the sequence after re-reading it - keeping the " +
+                "mark, but not counting the chapters under it as missing");
+
+        _found.Add(new DetectedChapter(number, time, match.Confidence, unverified));
         var (highest, missingNumbers) = ChapterProgress(_found, _env.Options.ExpectedStartChapter);
         _ctx.Work.HighestChapter = highest;
         _ctx.Work.MissingChapters = missingNumbers.Count;

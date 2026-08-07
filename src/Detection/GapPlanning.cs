@@ -78,11 +78,16 @@ internal static class GapPlanning
         var gaps = new List<GapRegion>();
         if (chapters.Count == 0)
             return gaps;
-        if (expectedStartChapter is { } expected && chapters[0].Number > expected &&
-            chapters[0].TimeSeconds > MinLeadingGapSeconds)
+        if (expectedStartChapter is { } expected && !chapters[0].NumberUnverified &&
+            chapters[0].Number > expected && chapters[0].TimeSeconds > MinLeadingGapSeconds)
             gaps.Add(new GapRegion(0, chapters[0].TimeSeconds));
         for (var i = 1; i < chapters.Count; i++)
         {
+            // Skipping the entry rather than filtering it out of the list keeps its neighbours from
+            // being paired across it: an unverified number is still a real position in the book, it
+            // just may not be the far end of a hole (see DetectedChapter.NumberUnverified).
+            if (chapters[i].NumberUnverified)
+                continue;
             if (chapters[i].Number > chapters[i - 1].Number + 1)
                 gaps.Add(new GapRegion(chapters[i - 1].TimeSeconds, chapters[i].TimeSeconds));
         }
@@ -492,7 +497,9 @@ internal static class GapPlanning
     /// <see cref="ChapterDetector.BuildDetectionResult"/>'s leading-gap rule: without
     /// <paramref name="expectedStartChapter"/>, nothing below the lowest number actually found is
     /// "missing" - a split-book part starting at chapter 2 must not report chapter 1 as missing.
-    /// Internal for unit testing.
+    /// The ceiling comes from the corroborated numbers only, so one number nothing could vouch for
+    /// cannot declare everything under it missing (see
+    /// <see cref="DetectedChapter.NumberUnverified"/>). Internal for unit testing.
     /// </summary>
     /// <param name="found">The chapters detected so far.</param>
     /// <param name="expectedStartChapter">The chapter number the book is expected to start at
@@ -500,10 +507,23 @@ internal static class GapPlanning
     internal static (int Highest, List<int> Missing) ChapterProgress(
         IEnumerable<DetectedChapter> found, int? expectedStartChapter = null)
     {
-        var numbers = Normalize(found.ToList()).Select(c => c.Number).ToHashSet();
+        var kept = Normalize(found.ToList());
+        var numbers = kept.Select(c => c.Number).ToHashSet();
         if (numbers.Count == 0)
             return (0, []);
-        var highest = numbers.Max();
+        // Only a corroborated number gets to say how far the book runs. An unverified one still
+        // counts as present - it is a mark like any other - but the stretch below it is not
+        // reported missing, which is what keeps a spoken year from declaring two thousand chapters
+        // lost (see DetectedChapter.NumberUnverified).
+        var vouched = kept.Where(c => !c.NumberUnverified).Select(c => c.Number).ToList();
+        // Nothing corroborated at all leaves no span to be missing from, so nothing is: the highest
+        // number is still reported, since it names a mark that really was written, but a lone
+        // uncorroborated 2179 must not answer "how much of this book is still missing?" with 2114.
+        // Reachable on a clip or a short file - Pass 2 finding exactly one chapter and that one in
+        // doubt - rather than on a whole book.
+        if (vouched.Count == 0)
+            return (numbers.Max(), []);
+        var highest = vouched.Max();
         // Clamped to highest: the first chapter found can transiently be numbered below
         // expectedStartChapter for one call, right before ChapterDetector's own "below
         // expectation" check aborts the run - without the clamp that would make the range

@@ -453,6 +453,15 @@ announces it.
 Nothing is required of what *follows* the announcement: narrators routinely
 read straight on from "Epilogue" into the epilogue's first sentence.
 
+What may follow it is a *second* line of the same heading — a year, a date, a
+place — and where that line is a number, it can look exactly like a chapter
+announcement. A chapter mark landing within a few seconds of a prologue,
+epilogue or `--custom` mark, and carrying a number that fits nowhere in the
+book's sequence, is therefore taken as part of that same heading and dropped. A
+real chapter that begins right after a short prologue keeps its mark, since its
+number continues the sequence, and a book's first chapter is never dropped this
+way.
+
 Both are switched off by passing an empty phrase, e.g.
 `--prologue-phrase "" --epilogue-phrase ""`.
 
@@ -1212,10 +1221,13 @@ skipped (reported as "skipped").
   detected chapter numbered above `<n>` is discarded on the spot as a
   mishearing rather than becoming a mark. Worth setting whenever you know the
   chapter count roughly: a single "chapter five hundred and ten" misheard in a
-  twelve-chapter book otherwise stretches the expected sequence to 510, leaves
-  pass 3 hunting for the ~500 chapters "missing" in between, and ends with the
-  file tagged as missing all of them. Lighter Whisper models (`tiny`, `base`)
-  are the usual source of such numbers. Not to be confused with
+  twelve-chapter book otherwise becomes a mark of its own, and every real
+  chapter behind it is then rejected for being numbered below it. A number that
+  wild no longer drags the rest of the run with it — nothing between it and the
+  last real chapter is reported missing, and no pass goes looking there — but
+  the mark is still written, and only the file's summary line says so. Lighter
+  Whisper models (`tiny`, `base`) are the usual source of such numbers. Not to
+  be confused with
   `--max-chapters`, which counts a file's *pre-existing* marks rather than the
   numbers heard in the audio.
 
@@ -2346,15 +2358,25 @@ long pause can fool the tool. Use `--backup`, inspect the result, and
 `--revert` if needed; a regexp phrase (`-c "/^\s*chapter (\d+)/"`) can help
 with stubborn cases.
 
+**The summary line says a number could not be corroborated** — a chapter was
+detected whose number cannot continue the sequence, re-reading the audio
+produced nothing better, and the run declined to take it at face value: the
+mark is written where it was found, nothing under it is reported missing, and
+no pass went looking there. Usually Whisper misheard a number (lighter models
+such as `tiny` and `base` are prone to this); it can also be a number in the
+audio that is not a chapter number at all, which is what `--chapter-phrase
+none` invites. Either way the mark is worth a look. Set
+`--max-chapter-number` to roughly the book's real chapter count and such a
+number is thrown away as it is found instead. Note that a real chapter behind
+it may have been lost, having been rejected for being numbered below it.
+
 **A wildly wrong chapter number appeared, and everything below it is now
-"missing"** — Whisper misheard a number (lighter models such as `tiny` and
-`base` are prone to this), and everything between the last real chapter and
-that number counts as a gap. Set `--max-chapter-number` to roughly the book's
-real chapter count and the bogus number is thrown away as it is found. If the
-run already left the file tagged, note that a tag naming more than ten
-missing chapters is shortened to a plain `.missing-marks` and is *not*
-resumed automatically — rerun it with `--force` (and the new option) once you
-know what went wrong.
+"missing"** — the same mishearing, but with something detected *after* it that
+made the sequence believe in it. Set `--max-chapter-number` as above. If the
+run already left the file tagged, note that a tag naming more than ten missing
+chapters is shortened to a plain `.missing-marks` and is *not* resumed
+automatically — rerun it with `--force` (and the new option) once you know
+what went wrong.
 
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes),
 `--max-jingle-length` (smaller probe windows, or `0` if there's no jingle at

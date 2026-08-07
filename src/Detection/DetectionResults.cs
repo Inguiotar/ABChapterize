@@ -14,7 +14,34 @@ namespace ABChapterize.Detection;
 /// <param name="Confidence">Whisper's probability for the segment the chapter number was parsed
 /// from (0-1); 1.0 when unknown. Below <see cref="DetectionTuning.LowConfidenceThreshold"/> the
 /// number surfaces in <see cref="DetectionResult.LowConfidenceNumbers"/>.</param>
-public readonly record struct DetectedChapter(int Number, double TimeSeconds, double Confidence = 1.0);
+/// <param name="NumberUnverified">True when <see cref="SuspectNumberMender"/> was asked about this
+/// number - it leaves an implausible hole below it (see <see cref="NumberBounds.Admits"/>) - and
+/// nothing could corroborate or correct it. Such a mark keeps its number and its position; what it
+/// loses is the authority to say how far the book runs, so <see cref="GapPlanning.FindGaps"/> opens
+/// no gap beneath it and <see cref="GapPlanning.ChapterProgress"/> counts nothing under it as
+/// missing.
+/// <para>
+/// The shape this exists for is a number heard perfectly that belongs to something other than a
+/// chapter, which every other defence is blind to because they all reason about mishearing.
+/// "Corsa nello spazio" (Italian, 18 h, <c>--chapter-phrase none</c>, build 251, 2026-08-06) heads
+/// its epilogue "Epilogo / 2179 / Spazio profondo", and 2179 is the year: spoken alone, flanked by
+/// real pauses so <see cref="AnnouncementIsolation"/> passes it, and read as 2179 by the mender's
+/// 15 s and 45 s re-framings and by every one of the refinement's probes.
+/// <see cref="GapPlanning.Normalize"/> keeps it as well, 1..65 followed by 2179 being strictly
+/// ascending. The sequence therefore declared chapters 66 to 2178 missing, which cost some 25
+/// minutes of a 90-minute run in Pass 2.5/3/3.5 sweeps over audio holding nothing, and left the
+/// file tagged ".missing-marks" with too many numbers to name and so outside
+/// <see cref="ABChapterize.Processing.MissingMarksTag.IsResumable"/>.
+/// </para>
+/// <para>
+/// Deliberately not a reason to drop the mark. An unmendable number is also what a real chapter
+/// looks like when Pass 2 missed the several chapters before it, and dropping that would trade a
+/// lost chapter for saved time - the wrong way round here. Only a mark provably belonging to a
+/// named announcement's own heading is removed; see
+/// <see cref="ChapterDetector.DropNamedMarkEchoes"/>.
+/// </para></param>
+public readonly record struct DetectedChapter(
+    int Number, double TimeSeconds, double Confidence = 1.0, bool NumberUnverified = false);
 
 /// <summary>
 /// A detected non-numbered mark - a prologue or epilogue announcement, or a <c>--custom</c> match
@@ -116,13 +143,19 @@ public readonly record struct DetectionStats(
 /// file's summary line for the same reason as <paramref name="CustomMarkLimitHit"/>: a book that
 /// stops yielding chapters halfway through looks like a detection failure until someone reads the
 /// --verbose log and finds every later announcement listed as heard and skipped.</param>
+/// <param name="UnverifiedNumbers">The chapter numbers written with
+/// <see cref="DetectedChapter.NumberUnverified"/> set - heard, marked, and never corroborated. Null
+/// (rather than empty) for the ordinary file, so the common case allocates nothing. Surfaced in the
+/// file's summary line for the same reason as <paramref name="CustomMarkLimitHit"/>, and it is the
+/// more important of the two: the marks are written and the passes that would have chased the hole
+/// beneath them were called off, so nothing else about the output looks wrong.</param>
 public readonly record struct DetectionResult(
     IReadOnlyList<DetectedChapter> Chapters, IReadOnlyList<DetectedMark> NamedMarks,
     bool GapRemains, IReadOnlyList<int> MissingNumbers,
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability, DetectionStats Stats, bool EarlyAborted = false,
     int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true, bool CustomMarkLimitHit = false,
-    int SequenceRestartSkips = 0);
+    int SequenceRestartSkips = 0, IReadOnlyList<int>? UnverifiedNumbers = null);
 
 /// <summary>Outcome of checking one pre-existing chapter marking against the audio, in file order -
 /// the raw material <see cref="GapPlanning.BuildGapRegions"/> groups into gap-scoped recovery

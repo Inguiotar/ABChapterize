@@ -108,6 +108,27 @@ earn a round number.
   `--custom` phrases are exempt from the check entirely — they name whatever recurring
   element you say they do, wherever you say it is.
 
+- **One implausible chapter number no longer sends the search after chapters that were
+  never there.** A number that cannot possibly continue the sequence has always been
+  re-read from differently framed audio, and usually that settles it. When it does not —
+  because the number was heard perfectly and simply belongs to something other than a
+  chapter, a spoken year being the case that prompted this — the mark used to be taken at
+  face value anyway, and everything below it declared missing. On an eighteen-hour book
+  that meant a long, fruitless search of audio with nothing in it, and a file left tagged
+  `.missing-marks` for chapters it had never lost. Such a mark is now written where it was
+  found and left out of the reckoning: nothing under it is reported missing and no pass
+  goes looking for it. Because the output then looks entirely clean, the file's summary
+  line names the number in question so it can be checked by hand.
+
+- **A chapter mark is no longer planted on the heading of a prologue or epilogue.** Where a
+  book's epilogue is introduced by more than one line — a title, then a date or a year, then
+  a place — a numbered announcement could be read out of the second line and written as a
+  chapter of its own, seconds behind the epilogue's own mark. A mark that lands within a few
+  seconds of a prologue, epilogue or `--custom` mark and carries a number that fits nowhere
+  in the book's sequence is now recognised as part of that same announcement and dropped. A
+  real chapter beginning right after a short prologue keeps its mark, since its number
+  continues the sequence, and the first chapter of a book is never dropped this way.
+
 
 ## [0.10.1] — 2026-08-04
 
