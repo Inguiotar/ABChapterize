@@ -638,12 +638,10 @@ public sealed class ChapterDetector
         for (var i = 0; i < chapters.Count; i++)
         {
             var chapter = chapters[i];
-            // Judged against every other chapter, so a phantom can never vouch for itself.
-            var others = chapters.Where((_, index) => index != i).ToList();
-            if (!others.Any(c => c.TimeSeconds <= chapter.TimeSeconds) ||
-                NamedMarkBeside(chapter.TimeSeconds, named) is not { } mark ||
-                BracketingBounds(chapter.TimeSeconds, others, [], expectedStartChapter)
-                    .Admits(chapter.Number))
+            // Proximity first: it is the cheap half, and on any real book it rules out all but a
+            // handful of chapters before the fit test has to rebuild the sequence around one.
+            if (NamedMarkBeside(chapter.TimeSeconds, named) is not { } mark ||
+                !FitsNowhereInTheSequence(chapters, i, expectedStartChapter))
             {
                 kept.Add(chapter);
                 continue;
@@ -666,6 +664,25 @@ public sealed class ChapterDetector
             if (Math.Abs(mark.TimeSeconds - timeSeconds) < CollidingChapterMarkSeconds)
                 return mark;
         return null;
+    }
+
+    /// <summary>
+    /// Whether the chapter at <paramref name="index"/> carries a number the rest of the sequence
+    /// cannot hold where it sits. Measured against every <em>other</em> chapter, so a phantom can
+    /// never vouch for itself, and always false for the sequence's own first chapter - see
+    /// <see cref="DropNamedMarkEchoes"/> for why an assumed lower bound may not condemn a mark.
+    /// </summary>
+    /// <param name="chapters">The sequence, ascending in time.</param>
+    /// <param name="index">Which of them is in question.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null.</param>
+    private static bool FitsNowhereInTheSequence(
+        List<DetectedChapter> chapters, int index, int? expectedStartChapter)
+    {
+        var chapter = chapters[index];
+        var others = chapters.Where((_, i) => i != index).ToList();
+        return others.Any(c => c.TimeSeconds <= chapter.TimeSeconds) &&
+               !BracketingBounds(chapter.TimeSeconds, others, [], expectedStartChapter)
+                   .Admits(chapter.Number);
     }
 
     /// <summary>
