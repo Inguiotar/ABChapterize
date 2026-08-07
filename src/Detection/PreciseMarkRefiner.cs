@@ -9,6 +9,7 @@ using ABChapterize.Transcription;
 using ABChapterize.Vad;
 using static ABChapterize.Detection.DetectionFormatting;
 using static ABChapterize.Detection.DetectionTuning;
+using static ABChapterize.Detection.PhraseMatching;
 
 namespace ABChapterize.Detection;
 
@@ -143,7 +144,9 @@ internal sealed class PreciseMarkRefiner
         // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
         // *non-blank* segment is what actually starts at or after the checked position.
         var first = transcript.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Text));
-        var found = first.Text != null && announcement.Matches(first.Text);
+        // Normalized for the same reason PhraseMatching.Flatten normalizes: a multi-word phrase has
+        // to survive whatever spacing the recognizer wrote around and inside the segment.
+        var found = first.Text != null && announcement.Matches(NormalizeWhitespace(first.Text));
         if (found)
             _phraseReadings?.Add(transcript);
         LogProbe($"onset probe {length:0.00}s@{FormatTimestamp(decodeStart)} " +
@@ -1211,7 +1214,8 @@ internal sealed class PreciseMarkRefiner
         var length = Math.Round(Math.Max(until - from, PreciseMarkMinSurvivalSeconds), 6);
         var samples = await _audio.DecodePcmAsync(file, from, length, inputDecoder, ct);
         var transcript = await _transcribe(samples, ct);
-        var survives = transcript.Any(s => s.Text != null && announcement.Matches(s.Text));
+        var survives = transcript.Any(
+            s => s.Text != null && announcement.Matches(NormalizeWhitespace(s.Text)));
         if (survives)
             _phraseReadings?.Add(transcript);
         LogProbe($"survival probe {length:0.00}s@{FormatTimestamp(from)} " +

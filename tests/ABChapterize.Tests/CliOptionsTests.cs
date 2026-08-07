@@ -53,7 +53,13 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal("/chapter/", o.ChapterPhrase);
         Assert.Equal("Chapter", o.Title);
         Assert.Equal("Intro", o.IntroTitle);
-        Assert.Equal("turbo", o.Model);
+        // The probing model and the pass-3 model are deliberately different by default: short probe
+        // windows are what "small" is better at, long transcriptions what "turbo" is better at.
+        Assert.Equal("small", o.Model);
+        Assert.Equal("turbo", o.Pass3Model);
+        Assert.True(o.Pass3ModelIsUpgrade);
+        // The trailing scan is on unless --no-trailing-scan says otherwise.
+        Assert.True(o.TrailingScan);
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.True(o.AutoMinSilence);
         Assert.Equal(45, o.MaxJingleSeconds);
@@ -66,7 +72,7 @@ public sealed class CliOptionsTests : IDisposable
         // Mark refinement is on by default; --quick-marks is the opt-out, so it starts false
         // while PreciseMark itself starts true (asserted separately).
         Assert.True(o.PreciseMark);
-        Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.QuickMarks | o.TrailingScan | o.Quiet | o.Verbose
+        Assert.False(o.Recurse | o.Backup | o.Revert | o.NoOp | o.CpuOnly | o.Force | o.MarkBeforeJingle | o.QuickMarks | o.Quiet | o.Verbose
                      | o.NoBar | o.Summary | o.DryRun | o.Export | o.Import | o.SimpleMetadata | o.Verify);
         Assert.Null(o.VadThreads);
         Assert.Null(o.WhisperThreads);
@@ -358,11 +364,13 @@ public sealed class CliOptionsTests : IDisposable
         => Assert.Throws<CliError>(() => ParseFile("--ignore-chapter-numbers", opt, value));
 
     [Theory]
-    [InlineData("--trailing-scan")]
     [InlineData("--verify")]
     [InlineData("--import")]
-    public void IgnoreChapterNumbers_RejectsANumberBasedFlag(string flag)
-        => Assert.Throws<CliError>(() => ParseFile("--ignore-chapter-numbers", flag));
+    [InlineData("--chapter-count", "12")]
+    public void IgnoreChapterNumbers_RejectsANumberBasedFlag(string flag, string? value = null)
+        => Assert.Throws<CliError>(() =>
+            ParseFile(value is null ? ["--ignore-chapter-numbers", flag]
+                                    : ["--ignore-chapter-numbers", flag, value]));
 
     [Theory]
     [InlineData("--chapter-phrase", "part")]
@@ -487,7 +495,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--pass3-model", "large")]
     [InlineData("--mark-before-jingle")]
     [InlineData("--quick-marks")]
-    [InlineData("--trailing-scan")]
+    [InlineData("--no-trailing-scan")]
     [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
     [InlineData("--mark-lead", "0.5")]
@@ -646,11 +654,18 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void Pass3ModelIsUpgrade_IsFalse_WhenNoPass3ModelWasGivenAtAll()
+    public void Pass3Model_FollowsTheModelChosen_UnlessNeitherWasNamed()
     {
-        // The default mirrors --model, so there is nothing to upgrade to and pass 2.5 stays off.
-        Assert.False(ParseFile("--model", "tiny")!.Pass3ModelIsUpgrade);
-        Assert.False(ParseFile()!.Pass3ModelIsUpgrade);
+        // Naming --model alone re-points pass 3 at it, so there is nothing to upgrade to and pass 2.5
+        // stays off - which is what keeps "-m large" meaning large throughout rather than large
+        // probing and a quietly lighter pass 3.
+        var picked = ParseFile("--model", "tiny")!;
+        Assert.Equal("tiny", picked.Pass3Model);
+        Assert.False(picked.Pass3ModelIsUpgrade);
+        // Naming neither keeps the small/turbo pair, and with it the upgrade that turns pass 2.5 on.
+        var bare = ParseFile()!;
+        Assert.Equal("turbo", bare.Pass3Model);
+        Assert.True(bare.Pass3ModelIsUpgrade);
     }
 
     [Theory]
@@ -698,10 +713,22 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void TrailingScan_IsParsed_LongAndShort()
+    public void TrailingScan_IsOnByDefault_AndOffOnlyWithNoTrailingScan()
     {
-        Assert.True(ParseFile("--trailing-scan")!.TrailingScan);
-        Assert.True(ParseFile("-L")!.TrailingScan);
+        Assert.True(ParseFile()!.TrailingScan);
+        Assert.False(ParseFile("--no-trailing-scan")!.TrailingScan);
+    }
+
+    [Fact]
+    public void TrailingScan_RejectsItsOldSpelling_WithAMigrationMessage()
+    {
+        // Both the long form and the -L it still maps from, so a script carrying either is told the
+        // scan it asked for is now the default rather than silently doing the opposite.
+        foreach (var spelling in new[] { "--trailing-scan", "-L" })
+        {
+            var error = Assert.Throws<CliError>(() => ParseFile(spelling));
+            Assert.Contains("--no-trailing-scan", error.Message);
+        }
     }
 
     // Mark refinement is the default: PreciseMark is simply the inverse of the opt-out flag,
@@ -1155,7 +1182,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--mark-before-jingle"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--quick-marks"));
-        Assert.Throws<CliError>(() => ParseDir("--revert", "--trailing-scan"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--no-trailing-scan"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--early-abort", "30"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--expected-start-chapter", "5"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapter-number", "50"));
@@ -1226,7 +1253,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--backup"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--verify"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--export"));
-        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--trailing-scan"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--no-trailing-scan"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--quick-marks"));
     }
 

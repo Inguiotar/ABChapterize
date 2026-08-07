@@ -13,7 +13,7 @@ namespace ABChapterize.Detection;
 
 /// <summary>Finds the chapter-announcement phrase (and its chapter number) inside a window's
 /// transcribed segments.</summary>
-internal static class PhraseMatching
+internal static partial class PhraseMatching
 {
     /// <summary>A phrase match inside a transcribed window.</summary>
     /// <param name="Number">Parsed chapter number.</param>
@@ -330,9 +330,9 @@ internal static class PhraseMatching
 
     /// <summary>
     /// Concatenates all segment texts into the single string the regexes run against, remembering
-    /// where each segment starts in it so a match position can be mapped back to a time. The
-    /// trailing space after every segment is what keeps two segments from fusing into a spurious
-    /// word across their join.
+    /// where each segment starts in it so a match position can be mapped back to a time. The single
+    /// space between two segments is what keeps them from fusing into a spurious word across their
+    /// join - and, since every text is normalized first, it really is a single space.
     /// </summary>
     /// <param name="segments">The transcript segments, in order.</param>
     private static (string Text, int[] SegStartChar) Flatten(List<TranscriptSegment> segments)
@@ -342,11 +342,35 @@ internal static class PhraseMatching
         for (var i = 0; i < segments.Count; i++)
         {
             segStartChar[i] = sb.Length;
-            sb.Append(segments[i].Text);
+            var text = NormalizeWhitespace(segments[i].Text);
+            if (text.Length == 0)
+                continue;
+            sb.Append(text);
             sb.Append(' ');
         }
         return (sb.ToString(), segStartChar);
     }
+
+    /// <summary>Collapses every run of whitespace to one space and trims the ends, so that what a
+    /// phrase regex is matched against is spaced the way the phrase is written.</summary>
+    /// <remarks>
+    /// Whisper prefixes a space to every segment it returns. <see cref="Flatten"/> then separated
+    /// them with a space of its own, so each join carried <em>two</em>, and any phrase containing a
+    /// space - which the built-in ones never do, being single words, and a user's --chapter-phrase
+    /// routinely does - could not match across a segment boundary. Found on "Paula Monti.m4b" with
+    /// <c>--chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/"</c> (2026-08-08): Pass 3 heard
+    /// chapter 19 perfectly and split it as "Première partie." + "Chapitre 19.", which joined into
+    /// two spaces where the phrase writes one, and the chapter was silently lost. Normalizing per
+    /// segment rather than over the finished string is what keeps <see cref="Flatten"/>'s offsets
+    /// pointing at the right segment.
+    /// </remarks>
+    /// <param name="text">One transcript segment's text, as the recognizer wrote it.</param>
+    internal static string NormalizeWhitespace(string? text)
+        => text is null ? "" : WhitespaceRuns().Replace(text, " ").Trim();
+
+    /// <summary>Every run of one or more whitespace characters.</summary>
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRuns();
 
     /// <summary>The index of the segment a character position in <see cref="Flatten"/>'s text
     /// belongs to: the last segment starting at or before it.</summary>

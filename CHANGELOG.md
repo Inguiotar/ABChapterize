@@ -13,7 +13,7 @@ release is whatever felt big enough to deserve one — the program has turned in
 different animal, or a headline feature landed, or it has simply grown up enough to
 earn a round number.
 
-## [0.10.2] — unreleased
+## [0.11.0] — unreleased
 
 ### Added
 
@@ -73,8 +73,8 @@ earn a round number.
 - **`--chapter-count`: tell it how many chapters the book has.** A missing chapter is
   normally spotted as a hole in the numbering, which needs a known chapter on either side
   of it — so one missing *after* the last chapter found was the one case nothing noticed,
-  and the file came out looking complete. `--trailing-scan` has always closed that hole by
-  transcribing the whole tail on spec, on every file, whether or not anything was wrong.
+  and the file came out looking complete. The trailing scan closes that hole by transcribing
+  the whole tail on spec, on every file, whether or not anything was wrong.
   Given the count instead, the run knows precisely which numbers are still owed, hunts
   only those, stops the moment they turn up, and does nothing at all when the count was
   already reached. It also caps the numbering, so a misheard "chapter five hundred" cannot
@@ -94,7 +94,57 @@ earn a round number.
   for a scripted cleanup, and is required where there is no console to ask at. Add
   `--revert` to restore the backups over their files instead of deleting them.
 
+### Changed
+
+- **The default is now a small model for finding chapters and `turbo` for filling the gaps**
+  (`-m small -M turbo`), where both used to be `turbo`. This is not a speed compromise: the
+  model that finds chapters listens to windows a few seconds long, and the large models are
+  markedly *worse* at those — they tend to return the whole window as one run-on sentence with
+  the announcement missing from it. The heavier model is kept for pass 3, which transcribes long
+  stretches where it genuinely does hear more, and is downloaded and loaded only if a chapter
+  actually goes missing. Runs are also faster, and the first-run download is much smaller.
+  Because the two models now differ by default, the second-opinion pass (pass 2.5) and pass 2's
+  re-reading of an implausible chapter number are on by default too. Naming `--model` without
+  `--pass3-model` still points both at your choice, so `-m large` means large throughout.
+
+- **The trailing scan runs by default.** A missing chapter is normally spotted as a hole in the
+  numbering, which needs a known chapter on either side of it — so one missing *after* the last
+  chapter found was the one case nothing noticed, and the file was written out looking complete:
+  nothing reported missing, no `.missing-marks` tag, nothing in the log to go on. That silent
+  failure is worse than a run that takes a few minutes longer, so the stretch after the last
+  chapter is now transcribed by default. It costs about one final chapter's worth of
+  transcription per file and can never stop early, having no expected numbers to satisfy;
+  `--no-trailing-scan` buys that time back for a library you have already checked. It is read
+  once and never twice now, so the price is bounded at a single pass over the tail.
+
+- **`--chapter-count` now switches the blind trailing scan off.** Telling the run how many
+  chapters a book has is a statement about what is in the tail, so it replaces the speculative
+  sweep instead of running alongside it: the numbers still owed are hunted directly, the search
+  stops the moment they turn up, and nothing at all is transcribed once the count is reached.
+
+### Removed
+
+- **`--trailing-scan` / `-L`**, replaced by `--no-trailing-scan` now that the scan is the
+  default. Either spelling stops the run with a message pointing at the new option rather than
+  quietly doing the opposite of what was meant.
+
 ### Fixed
+
+- **A multi-word `--chapter-phrase` is no longer defeated by where the recognizer breaks its
+  sentences.** If the announcement came back split — "Première partie." and then
+  "Chapitre 19." — a phrase containing a space could not match across the break, and the chapter
+  was dropped without a word in the log. The built-in phrases are all single words and never ran
+  into it; a phrase of your own routinely could. Whitespace is now normalized before any phrase
+  is matched, so where the words fall between two transcript sentences no longer matters.
+
+- **Chapter announcements are no longer lost to an over-narrow probe window.** The window that
+  looks for an announcement narrows itself to fit the jingles a book actually has, and on a book
+  with short jingles it could narrow far enough that the recognizer started padding it out — at
+  which point the larger models hand back the whole window as one run-on sentence with the
+  announcement missing from it. On one book that cost six chapters of twenty-five, five of them
+  at the very end where nothing else would have noticed. The automatic narrowing now stops at a
+  width that transcribes reliably. An explicit `--max-jingle-length` is still honoured exactly
+  as given.
 
 - **A prologue or epilogue is no longer marked on a word that merely contains the phrase.**
   "Prologue" and "epilogue" are ordinary words, and in some languages they hide inside

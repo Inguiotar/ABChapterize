@@ -568,6 +568,35 @@ internal static class DetectionTuning
     internal const double JingleRereadWindowSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
 
     /// <summary>
+    /// Floor under the --max-jingle-length auto probe window (see
+    /// <see cref="RegionProber.ObserveJingleLength"/>), applied beneath the ceiling so an explicit
+    /// --max-jingle-length still wins outright. A book whose jingles are all short would otherwise
+    /// narrow the window to a width the recognizer handles badly, and the announcement is then lost
+    /// in exactly the windows the narrowing was supposed to make cheap.
+    /// <para>
+    /// The failure is the recognizer's, not the geometry's. Whisper pads anything shorter than
+    /// <see cref="WhisperChunkSeconds"/> out to a full mel chunk, and the large models degenerate on
+    /// the padding: the whole window comes back as one unpunctuated run-on segment with the
+    /// announcement simply missing from it. Measured on "Paula Monti.m4b" (French, 4:33:37, 25
+    /// chapters, 2026-08-08), whose 4.48 s longest jingle narrows the window to 10.6 s - replaying
+    /// that run's own Pass 2 probe windows through the real recognizer, ggml-large-v3-turbo matched
+    /// the announcement in 4 of 15 windows at 11-22 s and in 13 of 13 at 50 s, while ggml-small
+    /// matched 14 of 14 at the same narrow widths. That is why the book detected perfectly under
+    /// <c>-m small</c> and lost chapters 19 and 21-25 under turbo, and why the floor is a property of
+    /// the window rather than of the model.
+    /// </para>
+    /// <para>
+    /// One phrase margin below the chunk rather than at it, which the same five windows settle by
+    /// measurement: 0 of 5 at 20 s, 5 of 5 at 25 s, 4 of 5 at 30 s and at 50 s. Chapter 22 is the one
+    /// that only 25 s finds. Crossing into a multi-pass decode is its own way of losing an
+    /// announcement - see <see cref="WhisperChunkSeconds"/> for Gruelfin.m4b's prologue, heard at
+    /// 23.5 s and gone at 30.0 s - so the floor keeps every probe a single pass. Same value and the
+    /// same reasoning as <see cref="JingleRereadWindowSeconds"/>.
+    /// </para>
+    /// </summary>
+    internal const double MinAdaptiveProbeSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
+
+    /// <summary>
     /// How far <em>before</em> a confirmed or left-as-is mark
     /// <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> may search for a quieter point to
     /// move it to. Backward-only, so a one-sided lookback rather than a window centered on the

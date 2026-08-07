@@ -273,7 +273,7 @@ public sealed class ChapterDetector
     /// continuation of whatever an earlier region's Pass 2 happened to learn. The sequence-gap
     /// Pass 3 tail (over the accumulated <c>chapters</c> and the file's full duration) is the final
     /// net for any interior gap regardless of how <c>chapters</c> was seeded;
-    /// <paramref name="trailingFallback"/> and --trailing-scan exist only for the one case that
+    /// <paramref name="trailingFallback"/> and the trailing scan exist only for the one case that
     /// tail structurally cannot catch - a still-missing chapter after the last one found, which
     /// nothing bounds from above to even notice.
     /// </summary>
@@ -833,7 +833,7 @@ public sealed class ChapterDetector
     /// <param name="trailingFallback">The trailing region's start and expected chapter numbers,
     /// when <see cref="BuildGapRegions"/> found the last checkable --verify marking unconfirmed;
     /// null otherwise (including for a fresh <see cref="DetectAsync"/> run).</param>
-    /// <param name="trailingScanAllowed">Whether --trailing-scan may run; see <see
+    /// <param name="trailingScanAllowed">Whether the trailing scan may run; see <see
     /// cref="ResolveTrailingRegion"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns><paramref name="chapters"/> plus anything Pass 3 recovered.</returns>
@@ -880,17 +880,18 @@ public sealed class ChapterDetector
         // independent things ask for it (see ResolveTrailingRegion), and both end up here.
         if (ResolveTrailingRegion(trailingFallback, chapters, trailingScanAllowed) is { } trailing)
         {
-            // "suspicious" only fits the --verify fallback, which is chasing specific numbers it
-            // has reason to believe are there; a --trailing-scan sweep is speculative by design.
+            // "suspicious" only fits a targeted sweep, which is chasing specific numbers it has
+            // reason to believe are there; the open-ended scan is speculative by design.
             var what = trailing.Targets is null ? "trailing region" : "suspicious trailing region";
             // Whether a shifted re-read may follow at all, which decides both this transcription's
-            // chunk borders (see snapSeams) and, below, whether one actually runs.
-            // --trailing-scan is speculative and never "done", so nothing but the flag itself can
-            // say whether a second look is wanted - and setting it is already that statement. The
-            // --verify fallback does know what it is after, and goes by the same rule the gaps do.
-            var rereadPossible = trailing.Targets is null
-                ? _options.TrailingScan
-                : !_options.Pass3ModelIsDowngrade;
+            // chunk borders (see snapSeams) and, below, whether one actually runs. A targeted sweep
+            // knows what it is after and goes by the same rule the gaps do. The open-ended one gets
+            // a single pass instead: it now runs on every file by default, and a second reading of
+            // audio nothing suspects would double that standing cost for the whole library. It is
+            // not left unprotected against the boundary problem the re-read exists for - with no
+            // re-read to follow, its own seams snap to silences (see snapSeams), which is what keeps
+            // an announcement off a chunk border in the first place.
+            var rereadPossible = trailing.Targets is not null && !_options.Pass3ModelIsDowngrade;
             _log?.Invoke($"transcribing {what} " +
                          $"{FormatTimestamp(trailing.From)} - {FormatTimestamp(info.DurationSeconds)}");
             work.BeginPhase("Pass 3", (long)((info.DurationSeconds - trailing.From) * bytesPerSecond));
@@ -999,7 +1000,7 @@ public sealed class ChapterDetector
     /// <param name="fromSeconds">Start of the region as the first attempt read it.</param>
     /// <param name="toSeconds">End of the region.</param>
     /// <param name="expectedNumbers">The numbers this region is expected to yield, or null for an
-    /// open-ended --trailing-scan sweep.</param>
+    /// open-ended trailing sweep.</param>
     /// <param name="allSilences">Every silence Pass 1 retained.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions.</param>
     /// <param name="speechSegments">Raw VAD speech segments.</param>
@@ -1052,31 +1053,30 @@ public sealed class ChapterDetector
     /// it is skipped entirely once they have all turned up elsewhere;</description></item>
     /// <item><description>--chapter-count, which states how many numbered chapters the book has and
     /// therefore names exactly which ones above the last find are still owed;</description></item>
-    /// <item><description>--trailing-scan, which sweeps from the last detected chapter to the end of
-    /// the file with no expectation of what it will find - the only way to catch a chapter after the
-    /// last one detected when nothing has said how many there are.</description></item>
+    /// <item><description>the trailing scan (on unless --no-trailing-scan), which sweeps from the
+    /// last detected chapter to the end of the file with no expectation of what it will find - the
+    /// only way to catch a chapter after the last one detected when nothing has said how many there
+    /// are.</description></item>
     /// </list>
-    /// --trailing-scan subsumes the other two when it applies: an open-ended scan accepts everything
-    /// a targeted one would and starts no later, so they are merged into a single sweep rather than
-    /// transcribing the tail twice. The two targeted kinds merge with each other instead, since each
-    /// knows numbers the other does not.
+    /// The two targeted kinds merge with each other, since each knows numbers the other does not,
+    /// and the mere presence of either suppresses the open-ended sweep - including when it has
+    /// nothing left to look for, which is exactly when a --chapter-count run should be doing no
+    /// trailing work at all. That precedence is the opposite of what it was while the scan was
+    /// opt-in, where asking for it was a request for the broadest possible search; now that it is
+    /// the default, letting it win would mean --chapter-count silently paid for a sweep to the end
+    /// of the file instead of the early-stopping search it exists to provide.
     /// </summary>
     /// <param name="verifyFallback">The --verify fallback's region start and expected numbers, or
     /// null when this is not a gap-scoped run (or its last marking was confirmed).</param>
     /// <param name="chapters">Everything detected so far, in chronological order.</param>
-    /// <param name="trailingScanAllowed">Whether --trailing-scan may run at all - false once Pass 2
+    /// <param name="trailingScanAllowed">Whether the trailing scan may run at all - false once Pass 2
     /// aborted, since a run that gave up on the file has no meaningful "last chapter" to sweep from.</param>
     /// <returns>The region's start and its expected chapter numbers (null for an open-ended
-    /// --trailing-scan sweep), or null when no trailing region is needed.</returns>
+    /// open-ended sweep), or null when no trailing region is needed.</returns>
     private (double From, IReadOnlyList<int>? Targets)? ResolveTrailingRegion(
         (double From, List<int> Targets)? verifyFallback, List<DetectedChapter> chapters,
         bool trailingScanAllowed)
     {
-        // Nothing found at all means no anchor to sweep from - the whole file would be "the
-        // trailing region", which is Pass 2's job, not this one's.
-        if (_options.TrailingScan && trailingScanAllowed && chapters.Count > 0)
-            return (Math.Min(chapters[^1].TimeSeconds, verifyFallback?.From ?? double.MaxValue), null);
-
         var targets = new List<int>();
         var from = double.MaxValue;
         if (verifyFallback is { } tf)
@@ -1094,7 +1094,21 @@ public sealed class ChapterDetector
             targets.AddRange(declared);
             from = Math.Min(from, chapters[^1].TimeSeconds);
         }
-        return targets.Count > 0 ? (from, targets.Distinct().Order().ToList()) : null;
+        if (targets.Count > 0)
+            return (from, targets.Distinct().Order().ToList());
+
+        // Nothing left to aim at, so sweep on spec - but only where nothing better informed is
+        // driving this file. Both targeted mechanisms suppress the open-ended scan outright, not
+        // merely outrank it: "the book has twelve chapters and twelve are marked" is a statement
+        // that there is nothing in the tail, not an invitation to go and look, and --chapter-count
+        // caps the numbering as well, so anything a sweep did find above the count would be
+        // discarded anyway. Letting the scan win here would take the whole saving that option exists
+        // for away from every run that uses it. Nothing found at all means no anchor to sweep from
+        // either; the whole file would be "the trailing region", which is Pass 2's job, not this one's.
+        var somethingTargeted = verifyFallback != null || _options.LastExpectedChapter != null;
+        return _options.TrailingScan && !somethingTargeted && trailingScanAllowed && chapters.Count > 0
+            ? (chapters[^1].TimeSeconds, null)
+            : null;
     }
 
     /// <summary>
@@ -1137,7 +1151,8 @@ public sealed class ChapterDetector
     /// as the full transcription it is avoiding, and when it finds nothing Pass 3 still runs after
     /// it. Measured on real audio (2026-07-26, --model tiny --pass3-model large): a 56-minute gap
     /// took ~40 minutes of re-probing and recovered nothing. A favourable bet only where candidates
-    /// are sparse - hence opt-in behind a deliberately chosen heavier --pass3-model.
+    /// are sparse - hence gated behind a pass-3 model heavier than the probing one, which since
+    /// 0.11.0 the default small/turbo pair is, so this runs unless --model says otherwise.
     /// </para>
     /// <para>
     /// Runs only when <see cref="CliOptions.Pass3ModelIsUpgrade"/> holds (a lighter or equal pass-3
@@ -1935,7 +1950,7 @@ public sealed class ChapterDetector
     /// continuing would only re-scan audio that cannot yield anything new - so the caller can
     /// advance to the next gap (or finish Pass 3) immediately.
     /// <para>
-    /// Null instead runs the region <em>open-ended</em>, as --trailing-scan needs: there is no
+    /// Null instead runs the region <em>open-ended</em>, as the trailing scan needs: there is no
     /// known set of numbers to satisfy, so nothing can ever be complete and the region is always
     /// scanned through to its end. With no target list to filter by, the only thing that makes a
     /// match new is being numbered above every chapter already known - otherwise an in-text
@@ -1969,7 +1984,7 @@ public sealed class ChapterDetector
         var found = new List<DetectedChapter>();
         // The still-missing chapter numbers of this gap; emptied as they are found, at which
         // point there is nothing left to recover here and transcription can stop early. Null for
-        // an open-ended --trailing-scan region, which has no such list and therefore no way to
+        // an open-ended trailing region, which has no such list and therefore no way to
         // finish early - see the expectedNumbers doc above.
         var remaining = expectedNumbers is null ? null : new HashSet<int>(expectedNumbers);
         // Inputs to the cross-chunk bridging below: the previous chunk's transcript in absolute

@@ -196,8 +196,9 @@ internal sealed class RegionProber
 
     /// <summary>With --max-jingle-length auto, the adapted probe window:
     /// <see cref="JingleObservationSafetyFactor"/> times the longest real inter-chapter jingle
-    /// observed so far in this region, plus <see cref="PhraseMarginSeconds"/>, capped at the
-    /// ceiling. Null until the first qualifying observation; monotonically increasing from then on
+    /// observed so far in this region, plus <see cref="PhraseMarginSeconds"/>, held between
+    /// <see cref="MinAdaptiveProbeSeconds"/> and the ceiling. Null until the first qualifying
+    /// observation; monotonically increasing from then on
     /// (see <see cref="JingleObservationSafetyFactor"/>).</summary>
     private double? _adaptedWindowSeconds;
 
@@ -1598,8 +1599,12 @@ internal sealed class RegionProber
         // (monotonically increasing - see JingleObservationSafetyFactor), capped at the ceiling so
         // an outlier can never widen the window past what --max-jingle-length allows. During a gap
         // re-probe only the maximum moves; _probeSeconds stays at the ceiling until it is done.
+        // The floor sits inside the ceiling, so a deliberately small --max-jingle-length is still
+        // honoured to the second - it is the *automatic* narrowing that must not go below a width
+        // Whisper transcribes reliably (see MinAdaptiveProbeSeconds).
         var proposed = Math.Min(_ctx.JingleCeilingSeconds,
-            JingleObservationSafetyFactor * observedLength + PhraseMarginSeconds);
+            Math.Max(MinAdaptiveProbeSeconds,
+                JingleObservationSafetyFactor * observedLength + PhraseMarginSeconds));
         _adaptedWindowSeconds = Math.Max(_adaptedWindowSeconds ?? proposed, proposed);
         if (!_reprobing && _adaptedWindowSeconds.Value != _probeSeconds)
         {

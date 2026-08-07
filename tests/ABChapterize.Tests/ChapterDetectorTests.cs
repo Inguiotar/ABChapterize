@@ -290,8 +290,27 @@ public sealed class ChapterDetectorTests : IDisposable
     /// nothing about what the test is checking. What the measurement itself decides is
     /// <see cref="SilenceThresholdProbeTests"/>'s subject instead.
     /// </para>
+    /// <para>
+    /// The trailing scan is pinned off for the noise-floor reason rather than the mark-lead one: it
+    /// runs by default from 0.11.0 on, it transcribes everything after the last chapter found, and
+    /// almost every fixture below puts something at the end of the file that Pass 2 was never meant
+    /// to reach. Left on, it would add a chapter to test after test that is about candidate
+    /// geometry, threshold adaptation or gap planning and says nothing about the tail. Tests whose
+    /// subject <em>is</em> the tail use <see cref="OptionsWithTrailingScan"/>, which is also what
+    /// keeps the default itself covered - see
+    /// <see cref="TrailingScan_FindsAChapterAfterTheLastOneDetected"/> and CliOptionsTests.
+    /// </para>
     /// </summary>
     private CliOptions Options(params string[] args)
+        => BuildOptions([.. args, "--no-trailing-scan"]);
+
+    /// <summary>Like <see cref="Options"/>, but leaving the trailing scan at its default (on) for the
+    /// tests that are about it.</summary>
+    private CliOptions OptionsWithTrailingScan(params string[] args) => BuildOptions(args);
+
+    /// <summary>The shared body of the two option builders above.</summary>
+    /// <param name="args">The option list, already carrying whatever trailing-scan choice was made.</param>
+    private CliOptions BuildOptions(string[] args)
     {
         string[] withFloor = args.Contains("--noise-floor")
             ? args
@@ -1337,12 +1356,12 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Chapter 3 is announced at 1799.95, past the last chapter pass 2 found and with nothing
         // above it - the one hole FindGaps structurally cannot see, since a sequence gap needs a
-        // known chapter on either side. --trailing-scan transcribes from chapter 2's mark to the
+        // known chapter on either side. The trailing scan transcribes from chapter 2's mark to the
         // end of the file and picks it up. (The scan's second chunk carries it: its first, starting
         // at chapter 2's own mark, is too close to that chapter's probe window for the scripted
         // transcriber to tell the two decodes apart.)
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--trailing-scan"),
+            OptionsWithTrailingScan("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1363,7 +1382,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Same audio as above, minus the flag: chapters 1 and 2 form an unbroken sequence, so
         // nothing raises a gap and chapter 3 is never looked for. This is the default, and the
-        // reason --trailing-scan exists.
+        // reason the trailing scan exists, and --no-trailing-scan is how it is declined.
         var (result, _, audio) = await DetectFullAsync(
             Options("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
@@ -1385,7 +1404,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the entire book, which is pass 2's job. This also covers the --early-abort and
         // --expected-start-chapter aborts, both of which leave the chapter list empty.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--trailing-scan"),
+            OptionsWithTrailingScan("--max-jingle-length", "0"),
             [new(595, 600)],
             s => { });
 
@@ -1403,7 +1422,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // announced *after* chapter 3 is an in-text mention, not a chapter start. Accepting it would
         // report a find that Normalize then quietly drops again.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--trailing-scan"),
+            OptionsWithTrailingScan("--max-jingle-length", "0"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1597,7 +1616,7 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task ChapterCount_HuntsTheChaptersAfterTheLastOneDetected()
     {
-        // The same hole --trailing-scan brute-forces, told exactly what is missing instead: chapter
+        // The same hole the trailing scan brute-forces, told exactly what is missing instead: chapter
         // 3 is announced past everything pass 2 found, with no chapter above it to make its absence
         // visible as a sequence gap.
         var (result, _, audio) = await DetectFullAsync(
@@ -1613,7 +1632,7 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters([new(1, 0.25), new(2, 1199.95), new(3, 1799.7)], result.Chapters);
         Assert.False(result.GapRemains);
         // Knowing what it was after, the hunt stopped at chapter 3 rather than carrying on to the
-        // end of the file the way an open-ended --trailing-scan has to.
+        // end of the file the way an open-ended scan has to.
         Assert.Contains(1199.95, audio.DecodeStarts);
         Assert.DoesNotContain(audio.DecodeWindows, w => w.Start > 2900);
     }
@@ -1622,9 +1641,31 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task ChapterCount_TranscribesNoTail_WhenTheCountIsAlreadyReached()
     {
         // Two chapters declared, two found: nothing is owed, so the tail is never touched - which is
-        // the whole difference from --trailing-scan, whose sweep is paid for on every file.
+        // the whole difference from the blind scan, whose sweep is paid for on every file.
         var (result, _, audio) = await DetectFullAsync(
             Options("--max-jingle-length", "0", "--chapter-count", "2"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1789.95, Seg(10, " Chapter three."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        Assert.False(result.GapRemains);
+        Assert.All(audio.DecodeWindows, w => Assert.True(w.Duration is null or <= 60));
+    }
+
+    [Fact]
+    public async Task ChapterCount_BeatsTheOpenEndedTrailingSweep()
+    {
+        // Both apply here - the count is satisfied, and the trailing scan is on by default - and the
+        // count has to win. An open-ended sweep starts at the same place but runs to the end of the
+        // file with nothing able to stop it, so letting it take precedence would quietly hand every
+        // --chapter-count run the bill the option exists to avoid.
+        var (result, _, audio) = await DetectFullAsync(
+            OptionsWithTrailingScan("--max-jingle-length", "0", "--chapter-count", "2"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -2223,23 +2264,54 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Pass3_ReReadsTheTrailingRegionShifted_EvenOnADowngradePass3Model()
+    public async Task Pass3_ReadsTheOpenEndedTrailingRegionOnce_NeverTwice()
     {
-        // --trailing-scan is the user paying for a speculative sweep of audio nothing suspects, so
-        // asking for it settles the "is a second look worth the time" question on its own - the
-        // model gate that governs the gaps does not apply. Deliberately paired with the downgrade
-        // model that switches that gate off, so only the flag can be what let this run.
+        // The open-ended sweep runs on every file now that the trailing scan is the default, so its
+        // cost is a standing cost for a whole library and a second reading of audio nothing suspects
+        // would double it. It is not left unguarded against the chunk-boundary problem the shifted
+        // re-read exists for: with no re-read to follow, this transcription snaps its own seams to
+        // silences instead, which is what keeps an announcement off a border to begin with.
+        var (_, log, _) = await DetectWithLogAsync(
+            OptionsWithTrailingScan("--max-jingle-length", "0"),
+            [new(595, 600)],
+            s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(log, l => l.Contains("transcribing trailing region 0:09:59.75 - 1:00:00.00"));
+        Assert.DoesNotContain(log, l => l.Contains("re-reading trailing region"));
+    }
+
+    [Fact]
+    public async Task Pass3_ReReadsATargetedTrailingRegionShifted()
+    {
+        // A targeted sweep is the other half of that rule: --chapter-count names a chapter it has
+        // good reason to believe is in the tail, so a second look is worth the same as it is for any
+        // sequence gap - and goes by the same model gate.
+        var (_, log, _) = await DetectWithLogAsync(
+            OptionsWithTrailingScan("--max-jingle-length", "0", "--chapter-count", "2"),
+            [new(595, 600)],
+            s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.Contains(log, l => l.Contains(
+            "re-reading suspicious trailing region 0:09:59.75 - 1:00:00.00 from 0:10:14.75"));
+    }
+
+    [Fact]
+    public async Task Pass3_SkipsTheTrailingReRead_OnADowngradePass3Model()
+    {
+        // A lighter pass-3 model is the one unambiguous statement that this file's stragglers are
+        // not worth more time, and it governs the targeted trailing sweep exactly as it governs the
+        // gaps.
         var log = new List<string>();
-        var (_, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "large", "--pass3-model", "base", "--max-jingle-length", "0",
-                "--trailing-scan"),
+        await DetectWithPass3TranscriberAsync(
+            OptionsWithTrailingScan("--model", "large", "--pass3-model", "base",
+                "--max-jingle-length", "0", "--chapter-count", "2"),
             [new(595, 600)],
             pass2 => pass2.Add(600, Seg(0.5, " Chapter one.")),
             pass3 => { },
             log);
 
-        Assert.Contains(log, l => l.Contains("re-reading trailing region 0:09:59.75 - 1:00:00.00 " +
-                                             "from 0:10:14.75"));
+        Assert.Contains(log, l => l.Contains("transcribing suspicious trailing region"));
+        Assert.DoesNotContain(log, l => l.Contains("re-reading"));
     }
 
     [Theory]
@@ -2613,12 +2685,13 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task AutoMaxJingle_AfterAGap_ReprobesAProbedCandidateAtTheCeilingWindow()
     {
-        // The narrowed-window hole: chapter 2's 3 s jingle sizes the probe window down to
-        // 1.25 x 3 + 5 = 8.75 s, but chapter 3's announcement sits 20 s after its silence, past
-        // that window's end - so the candidate at 900 is probed, hears nothing, and would once have
-        // been forgotten because only *skipped* candidates were remembered for a gap re-probe.
-        // Chapter 4 reveals the gap, and the re-probe must re-decode 900 at the full 50 s ceiling
-        // (--max-jingle-length's 45 s default plus the 5 s phrase margin), which does reach 920.
+        // The narrowed-window hole: chapter 2's 3 s jingle asks for a 1.25 x 3 + 5 = 8.75 s probe
+        // window and gets the 25 s MinAdaptiveProbeSeconds floor, but chapter 3's announcement sits
+        // 30 s after its silence, past that window's end - so the candidate at 900 is probed, hears
+        // nothing, and would once have been forgotten because only *skipped* candidates were
+        // remembered for a gap re-probe. Chapter 4 reveals the gap, and the re-probe must re-decode
+        // 900 at the full 50 s ceiling (--max-jingle-length's 45 s default plus the 5 s phrase
+        // margin), which does reach 930.
         var (result, log, audio) = await DetectWithLogAsync(
             Options("--verbose"),
             [new(595, 600), new(895, 900), new(1195, 1200)],
@@ -2626,7 +2699,7 @@ public sealed class ChapterDetectorTests : IDisposable
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(600, Seg(3.0, " Chapter two."));
-                s.Add(900, Seg(20.0, " Chapter three."));
+                s.Add(900, Seg(30.0, " Chapter three."));
                 s.Add(1200, Seg(3.0, " Chapter four."));
             },
             // Continuous speech: the VAD pre-pass runs (it must, or the window never adapts) but
@@ -2638,7 +2711,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The narrowed first probe and the widened re-probe of the very same candidate. The pair is
         // what proves Pass 2 recovered the chapter: Pass 3 chunks the whole 600-1200 region and
         // never decodes exactly 50 s from 900.
-        Assert.Contains((900.0, (double?)8.75), audio.DecodeWindows);
+        Assert.Contains((900.0, (double?)25.0), audio.DecodeWindows);
         Assert.Contains((900.0, (double?)50.0), audio.DecodeWindows);
         Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
                                   l.Contains("0 skipped, 1 at a wider window"));
@@ -2679,35 +2752,35 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task AGapRecoveredChapter_WidensTheJingleWindow_ByAtMostTheGrowthCap()
     {
-        // Chapter 2's 3 s jingle narrows the window to 8.75 s. Chapter 3's announcement sits 20 s
-        // after its silence, so the narrowed window misses it and only the ceiling re-probe finds it.
-        // The 1 s silence at 919 is what makes this the BARDIOC.m4b shape rather than a case the
-        // existing machinery already handles: the mark anchors to *that* silence, so the jingle
-        // observation measures ~0 s, falls under its 2 s floor and is discarded - the reach is the
-        // only thing left to learn from. The reach it reports (27 s) is far above what one recovery may
-        // apply, so the growth cap holds the window to 1.25 x 8.75 = 10.9 s. Chapter 5's announcement,
-        // 9.5 s after its own silence, is the proof something was learned all the same: out of reach at
-        // 8.75 s, inside the capped width, and being the last mark nothing could recover it if it were
-        // missed.
+        // Chapter 2's 3 s jingle asks for an 8.75 s window and gets the 25 s MinAdaptiveProbeSeconds
+        // floor. Chapter 3's announcement sits 35 s after its silence, so that window misses it and
+        // only the ceiling re-probe finds it. The 1 s silence at 934 is what makes this the
+        // BARDIOC.m4b shape rather than a case the existing machinery already handles: the mark
+        // anchors to *that* silence, so the jingle observation measures ~0 s, falls under its 2 s
+        // floor and is discarded - the reach is the only thing left to learn from. The reach it
+        // reports (42 s) is far above what one recovery may apply, so the growth cap holds the window
+        // to 1.25 x 25 = 31.3 s. Chapter 5's announcement, 28 s after its own silence, is the proof
+        // something was learned all the same: out of reach at 25 s, inside the capped width, and
+        // being the last mark nothing could recover it if it were missed.
         var (result, log, _) = await DetectWithLogAsync(
             Options("--verbose"),
-            [new(595, 600), new(895, 900), new(919, 920), new(1195, 1200), new(1495, 1500)],
+            [new(595, 600), new(895, 900), new(934, 935), new(1195, 1200), new(1495, 1500)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(600, Seg(3.0, " Chapter two."));
-                s.Add(900, Seg(20.0, " Chapter three."));
+                s.Add(900, Seg(35.0, " Chapter three."));
                 s.Add(1200, Seg(3.0, " Chapter four."));
-                s.Add(1500, Seg(9.5, " Chapter five."));
+                s.Add(1500, Seg(28.0, " Chapter five."));
             },
             new FakeVad { Speech = [new(0, 3600)] });
 
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3, 4, 5], result.Chapters.Select(c => c.Number));
-        // 22 s of reach (the phrase ends 2 s after its 20 s onset) plus the 5 s phrase margin.
-        Assert.Contains(log, l => l.Contains("chapter 3 needed 22 s of probe window") &&
-                                  l.Contains("widened to 10.9 s (capped from 27 s)"));
-        Assert.Contains(log, l => l.Contains("jingle probe window restored to 10.9 s"));
+        // 37 s of reach (the phrase ends 2 s after its 35 s onset) plus the 5 s phrase margin.
+        Assert.Contains(log, l => l.Contains("chapter 3 needed 37 s of probe window") &&
+                                  l.Contains("widened to 31.3 s (capped from 42 s)"));
+        Assert.Contains(log, l => l.Contains("jingle probe window restored to 31.3 s"));
     }
 
     [Fact]
@@ -2985,10 +3058,10 @@ public sealed class ChapterDetectorTests : IDisposable
         //     anchor from the VAD region (Silence = null), tightens nothing, and finds chapter
         //     three - so the result must be [1, 2, 3], not [1, 2].
         //   * --max-jingle-length: the buggy path measures the jingle as phrase - pause.End =
-        //     32 s and keeps the window at ~45 s; the correct path measures the VAD region (5 s)
-        //     and narrows it to ~11 s. The spurious 20 s music-bed region at 700-720 must then
-        //     be skipped (too long to be this book's jingle) rather than probed.
-        var (result, _, audio) = await DetectFullAsync(
+        //     32 s and asks for a ~45 s window; the correct path measures the VAD region (5 s),
+        //     asks for ~11 s and lands on the 25 s MinAdaptiveProbeSeconds floor. The resized
+        //     window in the log is what separates the two.
+        var (result, log, _) = await DetectWithLogAsync(
             Options("--quick-marks", "--mark-before-jingle", "--max-jingle-length", "auto"),
             [new(610, 613), new(1000, 1002)],
             s =>
@@ -3009,7 +3082,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
         AssertContainsChapter(new DetectedChapter(2, 640), result.Chapters);       // jingle start, not 612.5
-        Assert.DoesNotContain(700.0, audio.DecodeStarts);                    // window narrowed to ~11 s
+        Assert.Contains(log, l => l.Contains("jingle probe window resized to 25 s"));
     }
 
     [Fact]
@@ -4099,11 +4172,11 @@ public sealed class ChapterDetectorTests : IDisposable
         // got merged back into the region (the ComputeNonSpeechRegions short-speech-gap merge).
         // The phrase (at 805) sits inside that region. --max-jingle-length auto must measure the
         // jingle up to the phrase (min(regionEnd, phrase) - regionStart = 5 s), not the full 25 s
-        // region span: 5 s resizes the window to ~11 s, so chapter three's 15 s decoy region at
-        // 900 is skipped (too long for this book's jingle); the inflated 25 s would have kept the
-        // window wide enough to probe it. A false pause (770-773) triggers the probe so the jingle
-        // is resolved by region lookup.
-        var (result, _, audio) = await DetectFullAsync(
+        // region span. The resized window is what says which it measured: 5 s asks for ~11 s and is
+        // lifted to the MinAdaptiveProbeSeconds floor of 25 s, where the inflated 25 s would have
+        // asked for 1.25 x 25 + 5 = 36.3 s and got it. A false pause (770-773) triggers the probe so
+        // the jingle is resolved by region lookup.
+        var (result, log, _) = await DetectWithLogAsync(
             Options("--mark-before-jingle", "--max-jingle-length", "auto"),
             [new(770, 773)],
             s =>
@@ -4115,7 +4188,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
         AssertContainsChapter(new DetectedChapter(2, 800), result.Chapters); // jingle start, clipped length fed to auto
-        Assert.DoesNotContain(900.0, audio.DecodeStarts);              // window narrowed to ~11 s, decoy skipped
+        Assert.Contains(log, l => l.Contains("jingle probe window resized to 25 s"));
     }
 
     [Fact]

@@ -122,11 +122,12 @@ abchapterize "My Audiobook.m4b"
 ```
 
 That's it. On the first run, the speech model is downloaded automatically
-(about 1.6 GB for the default model — one time only, with a progress display).
+(about 490 MB for the default model — one time only, with a progress display;
+the 1.6 GB pass-3 model follows later, and only if a chapter goes missing).
 Then the audiobook is scanned and the chapter marks are written:
 
 ```
-Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070, auto language detection), 1 file(s) to process.
+Whisper model "small" loaded (Vulkan backend on NVIDIA GeForce GTX 1070, auto language detection), pass 3 model "turbo" (loaded on first use), 1 file(s) to process.
 My Audiobook.m4b: 23 chapter(s) written (1-23) + intro, language: en (p=1.00)
 ```
 
@@ -231,9 +232,9 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
 | `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched at any point in the file as often as it occurs (up to 100 marks per file), but must be announced just as a chapter phrase must. Titles may reference the phrase's capturing groups as `$1`, `$2` or by name. Repeatable; never localized, though a mapping may open with a `[xx]` tag to restrict it to files in that language. |
 | `-U`, `--custom-file <path>` | Read `--custom` mappings from a text file, one per line (blank and `#` lines ignored). |
-| `--ignore-chapter-numbers` | Detect chapter announcements as usual but form no opinion about their numbers: the spoken number still reaches the title, nothing checks the sequence. Passes 2.5 and 3 never run and nothing is ever tagged `.missing-marks`. Cannot combine with `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` or `--verify`. |
-| `-m`, `--model <name>` | Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default), `large`, or `custom:<path>` for a GGML model file of your own (used as-is: not downloaded, not checksum-verified, ranked against the built-in models by file size). `tiny`/`base` are not recommended for real audiobooks (see [Tuning tips](#tuning-tips)). |
-| `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model`, `custom:<path>` included (default: same as `--model`). Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. Loaded lazily, only if pass 3 runs. |
+| `--ignore-chapter-numbers` | Detect chapter announcements as usual but form no opinion about their numbers: the spoken number still reaches the title, nothing checks the sequence. Passes 2.5 and 3 never run and nothing is ever tagged `.missing-marks`. Cannot combine with `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number` or `--verify`. |
+| `-m`, `--model <name>` | Whisper model used to find the chapters: `tiny`, `base`, `small` (default), `medium`, `turbo`, `large`, or `custom:<path>` for a GGML model file of your own (used as-is: not downloaded, not checksum-verified, ranked against the built-in models by file size). Bigger is not better here — this model listens to short windows a few seconds long, and the large ones are markedly worse at those (see [Tuning tips](#tuning-tips)). `tiny`/`base` are not recommended for real audiobooks either. |
+| `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model`, `custom:<path>` included (default: `turbo`, or whatever `--model` says if you set that and not this). Pass 3 transcribes long stretches of audio, where the heavier models really are the better recognizers. Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. A model heavier than `--model`'s also enables pass 2.5 — which the default pairing does. Loaded lazily, only if pass 2.5 or pass 3 runs. |
 | `-C`, `--cpu-only` | Force Whisper onto the CPU backend instead of the fastest available hardware acceleration. The Silero VAD pre-pass already always runs on CPU regardless of this option, so it only affects Whisper. |
 | `--use-gpu <name>` | Run Whisper on the GPU whose name contains `<name>`, case-insensitively — `--use-gpu gtx`, `--use-gpu uhd`. Only needed to override the automatic preference for a single discrete GPU, or to choose between several discrete ones. A request matching no GPU, or more than one, is an error listing the real names. Vulkan only. See [picking a GPU](doc/manual.md#picking-a-gpu-on-a-multi-gpu-machine). |
 | `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Where the walk ends on a pause, the mark backs into it by `-k` seconds; a chapter with no jingle at all keeps its ordinary placement. Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
@@ -249,8 +250,8 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | --- | --- |
 | `-a`, `--early-abort <minutes>` | Always on (default: 60; `0` disables it). Give up on a file, unchanged, once this many minutes of play time have been probed with no chapter found — avoids transcribing a whole book that plainly isn't going to yield any. Only applies to a fresh detection run. |
 | `-e`, `--expected-start-chapter <n>` | For a split-book part that doesn't start at chapter 1: the number this file is expected to start at. Without it (the default), whatever number pass 2 finds first is trusted outright and nothing below it is ever searched for. With it, a first chapter found *below* `<n>` aborts the file outright, unchanged; a first chapter found *above* `<n>` has pass 3 search for the missing numbers down to `<n>`, tagging the file `.missing-marks-…` if it still can't find them all. Only applies to a fresh detection run. |
-| `-L`, `--trailing-scan` | Transcribe everything after the last chapter found, through to the end of the file, looking for further chapters (default: off). A missing chapter is normally spotted as a hole in the number sequence, which needs a known chapter on either side of it — so one missing *after* the last chapter found is the one case nothing notices, and the file comes out looking complete. This closes that hole, but there are no expected numbers to satisfy here, so the scan can never stop early: every file pays a full final chapter's worth of transcription, whether or not anything was wrong. |
-| `--chapter-count <n>` | How many numbered chapters this book has, exactly (default: no expectation). Takes one file, never a folder. The informed version of `--trailing-scan`: knowing the count, the run knows which numbers are still owed after the last one found, hunts only those, and transcribes nothing at all when the count is already reached. Doubles as `--max-chapter-number` (a higher number is discarded as a mishearing), so the two cannot be combined. Reaching the count does not end the search — an epilogue or a `--custom` phrase may still follow. |
+| `--no-trailing-scan` | Skip the transcription of everything after the last chapter found (default: it runs). A missing chapter is normally spotted as a hole in the number sequence, which needs a known chapter on either side of it — so one missing *after* the last chapter found is the one case nothing else notices, and the file would come out looking complete, with nothing reported missing and no `.missing-marks` tag. Closing that hole costs a final chapter's worth of transcription on every file, since there are no expected numbers to satisfy and the scan can never stop early. Turn it off for a library you already know is sound, or give `--chapter-count` instead. Suppressed automatically when `--chapter-count` is given. |
+| `--chapter-count <n>` | How many numbered chapters this book has, exactly (default: no expectation). Takes one file, never a folder. The informed version of the trailing scan, and it replaces it: knowing the count, the run knows which numbers are still owed after the last one found, hunts only those, and transcribes nothing at all when the count is already reached. Doubles as `--max-chapter-number` (a higher number is discarded as a mishearing), so the two cannot be combined. Reaching the count does not end the search — an epilogue or a `--custom` phrase may still follow. |
 | `-N`, `--max-chapter-number <n>` | Highest chapter number this book plausibly has (default: no limit). A detected chapter numbered above `<n>` is discarded as a mishearing — without it, one misheard "chapter 510" in a twelve-chapter book turns everything in between into a gap to hunt for. Not to be confused with `--max-chapters` above, which counts *pre-existing* marks. |
 | `-V`, `--verify` | Check pre-existing chapter marks against the audio instead of trusting them blindly (or requiring `--force`). The check assumes each mark is titled with a chapter number that the narrator announces right there: marks that check out are kept, and only the stretch(es) around a mark that doesn't are redetected. So this is **not** a read-only report. Where the failures outnumber the confirmations, the file is skipped with a warning and left exactly as it was — which is what happens to retailer marks that lump several book chapters into one entry, since those cannot pass the check. Cannot combine with `--force` or `--import`. |
 | `--fix` | Requires `--verify`. Lets it correct a mark instead of only reporting on it: a mark whose announcement is confirmed but which sits a little away from it is moved onto it and the file rewritten. Only a nudge — a mark already within a quarter of a second is left alone, and so is one more than 30 seconds out, which is not a mark that drifted but one that means something else. Unconfirmed marks are untouched and still go to the usual gap recovery. |
@@ -413,14 +414,14 @@ use `.`, whatever the machine's locale says.
    at a time, longest first, down to half a second under the setting, stopping as
    soon as the missing chapters turn up — which is what saves a book whose
    narrator's chapter break happens to land right on the limit. Only ever happens
-   when `--pass3-model` names a *better* model than pass 2's, so it stays
-   something you opt into.
+   when `--pass3-model` names a *better* model than pass 2's, which by default it
+   does: `small` probes, `turbo` gets the second opinion.
 3. **Pass 3 — gap filling (only if needed):** if the chapter numbers found so
    far have sequence gaps, the regions where the missing chapters must be
    hiding are transcribed completely, in roughly 10-minute chunks. Pass 3
    can use a different model than pass 2 (`--pass3-model`). A chapter missing
    after the *last* one found leaves no such gap — nothing above it to notice
-   its absence — which is what `--trailing-scan` is for.
+   its absence — which is what the trailing scan below is for.
 3b. **Pass 3.5 — the shifted re-read:** a gap that survives being transcribed end
    to end is a misreading, not unread audio — every second of it was read. The
    likeliest misreading is framing: Whisper decodes in 30-second windows, and an
@@ -430,8 +431,9 @@ use `.`, whatever the machine's locale says.
    read once more with every decode shifted by half a window, putting whatever
    sat on a border as far from one as it can get. Runs unless `--pass3-model`
    names a *lighter* model than `--model` — the one setting that says outright
-   the stragglers aren't worth more time — and always for `--trailing-scan`,
-   where asking for the scan says the opposite. If a gap still
+   the stragglers aren't worth more time. The trailing scan below is read once
+   only either way: it already runs on every file, and reading audio nothing
+   suspects twice would double that standing cost. If a gap still
    remains after all that, the chapters that *were* found are written and the
    file is renamed
    with a `.missing-marks-…` tag listing the still-missing numbers, rather than
@@ -448,6 +450,16 @@ use `.`, whatever the machine's locale says.
    with a complete chapter sequence takes the tag back off (and, with `--debug`,
    brings the log beside it along, replacing the earlier run's).
 
+3c. **The trailing scan:** everything after the last chapter found is transcribed
+   too, on spec, because that is the one place a missing chapter leaves no trace.
+   A gap is spotted as a hole in the numbering, and a hole at the very end has
+   nothing above it to be a hole *in* — so without this the file is written out
+   looking complete. It costs a final chapter's worth of transcription on every
+   file and can never stop early, having no expected numbers to satisfy;
+   `--no-trailing-scan` buys that time back for a library already known to be
+   sound, and `--chapter-count` replaces it with a search that knows what it is
+   looking for. Skipped when no chapter was found at all, and after an
+   `--early-abort`.
 `--custom "phrase:Title;..."` adds marks for anything else a book announces —
 an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` (with
 `$1`-style group references in the title), and is matched at any point in the
@@ -483,23 +495,29 @@ keeps its exact position.
   know the jingle is consistently short, an explicit `-X 15` narrows the
   window and speeds things up further; if there's no jingle at all, `-X 0`
   narrows it all the way back down and skips the VAD pre-pass too.
-- **Accuracy vs. speed:** `--model turbo` (default) is a good balance;
-  `large` is the most accurate and slowest. Going smaller than `small` is
-  not advisable for real audiobooks: chapter detection stands or falls with
-  the recognizer catching a single short phrase, and `tiny` in particular
-  mishears or drops chapter announcements so often that it is supported
-  mostly for completeness (quick experiments, toy examples).
-- **A faster pairing worth trying:** `-m small -M turbo` lets the small,
-  quick model do the many short probes and keeps `turbo` in reserve for the
-  chapters it couldn't resolve. In testing on English and German audiobooks
-  this came out meaningfully faster with the same chapter marks at the end —
-  worth a `--dry-run` comparison on your own books before adopting it, since
-  it does lean on a smaller model for most of the work.
+- **Accuracy vs. speed:** the default pairing is `-m small -M turbo`, and it is
+  not the compromise it looks like. The model named by `--model` listens to
+  short windows a few seconds long, and the large models are *worse* at those
+  than `small` is: they tend to hand back the whole window as one run-on
+  sentence with the announcement missing from it, which on one French audiobook
+  cost six of twenty-five chapters. `--pass3-model` handles the long
+  transcriptions, where the usual ranking does hold, so `turbo` is kept in
+  reserve for the chapters `small` could not resolve — and is loaded only if
+  that happens. The small model is also several times faster, so this is not a
+  trade at all.
+- **When to reach for something heavier:** `-M large` for one last, best-effort
+  attempt at a book that keeps losing chapters. Raising `--model` itself is
+  worth trying on a book whose narrator is hard to make out, but check the result
+  rather than assuming it improved. Going *below* `small` is not advisable for
+  real audiobooks: detection stands or falls with catching a single short phrase,
+  and `tiny` in particular mishears or drops chapter announcements so often
+  that it is supported mostly for completeness (quick experiments, toy examples).
 - **Memory:** a model needs somewhat more memory to run than its download size —
   whisper.cpp's own
   [figures](https://github.com/ggml-org/whisper.cpp#memory-usage) are ~852 MB
-  for `small`, ~2.1 GB for `medium` and ~3.9 GB for `large`, with the default
-  `turbo` landing around 2.2 GB. (Figures quoted for OpenAI's Python
+  for the default `small`, ~2.1 GB for `medium` and ~3.9 GB for `large`, with
+  `turbo` landing around 2.2 GB (loaded alongside it only once pass 2.5 or pass 3
+  actually runs). (Figures quoted for OpenAI's Python
   implementation are two to three times higher; they do not apply here.) It
   comes out of video memory on a GPU backend and out of system RAM on a CPU
   backend, and only ever one copy of it: files are processed one at a time. The

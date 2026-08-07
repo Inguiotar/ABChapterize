@@ -107,8 +107,8 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
 /// the same framing, so the model is the only variable), and otherwise - or in addition, when the
 /// heavier model reads it the same way - the pass-2 model on differently framed windows over the
 /// same announcement (<see cref="SuspectGapReframes"/>). The second path matters because the
-/// upgrade path is opt-in and the mishearing is not: a run without <c>--pass3-model</c> is exactly
-/// the run that can least afford a needless Pass 3.
+/// upgrade path can be switched off and the mishearing cannot: a run that has levelled the two
+/// models (<c>-m turbo</c>, say) is exactly the run that can least afford a needless Pass 3.
 /// </para>
 /// <para>
 /// One rule decides both what is worth questioning (<see cref="NumberBounds.WorthQuestioning"/>)
@@ -191,8 +191,8 @@ internal sealed class SuspectNumberMender
     /// "Chapter 13", "chapitre ban 5" for a slurred "vingt-cinq". Which of those a given stretch of
     /// audio comes out as follows the window framing, so re-framing it is a genuinely different
     /// question and not a re-roll. Bringing it to Pass 2 closes the one hole the Pass 3 version
-    /// cannot reach: an announcement past the last detected chapter is in no gap at all, so without
-    /// <c>--trailing-scan</c> nothing ever transcribes it again. That is how the final chapter of
+    /// cannot reach: an announcement past the last detected chapter is in no gap at all, so under
+    /// <c>--no-trailing-scan</c> nothing ever transcribes it again. That is how the final chapter of
     /// "Paula Monti" was lost on 2026-07-31 - heard as "1ère partie, chapitre ban 5, douleur" at
     /// 4:23:03 and never looked at again. Re-running that file with this in place, the upgrade model
     /// read the same window as chapter 25 on the first attempt, before either re-framing was needed.

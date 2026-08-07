@@ -272,7 +272,9 @@ By default (`--max-jingle-length auto`), the jingle probe window self-tightens
 the same way. Starting from the second jingle mark found (the first is
 excluded — the gap before it isn't necessarily representative), the window
 resizes to 1.25x the longest jingle actually observed so far plus the
-5-second phrase margin, capped at the 45 s ceiling — narrowing once a book's
+5-second phrase margin, capped at the 45 s ceiling and never allowed below 25
+seconds — any narrower and Whisper starts padding the window out and
+misreading it — narrowing once a book's
 real jingle length is known, and widening again if a longer one turns up.
 Giving `--max-jingle-length` an explicit numeric value (including `0`)
 disables this and keeps the window fixed at that value throughout. See the
@@ -365,11 +367,13 @@ taken as-is, not searched past.
 A chapter missing *after* the last one found is the one case none of this can
 notice: a gap is a hole in the number sequence, which needs a known chapter on
 either side of it, and there is nothing above the last one to compare against.
-Two options close it. `--chapter-count` says how many numbered chapters the book
-has, so the run knows which numbers are still owed and hunts only those, and only
-when some are; `--trailing-scan` transcribes the stretch anyway — from the last
-chapter found through to the end of the file — at the price of doing so on every
-file, every run, whether or not anything is wrong. See
+The trailing scan closes it by transcribing that stretch anyway — from the last
+chapter found through to the end of the file — and it runs by default, at the
+price of doing so on every file, every run, whether or not anything is wrong.
+`--no-trailing-scan` switches it off. `--chapter-count` is the informed
+alternative: told how many numbered chapters the book has, the run knows which
+numbers are still owed, hunts only those, and does nothing at all when none are 
+— so giving a count suppresses the blind scan entirely. See
 [Detection behaviour](#detection-behaviour).
 
 ### Pass 3.5 — the shifted re-read
@@ -387,8 +391,10 @@ piece of it — is read once more with every decode shifted by 15 seconds, half 
 window, which puts whatever sat on a border as far from one as it can get.
 This runs unless `--pass3-model` names a *lighter* model than `--model`: that is
 the one setting which unambiguously says the stragglers are not worth more time.
-For `--trailing-scan` it always runs, since asking for that scan is itself the
-statement that they are.
+The blind trailing scan is the exception in the other direction — it is read once
+and never twice, because it already runs on every file and reading audio nothing
+suspects a second time would double that standing cost. A trailing hunt that does
+know what it is after (`--chapter-count`) goes by the same rule the gaps do.
 
 If a gap *between* detected chapters (or, with `--expected-start-chapter`,
 before the first one) still remains after pass 3, the chapters that *were*
@@ -542,7 +548,7 @@ chapter announcements.
 
 The options that reason in chapter numbers are rejected rather than silently
 ignored: `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
-`--trailing-scan` and `--verify`. `--chapter-phrase` and `--title` remain
+`--chapter-count` and `--verify`. `--chapter-phrase` and `--title` remain
 perfectly useful and are accepted.
 
 ### The intro chapter
@@ -821,20 +827,27 @@ Two things are worth knowing before reaching for it:
 : Detect chapter announcements as usual, but form no opinion about the numbers
   in them: no sequence, no gaps, no missing chapters. The spoken number still
   reaches the title. Cannot be combined with `--pass3-model`,
-  `--expected-start-chapter`, `--max-chapter-number`, `--trailing-scan` or
+  `--expected-start-chapter`, `--max-chapter-number`, `--chapter-count` or
   `--verify`. See
   [Detecting chapters without believing their numbers](#detecting-chapters-without-believing-their-numbers).
 
 `-m`, `--model <name>`
-: Whisper model: `tiny`, `base`, `small`, `medium`, `turbo` (default) or
-  `large`. `tiny` and `base` are not recommended for real audiobooks; see
-  [section 8](#8-whisper-models). `custom:<path>` uses a GGML model file of
-  your own instead — see [Using your own model](#using-your-own-model).
+: Whisper model used to find the chapters: `tiny`, `base`, `small`
+  (default), `medium`, `turbo` or `large`. Bigger is not better here — this
+  model listens to short windows a few seconds long, and the large ones are
+  markedly worse at those; see [section 8](#8-whisper-models). `tiny` and
+  `base` are not recommended for real audiobooks either. `custom:<path>` uses
+  a GGML model file of your own instead — see
+  [Using your own model](#using-your-own-model).
 
 `-M`, `--pass3-model <name>`
 : Whisper model to use for [pass 3](#pass-3--gap-filling-only-when-needed)
-  (gap filling) only; same choices as `--model` including `custom:<path>`, and
-  defaulting to whatever `--model` is. Use a lighter model to make pass 3
+  (gap filling) only; same choices as `--model` including `custom:<path>`.
+  Defaults to `turbo`, or to whatever `--model` says if you set that and not
+  this — so `-m large` means large throughout rather than large probing and a
+  quietly lighter pass 3. Pass 3 transcribes long, naturally framed stretches of
+  audio, which is where the heavier models really are the better recognizers.
+  Use a lighter model to make pass 3
   faster (when you expect to fix any stragglers by hand anyway), or `large` for
   one last, best-effort attempt at the chapters the main model missed. Naming a
   *bigger* model here than `--model`'s also enables
@@ -1026,7 +1039,11 @@ Two things are worth knowing before reaching for it:
   excluded for the same reason as `--min-silence-length auto` excludes the
   first silence — the gap before it isn't necessarily representative),
   resizes the probe window to 1.25x the longest jingle actually observed so
-  far plus the 5-second phrase margin, never past the original ceiling. The
+  far plus the 5-second phrase margin, never past the original ceiling and never
+  below 25 seconds — a shorter window than that is padded out by Whisper before
+  it is transcribed, and the recognizers are markedly worse at reading the
+  result. An explicit value is honoured to the second either way; only the
+  automatic narrowing has a floor. The
   second mark narrows the window down from the ceiling; after that it only
   ever widens again (when a longer jingle turns up) — the exact mirror of
   `--min-silence-length auto`'s lower-only threshold, and for the mirrored
@@ -1168,24 +1185,29 @@ skipped (reported as "skipped").
   an unresolved gap between two detected chapters already is. Only applies
   to a fresh, from-scratch run, the same restriction as `--early-abort`.
 
-`-L`, `--trailing-scan`
-: Transcribe everything after the last chapter found, through to the end of the
-  file, looking for further chapters (default: off). Pass 3 spots a missing
-  chapter as a hole in the number sequence, which needs a known chapter on
-  either side of it — so a chapter missing *after* the last one found is the
-  one case nothing can notice, and the file is written out looking complete.
-  This closes that hole. The catch is that it is not a safety net that only
-  costs something when it fires: with no expected numbers to satisfy, the scan
-  can never stop early, so every file pays a full final chapter's worth of
-  transcription time whether or not anything was wrong. Reach for it when a
-  book's last chapter matters more than the run time — and note that it takes
-  that at its word: the tail is also given the shifted re-read of
-  [pass 3.5](#pass-35--the-shifted-re-read), whatever `--pass3-model` says, so
-  the price is two passes over it rather than one. Does nothing when no
-  chapter was found at all — there is no "last chapter" to scan from — nor
-  after an `--early-abort` or `--expected-start-chapter` abort. If you happen to
-  know how many chapters the book has, `--chapter-count` answers the same
-  question for a fraction of the time.
+`--no-trailing-scan`
+: Skip the transcription of everything after the last chapter found (default: it
+  runs). No short form. Pass 3 spots a missing chapter as a hole in the number
+  sequence, which needs a known chapter on either side of it — so a chapter
+  missing *after* the last one found is the one case nothing else can notice, and
+  the file would be written out looking complete: nothing reported missing, no
+  `.missing-marks` tag, nothing in the log to go on. The trailing scan closes
+  that hole, and it is on by default because a run that silently drops the end of
+  a book is worse than a run that takes a few minutes longer.
+
+  The cost is real and worth knowing: it is not a safety net that only costs
+  something when it fires. With no expected numbers to satisfy the scan can never
+  stop early, so every file pays a final chapter's worth of transcription time
+  whether or not anything was wrong. It is read once and never twice — the
+  shifted re-read of [pass 3.5](#pass-35--the-shifted-re-read) does not apply to
+  it — which bounds that price at one pass over the tail.
+
+  Turn it off for a library you have already checked, or where the last chapter
+  matters less than the run time. Nothing is scanned anyway when no chapter was
+  found at all — there is no "last chapter" to scan from — nor after an
+  `--early-abort` or `--expected-start-chapter` abort. If you happen to know
+  how many chapters the book has, `--chapter-count` answers the same question
+  for a fraction of the time, and giving it switches the blind scan off for you.
 
 `--chapter-count <n>`
 : How many numbered chapters this book has, exactly (default: no expectation).
@@ -1193,13 +1215,14 @@ skipped (reported as "skipped").
   statement about one particular book, and applied to a library it would tag
   most of it as incomplete. No short form.
 
-  This is the informed version of `--trailing-scan` above, aimed at the same
+  This is the informed version of the trailing scan above, aimed at the same
   blind spot: a chapter missing after the last one found has nothing above it
   to make its absence visible. Told the count, the run knows exactly which
   numbers are still owed, hunts only those, and stops the moment they turn up —
-  where `--trailing-scan` has to transcribe the whole tail on spec, every time,
-  even on a book that was already complete. When the count is reached, nothing
-  is transcribed at all. When it is not, the chapters still missing are named
+  where the blind scan has to transcribe the whole tail on spec, every time, even
+  on a book that was already complete. Giving a count therefore replaces that
+  scan rather than adding to it, and when the count is reached nothing is
+  transcribed at all. When it is not, the chapters still missing are named
   and the file is tagged `.missing-marks-…` like any other unresolved gap.
 
   It is a cap as well: a chapter numbered above the count is discarded as a
@@ -1631,8 +1654,8 @@ touching Whisper at all.
   `--custom-file`, `--ignore-chapter-numbers`, `--model`, `--pass3-model`,
   `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
   `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
-  `--expected-start-chapter`, `--max-chapter-number`,
-  `--trailing-scan`, `--verify` — nor with the title options `--title`,
+  `--expected-start-chapter`, `--max-chapter-number`, `--chapter-count`,
+  `--no-trailing-scan`, `--verify` — nor with the title options `--title`,
   `--intro-title`, `--prologue-title` and `--epilogue-title`, since an
   imported mark carries the title the sidecar gives it and no intro mark is
   prepended — nor with `--export`, `--revert` or
@@ -1861,10 +1884,30 @@ is a self-contained job that needs no knowledge of the rest of the codebase.
 | --- | --- | --- | --- |
 | `tiny` | ggml-tiny.bin | ~75 MB | fastest; not suitable for real audiobooks |
 | `base` | ggml-base.bin | ~140 MB | still error-prone; not recommended |
-| `small` | ggml-small.bin | ~465 MB | smallest model with dependable results |
+| `small` | ggml-small.bin | ~465 MB | **`--model` default** — the best prober, see below |
 | `medium` | ggml-medium.bin | ~1.5 GB | |
-| `turbo` | ggml-large-v3-turbo.bin | ~1.6 GB | **default** — near-large accuracy, much faster |
+| `turbo` | ggml-large-v3-turbo.bin | ~1.6 GB | **`--pass3-model` default** — near-large accuracy, much faster |
 | `large` | ggml-large-v3.bin | ~3.1 GB | most accurate, slowest |
+
+The two options are set to different models on purpose, and the pairing matters
+more than either value on its own.
+
+`--model` does the finding, and it works in short windows — a pause, perhaps a
+jingle, an announcement, a few seconds in all. Whisper always processes audio in
+30-second chunks and pads anything shorter out to fill one, and the large models
+handle that padding badly: they tend to hand back the whole window as a single
+run-on sentence with the announcement missing from it altogether. Smaller models
+do not do this. On one French audiobook the difference was six chapters out of
+twenty-five, lost by the larger model and found by `small` in the very same
+windows. `small` is also several times faster, so it is the default for the
+probing and there is nothing being traded away.
+
+`--pass3-model` does the reading-out-loud: long, naturally framed stretches of
+audio, where the usual ranking does hold and a heavier model genuinely hears
+more. So it defaults to `turbo`, which is loaded only if a chapter actually
+goes missing — and, being heavier than the probing model, also brings
+[pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model) and
+pass 2's second reading of an implausible chapter number into play.
 
 A word of warning about the small end of the scale: chapter detection hinges
 on the recognizer catching one short, isolated phrase per chapter — there is
@@ -1873,22 +1916,15 @@ announcement leaves a sequence gap or a mismarked chapter. `tiny` mishears
 or drops chapter announcements far too often for that to be reliable; its
 support exists mostly for completeness — quick experiments, toy examples,
 or extremely constrained machines. `base` fares somewhat better but is
-still error-prone, especially for non-English audio. For real audiobooks,
-use `small` or bigger; the default `turbo` is the best choice on almost
-any hardware that can run it.
+still error-prone, especially for non-English audio. For real audiobooks, do not
+go below `small`.
 
-If you would rather trade some of that safety margin for speed, pair the two
-model options instead of lowering `--model` on its own: `-m small -M turbo`
-runs the many short probe transcriptions with the quick model and keeps
-`turbo` for the chapters `small` could not resolve — which, because `-M` then
-names the *heavier* model, also brings
-[pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model) and
-pass 2's second reading of an implausible chapter number into play. In testing
-on English and German audiobooks this was meaningfully faster than plain
-`turbo` and produced the same marks. It has not been checked across every
-supported language, and it does put a smaller model in charge of most of the
-listening, so compare a `--dry-run` against the default on one of your own
-books before making it a habit.
+Raising `--model` is worth trying on a book whose narrator is genuinely hard to
+make out, but check the result rather than assuming it improved — and note that
+naming `--model` alone moves the pass-3 model with it, so `-m large` gives you
+large in both roles. `-M large` on its own is the safer way to spend more time:
+one last, best-effort attempt at the chapters that went missing, and nothing
+changed about the ones that did not.
 
 ### Memory requirements
 
@@ -1905,9 +1941,10 @@ the engine underneath ABChapterize, publishes its own
 | `large` | 2.9 GiB | ~3.9 GB |
 
 That table has no `turbo` row — it predates the model. Expect roughly 2.2 GB
-for the default model, consistent with `turbo` having about as many parameters
-as `medium` (809 M against 769 M) on a larger file. Treat that one as an
-estimate rather than a published number.
+for it, consistent with `turbo` having about as many parameters as `medium`
+(809 M against 769 M) on a larger file. Treat that one as an estimate rather than
+a published number. A default run holds `small`'s ~852 MB throughout and adds
+`turbo`'s share only once pass 2.5 or pass 3 actually runs.
 
 Be aware that figures quoted for Whisper elsewhere are often much higher —
 OpenAI's
@@ -2380,9 +2417,9 @@ what went wrong.
 
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes),
 `--max-jingle-length` (smaller probe windows, or `0` if there's no jingle at
-all), a smaller `--model` (or a
-smaller `--pass3-model` if only the gap-filling pass drags). Check that the
-startup line reports a GPU backend, not CPU.
+all), `--no-trailing-scan` (skips a final chapter's worth of transcription on
+every file), and a smaller `--pass3-model` if only the gap-filling pass drags.
+Check that the startup line reports a GPU backend, not CPU.
 
 **Model download fails** — the error message includes manual installation
 steps; see [section 8](#8-whisper-models). A checksum-mismatch error means
