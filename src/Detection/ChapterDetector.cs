@@ -1745,7 +1745,8 @@ public sealed class ChapterDetector
                   $"({r.EndSeconds - r.StartSeconds:0.00} s)");
         foreach (var j in jingles)
             debug($"  jingle {FormatTimestamp(j.StartSeconds)}-{FormatTimestamp(j.EndSeconds)} " +
-                  $"({j.LengthSeconds:0.00} s)");
+                  $"({j.LengthSeconds:0.00} s, speech at {FormatTimestamp(j.AnnouncementSeconds)}" +
+                  (j.BridgedBlips > 0 ? $", {j.BridgedBlips} bridged blip(s)" : "") + ")");
     }
 
     /// <summary>

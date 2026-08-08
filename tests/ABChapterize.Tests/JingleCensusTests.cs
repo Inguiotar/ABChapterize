@@ -57,6 +57,31 @@ public class JingleCensusTests
         Assert.Equal(8, jingle.LengthSeconds, 3);
     }
 
+    // The transient is counted, not just bridged: how often Silero picked a vocal out of the music
+    // is what tells a plain instrumental sting apart from one with a voice in it.
+    [Fact]
+    public void Measure_BridgedTransients_AreCountedOnTheJingleTheyLieIn()
+    {
+        var jingles = JingleCensus.Measure(
+            [new(0, 100), new(104, 104.3), new(108, 108.2), new(112, 130)], []);
+
+        var jingle = Assert.Single(jingles);
+        Assert.Equal(2, jingle.BridgedBlips);
+    }
+
+    // Where the speech behind a jingle resumes is not where the music stops: a hush in between
+    // belongs to neither, and the announcement is what a window crossing the jingle has to reach.
+    [Fact]
+    public void Measure_HushBetweenTheMusicAndTheVoice_LeavesTheAnnouncementPastTheJingleEnd()
+    {
+        var jingles = JingleCensus.Measure(
+            [new(0, 100), new(116, 130)], [new(112, 116)]);
+
+        var jingle = Assert.Single(jingles);
+        Assert.Equal(112, jingle.EndSeconds, 3);
+        Assert.Equal(116, jingle.AnnouncementSeconds, 3);
+    }
+
     // The case the region list cannot report at all, since it keeps a region only for its longest
     // *contiguous* run: two 1.5 s halves of one sting either side of a 0.3 s transient are 3.3 s of
     // music, and the census is the thing that says so.

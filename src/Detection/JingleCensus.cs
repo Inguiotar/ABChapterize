@@ -12,18 +12,25 @@ namespace ABChapterize.Detection;
 /// silencedetect did not call silence, which on an audiobook is music.</summary>
 /// <param name="StartSeconds">Where the audible non-speech begins.</param>
 /// <param name="EndSeconds">Where it ends.</param>
-internal readonly record struct Jingle(double StartSeconds, double EndSeconds)
+/// <param name="AnnouncementSeconds">Where VAD hears speech again after this jingle - at a chapter
+/// transition, the announcement itself. This, not <see cref="EndSeconds"/>, is what a probe window
+/// crossing the jingle has to arrive at: the two differ whenever a hush sits between the music and
+/// the voice, or the music resumes after an interior dip the census had to cut.</param>
+/// <param name="BridgedBlips">How many VAD "speech" transients shorter than
+/// <see cref="TransientSpeechFloorSeconds"/> lie inside this jingle, i.e. how often Silero picked a
+/// vocal- or rhythm-like moment out of the music. Zero for a clean instrumental sting.</param>
+internal readonly record struct Jingle(
+    double StartSeconds, double EndSeconds, double AnnouncementSeconds, int BridgedBlips)
 {
     /// <summary>How long the stretch runs, the figure <see cref="JingleCensus"/> reports on.</summary>
     internal double LengthSeconds => EndSeconds - StartSeconds;
 }
 
 /// <summary>
-/// Counts and measures a file's jingles from Pass 1's two raw signals, for the --verbose log.
-/// Purely diagnostic: nothing in detection or placement reads a census back - it answers the
-/// question neither Pass 1 line answers on its own, namely how much of what VAD called non-speech
-/// is music rather than plain silence, which is what decides whether a book's chapter openings need
-/// --mark-before-jingle at all and roughly what --max-jingle-length they call for.
+/// Counts and measures a file's jingles from Pass 1's two raw signals, for the --verbose log and
+/// the --debug listing under it. Purely diagnostic: nothing in detection or placement reads a
+/// census back, so an entry carries more than the log prints - where the speech behind the jingle
+/// resumes, and how many VAD transients had to be bridged to see it as one stretch.
 /// <para>
 /// A jingle here is a stretch of at least <see cref="MinJingleObservationSeconds"/> that VAD did
 /// not hear speech in and silencedetect did not call silence, with a vocal transient shorter than
@@ -87,19 +94,11 @@ internal static class JingleCensus
         // of the same loop is the one thing here that could be felt.
         var ordered = silences.OrderBy(s => s.StartSeconds).ToList();
         var next = 0;
-        foreach (var (start, end) in NonSpeechSpans(speech))
+        foreach (var span in NonSpeechSpans(speech))
         {
-            while (next < ordered.Count && ordered[next].EndSeconds <= start)
+            while (next < ordered.Count && ordered[next].EndSeconds <= span.Start)
                 next++;
-            // Emits whatever lies between the silences overlapping the span. Silences are clipped to
-            // it, and overlapping ones collapse into one, because the cursor only moves forward.
-            var cursor = start;
-            for (var i = next; i < ordered.Count && ordered[i].StartSeconds < end; i++)
-            {
-                AddIfJingle(jingles, cursor, Math.Min(ordered[i].StartSeconds, end));
-                cursor = Math.Max(cursor, ordered[i].EndSeconds);
-            }
-            AddIfJingle(jingles, cursor, end);
+            AddJingles(jingles, span, AudibleParts(span, ordered, next));
         }
         return jingles;
     }
@@ -117,6 +116,23 @@ internal static class JingleCensus
                  $"average {jingles.Average(j => j.LengthSeconds):0.00} s"
                : "");
 
+    /// <summary>One stretch of non-speech between two genuine speech segments, with the transients
+    /// bridged to build it. A class rather than a record because bridging grows a span in place,
+    /// both its end and its blip list.</summary>
+    /// <param name="start">Where VAD stopped hearing speech.</param>
+    /// <param name="end">Where it heard speech again - the announcement, at a chapter transition.</param>
+    private sealed class NonSpeechSpan(double start, double end)
+    {
+        /// <summary>Where VAD stopped hearing speech.</summary>
+        internal double Start { get; } = start;
+
+        /// <summary>Where it heard speech again, moved forward by each bridged transient.</summary>
+        internal double End { get; set; } = end;
+
+        /// <summary>The bridged transients inside, in file order.</summary>
+        internal List<SpeechSegment> Blips { get; } = [];
+    }
+
     /// <summary>
     /// The gaps between consecutive speech segments, with any gap whose separating "speech" is
     /// shorter than <see cref="TransientSpeechFloorSeconds"/> merged into the one before it - the
@@ -130,9 +146,9 @@ internal static class JingleCensus
     /// </para>
     /// </summary>
     /// <param name="speech">The raw VAD speech segments in file order.</param>
-    private static List<(double Start, double End)> NonSpeechSpans(List<SpeechSegment> speech)
+    private static List<NonSpeechSpan> NonSpeechSpans(List<SpeechSegment> speech)
     {
-        var spans = new List<(double Start, double End)>();
+        var spans = new List<NonSpeechSpan>();
         for (var i = 1; i < speech.Count; i++)
         {
             var start = speech[i - 1].EndSeconds;
@@ -140,21 +156,55 @@ internal static class JingleCensus
             // start minus the previous span's end is the length of speech[i - 1], the segment
             // between the two gaps.
             if (spans.Count > 0 && start - spans[^1].End < TransientSpeechFloorSeconds)
-                spans[^1] = (spans[^1].Start, end);
+            {
+                spans[^1].Blips.Add(speech[i - 1]);
+                spans[^1].End = end;
+            }
             else
-                spans.Add((start, end));
+            {
+                spans.Add(new NonSpeechSpan(start, end));
+            }
         }
         return spans;
     }
 
-    /// <summary>Adds one gap between silences to the census, unless it is too short to be a jingle
-    /// or empty (a silence covering the rest of the span leaves a cursor past its end).</summary>
-    /// <param name="jingles">The census being built.</param>
-    /// <param name="from">Start of the audible stretch.</param>
-    /// <param name="to">End of the audible stretch.</param>
-    private static void AddIfJingle(List<Jingle> jingles, double from, double to)
+    /// <summary>
+    /// What is left of one span once the silences overlapping it are cut out, in file order.
+    /// </summary>
+    /// <param name="span">The span to cut.</param>
+    /// <param name="ordered">The stored silences, ordered by start.</param>
+    /// <param name="next">Index of the first silence that can still overlap this span.</param>
+    private static List<(double Start, double End)> AudibleParts(
+        NonSpeechSpan span, List<Silence> ordered, int next)
     {
-        if (to - from >= MinJingleObservationSeconds)
-            jingles.Add(new Jingle(from, to));
+        var parts = new List<(double Start, double End)>();
+        // Silences are clipped to the span, and overlapping ones collapse into one, because the
+        // cursor only ever moves forward.
+        var cursor = span.Start;
+        for (var i = next; i < ordered.Count && ordered[i].StartSeconds < span.End; i++)
+        {
+            var until = Math.Min(ordered[i].StartSeconds, span.End);
+            if (until > cursor)
+                parts.Add((cursor, until));
+            cursor = Math.Max(cursor, ordered[i].EndSeconds);
+        }
+        if (span.End > cursor)
+            parts.Add((cursor, span.End));
+        return parts;
+    }
+
+    /// <summary>Turns one span's audible parts into census entries, keeping those long enough to be
+    /// a jingle and measuring each one's reach and bridged transients.</summary>
+    /// <param name="jingles">The census being built.</param>
+    /// <param name="span">The span the parts came from.</param>
+    /// <param name="parts">Its audible parts, in file order.</param>
+    private static void AddJingles(
+        List<Jingle> jingles, NonSpeechSpan span, List<(double Start, double End)> parts)
+    {
+        foreach (var (start, end) in parts)
+            if (end - start >= MinJingleObservationSeconds)
+                jingles.Add(new Jingle(
+                    start, end, span.End,
+                    span.Blips.Count(b => b.StartSeconds >= start && b.StartSeconds < end)));
     }
 }
