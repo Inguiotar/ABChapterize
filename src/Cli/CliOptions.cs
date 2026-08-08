@@ -2158,7 +2158,10 @@ public sealed class CliOptions
                                     written, the shortest silence and longest jingle seen before
                                     a chapter, and how much audio Whisper was fed (with its
                                     transcription speed) - then a list of every file skipped
-                                    and why, and of every file still missing chapter marks.
+                                    and why, of every file no chapters were found in, of every
+                                    file still missing chapter marks, and of every file carrying
+                                    marks read below 0.50 confidence, which are the ones worth a
+                                    manual check.
 
         Performance (files are always processed one at a time, so each gets the whole machine):
               --vad-threads <n|auto>

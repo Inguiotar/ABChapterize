@@ -2,22 +2,25 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Detection;
 using ABChapterize.Ui;
+using static ABChapterize.Detection.DetectionTuning;
 
 namespace ABChapterize.Processing;
 
 /// <summary>
 /// The run's roster of per-file outcomes worth naming at the end: which files were skipped and for
-/// what reason, which came out of detection with no chapters at all, and which were left with
-/// chapter marks still missing. Where <see cref="RunStatistics"/> accumulates measurements, this
-/// accumulates names - the three listings <c>--summary</c> closes a run with.
+/// what reason, which came out of detection with no chapters at all, which were left with chapter
+/// marks still missing, and which were finished but carry marks Whisper was unsure of. Where
+/// <see cref="RunStatistics"/> accumulates measurements, this accumulates names - the four listings
+/// <c>--summary</c> closes a run with.
 /// </summary>
 /// <remarks>
 /// The point of the listings is a batch of two hundred audiobooks, where the per-file result lines
 /// have long scrolled away (and under <c>--quiet</c> were never printed at all): the questions left
-/// at the end are "which ones did you not do", "which ones came back empty-handed" and "which ones
-/// are not finished", and none should require reading a log back. Filled one file at a time by
-/// <see cref="FileProcessor"/>, so nothing here is synchronized.
+/// at the end are "which ones did you not do", "which ones came back empty-handed", "which ones
+/// are not finished" and "which ones should I check by hand", and none should require reading a log
+/// back. Filled one file at a time by <see cref="FileProcessor"/>, so nothing here is synchronized.
 /// </remarks>
 internal sealed class RunOutcomes
 {
@@ -33,6 +36,11 @@ internal sealed class RunOutcomes
     /// <summary>Files written with an incomplete chapter sequence, each with the chapter numbers
     /// still missing from it.</summary>
     private readonly List<(string Name, IReadOnlyList<int> MissingNumbers)> _missingMarks = [];
+
+    /// <summary>Files carrying at least one mark whose chapter number was read from a transcript
+    /// segment Whisper scored below <see cref="DetectionTuning.LowConfidenceThreshold"/>, each with
+    /// those numbers and whether the file was read in <c>--chapter-phrase none</c> mode.</summary>
+    private readonly List<(string Name, IReadOnlyList<int> Numbers, bool BareNumbers)> _lowConfidence = [];
 
     /// <summary>How many files the run skipped. Taken from the listing itself rather than from a
     /// counter of its own, so the number <c>--summary</c>'s first line quotes and the entries
@@ -63,11 +71,21 @@ internal sealed class RunOutcomes
     internal void RecordMissingMarks(string name, IReadOnlyList<int> missingNumbers)
         => _missingMarks.Add((name, missingNumbers));
 
+    /// <summary>Records one file whose written marks include at least one low-confidence chapter
+    /// number.</summary>
+    /// <param name="name">The bare name the file carries once the run is done, for the same reason
+    /// <see cref="RecordMissingMarks"/> takes that one.</param>
+    /// <param name="numbers">The chapter numbers read below the threshold.</param>
+    /// <param name="bareNumbers">Whether this file was read in <c>--chapter-phrase none</c> mode,
+    /// which is what earns the block its footnote.</param>
+    internal void RecordLowConfidence(string name, IReadOnlyList<int> numbers, bool bareNumbers)
+        => _lowConfidence.Add((name, numbers, bareNumbers));
+
     /// <summary>
     /// Builds the closing listings, in order of how much of the file's work got done - not started,
-    /// started and empty-handed, finished but incomplete - as lines pre-split into their pieces so
-    /// that the file names are colored as titles rather than pattern-matched as prose. Any listing
-    /// is left out entirely when nothing fell into it.
+    /// started and empty-handed, finished but incomplete, finished but worth a look - as lines
+    /// pre-split into their pieces so that the file names are colored as titles rather than
+    /// pattern-matched as prose. Any listing is left out entirely when nothing fell into it.
     /// </summary>
     internal List<List<SummarySegment>> FormatListings()
     {
@@ -76,6 +94,11 @@ internal sealed class RunOutcomes
         AppendBlock(lines, $"No chapters found in {_noChapters.Count} file(s):", _noChapters);
         AppendBlock(lines, $"Still missing chapter marks in {_missingMarks.Count} file(s):",
             [.. _missingMarks.Select(f => (f.Name, DescribeMissing(f.MissingNumbers)))]);
+        AppendBlock(lines,
+            $"Low-confidence chapter marks in {_lowConfidence.Count} file(s) " +
+            $"(below p={LowConfidenceThreshold:0.00}, worth a manual check):",
+            [.. _lowConfidence.Select(f => (f.Name, DescribeLowConfidence(f.Numbers)))],
+            BareNumberFootnote());
         return lines;
     }
 
@@ -84,8 +107,11 @@ internal sealed class RunOutcomes
     /// <param name="lines">The listing lines built so far, appended to.</param>
     /// <param name="heading">The block's heading line.</param>
     /// <param name="entries">The files to list and the note to print after each one.</param>
+    /// <param name="footnote">A single line closing the block, or null for none. Indented with the
+    /// entries rather than the heading, since it qualifies them.</param>
     private static void AppendBlock(
-        List<List<SummarySegment>> lines, string heading, IReadOnlyList<(string Name, string Note)> entries)
+        List<List<SummarySegment>> lines, string heading,
+        IReadOnlyList<(string Name, string Note)> entries, string? footnote = null)
     {
         if (entries.Count == 0)
             return;
@@ -96,6 +122,8 @@ internal sealed class RunOutcomes
                 SummarySegment.Title(name),
                 SummarySegment.Prose($": {note}"),
             ]);
+        if (footnote != null)
+            lines.Add([SummarySegment.Prose($"  {footnote}")]);
     }
 
     /// <summary>The note following an unfinished book's name: how many marks it is still short of,
@@ -105,4 +133,33 @@ internal sealed class RunOutcomes
     private static string DescribeMissing(IReadOnlyList<int> missingNumbers)
         => $"{missingNumbers.Count} mark(s) missing " +
            $"(chapter {MissingMarksTag.FormatList(missingNumbers)})";
+
+    /// <summary>The note following the name of a book with marks worth checking: how many, and
+    /// which chapters. Through <see cref="MissingMarksTag.FormatList"/> like the missing-marks note,
+    /// so a book that came back unsure about forty of its chapters takes one line rather than
+    /// forty numbers.</summary>
+    /// <param name="numbers">The chapter numbers read below the threshold.</param>
+    private static string DescribeLowConfidence(IReadOnlyList<int> numbers)
+        => $"{numbers.Count} mark(s) (chapter {MissingMarksTag.FormatList(numbers)})";
+
+    /// <summary>
+    /// The line closing the low-confidence block when any of the files in it were read in
+    /// <c>--chapter-phrase none</c> mode, and null otherwise.
+    /// </summary>
+    /// <remarks>
+    /// The confidence is Whisper's mean token probability for the segment the number was read from,
+    /// and in bare-number mode that segment is frequently the number and nothing else - a single
+    /// token, whose probability is far more volatile than a phrase's whole sentence. Measured on
+    /// "Corsa nello spazio" (Italian, 65 chapters, 2026-08-08): its marks have the highest median
+    /// confidence of the fourteen-book corpus at 0.89, and simultaneously the only three marks below
+    /// 0.5 anywhere in it - 0.44, 0.42 and 0.29, each from a segment reading exactly "44", "55" and
+    /// "58" while the prose either side of them scored 0.81 to 0.94. All three were correctly placed,
+    /// landing in -91 to -95 dBFS silence. So the tail is fatter without the marks being worse, which
+    /// is precisely what a reader deciding where to spend an evening needs told.
+    /// </remarks>
+    private string? BareNumberFootnote()
+        => _lowConfidence.Any(f => f.BareNumbers)
+            ? "(A bare number is often a segment of one token, so its confidence swings much wider " +
+              "than a phrase's - a low value there is weaker evidence of a bad mark.)"
+            : null;
 }

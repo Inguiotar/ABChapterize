@@ -1587,14 +1587,23 @@ of its own; see [Custom marks](#custom-marks).
   length (over 100 % is normal — re-probed stretches are counted each time),
   and Whisper's transcription speed as a percentage of real time.
 
-  The block closes with three listings, each left out when it would be empty:
+  The block closes with four listings, each left out when it would be empty:
   every file that was **skipped** and why, every file **no chapters were found
-  in** and which of the reasons applied, and every file left **still missing
+  in** and which of the reasons applied, every file left **still missing
   chapter marks**, with how many are missing and — up to ten of them — which
-  chapters those are. Files appear under the name they carry once the run is
-  over, so a book tagged
+  chapters those are, and every file carrying **low-confidence chapter marks**,
+  meaning marks whose chapter number was read at a Whisper probability below
+  0.50 and which are therefore worth a look by hand. Files appear under the name
+  they carry once the run is over, so a book tagged
   [`.missing-marks-…`](#pass-35--the-shifted-re-read) is listed under its
   tagged name and can be found in the folder as printed.
+
+  Where any of the low-confidence files was read with
+  [`--chapter-phrase none`](#bare-numbers-as-announcements),
+  that listing adds one line of warning about comparing the two: a number spoken
+  alone is often a transcript segment of a single token, whose probability
+  fluctuates far more than a whole phrase's does, so a low value there says much
+  less about the mark than the same value would in an ordinary run.
 
   ```
   Summary: 5 file(s) encountered, 3 processed, 2 skipped, 1 with warnings, 1 with no chapters found
@@ -1607,6 +1616,8 @@ of its own; see [Custom marks](#custom-marks).
     Interview.mp3: no chapter phrases found
   Still missing chapter marks in 1 file(s):
     Die Dritte Macht.missing-marks-3-7.m4b: 2 mark(s) missing (chapter 3, 7)
+  Low-confidence chapter marks in 1 file(s) (below p=0.50, worth a manual check):
+    Raumschiff Erde.m4b: 2 mark(s) (chapter 12, 31)
   ```
 
 `-d`, `--dry-run`

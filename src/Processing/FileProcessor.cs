@@ -716,6 +716,7 @@ public sealed class FileProcessor
         var retarget = MissingMarksTag.PathFor(ctx.File, resumed.MissingNumbers);
         var stillMissing = MissingMarksTag.FormatList(resumed.MissingNumbers);
         RecordStillMissing(ctx, retarget, resumed.MissingNumbers);
+        RecordLowConfidence(ctx, resumed, retarget);
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
@@ -745,6 +746,7 @@ public sealed class FileProcessor
         FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
     {
         var restored = MissingMarksTag.StripFrom(ctx.File);
+        RecordLowConfidence(ctx, resumed, restored);
         // Through FormatWrittenCount rather than indexing the chapter list directly: a tagged file
         // whose markings have since been stripped by hand resumes with nothing to seed from and
         // nothing to find, and reaches here with an empty list rather than a completed sequence.
@@ -957,6 +959,7 @@ public sealed class FileProcessor
         var target = MissingMarksTag.PathFor(ctx.File, result.MissingNumbers);
         var missingList = MissingMarksTag.FormatList(result.MissingNumbers);
         RecordStillMissing(ctx, target, result.MissingNumbers);
+        RecordLowConfidence(ctx, result, target);
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
@@ -985,6 +988,27 @@ public sealed class FileProcessor
     private void RecordStillMissing(FileContext ctx, string taggedPath, IReadOnlyList<int> missingNumbers)
         => _outcomes.RecordMissingMarks(
             _options.DryRun ? ctx.Name : Path.GetFileName(taggedPath), missingNumbers);
+
+    /// <summary>
+    /// Lists one file --summary is to report as carrying marks worth a manual check, under the name
+    /// its reader will find in the folder - the same rule <see cref="RecordStillMissing"/> follows.
+    /// Called from each of the four paths that write chapters rather than from the one place they
+    /// share, because the final name is only settled inside each of them.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="result">The file's detection result.</param>
+    /// <param name="finalPath">The path the file ends the run under, or null where it keeps its own.</param>
+    private void RecordLowConfidence(FileContext ctx, DetectionResult result, string? finalPath)
+    {
+        if (result.LowConfidenceNumbers.Count == 0)
+            return;
+        // The profile is the one this file actually resolved to, which with --lang auto is a
+        // per-file answer - so a batch mixing a bare-number book with ordinary ones earns the
+        // block's footnote from the one book it applies to.
+        _outcomes.RecordLowConfidence(
+            _options.DryRun || finalPath == null ? ctx.Name : Path.GetFileName(finalPath),
+            result.LowConfidenceNumbers, result.Profile.BareNumberAnnouncements);
+    }
 
     /// <summary>Reports a detection that produced no chapters at all - the file is left
     /// untouched - naming whichever of the three reasons applies, and lists the file for
@@ -1045,6 +1069,7 @@ public sealed class FileProcessor
         // reaches this point is the unnumbered form, which no resume picks up, or either form under
         // --force, which redetects the whole file from scratch.
         var restored = MissingMarksTag.IsTagged(ctx.File) ? MissingMarksTag.StripFrom(ctx.File) : null;
+        RecordLowConfidence(ctx, result, restored);
         var renameNote = restored != null ? $", renamed to {Path.GetFileName(restored)}" : "";
 
         if (_options.DryRun)

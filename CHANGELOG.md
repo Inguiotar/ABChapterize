@@ -94,8 +94,18 @@ earn a round number.
   for a scripted cleanup, and is required where there is no console to ask at. Add
   `--revert` to restore the backups over their files instead of deleting them.
 
-### Changed
+- **`--summary` now lists the low-confidence marks.** A mark whose chapter number was read at a
+  Whisper probability below 0.50 has always been flagged on the file's own result line, which in a
+  batch of two hundred books has scrolled away long before the run ends. The closing block now
+  carries a fourth listing naming those files and chapters, alongside the skipped, empty-handed and
+  still-incomplete ones, so "which of these should I check by hand" is answered without reading a
+  log back. Files are named as they are once the run is over, so what is printed is what is in the
+  folder. Where any of them was read with `--chapter-phrase none`, one line is added warning that
+  the two kinds of confidence are not comparable: a number spoken alone is often a transcript
+  segment of a single token, whose probability fluctuates far more than a whole phrase's, so a low
+  value there says much less about the mark.
 
+### Changed
 - **The default is now a small model for finding chapters and `turbo` for filling the gaps**
   (`-m small -M turbo`), where both used to be `turbo`. This is not a speed compromise: the
   model that finds chapters listens to windows a few seconds long, and the large models are
