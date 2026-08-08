@@ -261,6 +261,11 @@ internal static class DetectionTuning
     /// one German data point. Deliberately tighter than
     /// <see cref="MergeShortSpeechGapSeconds"/>'s cluster-grouping gap: this rejects a single
     /// too-short blip, that decides whether separate blips belong to the same cluster.
+    /// <para>
+    /// <see cref="JingleCensus"/> bridges its jingles across the same floor, deliberately sharing
+    /// this constant rather than the wider merge: what the census reports as one jingle is then the
+    /// same stretch --mark-before-jingle's walk would cross in one go.
+    /// </para>
     /// </summary>
     internal const double TransientSpeechFloorSeconds = 0.4;
 

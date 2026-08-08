@@ -2305,11 +2305,15 @@ name, everything the pipeline does:
 
 - probe result (duration, codec/profile, existing chapter marks),
 - the silence count of pass 1 and, when the VAD pre-pass ran, its non-speech
-  region count followed by a jingle tally: how many of those regions hold at
-  least two seconds of sound that is neither speech nor silence, with the
-  shortest, longest and average length of those. A book whose chapters open
-  with music says so here, in the first few seconds of a run, and the lengths
-  are the figures [`--max-jingle-length`](#detection-behaviour) has to cover,
+  region count followed by a jingle tally: how many stretches of at least two
+  seconds the file holds that are neither speech nor silence — music, in other
+  words — with the shortest, longest and average length of them. A brief vocal
+  blip in the music does not split one jingle in two, and counts toward its
+  length. A book whose chapters open with music says so here, in the first few
+  seconds of a run, and the lengths are the figures
+  [`--max-jingle-length`](#detection-behaviour) has to cover. The two counts
+  answer different questions and need not match: the regions are the places
+  pass 2 will look, the jingles are what the audio actually holds,
 - each probe window and pass-3 chunk as a `<length>@<time>` header line,
 - every accepted chapter detection with the exact mark position, confidence
   and the loudness of the audio right at that position (e.g. `-58.3 dBFS`;

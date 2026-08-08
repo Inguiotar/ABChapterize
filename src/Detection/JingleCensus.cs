@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Audio;
+using ABChapterize.Vad;
 using static ABChapterize.Detection.DetectionTuning;
 
 namespace ABChapterize.Detection;
@@ -18,56 +19,87 @@ internal readonly record struct Jingle(double StartSeconds, double EndSeconds)
 }
 
 /// <summary>
-/// Counts and measures a file's jingles from Pass 1's two signals, for the --verbose log. Purely
-/// diagnostic: nothing in detection or placement reads a census back - it answers the question
-/// neither Pass 1 line answers on its own, namely how much of what VAD called non-speech is music
-/// rather than plain silence, which is what decides whether a book's chapter openings need
+/// Counts and measures a file's jingles from Pass 1's two raw signals, for the --verbose log.
+/// Purely diagnostic: nothing in detection or placement reads a census back - it answers the
+/// question neither Pass 1 line answers on its own, namely how much of what VAD called non-speech
+/// is music rather than plain silence, which is what decides whether a book's chapter openings need
 /// --mark-before-jingle at all and roughly what --max-jingle-length they call for.
 /// <para>
-/// A <see cref="NonSpeechRegion"/> is only the raw material: an ordinary in-narration pause is one
-/// too, and a real jingle's region usually opens with a lead-in hush before the music starts. So a
-/// jingle here is what is left of a region once every silence inside it is cut out, kept when at
-/// least <see cref="MinJingleObservationSeconds"/> of sound survives.
+/// A jingle here is a stretch of at least <see cref="MinJingleObservationSeconds"/> that VAD did
+/// not hear speech in and silencedetect did not call silence, with a vocal transient shorter than
+/// <see cref="TransientSpeechFloorSeconds"/> bridged rather than ending it - the same reading of
+/// "that blip is the music, not a speaker" that --mark-before-jingle's walk uses, so the two agree
+/// about where a jingle stops.
+/// </para>
+/// <para>
+/// Deliberately measured from the speech segments themselves rather than from
+/// <see cref="JingleGeometry.ComputeNonSpeechRegions"/>'s output, which is not the same question:
+/// those regions are Pass 2's candidate list, merged at a wider gap and then filtered by longest
+/// <em>contiguous</em> run, so a jingle a transient splits into two 1.5 s halves is dropped from
+/// them entirely - correct for "is this worth a probe", wrong for "how long is this book's music".
+/// Consequently the census and the region count need not agree, and neither is a subset of the
+/// other.
+/// </para>
+/// <para>
+/// <b>Why the narrower floor is also the more accurate one</b> (measured 2026-08-08 by replaying
+/// both readings over the fourteen-book corpus's own Pass 1 signals, parsed out of the 2026-08-07
+/// debug logs in <c>L:\Temp</c>). A chapter announcement is a <em>short</em> VAD segment - "Kapitel
+/// eins." runs 0.6-0.9 s - so the regions' 1.0 s merge bridges straight over it and the jingle
+/// appears to run on to the next narration, seconds past where the music stopped. Four marks pin
+/// this down: Raumschiff Erde's chapter 1 (mark 0:05:07.28, announcement 307.48-308.41), chapter 2
+/// (2355.07, 2355.48-2356.32) and chapter 4 (5551.38, 5551.58-5552.25), and Die Maahks' chapter 5
+/// (6305.40, 6305.56-6306.20) - in every one the census ends the jingle within 0.2 s of the mark,
+/// where the region-based reading ran 0.6-2.3 s past it. The corpus-wide count moves both ways
+/// (BARDIOC 29 to 32, Das Mutantenkorps 50 to 62, Die Cyber-Brutzellen 39 to 37, Wintersmith 16 to
+/// 14), and on the five books with no chapter music at all the spurious tally drops - The Forever
+/// War and I Shall Wear Midnight from 1 to 0, Mort and Paula Monti from 3 to 1.
 /// </para>
 /// </summary>
 internal static class JingleCensus
 {
     /// <summary>
-    /// Every audible stretch of at least <see cref="MinJingleObservationSeconds"/> inside the VAD's
-    /// non-speech regions, in file order.
+    /// Every audible stretch of at least <see cref="MinJingleObservationSeconds"/> between two
+    /// genuine VAD speech segments, in file order.
     /// <para>
-    /// Two properties of the inputs are load-bearing and neither is an approximation worth
-    /// "fixing". Silences below <see cref="MinStoredSilenceSeconds"/> were never recorded, so a
-    /// beat of quiet inside a music sting does not split one jingle into two - which is what makes
-    /// the measured lengths comparable to the ones --max-jingle-length reasons about. And a region
-    /// carries the short speech blips <see cref="JingleGeometry.ComputeNonSpeechRegions"/> merged
-    /// across, deliberately: those are VAD misfiring on a vocal or rhythmic transient in the music,
-    /// so counting them as part of the jingle is the correct reading rather than a leak.
+    /// The silence floor is load-bearing and is not an approximation worth "fixing": silences below
+    /// <see cref="MinStoredSilenceSeconds"/> were never recorded, so a beat of quiet inside a music
+    /// sting does not split one jingle into two, which is what keeps the measured lengths
+    /// comparable to the ones --max-jingle-length reasons about.
+    /// </para>
+    /// <para>
+    /// What keeps narration out is that cut, not the speech segments: a passage of short words
+    /// separated by breath pauses bridges into one span exactly as a transient-broken jingle does,
+    /// but its pauses are stored silences, so what survives the cut is the individual words -
+    /// nowhere near <see cref="MinJingleObservationSeconds"/> apiece.
     /// </para>
     /// </summary>
-    /// <param name="regions">The merged VAD non-speech regions; empty when the pre-pass did not run,
-    /// which yields an empty census.</param>
+    /// <param name="speech">The raw VAD speech segments in file order; empty when the pre-pass did
+    /// not run, which yields an empty census.</param>
     /// <param name="silences">Every silence Pass 1 stored, down to
     /// <see cref="MinStoredSilenceSeconds"/> - the whole list, not Pass 2's --min-silence-length
     /// subset, since a half-second hush is still not music.</param>
-    internal static List<Jingle> Measure(List<NonSpeechRegion> regions, List<Silence> silences)
+    internal static List<Jingle> Measure(List<SpeechSegment> speech, List<Silence> silences)
     {
         var jingles = new List<Jingle>();
-        foreach (var region in regions)
+        // Sorted defensively (the scan emits them in order) because the walk below leans on it, and
+        // scanned with a carried index rather than re-filtered per span: a long book brings tens of
+        // thousands of speech segments and thousands of silences to this, and the quadratic version
+        // of the same loop is the one thing here that could be felt.
+        var ordered = silences.OrderBy(s => s.StartSeconds).ToList();
+        var next = 0;
+        foreach (var (start, end) in NonSpeechSpans(speech))
         {
-            // Walks the region left to right, emitting whatever lies between the silences that
-            // overlap it. Ordering by start rather than trusting the scan's own order costs
-            // nothing here and keeps the cursor monotonic; overlapping silences collapse into one
-            // because the cursor only ever moves forward.
-            var cursor = region.StartSeconds;
-            foreach (var silence in silences
-                         .Where(s => s.EndSeconds > region.StartSeconds && s.StartSeconds < region.EndSeconds)
-                         .OrderBy(s => s.StartSeconds))
+            while (next < ordered.Count && ordered[next].EndSeconds <= start)
+                next++;
+            // Emits whatever lies between the silences overlapping the span. Silences are clipped to
+            // it, and overlapping ones collapse into one, because the cursor only moves forward.
+            var cursor = start;
+            for (var i = next; i < ordered.Count && ordered[i].StartSeconds < end; i++)
             {
-                AddIfJingle(jingles, cursor, Math.Min(silence.StartSeconds, region.EndSeconds));
-                cursor = Math.Max(cursor, silence.EndSeconds);
+                AddIfJingle(jingles, cursor, Math.Min(ordered[i].StartSeconds, end));
+                cursor = Math.Max(cursor, ordered[i].EndSeconds);
             }
-            AddIfJingle(jingles, cursor, region.EndSeconds);
+            AddIfJingle(jingles, cursor, end);
         }
         return jingles;
     }
@@ -85,8 +117,38 @@ internal static class JingleCensus
                  $"average {jingles.Average(j => j.LengthSeconds):0.00} s"
                : "");
 
+    /// <summary>
+    /// The gaps between consecutive speech segments, with any gap whose separating "speech" is
+    /// shorter than <see cref="TransientSpeechFloorSeconds"/> merged into the one before it - the
+    /// transient counting toward the length, since a vocal-like blip Silero picked out of a music
+    /// sting is part of the sting.
+    /// <para>
+    /// Non-speech before the first segment and after the last is left out, as it is for
+    /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/>: a jingle is flanked by narration on
+    /// both sides, whereas a file's head and tail hold publisher idents, credits and dead air that
+    /// would skew every figure this census reports.
+    /// </para>
+    /// </summary>
+    /// <param name="speech">The raw VAD speech segments in file order.</param>
+    private static List<(double Start, double End)> NonSpeechSpans(List<SpeechSegment> speech)
+    {
+        var spans = new List<(double Start, double End)>();
+        for (var i = 1; i < speech.Count; i++)
+        {
+            var start = speech[i - 1].EndSeconds;
+            var end = speech[i].StartSeconds;
+            // start minus the previous span's end is the length of speech[i - 1], the segment
+            // between the two gaps.
+            if (spans.Count > 0 && start - spans[^1].End < TransientSpeechFloorSeconds)
+                spans[^1] = (spans[^1].Start, end);
+            else
+                spans.Add((start, end));
+        }
+        return spans;
+    }
+
     /// <summary>Adds one gap between silences to the census, unless it is too short to be a jingle
-    /// or empty (a silence covering the rest of the region leaves a cursor past its end).</summary>
+    /// or empty (a silence covering the rest of the span leaves a cursor past its end).</summary>
     /// <param name="jingles">The census being built.</param>
     /// <param name="from">Start of the audible stretch.</param>
     /// <param name="to">End of the audible stretch.</param>

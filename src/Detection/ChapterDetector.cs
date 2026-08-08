@@ -1687,10 +1687,10 @@ public sealed class ChapterDetector
               (_options.AutoMinSilence ? " (adaptive threshold)" : "")
             : $"Pass 1: {allSilences.Count} silence(s) found, none probed " +
               "(--min-silence-length 0 - jingles only)");
-        // Derived from the two lists above and nothing else, so it costs no audio work - see
-        // JingleCensus for why the regions alone do not answer "how many jingles does this book
-        // have". Empty without the VAD pre-pass, which is why it is only logged with it.
-        var jingles = JingleCensus.Measure(nonSpeechRegions, allSilences);
+        // Derived from the scan's own two signals and nothing else, so it costs no audio work - and
+        // from the raw speech segments rather than the merged regions, for the reason JingleCensus
+        // gives. Empty without the VAD pre-pass, which is why it is only logged with it.
+        var jingles = JingleCensus.Measure(speechSegments, allSilences);
         if (_vad != null)
         {
             // The speech-segment count carries no extra information (a non-speech region is just
