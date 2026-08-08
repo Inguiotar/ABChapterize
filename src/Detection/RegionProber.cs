@@ -115,10 +115,11 @@ internal readonly record struct Pass2Context(
 /// <param name="WindowSeconds">This candidate's own probe window length, or null to use the pass's
 /// shared <see cref="RegionProber"/> window - which is what the gap re-probe and the recovery
 /// passes do.</param>
-/// <param name="FromJingle">True for a candidate the classification built around a jingle rather
-/// than a pause, which is what bars its marks from teaching --min-silence-length auto anything (see
-/// <see cref="RegionProber.ThresholdSilenceFor"/>). False for every candidate of a recovery pass,
-/// including its VAD-region ones: they keep the behaviour that predates the classification.</param>
+/// <param name="FromJingle">True for a candidate built around a jingle rather than a pause - the
+/// classification's own, and equally a recovery pass's VAD-region ones. Its only consequence is
+/// that such a candidate's marks teach --min-silence-length auto nothing (see
+/// <see cref="RegionProber.ThresholdSilenceFor"/>); it does not reach window sizing, which
+/// <see cref="RegionProber"/>'s own classification flag governs.</param>
 internal readonly record struct ProbeCandidate(
     double Start, Silence? Silence, NonSpeechRegion? VadRegion,
     double? ExpectAtSeconds = null, double? WindowSeconds = null, bool FromJingle = false)
@@ -523,7 +524,7 @@ internal sealed class RegionProber
             var length = vadRegion.EndSeconds - jingleStart;
             if (length < MinJingleObservationSeconds || length > _ctx.JingleCeilingSeconds)
                 continue;
-            candidates.Add(new ProbeCandidate(jingleStart, null, vadRegion));
+            candidates.Add(new ProbeCandidate(jingleStart, null, vadRegion, FromJingle: true));
         }
         return candidates.OrderBy(c => c.Start).ToList();
     }
@@ -2046,8 +2047,8 @@ internal sealed class RegionProber
                 // proposal cannot lower the running minimum and this is a no-op for it; both go
                 // through the same guard rather than the caller having to remember which list a
                 // candidate came from. Only genuine gap-fillers count either way; a re-detection of
-                // a chapter outside this gap must not lower anything - and a mark a jingle candidate
-                // recovered brings nothing to fold in at all (see ThresholdSilenceFor).
+                // a chapter outside this gap must not lower anything - and a mark recovered at a
+                // jingle brings nothing to fold in at all (see ThresholdSilenceFor).
                 if (!missing.Remove(gapMark.Number))
                     continue;
                 if (_env.Options.AutoMinSilence)
@@ -2149,10 +2150,13 @@ internal sealed class RegionProber
     /// a short pause) now falls through to the gap passes instead, which is slower but not blind.
     /// </para>
     /// <para>
-    /// Not extended to the recovery passes' own VAD-region candidates, which keep proposing exactly
-    /// as they always have: their candidate lists are deliberately frozen at pre-classification
-    /// behaviour, and the same argument applies to them, so this is a boundary to revisit rather
-    /// than a distinction to defend.
+    /// Applies to a recovery pass's VAD-region candidates too, although their candidate <em>lists</em>
+    /// stay frozen at pre-classification behaviour: nothing there was leaning on the old proposals.
+    /// The gap re-probe and the sub-floor sweep filter by no threshold at all - the one probes
+    /// unconditionally, the other short-circuits <see cref="ShouldSkipCandidate"/> - and Pass 2.5
+    /// runs a fresh prober, so it starts at the run's own --min-silence-length and never sees the
+    /// value Pass 2 adapted. The only thing this changes for them is that Pass 2.5 no longer
+    /// tightens its own threshold off a jingle, i.e. probes a few more of its own pauses.
     /// </para>
     /// </summary>
     /// <param name="candidate">The candidate whose window produced the mark.</param>
