@@ -170,12 +170,7 @@ public readonly record struct DetectionResult(
 /// enough to be worth leaving alone (see
 /// <see cref="DetectionTuning.VerifyFixMinShiftSeconds"/>).</param>
 public readonly record struct VerifyMarkingOutcome(
-    double StartSeconds, int? ExpectedNumber, bool Confirmed, double? CorrectedStartSeconds = null)
-{
-    /// <summary>Where this marking should sit: the correction <c>--fix</c> computed, or the
-    /// position it already has.</summary>
-    public double FixedStartSeconds => CorrectedStartSeconds ?? StartSeconds;
-}
+    double StartSeconds, int? ExpectedNumber, bool Confirmed, double? CorrectedStartSeconds = null);
 
 /// <summary>Outcome of checking pre-existing chapter markings against the audio (--verify).</summary>
 /// <param name="Passed">True when every checkable marking was confirmed; also true when none of the

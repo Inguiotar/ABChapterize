@@ -535,7 +535,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// How short a pause this run may end up treating as a chapter break. With an explicit
-    /// --min-silence-length that is the value given and nothing shorter is looked at anywhere; with
+    /// --min-silence-length that is the value given and nothing shorter is ever probed; with
     /// "auto" the threshold may settle below <see cref="MinSilenceSeconds"/>, down to
     /// <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/>, and what it reaches below the
     /// starting demand is swept for separately rather than probed inline - see
@@ -619,10 +619,10 @@ public sealed class CliOptions
     /// pre-pass's speech segments and non-speech regions, and every Whisper transcript segment by
     /// segment, including the mark-refinement probes nothing else ever shows.
     /// <para>
-    /// Deliberately absent from --help and the README, and documented in the manual and the sources
-    /// only. It is the option one is <em>told</em> to use when a mark comes out wrong, not one to
-    /// pick off a list: it writes a file per audiobook, sizeable on a long one, and its output is
-    /// meaningful only to someone reading this code.
+    /// Deliberately absent from --help and from the README's option tables, and documented at length
+    /// in the manual and the sources only. It is the option one is <em>told</em> to use when a mark
+    /// comes out wrong, not one to pick off a list: it writes a file per audiobook, sizeable on a
+    /// long one, and its output is meaningful only to someone reading this code.
     /// </para>
     /// </summary>
     public bool Debug { get; private set; }
@@ -1931,28 +1931,33 @@ public sealed class CliOptions
                                     throughout - useful if the jingle length is known and
                                     consistent, or for troubleshooting.
           -n, --min-silence-length <seconds|auto>
-                                    Minimum silence duration that counts as a potential
-                                    chapter break; the silence scan always uses this as its
-                                    floor (default, and floor with "auto": 1.5). With "auto"
-                                    (the default), starting from the second chapter mark
-                                    found (the silence before the first mark is usually the
-                                    intro/title silence and often longer, so it is not used
-                                    to tighten), the probing threshold sits at 75% of the
-                                    length of the shortest silence a mark has fallen into so
-                                    far (raised once, then only ever lowered), and a sequence
-                                    gap re-probes everything skipped since the last mark
-                                    rather than resetting the threshold - fewer Whisper
-                                    probes without a fixed guess. An explicit numeric value
-                                    disables this and probes every such silence instead -
-                                    useful if the breaks are known to vary a lot, or for
-                                    troubleshooting. 0 says not to probe silences at all,
-                                    leaving only the jingles the voice-activity pre-pass
-                                    finds - a large saving on a book whose every chapter
-                                    opens with one, and a way to miss every chapter that
-                                    does not. The silence scan itself still runs either
-                                    way: marks are placed and refined against it. Cannot be
-                                    combined with --max-jingle-length 0, which would leave
-                                    nothing to probe at all.
+                                    The shortest pause probed as a potential chapter
+                                    break (default: "auto", which starts at 1.5). This
+                                    governs probing alone: pass 1's scan keeps shorter
+                                    silences regardless, and marks are placed and refined
+                                    against them. With "auto" (the default), starting from
+                                    the second chapter mark found (the silence before the
+                                    first mark is usually the intro/title silence and often
+                                    longer, so it is not used to tighten), the probing
+                                    threshold sits at 75% of the length of the shortest
+                                    silence a mark has fallen into so far (set once, then
+                                    only ever lowered), and a sequence gap re-probes
+                                    everything skipped since the last mark rather than
+                                    resetting the threshold - fewer Whisper probes without
+                                    a fixed guess. Where that figure comes out below the
+                                    1.5 probing started at - a narrator whose chapter
+                                    breaks are simply shorter than the default assumes -
+                                    the gaps left in the numbering are swept for the pauses
+                                    in between, down to 0.8. An explicit numeric value
+                                    disables all of that and probes every silence at or
+                                    above it instead - useful if the breaks are known to
+                                    vary a lot, or for troubleshooting. 0 says not to probe
+                                    silences at all, leaving only the jingles the
+                                    voice-activity pre-pass finds - a large saving on a
+                                    book whose every chapter opens with one, and a way to
+                                    miss every chapter that does not. Cannot be combined
+                                    with --max-jingle-length 0, which would leave nothing
+                                    to probe at all.
               --noise-floor <dBFS|auto>
                                     How quiet audio has to be to count as a pause, in dBFS
                                     (default: auto; 0 is full scale, so this is negative).
@@ -2094,11 +2099,12 @@ public sealed class CliOptions
                                     --epilogue-phrase, --custom, --custom-file,
                                     --ignore-chapter-numbers, --model, --pass3-model,
                                     --mark-before-jingle, --quick-marks, --mark-lead,
-                                    --max-jingle-length, --min-silence-length, --noise-floor,
-                                    --early-abort,
+                                    --max-jingle-length, --min-silence-length,
+                                    --noise-floor, --early-abort,
                                     --expected-start-chapter, --max-chapter-number,
-                                    --chapter-count, --no-trailing-scan and --verify. Also mutually
-                                    exclusive with --export, --revert, --cleanup and --no-op.
+                                    --chapter-count, --no-trailing-scan and --verify.
+                                    Also mutually exclusive with --export, --revert,
+                                    --cleanup and --no-op.
           -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
                                     of FFMETADATA for --export/--import. Requires one of them.
 

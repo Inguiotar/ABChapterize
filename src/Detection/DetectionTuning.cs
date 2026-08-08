@@ -89,7 +89,7 @@ internal static class DetectionTuning
     /// expected). Above 0, the window is --max-jingle-length plus
     /// <see cref="PhraseMarginSeconds"/> instead, whether or not the VAD pre-pass ends up
     /// running - see <see cref="CliOptions.RunVadPrePass"/>.</summary>
-    internal const double ProbeSecondsPlain = 12;
+    internal const double PlainProbeSeconds = 12;
 
     /// <summary>
     /// The shortest silence Pass 1 keeps (see the <c>allSilences</c>/<c>silences</c> split in
@@ -116,7 +116,7 @@ internal static class DetectionTuning
     /// <summary>Without a VAD pre-pass, the phrase must start within this many seconds after the
     /// silence that triggered its probe (or a closer anchor silence still inside the window) to
     /// count as a real announcement rather than an in-text mention.</summary>
-    internal const double PhraseLatestStart = 5.0;
+    internal const double PhraseLatestStartSeconds = 5.0;
 
     /// <summary>
     /// How far past the point where Pass 2's primary scan <em>expects</em> an announcement its
@@ -173,8 +173,10 @@ internal static class DetectionTuning
     /// by when its backward walk runs out of VAD data before finding the previous chapter's real
     /// trailing narration - typically a jingle at the very start of the file, before chapter 1.
     /// The same flat 0.5 s used elsewhere as a last resort when nothing more precise is known.
+    /// Nothing to do with <see cref="JingleLeadInSeconds"/>, which is how much music a jingle
+    /// candidate's probe window opens with; this one is a mark placement of last resort.
     /// </summary>
-    internal const double JingleLeadSeconds = 0.5;
+    internal const double JingleWalkFallbackLeadSeconds = 0.5;
 
     /// <summary>
     /// Default for <see cref="ABChapterize.Cli.CliOptions.MarkLeadSeconds"/> (--mark-lead): without

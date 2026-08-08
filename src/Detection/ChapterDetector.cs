@@ -1345,7 +1345,7 @@ public sealed class ChapterDetector
         // the only unit in which a handful of short probes and one long transcription compare
         // honestly: recognition cost is per window, and a 12 s probe costs a whole one just as a
         // 30 s stretch of a Pass 3 chunk does.
-        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
+        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : PlainProbeSeconds;
         var windowsPerProbe = ChunkWindows(probeSeconds);
         var budget = SubFloorSweepBudgetFraction * ChunkWindows(gap.ToSeconds - gap.FromSeconds);
         var spent = 0;
@@ -1446,7 +1446,7 @@ public sealed class ChapterDetector
         if (work.Count == 0)
             return;
 
-        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
+        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : PlainProbeSeconds;
         var windowsPerProbe = ChunkWindows(probeSeconds);
         var env = BuildProbeEnvironment();
         _log?.Invoke(
@@ -2421,7 +2421,7 @@ public sealed class ChapterDetector
             // Without a VAD pre-pass, the mark always goes --mark-lead seconds before the
             // phrase itself; the preceding silence (if any close enough) is still located
             // purely to feed the --min-silence-length auto tightening via MarkPlacer's statistics.
-            var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStart, phraseAbs, allSilences);
+            var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStartSeconds, phraseAbs, allSilences);
             time = Math.Max(0, phraseAbs - _options.MarkLeadSeconds);
             statSilence = anchor;
         }

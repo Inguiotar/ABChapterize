@@ -208,7 +208,7 @@ public class JingleGeometryTests
 
     // Step 5: the retreat runs out of VAD data before ever finding real preceding speech (a
     // jingle sitting at the very start of the file, before there was any narration) - the
-    // reached position is backed off by the flat JingleLeadSeconds lead instead.
+    // reached position is backed off by the flat JingleWalkFallbackLeadSeconds lead instead.
     [Fact]
     public void ComputeMarkBeforeJingle_NoPrecedingSpeechAtAll_BacksOffByTheFlatLead()
     {

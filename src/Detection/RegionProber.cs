@@ -242,7 +242,7 @@ internal sealed class RegionProber
     private readonly double _progressOffsetSeconds;
 
     /// <summary>Current probe window length. Starts at the ceiling with --max-jingle-length, at
-    /// <see cref="ProbeSecondsPlain"/> without it, and follows <see cref="_adaptedWindowSeconds"/>
+    /// <see cref="PlainProbeSeconds"/> without it, and follows <see cref="_adaptedWindowSeconds"/>
     /// from the first qualifying jingle observation on.</summary>
     private double _probeSeconds;
 
@@ -360,7 +360,7 @@ internal sealed class RegionProber
 
     /// <summary>The file's language resolution, settled before Pass 2 started and read-only from
     /// here - see <see cref="LanguageResolver"/>.</summary>
-    private readonly LanguageState Language;
+    private readonly LanguageState _language;
 
     /// <summary>Whether --early-abort fired in this region: enough play time probed without a
     /// single find that further probing is pointless.</summary>
@@ -449,11 +449,11 @@ internal sealed class RegionProber
         _mender = new SuspectNumberMender(env, ctx, region);
         _found = found;
         _namedFound = namedFound;
-        Language = language;
+        _language = language;
         _progressOffsetSeconds = progressOffsetSeconds;
         _sweeping = sweepingSubFloorSilences;
         _classified = classifyCandidates && !sweepingSubFloorSilences;
-        _probeSeconds = env.Options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
+        _probeSeconds = env.Options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : PlainProbeSeconds;
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
         _threshold = env.Options.MinSilenceSeconds;
@@ -921,7 +921,7 @@ internal sealed class RegionProber
         // which recognizer it goes through - unlike the mender's second opinion, which is a decode
         // of its own. A pass 2.5 re-probe reaches this with SecondOpinion null and _ctx.Transcriber
         // already the heavier model, so it re-reads through that one without needing a branch here.
-        var upgradeLanguage = _env.SecondOpinion != null ? Language.Profile.Language : null;
+        var upgradeLanguage = _env.SecondOpinion != null ? _language.Profile.Language : null;
         _env.Log?.Invoke(
             $"nothing heard in the window at {FormatTimestamp(start)}, but VAD hears speech at " +
             $"{FormatTimestamp(blip.StartSeconds)} inside its jingle - re-reading it in a shorter " +
@@ -1068,14 +1068,14 @@ internal sealed class RegionProber
         => segmentsAbs.Where(s => s.StartSeconds >= start && s.StartSeconds < windowEnd).ToList();
 
     /// <summary>
-    /// Transcribes a whole window from scratch and makes it the new cache. For a fresh run this is
-    /// also where --lang auto resolves the language, once, from the very first probe's full
-    /// samples; a gap-scoped run arrives with the profile already set, so this never re-resolves it.
+    /// Transcribes a whole window from scratch and makes it the new cache - the path taken whenever
+    /// the previous decode's span cannot serve this window, or must not (see
+    /// <see cref="CacheHidesTheExpectation"/>).
     /// <para>
-    /// Read-ahead reaches the language resolution too, harmlessly: Whisper detects from the first
-    /// mel frame either way, so a window that already spanned a whole
-    /// <see cref="WhisperChunkSeconds"/> sees exactly what it saw before, and a shorter one now has
-    /// real audio where it had zero padding.
+    /// The decode may run past the window's own planned end (<see cref="ExtendToPlannedSeam"/>).
+    /// What the scan is handed is sliced back to the window either way; only the surplus the
+    /// recognizer actually filled becomes cache for the windows after it (see
+    /// <see cref="CacheableEnd"/>).
     /// </para>
     /// </summary>
     /// <param name="start">Absolute start of the window.</param>
@@ -1250,7 +1250,7 @@ internal sealed class RegionProber
             return marks;
 
         foreach (var heard in _env.FindCappedPhraseMatches(
-                     segments, Language.Profile, mergeBoundarySegIndex,
+                     segments, _language.Profile, mergeBoundarySegIndex,
                      BareNumberReadingFor(WideBareNumberReading)))
         {
             var match = heard;
@@ -1262,7 +1262,7 @@ internal sealed class RegionProber
             // did - including rejecting it.
             if (_ctx.SecondGuessNumbers &&
                 await _mender.MendAsync(
-                    match, Language.Profile, start, windowEnd, SequenceBounds(windowLast), ct) is { } mended)
+                    match, _language.Profile, start, windowEnd, SequenceBounds(windowLast), ct) is { } mended)
                 match = match with { Number = mended };
             if (IsOutOfSequence(match, phraseAbs, windowLast))
                 continue;
@@ -1366,7 +1366,7 @@ internal sealed class RegionProber
 
         var queued = false;
         var windowLast = _lastNumber ?? 0;
-        foreach (var heard in FindUnnumberedAnnouncements(segments, Language.Profile))
+        foreach (var heard in FindUnnumberedAnnouncements(segments, _language.Profile))
         {
             var phraseAbs = start + heard.PhraseStartSeconds;
             _env.Log?.Invoke(
@@ -1382,7 +1382,7 @@ internal sealed class RegionProber
                 continue;
             _unnumberedMends++;
             if (await _mender.ReadUnnumberedAsync(
-                    heard, Language.Profile, start, windowEnd, SequenceBounds(windowLast), ct)
+                    heard, _language.Profile, start, windowEnd, SequenceBounds(windowLast), ct)
                 is not { } number)
                 continue;
 
@@ -1421,7 +1421,7 @@ internal sealed class RegionProber
         ProbeCandidate candidate, double start, double windowEnd, List<TranscriptSegment> segments,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
-        foreach (var match in FindNamedMatches(segments, Language.Profile))
+        foreach (var match in FindNamedMatches(segments, _language.Profile))
         {
             if (!IsInScope(match.Phrase))
                 continue;
@@ -1433,7 +1433,7 @@ internal sealed class RegionProber
 
         // After the prologue/epilogue pass, so that a window holding both a scoped announcement and
         // a chapter still resolves the scoped one against the chapter count it had on arrival.
-        foreach (var match in FindChapterAnnouncements(segments, Language.Profile))
+        foreach (var match in FindChapterAnnouncements(segments, _language.Profile))
             await AcceptNamedMatchAsync(match, candidate, start, windowEnd, trimmedAbs, ct);
     }
 
@@ -1469,7 +1469,7 @@ internal sealed class RegionProber
 
     /// <summary><see cref="NamedPhrase.Kind"/> of the synthetic chapter phrase, the one named kind
     /// that is exempt from the <c>--custom</c> mark cap.</summary>
-    private string ChapterKind => Language.Profile.ChapterAnnouncement.Kind;
+    private string ChapterKind => _language.Profile.ChapterAnnouncement.Kind;
 
     /// <summary>
     /// Places, logs and records one in-scope named match - unless <see cref="ShouldDropNamedMatch"/>
@@ -1509,7 +1509,7 @@ internal sealed class RegionProber
         var (time, markSilence, markRegion) = placement;
         var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
-            Language.Profile.Language);
+            _language.Profile.Language);
         // The prologue and epilogue must sit behind a real pause, in every pass rather than only in
         // the late ones a bare number's check is reserved for. They are cheap to guard - the check
         // is Pass 1 geometry, no decoding - and they need it most: nothing bounds where they may
@@ -1748,17 +1748,17 @@ internal sealed class RegionProber
         var reading = BareNumberReadingFor(WideBareNumberReading);
         // Built before the context, because the refinement's own matcher is held to the same
         // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
-        var check = new NumberCheck(match.Number, Language.Profile, SequenceBounds(windowLast));
+        var check = new NumberCheck(match.Number, _language.Profile, SequenceBounds(windowLast));
         var markCtx = new MarkContext(
             _ctx.File, _ctx.Info.InputDecoder,
-            Language.Profile.AnnouncementFor(reading, check.AdmitsAsAnnouncement),
+            _language.Profile.AnnouncementFor(reading, check.AdmitsAsAnnouncement),
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
-            Language.Profile.Language);
+            _language.Profile.Language);
         if (await _env.Marks.PlaceAsync(
                 check,
                 time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx,
                 AnnouncementIsolation.ForChapter(
-                    Language.Profile, match, phraseAbs, WideBareNumberReading),
+                    _language.Profile, match, phraseAbs, WideBareNumberReading),
                 ct) is not { } placed)
             return null;
         // Placement may have re-read the number out of the refinement's own probes, so everything
@@ -1878,7 +1878,7 @@ internal sealed class RegionProber
     /// (the classic shape) anchors to that silence. One deeper in the window than the timing rule
     /// allows can still be accepted right away, without waiting for a later candidate's window, but
     /// only when a candidate-grade silence directly precedes it: within the same
-    /// <see cref="PhraseLatestStart"/> seconds the classic rule grants, and at least
+    /// <see cref="PhraseLatestStartSeconds"/> seconds the classic rule grants, and at least
     /// --min-silence-length long, so a breath pause before an in-text mention ("Chapter eight had
     /// been hard.") cannot qualify as an anchor.
     /// </para>
@@ -1954,7 +1954,7 @@ internal sealed class RegionProber
         // expectation sits past a jingle - and a phrase *before* the expected point passes too,
         // deliberately: on a jingle whose window spans the music that is the announcement being
         // spoken over it, which is the whole reason that window is shaped the way it is.
-        if (phraseAbs - candidate.ExpectAt <= PhraseLatestStart)
+        if (phraseAbs - candidate.ExpectAt <= PhraseLatestStartSeconds)
             return (Math.Max(0, phraseAbs - MarkLead), candidate.Silence, null);
 
         // Each of the three ways this can fail is named separately rather than folded into one
@@ -1962,10 +1962,10 @@ internal sealed class RegionProber
         // this book, which is exactly what someone chasing a missing chapter needs to be told.
         if (FindRealAnchorSilence(start, phraseAbs, _ctx.AllSilences) is not { } anchor)
             return RejectProbeMark(what, phraseAbs, "no silence precedes it inside the probe window");
-        if (phraseAbs - anchor.EndSeconds > PhraseLatestStart)
+        if (phraseAbs - anchor.EndSeconds > PhraseLatestStartSeconds)
             return RejectProbeMark(what, phraseAbs,
                 $"the nearest silence ends {phraseAbs - anchor.EndSeconds:0.0} s before it, " +
-                $"more than the {PhraseLatestStart:0.#} s allowed");
+                $"more than the {PhraseLatestStartSeconds:0.#} s allowed");
         if (anchor.EndSeconds - anchor.StartSeconds < _env.Options.MinSilenceSeconds)
             return RejectProbeMark(what, phraseAbs,
                 $"the silence before it is only {anchor.EndSeconds - anchor.StartSeconds:0.00} s long, " +

@@ -387,9 +387,9 @@ internal static class JingleGeometry
     /// <para>
     /// <b>Step 6:</b> if the walk runs out of both VAD and silencedetect data before finding a stop
     /// (the jingle sits at the very start of the file, with no narration to find), the position
-    /// reached is backed off by <see cref="JingleLeadSeconds"/> rather than trusted outright. The
-    /// flat constant rather than the lead: this is a "nothing is known here" fallback, not a
-    /// measured hush to sit inside.
+    /// reached is backed off by <see cref="JingleWalkFallbackLeadSeconds"/> rather than trusted
+    /// outright. The flat constant rather than the lead: this is a "nothing is known here"
+    /// fallback, not a measured hush to sit inside.
     /// </para>
     /// A final backward-only quiet-point snap - precise marking's own last step - still runs on
     /// whatever this returns; see <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> and its
@@ -422,7 +422,7 @@ internal static class JingleGeometry
         var (position, foundBoundary, stopSilence) =
             RetreatPastNonSpeech(afterSilence, speech, silences, transcript, TransientSpeechFloorSeconds);
         if (!foundBoundary)
-            return Math.Max(0, position - JingleLeadSeconds);
+            return Math.Max(0, position - JingleWalkFallbackLeadSeconds);
         // Clamped at the hush's own start, which makes this "back off by the lead, or by the whole
         // hush if it is shorter" without a second expression saying so.
         return stopSilence is { } hush

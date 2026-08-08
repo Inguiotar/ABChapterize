@@ -30,12 +30,13 @@ internal static class GapPlanning
     /// <param name="FromSeconds">Region start; candidates/decodes never precede it.</param>
     /// <param name="ToSeconds">Region end; candidates/decodes never reach past it.</param>
     /// <param name="LowerNumber">The chapter number already confirmed to precede this region, or 0
-    /// when nothing precedes it (a from-file-start region). Seeds Pass 2's running "last accepted
-    /// number" so a match must still exceed it to be accepted - but, unlike the whole-file case,
-    /// never as the seed for the intro-transition exemption (see <see cref="LowerNumber"/>'s use
-    /// in <see cref="ChapterDetector.DetectCoreAsync"/>: a match count already primed by <paramref
-    /// name="LowerNumber"/> &gt; 0 is not the "chapter 1" case even when this is the very first
-    /// match Pass 2 makes in this region).</param>
+    /// when nothing precedes it (a from-file-start region). Seeds <see cref="RegionProber"/>'s
+    /// running "last accepted number", which does two jobs: a match must exceed it to be accepted at
+    /// all, and it supplies the lower half of <see cref="RegionProber.SequenceBounds"/> until this
+    /// region has a chapter of its own. A non-zero value also tells the --min-silence-length auto
+    /// tightening (<c>RegionProber</c>'s <c>TightenThreshold</c>) that this region's very first mark
+    /// already has a chapter in front of it, so its anchor silence is a real inter-chapter break
+    /// rather than the front-matter transition a whole-file region has to skip.</param>
     /// <param name="UpperNumber">The chapter number already confirmed to follow this region, or
     /// null when nothing does (this region reaches to the file end). A match at or above it is
     /// rejected outright - guarding against a snapped probe window spilling into the next known

@@ -522,9 +522,12 @@ wherever you say it is.
 
 What it is *not* is a full-text search: a custom phrase has to be **announced**,
 and is held to exactly the same standard as a chapter phrase for deciding
-whether it was. A narrator mentioning a timeline in passing gets no mark; the
-narrator announcing "Zeittafel" after a pause does. Titles may pull text out of the phrase's own capturing groups with
-`$1`, `$2` or a group name; write `$$` for a literal dollar sign.
+whether it was — it has to turn up inside one of the windows probing actually
+looks at, and those are anchored on the file's own pauses and jingles. A
+narrator mentioning a timeline in the middle of a paragraph gets no mark; the
+narrator announcing "Zeittafel" at a section boundary does. Titles may pull text
+out of the phrase's own capturing groups with `$1`, `$2` or a group name; write
+`$$` for a literal dollar sign.
 
 Syntax notes:
 
@@ -806,9 +809,10 @@ chapter.
 
 Later passes look harder than the first one does, and then check their work
 against the pauses the file actually has: an announcement they turn up is only
-marked if a real pause precedes it — roughly a second of silence or jingle —
-and a shorter one follows. A run's `--verbose` output names the measurement and
-the thresholds when a candidate is dropped for that reason.
+marked if it is flanked by real non-speech on both sides — roughly a second of
+silence or jingle in front of it, and at least a third of a second behind it. A
+run's `--verbose` output names both measurements and both thresholds when a
+candidate is dropped for that reason.
 
 Everything else about a run is unaffected: the prologue, the epilogue and every
 `--custom` mapping still match their own phrases as usual, and marks are placed
@@ -915,10 +919,12 @@ Two things are worth knowing before reaching for it:
   [Picking a GPU on a multi-GPU machine](#picking-a-gpu-on-a-multi-gpu-machine).
 
 `-n`, `--min-silence-length <seconds|auto>`
-: Minimum silence duration (0, or 0.1–60, default: `auto`) that counts as a
-  potential chapter break. An explicit value is used as given and nothing
-  shorter is ever looked at; `auto` treats 1.5 seconds as the starting point
-  instead. By default (`auto`), pass 2
+: The shortest pause probed as a potential chapter break (0, or 0.1–60,
+  default: `auto`). An explicit value is used as given and nothing shorter is
+  ever probed; `auto` treats 1.5 seconds as the starting point instead. Either
+  way this governs *probing* alone — pass 1's scan keeps shorter silences too,
+  and mark placement and refinement are anchored to them (see the note on `0`
+  below, which spells that out). By default (`auto`), pass 2
   self-tightens the probing threshold to 75% of the *shortest* anchor
   silence observed so far as chapters are found at a pause (set at the second
   such mark, only ever lowered after that; chapters found at a jingle teach it
@@ -1703,9 +1709,10 @@ touching Whisper at all.
   `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--custom`,
   `--custom-file`, `--ignore-chapter-numbers`, `--model`, `--pass3-model`,
   `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
-  `--max-jingle-length`, `--min-silence-length`, `--early-abort`,
-  `--expected-start-chapter`, `--max-chapter-number`, `--chapter-count`,
-  `--no-trailing-scan`, `--verify` — nor with the title options `--title`,
+  `--max-jingle-length`, `--min-silence-length`, `--noise-floor`,
+  `--early-abort`, `--expected-start-chapter`, `--max-chapter-number`,
+  `--chapter-count`, `--no-trailing-scan`, `--verify` — nor with the title
+  options `--title`,
   `--intro-title`, `--prologue-title` and `--epilogue-title`, since an
   imported mark carries the title the sidecar gives it and no intro mark is
   prepended — nor with `--export`, `--revert` or
