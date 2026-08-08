@@ -2344,7 +2344,12 @@ name, everything the pipeline does:
   and the loudness of the audio right at that position (e.g. `-58.3 dBFS`;
   `-inf dBFS` for pure digital silence) — a figure close to silence means the
   mark landed in a real pause, a loud one that it landed mid-word or inside
-  music and is worth a listen. Flagged `LOW CONFIDENCE` below 0.5, plus a
+  music and is worth a listen. The same line names what made the spot a
+  candidate in the first place — `at a silence`, `at a jingle`, or `embedded in
+  a jingle` for a jingle the speech detector heard something inside — since that
+  is what decided where the window opened and how far it ran (see
+  [Pass 2](#pass-2--probing)); a mark found at the file's very start has no such
+  class and says nothing. Flagged `LOW CONFIDENCE` below 0.5, plus a
   `still missing:` list of any earlier chapter numbers not detected yet,
 - every chapter number that was heard but *not* turned into a mark, with the
   reason: one that does not top the last number accepted (`skipped chapter 3 at

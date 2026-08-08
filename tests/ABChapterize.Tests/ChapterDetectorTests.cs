@@ -4291,6 +4291,39 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task VerboseMarkLine_NamesTheCandidateClassThatFoundIt()
+    {
+        // All four shapes in one file. The class decides where a window opened and how far it ran,
+        // so a mark that landed oddly reads completely differently depending on which found it -
+        // and the log is the only place that pairing is visible once a run is over.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks"),
+            [new(595, 600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));      // the region start: no class to report
+                s.Add(600, Seg(0.3, " Chapter two."));    // a pause
+                s.Add(1020, Seg(0, " Chapter three."));   // the speech behind a plain jingle
+                s.Add(1430, Seg(0, " Chapter four."));    // behind a jingle with a blip in it
+            },
+            // Jingle one (1000-1020) is unbroken. Jingle two (1400-1430) carries a 0.3 s musical
+            // transient at 1410, short enough for the census to bridge rather than split on, which
+            // is what makes it the embedded shape - the announcement might be spoken over the music.
+            new FakeVad
+            {
+                Speech = [new(0, 1000), new(1020, 1400), new(1410, 1410.3), new(1430, 3600)],
+            });
+
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.StartsWith("chapter 1 detected") &&
+                                  !l.Contains(", at a") && !l.Contains("embedded"));
+        Assert.Contains(log, l => l.StartsWith("chapter 2 detected") && l.Contains(", at a silence)"));
+        Assert.Contains(log, l => l.StartsWith("chapter 3 detected") && l.Contains(", at a jingle)"));
+        Assert.Contains(log, l => l.StartsWith("chapter 4 detected") &&
+                                  l.Contains(", embedded in a jingle)"));
+    }
+
+    [Fact]
     public async Task AutoMinSilence_AJingleCandidatesMark_TeachesTheThresholdNothing()
     {
         // The sibling case the test above cannot reach: that jingle had no silence anywhere near
@@ -4319,6 +4352,7 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 996), new(1020, 3600)] });
 
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.StartsWith("chapter 2 detected") && l.Contains(", at a jingle)"));
         Assert.DoesNotContain(log, l => l.Contains("threshold") && l.Contains("after chapter 2"));
         // Chapter 3's proposal is therefore the first one to land, which is what makes the
         // absence above a real measurement: drop the rule and this line moves to chapter 2.

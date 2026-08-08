@@ -135,6 +135,11 @@ earn a round number.
   whether the voice-activity pre-pass runs, and `0` still means "no jingles here, look only
   at the pauses".
 
+  `--verbose` names the class on each mark line — `at a silence`, `at a jingle`, or `embedded
+  in a jingle` — next to the confidence and the loudness already there. Since the class is what
+  decided where that probe's window opened and how far it ran, it is the piece that makes a mark
+  in an unexpected place interpretable rather than merely visible.
+
   `--min-silence-length auto` now learns only from chapters found at a pause. A chapter
   found at a jingle used to teach it from the hush in front of the music, which measures the
   run-up to a jingle rather than the break between two chapters and is routinely a different

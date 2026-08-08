@@ -115,18 +115,45 @@ internal readonly record struct Pass2Context(
 /// <param name="WindowSeconds">This candidate's own probe window length, or null to use the pass's
 /// shared <see cref="RegionProber"/> window - which is what the gap re-probe and the recovery
 /// passes do.</param>
-/// <param name="FromJingle">True for a candidate built around a jingle rather than a pause - the
-/// classification's own, and equally a recovery pass's VAD-region ones. Its only consequence is
-/// that such a candidate's marks teach --min-silence-length auto nothing (see
-/// <see cref="RegionProber.ThresholdSilenceFor"/>); it does not reach window sizing, which
-/// <see cref="RegionProber"/>'s own classification flag governs.</param>
+/// <param name="Class">What made this a candidate - reported by <c>--verbose</c> for every mark, and
+/// the input to <see cref="RegionProber.ThresholdSilenceFor"/>. It does not reach window sizing,
+/// which <see cref="RegionProber"/>'s own classification flag governs: a recovery pass labels its
+/// candidates truthfully while still probing them all with the pass's shared window.</param>
 internal readonly record struct ProbeCandidate(
     double Start, Silence? Silence, NonSpeechRegion? VadRegion,
-    double? ExpectAtSeconds = null, double? WindowSeconds = null, bool FromJingle = false)
+    double? ExpectAtSeconds = null, double? WindowSeconds = null,
+    CandidateClass Class = CandidateClass.None)
 {
     /// <summary>Where this candidate expects its announcement - its own start unless the
     /// classification put the expectation somewhere else.</summary>
     internal double ExpectAt => ExpectAtSeconds ?? Start;
+
+    /// <summary>Whether this candidate is a jingle of either shape, which is the distinction the
+    /// threshold rule turns on - a mark found at music says nothing about how long this book's
+    /// chapter-break pauses run.</summary>
+    internal bool IsJingle => Class is CandidateClass.Jingle or CandidateClass.JingleEmbedded;
+}
+
+/// <summary>
+/// What made a place a Pass 2 candidate. Three of the four classes the primary scan reasons about;
+/// the fourth - a pause with a jingle right behind it - never becomes a candidate at all, so it has
+/// no value here (see <see cref="RegionProber.BuildClassifiedCandidates"/>).
+/// </summary>
+internal enum CandidateClass
+{
+    /// <summary>Neither: the region's own start, which exists so a book announcing its first
+    /// chapter in the opening seconds is not missed for want of a pause in front of it.</summary>
+    None,
+
+    /// <summary>A pause, with the announcement expected directly behind it.</summary>
+    Silence,
+
+    /// <summary>A jingle, with the announcement expected in the first speech behind the music.</summary>
+    Jingle,
+
+    /// <summary>A jingle the VAD pre-pass heard a bridged blip inside, so the announcement may be
+    /// spoken over the music rather than after it and the window covers the jingle as well.</summary>
+    JingleEmbedded,
 }
 
 /// <summary>
@@ -510,7 +537,7 @@ internal sealed class RegionProber
             : new List<ProbeCandidate> { new(_region.FromSeconds, null, null) };
         candidates.AddRange(_ctx.Silences
             .Where(s => s.EndSeconds >= _region.FromSeconds && s.EndSeconds < _region.ToSeconds - 1)
-            .Select(s => new ProbeCandidate(s.EndSeconds, s, null)));
+            .Select(s => new ProbeCandidate(s.EndSeconds, s, null, Class: CandidateClass.Silence)));
         if (_env.Vad == null || _sweeping)
             return candidates;
 
@@ -524,7 +551,11 @@ internal sealed class RegionProber
             var length = vadRegion.EndSeconds - jingleStart;
             if (length < MinJingleObservationSeconds || length > _ctx.JingleCeilingSeconds)
                 continue;
-            candidates.Add(new ProbeCandidate(jingleStart, null, vadRegion, FromJingle: true));
+            // Jingle, never JingleEmbedded: a recovery pass has no census entry to read a bridged
+            // blip out of, and the distinction would buy it nothing anyway - its window is the
+            // pass's shared one, which spans the music either way.
+            candidates.Add(new ProbeCandidate(
+                jingleStart, null, vadRegion, Class: CandidateClass.Jingle));
         }
         return candidates.OrderBy(c => c.Start).ToList();
     }
@@ -573,7 +604,8 @@ internal sealed class RegionProber
                 Math.Max(silence.StartSeconds, silence.EndSeconds - SilenceLeadInSeconds), silence, null,
                 ExpectAtSeconds: silence.EndSeconds,
                 WindowSeconds: silence.EndSeconds - Math.Max(silence.StartSeconds,
-                                   silence.EndSeconds - SilenceLeadInSeconds) + ExpectedAnnouncementSeconds));
+                                   silence.EndSeconds - SilenceLeadInSeconds) + ExpectedAnnouncementSeconds,
+                Class: CandidateClass.Silence));
         }
         // A jingle candidate opens after its own music, so the list is no longer in silence order.
         return candidates.OrderBy(c => c.Start).ToList();
@@ -622,7 +654,7 @@ internal sealed class RegionProber
         return new ProbeCandidate(start, null, region,
             ExpectAtSeconds: jingle.AnnouncementSeconds,
             WindowSeconds: jingle.AnnouncementSeconds - start + ExpectedAnnouncementSeconds,
-            FromJingle: true);
+            Class: spans ? CandidateClass.JingleEmbedded : CandidateClass.Jingle);
     }
 
     /// <summary>
@@ -1472,6 +1504,7 @@ internal sealed class RegionProber
         _env.Log?.Invoke($"{match.Phrase.Kind} detected (\"{match.Title}\"), mark placed at " +
                          $"{FormatTimestamp(time)} (confidence {match.Confidence:0.00}" +
                          await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
+                         CandidateNote(candidate) +
                          $"){LowConfidenceNote(match.Confidence)}");
     }
 
@@ -1713,6 +1746,7 @@ internal sealed class RegionProber
         _env.Log?.Invoke($"chapter {number} detected, mark placed at {FormatTimestamp(time)} " +
                          $"(confidence {match.Confidence:0.00}" +
                          await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
+                         CandidateNote(candidate) +
                          $"){LowConfidenceNote(match.Confidence)}" +
                          MissingNote(missingNumbers));
 
@@ -2162,7 +2196,22 @@ internal sealed class RegionProber
     /// <param name="candidate">The candidate whose window produced the mark.</param>
     /// <param name="markSilence">The silence the mark actually anchored to, or null.</param>
     private static Silence? ThresholdSilenceFor(ProbeCandidate candidate, Silence? markSilence)
-        => candidate.FromJingle ? null : markSilence;
+        => candidate.IsJingle ? null : markSilence;
+
+    /// <summary>What <c>--verbose</c> says about the candidate a mark came from, ready to append
+    /// inside the mark line's parenthetical, or empty for a candidate with no class to report. Not
+    /// merely decorative: the class decides where a window opened and how far it ran, so a mark that
+    /// landed oddly is read very differently depending on which of the three found it, and the log
+    /// is the only place that pairing is visible.</summary>
+    /// <param name="candidate">The candidate whose window produced the mark.</param>
+    private static string CandidateNote(ProbeCandidate candidate)
+        => candidate.Class switch
+        {
+            CandidateClass.Silence => ", at a silence",
+            CandidateClass.Jingle => ", at a jingle",
+            CandidateClass.JingleEmbedded => ", embedded in a jingle",
+            _ => "",
+        };
 
     /// <summary>
     /// Widens the --max-jingle-length auto window to whatever a gap-recovered chapter actually needed
