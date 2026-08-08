@@ -308,7 +308,7 @@ public sealed class ChapterDetector
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
 
-        var (allSilences, silences, nonSpeechRegions, speechSegments) =
+        var (allSilences, silences, nonSpeechRegions, speechSegments, jingles) =
             await RunPass1Async(file, info, work, bytesPerSecond, ct);
 
         // Pass 2 progress is position-based: the bar shows how far into the file's play time the
@@ -354,7 +354,7 @@ public sealed class ChapterDetector
 
         var pass2Ctx = new Pass2Context(
             file, info, work, bytesPerSecond, jingleCeilingSeconds,
-            allSilences, silences, nonSpeechRegions, speechSegments,
+            allSilences, silences, nonSpeechRegions, speechSegments, jingles,
             earlyAbortSeconds, expectedStartChapter, _transcriber);
 
         // The shortest chapter break any region measured, which is what decides whether the sweep
@@ -393,7 +393,8 @@ public sealed class ChapterDetector
         {
             if (pass2Completed)
                 chapters = await RunPass25Async(file, info, work, chapters, namedFound, jingleCeilingSeconds,
-                    allSilences, silences, nonSpeechRegions, speechSegments, bytesPerSecond, language.Profile, ct);
+                    allSilences, silences, nonSpeechRegions, speechSegments, jingles, bytesPerSecond,
+                    language.Profile, ct);
 
             chapters = await RunPass3Async(file, info, work, chapters, allSilences, nonSpeechRegions,
                 speechSegments, bytesPerSecond, language.Profile, trailingFallback, pass2Completed, ct);
@@ -1189,6 +1190,8 @@ public sealed class ChapterDetector
     /// <param name="silences">The --min-silence-length subset - Pass 2's own candidates.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions from <see cref="RunPass1Async"/>.</param>
     /// <param name="speechSegments">VAD speech segments from <see cref="RunPass1Async"/>.</param>
+    /// <param name="jingles">The file's jingle census, carried through only because
+    /// <see cref="Pass2Context"/> holds it; this pass's own windows keep their legacy sizing.</param>
     /// <param name="bytesPerSecond">The file's average byte rate, for progress reporting.</param>
     /// <param name="profile">The language profile resolved for this file.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -1198,7 +1201,7 @@ public sealed class ChapterDetector
         List<DetectedMark> namedFound,
         double jingleCeilingSeconds, List<Silence> allSilences, List<Silence> silences,
         List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
-        double bytesPerSecond, LanguageProfile profile, CancellationToken ct)
+        List<Jingle> jingles, double bytesPerSecond, LanguageProfile profile, CancellationToken ct)
     {
         if (!_options.Pass3ModelIsUpgrade || ReferenceEquals(_pass3Transcriber, _transcriber))
             return chapters;
@@ -1221,7 +1224,7 @@ public sealed class ChapterDetector
         // a question a bounded gap re-probe of an already-productive file gets to reopen.
         var ctx = new Pass2Context(
             file, info, work, bytesPerSecond, jingleCeilingSeconds,
-            allSilences, silences, nonSpeechRegions, speechSegments,
+            allSilences, silences, nonSpeechRegions, speechSegments, jingles,
             double.PositiveInfinity, null, _pass3Transcriber, SecondGuessNumbers: false);
 
         // No second opinion to ask: every window below already decodes through the upgrade model, so
@@ -1244,10 +1247,13 @@ public sealed class ChapterDetector
                 $"pass 2.5: re-probing {FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)} " +
                 $"for chapter{(missing.Count > 1 ? "s" : "")} {string.Join(", ", missing)} with the pass 3 model");
             var region = new DetectionRegion(gap.FromSeconds, gap.ToSeconds, missing[0] - 1, missing[^1] + 1);
+            // Unclassified windows on purpose: this pass re-reads a stretch the primary scan's own
+            // expectations already came up empty on, so the one thing it must not do is apply them
+            // a second time. Its value is the heavier model over the same audio, seen whole.
             var prober = new RegionProber(
                 env, ctx, region, found, namedFound,
                 new LanguageState(profile, null, 0),
-                gapSecondsDone - gap.FromSeconds);
+                gapSecondsDone - gap.FromSeconds, classifyCandidates: false);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
@@ -1617,9 +1623,12 @@ public sealed class ChapterDetector
     /// <param name="SpeechSegments">The raw VAD speech segments behind <paramref
     /// name="NonSpeechRegions"/>, kept for the anchor-time jingle edge adjustment; empty when the
     /// VAD pre-pass did not run.</param>
+    /// <param name="Jingles">The file's music stretches (see <see cref="JingleCensus"/>), which
+    /// Pass 2's primary scan builds its jingle candidates from; empty without the VAD pre-pass.</param>
     private readonly record struct Pass1Result(
         List<Silence> AllSilences, List<Silence> Silences,
-        List<NonSpeechRegion> NonSpeechRegions, List<SpeechSegment> SpeechSegments);
+        List<NonSpeechRegion> NonSpeechRegions, List<SpeechSegment> SpeechSegments,
+        List<Jingle> Jingles);
 
     /// <summary>
     /// Pass 1: scans the whole file for silences and, when the VAD pre-pass is enabled (see
@@ -1700,7 +1709,7 @@ public sealed class ChapterDetector
         }
         DumpPass1Signals(allSilences, nonSpeechRegions, speechSegments, jingles);
 
-        return new Pass1Result(allSilences, silences, nonSpeechRegions, speechSegments);
+        return new Pass1Result(allSilences, silences, nonSpeechRegions, speechSegments, jingles);
     }
 
     /// <summary>

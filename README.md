@@ -37,11 +37,11 @@ Prebuilt binaries for Windows and Linux are available on the
 - **Writes marks in place, safely** — chapters are written by stream-copy
   remuxing into a temporary file that is verified before it atomically replaces
   the original. Your audiobook cannot be lost, even without `--backup`.
-- **Jingle-aware probing, by default** — Pass 2's probe window is sized to
-  catch a jingle (a music sting) before the announcement, and a bundled
-  voice-activity model (Silero VAD) finds jingles even when they abut speech
-  with no silence on either side, which a plain amplitude scan would miss
-  entirely. `--mark-before-jingle` anchors the written mark to
+- **Jingle-aware probing, by default** — a bundled voice-activity model (Silero
+  VAD) finds jingles (music stings) even when they abut speech with no silence
+  on either side, which a plain amplitude scan would miss entirely, and Pass 2
+  gives each one a probe of its own aimed at where the announcement behind it
+  will be. `--mark-before-jingle` anchors the written mark to
   the jingle/silence itself instead of the default fixed offset before the
   phrase.
 - **Self-healing** — when the detected chapter numbers have gaps (e.g. chapter 12
@@ -239,7 +239,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `--use-gpu <name>` | Run Whisper on the GPU whose name contains `<name>`, case-insensitively — `--use-gpu gtx`, `--use-gpu uhd`. Only needed to override the automatic preference for a single discrete GPU, or to choose between several discrete ones. A request matching no GPU, or more than one, is an error listing the real names. Vulkan only. See [picking a GPU](doc/manual.md#picking-a-gpu-on-a-multi-gpu-machine). |
 | `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Where the walk ends on a pause, the mark backs into it by `-k` seconds; a chapter with no jingle at all keeps its ordinary placement. Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
 | `-Q`, `--quick-marks` | **Experimental.** Skip the refinement that normally re-transcribes the audio at every mark to confirm the phrase is really there (see [How it works](#how-it-works)). Faster — saves a handful of transcriptions per chapter — but marks, while usually usable, may end up after the chapter phrase rather than before it, even together with `-j`. |
-| `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the probe window's ceiling (default, and ceiling with `auto`: 45), or `0` for "no jingle expected at all" — narrows the probe window back down and skips the VAD pre-pass (unless `-j` still needs it). With `auto` (the default), the probe window self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps the window fixed at it instead. |
+| `-X`, `--max-jingle-length <s\|auto>` | Longest expected jingle in seconds; this is always the *recovery* window's ceiling (default, and ceiling with `auto`: 45) — Pass 2's own probing frames each window on its own candidate instead. `0` means "no jingle expected at all": no jingle candidates, and the VAD pre-pass is skipped (unless `-j` still needs it). With `auto` (the default), that width self-tightens after every jingle mark found (see [How it works](#how-it-works)); an explicit value keeps it fixed instead. |
 | `-k`, `--mark-lead <seconds>` | How far in front of the announcement a mark is placed (default 0.35). Purely a matter of taste — marks are located just as precisely whatever this is, it only decides how much lead-in you hear before the narrator starts. Below roughly 0.2 the announcement's opening consonant starts to get clipped; `0` marks the onset itself. Applies with `-j` too: in full where a chapter has no jingle, and as a back-off into the pause before the jingle where there is one (capped at that pause's length). |
 | `-n`, `--min-silence-length <s\|auto>` | Silence duration that counts as a potential chapter break; this is always the silence scan's floor (default, and floor with `auto`: 1.5). With `auto` (the default), the probing threshold self-tightens after every mark found (see [How it works](#how-it-works)); an explicit value probes every such silence instead. `0` switches silence-triggered probing off altogether, leaving only the jingles the voice-activity pre-pass finds — a large saving on a book whose every chapter opens with one, and a way to miss every chapter that does not. The silence scan itself keeps running either way, so marks land exactly where they otherwise would. |
 | `--noise-floor <dBFS\|auto>` | How quiet audio has to be to count as a pause — the other half of `--min-silence-length`'s question (default: `auto`). Normally −35 dBFS, which sits comfortably between the room tone and the narration of any ordinary master. `auto` samples each file first and moves the threshold only where −35 would not: a recording with audible hiss never drops below it, so no pause and no chapter is ever found, and a very quietly mastered one puts the narration itself under it, so every gap between two words looks like a chapter break. |
@@ -328,14 +328,15 @@ use `.`, whatever the machine's locale says.
    for speech vs. non-speech. A jingle is music, which reads as non-speech to
    a speech detector just like silence does — so this catches jingles the
    amplitude-only silence scan misses entirely: one that abuts the narration
-   with no detectable gap on either side. Where a silence leads into the
-   jingle, the silence scan already has it covered and VAD adds nothing
-   redundant; VAD only contributes new candidates at the silence-less
-   transitions, so it doesn't add extra Whisper probes for books that don't
-   need it.
-2. **Pass 2 — probing:** a short stretch of audio after each silence (and
-   after each silence-less jingle VAD found) is
-   transcribed with Whisper and matched against the chapter phrase. The chapter
+   with no detectable gap on either side. Every jingle it finds becomes a
+   probe candidate of its own; a pause that merely leads into one is then left
+   alone, since the jingle hears the same announcement from a better place.
+2. **Pass 2 — probing:** a short stretch of audio is transcribed with Whisper at
+   each candidate and matched against the chapter phrase. Where the window opens
+   and how far it runs follows from what made the place a candidate: after a
+   pause the announcement comes within seconds, behind a jingle it is the first
+   speech after the music, and a jingle with a sound *inside* it may be hiding
+   the announcement in there, so the window covers the music too. The chapter
    number is parsed from digits, Roman numerals, or numbers written out as
    words (0-999,
    cardinals and ordinals alike), whether it follows the phrase ("Chapter
@@ -353,15 +354,15 @@ use `.`, whatever the machine's locale says.
    are simply shorter than the default assumes — the gaps left in the
    numbering are swept for pauses in between, down to 0.8 s. An explicit
    `--min-silence-length` value disables
-   this and probes every silence at or above it instead. The jingle probe
-   window (`--max-jingle-length` plus 5 seconds for the phrase itself)
-   self-tightens the same way by default (`--max-jingle-length auto`):
+   this and probes every silence at or above it instead. The window the
+   *recovery* passes use (`--max-jingle-length` plus 5 seconds for the phrase
+   itself) self-tightens the same way by default (`--max-jingle-length auto`):
    starting from the second jingle mark found, it resizes to 1.25x the
    longest jingle actually observed so far, capped at the 45 s ceiling — an
-   explicit `--max-jingle-length` value keeps the window fixed at it instead.
-   A sequence gap puts the window back at the ceiling and retries every
-   candidate since the last chapter at that width, including ones already
-   probed while it was narrower — and since that retry knows both ends of the
+   explicit `--max-jingle-length` value keeps it fixed instead.
+   A sequence gap puts that width back at the ceiling and retries every
+   candidate since the last chapter there, including ones already
+   probed — and since that retry knows both ends of the
    hole it's filling, only the numbers actually missing from it can be right
    there. A number that can't be right — one leaving
    more than three chapters missing at once, one below the chapters
@@ -493,11 +494,11 @@ keeps its exact position.
   your audiobook's pauses vary too much for that to help, an explicit
   threshold like `-n 2.5` still works — far fewer Whisper probes, much faster
   run, but chapters go missing if it's set too high.
-- **Jingles:** by default (`-X auto`), the probe window self-tightens as real
-  jingle lengths are found, the same way `-n auto` does for silences. If you
-  know the jingle is consistently short, an explicit `-X 15` narrows the
-  window and speeds things up further; if there's no jingle at all, `-X 0`
-  narrows it all the way back down and skips the VAD pre-pass too.
+- **Jingles:** Pass 2 costs one probe per jingle whatever its length, so `-X`
+  is no longer a speed knob for it; by default (`-X auto`) it self-tightens the
+  window the *recovery* passes use, the same way `-n auto` does for silences.
+  If there's no jingle at all, `-X 0` drops the jingle candidates and skips the
+  VAD pre-pass too.
 - **Accuracy vs. speed:** the default pairing is `-m small -M turbo`, and it is
   not the compromise it looks like. The model named by `--model` listens to
   short windows a few seconds long, and the large models are *worse* at those

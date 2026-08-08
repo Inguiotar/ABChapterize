@@ -113,8 +113,8 @@ embedded in the executable (~2.2 MB, no separate download; see
 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)). Music reads as
 non-speech to a speech detector, the same as silence, so a jingle shows up as
 a non-speech region flanked by speech even when there is no amplitude gap
-around it, and pass 2 gets a candidate at every such jingle that has no
-leading silence of its own. This pre-pass is skipped only when
+around it, and pass 2 gets a candidate at every jingle it finds. This pre-pass
+is skipped only when
 `--max-jingle-length 0` says no jingle is expected at all and
 `--mark-before-jingle` is not given either — reproducing this tool's
 original, pre-jingle-detection behavior exactly (see the `-X` and `-j`
@@ -122,15 +122,31 @@ references below).
 
 ### Pass 2 — probing
 
-A short window of audio is transcribed with Whisper at the start of the file,
-after the end of every detected silence, and — whenever the VAD pre-pass ran
-(the default; see [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) — at every
-silence-less jingle it found too. The window is `--max-jingle-length` + 5
-seconds (up to 50 seconds, with the 45 s ceiling, before it self-tightens —
-see below), or a fixed 12 seconds when
-`--max-jingle-length 0` says no jingle is expected. Each transcript is matched
-against the chapter phrase (see `--chapter-phrase`), and the chapter number is
-parsed from digits, Roman numerals or number words
+A short window of audio is transcribed with Whisper at the start of the file and
+at every place a chapter could plausibly be announced. What made a place a
+candidate also decides where its window opens and how far it runs:
+
+- **A pause.** The announcement is expected directly after it, so the window
+  opens a few seconds before the pause ends — enough lead-in for the recognizer
+  to settle — and runs about twenty seconds past it.
+- **A jingle**, whenever the VAD pre-pass ran (the default; see
+  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)). The announcement is
+  expected in the first speech behind the music, so the window opens shortly
+  before that speech begins. Where the pre-pass heard a brief sound *inside* the
+  music, the announcement may be buried in it, and the window covers the whole
+  jingle as well.
+- **A pause that merely leads into a jingle** is not a candidate of its own.
+  Everything a window from there would hear belongs to the jingle behind it,
+  and the jingle listens for the same announcement from a better place.
+
+So `--max-jingle-length` no longer decides how wide these windows are — a book's
+jingles cost only the jingles' own probes now, however long they run. It still
+bounds the recovery passes below, and `--mark-before-jingle`'s search; and with
+`--max-jingle-length 0` there are no jingle candidates at all, leaving the pauses
+as the only thing looked at.
+
+Each transcript is matched against the chapter phrase (see `--chapter-phrase`),
+and the chapter number is parsed from digits, Roman numerals or number words
 (see [section 7](#7-languages-and-number-recognition)).
 
 If the phrase is heard but nothing following it can be read as a number,
@@ -277,22 +293,21 @@ recovered for a handful of probes instead. Nothing else about pass 2 changes:
 the pauses it was willing to probe in the first place are the same either way.
 See the [`-n` reference](#detection-behaviour) for the knob itself.
 
-By default (`--max-jingle-length auto`), the jingle probe window self-tightens
-the same way. Starting from the second jingle mark found (the first is
-excluded — the gap before it isn't necessarily representative), the window
-resizes to 1.25x the longest jingle actually observed so far plus the
-5-second phrase margin, capped at the 45 s ceiling and never allowed below 25
-seconds — any narrower and Whisper starts padding the window out and
-misreading it — narrowing once a book's
-real jingle length is known, and widening again if a longer one turns up.
-Giving `--max-jingle-length` an explicit numeric value (including `0`)
-disables this and keeps the window fixed at that value throughout. See the
+By default (`--max-jingle-length auto`), the *recovery* window self-tightens the
+same way — the width a re-probe or a pass 2.5 gets, since the primary probing
+above sizes each window from its own candidate. Starting from the second jingle
+mark found (the first is excluded — the gap before it isn't necessarily
+representative), it resizes to 1.25x the longest jingle actually observed so far
+plus the 5-second phrase margin, capped at the 45 s ceiling and never allowed
+below 25 seconds — any narrower and Whisper starts padding the window out and
+misreading it. Giving `--max-jingle-length` an explicit numeric value (including
+`0`) disables this and keeps the width fixed at that value throughout. See the
 [`-X` reference](#detection-behaviour) for the knob itself.
 
 A chapter turning up out of sequence puts every candidate since the previous
 chapter back in question, not just the ones that were passed over: a window
-that was probed while the jingle window sat narrow can end before an unusually
-late announcement, so those are re-probed at the full ceiling width too. The
+sized for an announcement close behind its own candidate can end before an
+unusually late one, so those are re-probed at the full ceiling width too. The
 retry stops as soon as the gap is closed. When there is nothing to retry —
 every candidate already had the full window and simply yielded no readable
 announcement — `--verbose` says so, and the gap goes straight to pass 3.
@@ -1036,23 +1051,26 @@ Two things are worth knowing before reaching for it:
   announcement. That can happen even together with `--mark-before-jingle`.
 
 `-X`, `--max-jingle-length <seconds|auto>`
-: Longest expected jingle (0, or 1–600); this is always the probe window's
-  ceiling (default, and ceiling with `auto`: 45). Above 0, probe windows
-  are `--max-jingle-length` + 5 seconds wide and a VAD pre-pass runs (see
-  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) to add candidates for
-  jingles with no detectable silence around them. `0` says no jingle is
-  expected at all: probe windows fall back to a fixed 12 seconds, and the
+: Longest expected jingle (0, or 1–600); this is always the *recovery* window's
+  ceiling (default, and ceiling with `auto`: 45) — the width a re-probe or a
+  pass 2.5 gets. It no longer sizes the primary probing, which frames each
+  window on its own candidate (see
+  [Pass 2](#pass-2--probing)). Above 0, a VAD pre-pass runs (see
+  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) and every jingle it finds
+  becomes a candidate. `0` says no jingle is
+  expected at all: there are no jingle candidates, recovery windows fall back to
+  a fixed 12 seconds, and the
   VAD pre-pass is skipped entirely unless `--mark-before-jingle` still needs
   it for mark placement — reproducing this tool's original,
   pre-jingle-detection behavior. An explicit numeric value (still above 0)
-  disables the self-tightening below and keeps the probe window fixed at
+  disables the self-tightening below and keeps the recovery window fixed at
   that width throughout — useful if the jingle length is known and
   consistent, or to shrink the window further for speed. With `auto` (the
-  default), probing starts
+  default), recovery starts
   at the 45 s ceiling and, from the second jingle mark found (the first is
   excluded for the same reason as `--min-silence-length auto` excludes the
   first silence — the gap before it isn't necessarily representative),
-  resizes the probe window to 1.25x the longest jingle actually observed so
+  resizes that window to 1.25x the longest jingle actually observed so
   far plus the 5-second phrase margin, never past the original ceiling and never
   below 25 seconds — a shorter window than that is padded out by Whisper before
   it is transcribed, and the recognizers are markedly worse at reading the
@@ -1071,13 +1089,11 @@ Two things are worth knowing before reaching for it:
   audiobooks only play the jingle for some chapters, and such a chapter
   says nothing about how long the window needs to be for one that does
   have a full jingle. Same idea as `--min-silence-length auto`, just for
-  the jingle window instead of the silence threshold. Once the window
-  narrows, VAD regions longer than it stop being probed too — the same
-  speedup pass 2 already gets from tightened silence candidates — but a
+  the recovery window instead of the silence threshold. A
   later sequence gap temporarily resets the window back to the ceiling,
   retries every candidate since the last chapter at that full width — those
-  skipped, and those already probed while the window was narrower than the
-  ceiling, whose announcement may simply have sat past the end of it — and
+  skipped, and those already probed, whose announcement may simply have sat
+  past the end of a window framed for one closer by — and
   then returns to the adapted width, including whatever the recovered
   chapters' own jingles just taught it — and how far into its window a
   recovered chapter's announcement reached, which may widen the window by up
@@ -2408,10 +2424,8 @@ actually transcribed. Typical causes: the announcements use a different word
 (fix with `--chapter-phrase`), the language is wrong (with `--lang auto`,
 check the "language used" note in the result line - the samples may have
 agreed on the wrong language or failed to agree at all and fallen back to
-`en`; pin it with an explicit `--lang` if so), the pauses are shorter than
-`--min-silence-length`
-(lower `-n`), or the jingle runs longer than the default 45 s ceiling (raise
-`--max-jingle-length`).
+`en`; pin it with an explicit `--lang` if so), or the pauses are shorter than
+`--min-silence-length` (lower `-n`).
 
 **Chapters found but some are missing** — if the missing ones are announced
 without a preceding pause, pass 3 usually catches them automatically. If a

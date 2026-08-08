@@ -118,6 +118,52 @@ internal static class DetectionTuning
     /// count as a real announcement rather than an in-text mention.</summary>
     internal const double PhraseLatestStart = 5.0;
 
+    /// <summary>
+    /// How far past the point where Pass 2's primary scan <em>expects</em> an announcement its
+    /// probe window reaches - after the silence for a plain pause, after the music for a jingle
+    /// (see <see cref="RegionProber.BuildCandidates"/>). This is the whole probe window for those
+    /// candidates: nothing has to cross a jingle any more, so no window needs to be as long as one.
+    /// <para>
+    /// Sized by what a Whisper pass costs, not by what an announcement needs. Recognition runs on a
+    /// fixed <see cref="WhisperChunkSeconds"/> mel whatever the window holds, so a 7 s window costs
+    /// exactly what a 27 s one does and there is no reason at all to be stingy - the only thing
+    /// shortening buys is decode I/O, which is negligible beside the recognition. This plus
+    /// <see cref="SilenceLeadInSeconds"/> stays inside one chunk, which is the real constraint.
+    /// </para>
+    /// <para>
+    /// Calibrated 2026-08-08 by replaying the classification over the fourteen-book corpus's own
+    /// Pass 1 signals: every mark Pass 2's main scan finds today is still inside its window, and the
+    /// tightest real announcement leaves 2.8 s of room ("Stalker"), most of them 5-8 s. Books whose
+    /// announcements sit further out than this exist - all ten the replay could not cover are marks
+    /// today's Pass 2 does not find either, recovered by the gap machinery, which is unchanged.
+    /// </para>
+    /// </summary>
+    internal const double ExpectedAnnouncementSeconds = 22.0;
+
+    /// <summary>
+    /// How much of the silence before an expected announcement a probe window opens with, so
+    /// Whisper has a run-up rather than starting hard on the first syllable.
+    /// <para>
+    /// Taken from <em>inside</em> the silence (clamped to its start), never from the narration
+    /// before it, and that constraint is load-bearing rather than tidy: several mechanisms read a
+    /// probe transcript as "the first speech heard here is the announcement" - see
+    /// <see cref="JingleGeometry.TrimLeadingNonSpeech"/> and
+    /// <see cref="PreciseMarkRefiner"/>'s survival probes - and a run-up of the previous chapter's
+    /// closing sentence would quietly make that false.
+    /// </para>
+    /// </summary>
+    internal const double SilenceLeadInSeconds = 3.0;
+
+    /// <summary>
+    /// The same run-up for a jingle candidate, taken from inside the music, and deliberately longer:
+    /// the point it is measured back from is a VAD speech onset rather than a silencedetect edge, so
+    /// it carries the detector's own latency plus whatever timeline drift survives Pass 1's resync
+    /// (see <see cref="Audio.FfmpegClient.PcmResyncToleranceSeconds"/> - up to 2.15 s was measured
+    /// across the corpus before that fix). Generous by design: the run-up costs nothing, and the
+    /// announcement landing before the window opens costs a chapter.
+    /// </summary>
+    internal const double JingleLeadInSeconds = 8.0;
+
     /// <summary>Flat margin added to --max-jingle-length so the phrase after the jingle still
     /// fits into the probe window.</summary>
     internal const double PhraseMarginSeconds = 5.0;

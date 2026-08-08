@@ -74,6 +74,9 @@ internal sealed record ProbeEnvironment(
 /// (see <see cref="RegionProber"/>'s sweep remarks).</param>
 /// <param name="NonSpeechRegions">The VAD pre-pass's non-speech regions, empty when it did not run.</param>
 /// <param name="SpeechSegments">The VAD pre-pass's speech segments, empty when it did not run.</param>
+/// <param name="Jingles">The file's music stretches as Pass 1 measured them
+/// (<see cref="JingleCensus"/>), empty when the VAD pre-pass did not run. The primary scan's
+/// jingle candidates are built from these; the recovery passes ignore them.</param>
 /// <param name="EarlyAbortSeconds">Play time that may be probed without a single find before
 /// --early-abort gives up, or +infinity when the check does not apply.</param>
 /// <param name="ExpectedStartChapter">--expected-start-chapter's abort threshold, or null when
@@ -95,8 +98,8 @@ internal sealed record ProbeEnvironment(
 internal readonly record struct Pass2Context(
     string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond, double JingleCeilingSeconds,
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
-    List<SpeechSegment> SpeechSegments, double EarlyAbortSeconds, int? ExpectedStartChapter,
-    ITranscriber Transcriber, bool SecondGuessNumbers = true);
+    List<SpeechSegment> SpeechSegments, List<Jingle> Jingles, double EarlyAbortSeconds,
+    int? ExpectedStartChapter, ITranscriber Transcriber, bool SecondGuessNumbers = true);
 
 /// <summary>One position Pass 2 may probe: the region start, a silence's end, or the start of a
 /// VAD jingle region. Exactly one of the two anchors is set, except for the region-start candidate,
@@ -104,8 +107,25 @@ internal readonly record struct Pass2Context(
 /// <param name="Start">Absolute time the probe window starts at.</param>
 /// <param name="Silence">The silence whose end this is, when a silence triggered the candidate.</param>
 /// <param name="VadRegion">The VAD non-speech region this starts, when one triggered the candidate.</param>
+/// <param name="ExpectAtSeconds">Where the announcement is expected, which is not always where the
+/// window opens: a plain pause expects it at the silence's end, a jingle expects it where the music
+/// stops. Null for a candidate with no expectation of its own (the region start, and every
+/// candidate of a recovery pass), which reads as "at <paramref name="Start"/>" and reproduces the
+/// behaviour that predates the classification.</param>
+/// <param name="WindowSeconds">This candidate's own probe window length, or null to use the pass's
+/// shared <see cref="RegionProber"/> window - which is what the gap re-probe and the recovery
+/// passes do.</param>
+/// <param name="SpansJingle">True for a jingle a VAD blip sits inside, whose window deliberately
+/// covers the music as well as the speech behind it, because the announcement may be embedded in
+/// the jingle rather than following it.</param>
 internal readonly record struct ProbeCandidate(
-    double Start, Silence? Silence, NonSpeechRegion? VadRegion);
+    double Start, Silence? Silence, NonSpeechRegion? VadRegion,
+    double? ExpectAtSeconds = null, double? WindowSeconds = null, bool SpansJingle = false)
+{
+    /// <summary>Where this candidate expects its announcement - its own start unless the
+    /// classification put the expectation somewhere else.</summary>
+    internal double ExpectAt => ExpectAtSeconds ?? Start;
+}
 
 /// <summary>
 /// One probe window as planned, together with the candidate sequence it came from - enough for the
@@ -363,6 +383,16 @@ internal sealed class RegionProber
     /// </summary>
     private readonly bool _sweeping;
 
+    /// <summary>
+    /// Whether this prober classifies its candidates and sizes each window to what that class
+    /// expects (see <see cref="BuildClassifiedCandidates"/>), which is the primary scan's job alone.
+    /// Every recovery pass - the sequence-gap re-probe, the sub-floor sweep, pass 2.5 - keeps the
+    /// older shared-window behaviour on purpose: each of them exists because the primary scan's
+    /// expectations already came up empty somewhere, so re-applying those same expectations is
+    /// exactly what a second look must not do.
+    /// </summary>
+    private readonly bool _classified;
+
     /// <summary>Creates a prober for one region.</summary>
     /// <param name="env">The detector-owned tools and callbacks to probe with.</param>
     /// <param name="ctx">Region-loop-invariant Pass 2 inputs.</param>
@@ -374,9 +404,12 @@ internal sealed class RegionProber
     /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
     /// <param name="sweepingSubFloorSilences">Whether this is a Pass 2.5 sub-floor sweep; see
     /// <see cref="_sweeping"/>.</param>
+    /// <param name="classifyCandidates">Whether to size windows from the candidate classification;
+    /// see <see cref="_classified"/>. False for every recovery pass.</param>
     internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
-        double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false)
+        double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false,
+        bool classifyCandidates = true)
     {
         _env = env;
         _ctx = ctx;
@@ -387,6 +420,7 @@ internal sealed class RegionProber
         Language = language;
         _progressOffsetSeconds = progressOffsetSeconds;
         _sweeping = sweepingSubFloorSilences;
+        _classified = classifyCandidates && !sweepingSubFloorSilences;
         _probeSeconds = env.Options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
@@ -456,6 +490,15 @@ internal sealed class RegionProber
     /// </para>
     /// </summary>
     private List<ProbeCandidate> BuildCandidates()
+        => _classified ? BuildClassifiedCandidates() : BuildLegacyCandidates();
+
+    /// <summary>
+    /// The candidate list the recovery passes use: every silence and every silence-less VAD region,
+    /// each probed with the pass's shared window. Kept unchanged from before the classification
+    /// because a recovery pass is looking for what the primary scan's expectations already failed to
+    /// find, so reasoning from those same expectations is the one thing it must not do.
+    /// </summary>
+    private List<ProbeCandidate> BuildLegacyCandidates()
     {
         var candidates = _sweeping
             ? []
@@ -482,6 +525,102 @@ internal sealed class RegionProber
     }
 
     /// <summary>
+    /// The primary scan's candidate list, where what made a place a candidate also decides where its
+    /// window opens and where in it the announcement is expected. Four shapes, and the classification
+    /// is the whole point - one window shape for all of them is what forced every probe to be as long
+    /// as this book's longest jingle:
+    /// <list type="bullet">
+    /// <item>a silence with a jingle right behind it is <em>not</em> a candidate: the jingle below
+    /// covers the same transition and knows where its speech resumes, so probing the silence would
+    /// spend a window on the music;</item>
+    /// <item>a silence with no jingle behind it expects the announcement immediately after it -
+    /// which is what a chapter break without music sounds like;</item>
+    /// <item>a jingle expects it where speech resumes (<see cref="Jingle.AnnouncementSeconds"/>),
+    /// with the window opening a <see cref="JingleLeadInSeconds"/> run-up earlier inside the music;</item>
+    /// <item>a jingle a VAD blip sits inside gets its whole span probed instead, because that blip
+    /// is the one evidence available that the announcement is spoken <em>over</em> the music rather
+    /// than after it.</item>
+    /// </list>
+    /// <para>
+    /// Both lead-ins are clamped to non-speech - into the silence, into the music - and never reach
+    /// back into the previous narration: <see cref="SilenceLeadInSeconds"/> says why that matters.
+    /// </para>
+    /// </summary>
+    private List<ProbeCandidate> BuildClassifiedCandidates()
+    {
+        var candidates = new List<ProbeCandidate> { RegionStartCandidate() };
+        var jingles = JinglesInRegion();
+        foreach (var jingle in jingles)
+            candidates.Add(JingleCandidate(jingle));
+        foreach (var silence in _ctx.Silences)
+        {
+            if (silence.EndSeconds < _region.FromSeconds || silence.EndSeconds >= _region.ToSeconds - 1)
+                continue;
+            // A silence that ends anywhere between a jingle's first note and the speech behind it -
+            // its lead-in hush, a dip in the middle of the music, the hush after it - is part of
+            // that transition rather than one of its own. Everything a window from here would hear
+            // is the jingle's, and the jingle candidate hears it from a better place.
+            if (jingles.Any(j =>
+                    silence.EndSeconds >= j.StartSeconds - JinglePhraseMatchToleranceSeconds &&
+                    silence.EndSeconds < j.AnnouncementSeconds))
+                continue;
+            candidates.Add(new ProbeCandidate(
+                Math.Max(silence.StartSeconds, silence.EndSeconds - SilenceLeadInSeconds), silence, null,
+                ExpectAtSeconds: silence.EndSeconds,
+                WindowSeconds: silence.EndSeconds - Math.Max(silence.StartSeconds,
+                                   silence.EndSeconds - SilenceLeadInSeconds) + ExpectedAnnouncementSeconds));
+        }
+        // A jingle candidate opens after its own music, so the list is no longer in silence order.
+        return candidates.OrderBy(c => c.Start).ToList();
+    }
+
+    /// <summary>The region's own start, which is a candidate in its own right: a book whose first
+    /// chapter is announced in the opening seconds has no silence in front of it to trigger one.</summary>
+    private ProbeCandidate RegionStartCandidate()
+        => new(_region.FromSeconds, null, null,
+            ExpectAtSeconds: _region.FromSeconds, WindowSeconds: ExpectedAnnouncementSeconds);
+
+    /// <summary>
+    /// This region's jingles, one per announcement. The census splits a jingle its music dipped
+    /// below the noise floor in the middle into two entries sharing that announcement; probing both
+    /// would decode the same transition twice, so the earliest entry stands for the whole run - it
+    /// also carries the earliest start, which is what the blip-spanning window needs.
+    /// </summary>
+    private List<Jingle> JinglesInRegion()
+        => _env.Vad == null
+            ? []
+            : _ctx.Jingles
+                .Where(j => j.StartSeconds >= _region.FromSeconds && j.StartSeconds < _region.ToSeconds)
+                .GroupBy(j => j.AnnouncementSeconds)
+                .Select(g => g.OrderBy(j => j.StartSeconds).First())
+                .OrderBy(j => j.StartSeconds)
+                .ToList();
+
+    /// <summary>Turns one jingle into its candidate: a window on the speech behind it, or - when a
+    /// bridged VAD blip says the announcement may be inside the music - one spanning the jingle
+    /// itself as well.</summary>
+    /// <param name="jingle">The jingle to probe around.</param>
+    private ProbeCandidate JingleCandidate(Jingle jingle)
+    {
+        var spans = jingle.BridgedBlips > 0;
+        var start = spans
+            ? jingle.StartSeconds
+            : Math.Max(jingle.StartSeconds, jingle.AnnouncementSeconds - JingleLeadInSeconds);
+        // The merged VAD region this jingle sits in, when there is one: ResolveAnnouncementMark
+        // prefers the candidate's own region over any other when the phrase falls inside it, and a
+        // jingle candidate without it would lose that preference to a neighbouring region.
+        var region = _ctx.NonSpeechRegions
+            .Where(r => r.StartSeconds <= jingle.StartSeconds + JinglePhraseMatchToleranceSeconds &&
+                        r.EndSeconds >= jingle.EndSeconds - JinglePhraseMatchToleranceSeconds)
+            .Cast<NonSpeechRegion?>()
+            .FirstOrDefault();
+        return new ProbeCandidate(start, null, region,
+            ExpectAtSeconds: jingle.AnnouncementSeconds,
+            WindowSeconds: jingle.AnnouncementSeconds - start + ExpectedAnnouncementSeconds,
+            SpansJingle: spans);
+    }
+
+    /// <summary>
     /// Where the window of <paramref name="index"/> ends. Computed on the fly, right before that
     /// window's probe runs, rather than pre-planned in bulk: an overlapping neighbor gets the shared
     /// border snapped to a silence mid-point, which moves this window's decode end itself - possibly
@@ -496,7 +635,11 @@ internal sealed class RegionProber
     private double WindowEndFor(IReadOnlyList<ProbeCandidate> list, int index)
         => PlanWindowEnd(list[index].Start,
             index + 1 < list.Count ? list[index + 1].Start : null,
-            _probeSeconds, _region.ToSeconds, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
+            // A classified candidate carries its own width; the shared window is what everything
+            // else uses, and what a gap re-probe deliberately falls back to even here (see
+            // ReprobeGapCandidatesAsync, which widens to the ceiling for exactly that reason).
+            _reprobing ? _probeSeconds : list[index].WindowSeconds ?? _probeSeconds,
+            _region.ToSeconds, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
 
     /// <summary>
     /// How far a decode that must cover up to <c>plan.End</c> is allowed to read on past it: the
@@ -600,7 +743,10 @@ internal sealed class RegionProber
             return false;
         var belowThreshold = _env.Options.AutoMinSilence && candidate.Silence is { } silence &&
                              silence.EndSeconds - silence.StartSeconds < _threshold;
-        var vadTooLong = candidate.VadRegion is { } vadRegion &&
+        // Only where the window is the pass's shared one and can therefore have narrowed since the
+        // candidate qualified. A classified candidate's window is cut to its own jingle, so there is
+        // nothing left for it to outgrow.
+        var vadTooLong = !_classified && candidate.VadRegion is { } vadRegion &&
                          vadRegion.EndSeconds - candidate.Start > _probeSeconds;
         if (!belowThreshold && !vadTooLong)
             return false;
@@ -1717,7 +1863,13 @@ internal sealed class RegionProber
             return (time, markSilence, markRegion);
         }
 
-        if (phraseStartSeconds <= PhraseLatestStart)
+        // Measured from where this candidate expects its announcement rather than from where its
+        // window happens to open, which are the same point for every unclassified candidate and for
+        // a plain-pause one. They part company where the window carries a lead-in, and where the
+        // expectation sits past a jingle - and a phrase *before* the expected point passes too,
+        // deliberately: on a jingle whose window spans the music that is the announcement being
+        // spoken over it, which is the whole reason that window is shaped the way it is.
+        if (phraseAbs - candidate.ExpectAt <= PhraseLatestStart)
             return (Math.Max(0, phraseAbs - MarkLead), candidate.Silence, null);
 
         // Each of the three ways this can fail is named separately rather than folded into one

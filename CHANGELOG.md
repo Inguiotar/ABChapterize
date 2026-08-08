@@ -117,6 +117,24 @@ earn a round number.
   `--max-jingle-length` has to cover. `--debug` lists each jingle with its position.
 
 ### Changed
+
+- **Pass 2 now frames each probe around what it expects to hear there, instead of handing
+  every candidate the same window.** A pause and a jingle are different promises: after a
+  pause the announcement follows within seconds, behind a jingle it is the first speech
+  after the music, and a jingle with a sound buried in it may be hiding the announcement
+  inside the music. Each probe now opens shortly before what it is actually looking for and
+  runs only as far as an announcement plausibly reaches — and a pause that merely leads into
+  a jingle is no longer probed on its own, since the jingle behind it listens for the same
+  announcement from a better place. Across the test corpus this roughly halves the
+  recognizer work pass 2 does, and it looks in the places the one-size window was stretched
+  to cover.
+
+  The knock-on effect is on `--max-jingle-length`: it no longer sizes pass 2's windows at
+  all, so a book with long jingles costs one probe per jingle rather than a book-wide window
+  wide enough for the longest of them. It still bounds the recovery passes, still decides
+  whether the voice-activity pre-pass runs, and `0` still means "no jingles here, look only
+  at the pauses".
+
 - **The default is now a small model for finding chapters and `turbo` for filling the gaps**
   (`-m small -M turbo`), where both used to be `turbo`. This is not a speed compromise: the
   model that finds chapters listens to windows a few seconds long, and the large models are
