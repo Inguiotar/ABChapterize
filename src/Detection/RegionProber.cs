@@ -485,9 +485,59 @@ internal sealed class RegionProber
     /// subset a sequence-gap re-probe forms.</param>
     /// <param name="index">Index within <paramref name="list"/>.</param>
     private double WindowEndFor(IReadOnlyList<ProbeCandidate> list, int index)
-        => PlanWindowEnd(list[index].Start,
-            index + 1 < list.Count ? list[index + 1].Start : null,
+        => PlanWindowEnd(list[index].Start, NextProbedStart(list, index),
             _probeSeconds, _region.ToSeconds, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
+
+    /// <summary>
+    /// The next candidate start <see cref="GapPlanning.PlanWindowEnd"/> is allowed to share a border
+    /// with: the ordinary grid only, never a sub-floor extra (see <see cref="IsSubFloorExtra"/>).
+    /// Null when there is none, which makes this window stand-alone.
+    /// <para>
+    /// This is what keeps the extras additive. A shared border does not merely mark where one
+    /// window's interest ends - it is where the decode itself stops and the next one resumes, so an
+    /// extra candidate inserted between two ordinary ones splits one decode into two shorter ones.
+    /// Whisper's reading of a stretch depends on the window it arrives in, which is a property this
+    /// tool relies on elsewhere and must not stumble over here: the same audio read in two pieces is
+    /// not the same evidence.
+    /// </para>
+    /// <para>
+    /// Measured, on a 25-minute BARDIOC clip (2026-08-08, build 257). Widening the candidate list
+    /// from 27 to 200 re-cut the decodes over the last two minutes - 49.4 s and 34.9 s became 28.8,
+    /// 19.8 and 13.5 s - and chapter 2's announcement at 0:24:44.73, which the long decode heard
+    /// comfortably, fell 1.2 s short of the end of a 19.8 s one and was dropped by the recognizer,
+    /// then missed again by the jingle re-read (which inherits the same end) and by the next window
+    /// (which starts after it). One chapter lost to framing alone, with the candidate that
+    /// eventually found it present and unchanged in both runs.
+    /// </para>
+    /// </summary>
+    /// <param name="list">The candidate sequence being walked.</param>
+    /// <param name="index">Index within <paramref name="list"/> of the window being planned.</param>
+    private double? NextProbedStart(IReadOnlyList<ProbeCandidate> list, int index)
+    {
+        for (var i = index + 1; i < list.Count; i++)
+            if (!IsSubFloorExtra(list[i]))
+                return list[i].Start;
+        return null;
+    }
+
+    /// <summary>
+    /// Whether this candidate exists only because --min-silence-length auto may talk its threshold
+    /// below the length the run opened at (see
+    /// <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/>). Such a candidate is a bonus probe
+    /// laid on top of the grid Pass 2 has always used, and it is bounded to that role: it may be
+    /// probed, and it may not reshape any other window (<see cref="NextProbedStart"/>). Judged
+    /// against --min-silence-length rather than the current threshold, so the grid is the same one
+    /// on every run of a given file no matter what the adaptation does in between.
+    /// <para>
+    /// Neither a sweep's list nor a gap re-probe's has extras in it: a sweep's candidates <em>are</em>
+    /// its grid, and a re-probe decodes every candidate it was handed, so both want their borders
+    /// shared as usual.
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The candidate to judge.</param>
+    private bool IsSubFloorExtra(ProbeCandidate candidate)
+        => !_sweeping && !_reprobing && candidate.Silence is { } silence &&
+           silence.EndSeconds - silence.StartSeconds < _env.Options.MinSilenceSeconds;
 
     /// <summary>
     /// How far a decode that must cover up to <c>plan.End</c> is allowed to read on past it: the
@@ -2015,6 +2065,13 @@ internal sealed class RegionProber
     /// still go into <see cref="_skippedSinceLastMark"/>, so the gap re-probe recovers the unlikely
     /// case after all (and Pass 3 remains the final net). A low-confidence mark settles nothing: the
     /// remaining windows keep their chance to re-detect the transition it may have gotten wrong.
+    /// <para>
+    /// Bounded at <see cref="DetectionTuning.MaxSettledWindowSkip"/> windows, because the premise
+    /// fails on a dense candidate sequence - see that constant for the book where one mark settled
+    /// 6260 of them. Reaching the cap is logged rather than passed over: it says the sequence was
+    /// denser than the skip assumes, which is the first thing worth knowing if the run then behaves
+    /// oddly around that mark.
+    /// </para>
     /// </summary>
     /// <param name="candidates">The region's candidate sequence.</param>
     /// <param name="ci">Index of the candidate just probed.</param>
@@ -2032,15 +2089,22 @@ internal sealed class RegionProber
 
         var skipTo = ci;
         var reach = windowEnd;
+        var capped = false;
         while (skipTo + 1 < candidates.Count && reach > candidates[skipTo + 1].Start)
         {
+            if (skipTo - ci >= MaxSettledWindowSkip)
+            {
+                capped = true;
+                break;
+            }
             skipTo++;
             reach = WindowEndFor(candidates, skipTo);
         }
         if (skipTo == ci)
             return ci;
 
-        _env.Log?.Invoke($"{skipTo - ci} overlapping window(s) skipped");
+        _env.Log?.Invoke($"{skipTo - ci} overlapping window(s) skipped" +
+                         (capped ? " - chain capped, the rest are probed" : ""));
         for (var si = ci + 1; si <= skipTo; si++)
             _skippedSinceLastMark.Add(candidates[si]);
         return skipTo;

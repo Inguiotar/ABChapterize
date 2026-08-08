@@ -945,6 +945,33 @@ internal static class DetectionTuning
     internal const double LowConfidenceThreshold = 0.5;
 
     /// <summary>
+    /// How many consecutive candidates one confident mark may settle in
+    /// <see cref="RegionProber.SkipSettledWindows"/>. The skip's premise - that an overlapping run
+    /// of windows covers the one transition just found, so a run spanning two of them is unlikely -
+    /// holds only while the run is short, and nothing about candidate density bounds its length: a
+    /// book whose pauses cluster just above the probing threshold produces windows that each overlap
+    /// the next for hours on end, and then the premise is not merely unlikely but false.
+    /// <para>
+    /// The case that forced this: BARDIOC.m4b, 2026-08-08, build 257 (the build that first cut the
+    /// candidate list at <see cref="AdaptiveSilenceFloorSeconds"/> rather than at
+    /// --min-silence-length). A single confident chapter-1 mark at 0:07:58 settled <em>6260</em>
+    /// windows in one step and probing resumed at 11:13:27 - eleven hours of a fifteen-hour book
+    /// skipped outright, with all 6260 also queued for the unconditional gap re-probe that any later
+    /// sequence gap would trigger.
+    /// </para>
+    /// <para>
+    /// Ten is where the corpus says the cap costs nothing. Counted over the fourteen-book run's
+    /// debug logs in L:\Temp (builds 244-251, i.e. before the candidate list widened), 292 chains:
+    /// lengths 1:126, 2:88, 3:38, 4:13, 5:5, 6:6, 7:4, 8:4, 9:1, 10:2, 11:1, 12:1, 15:1, 17:1,
+    /// 23:1. A cap of 10 leaves 287 of them exactly as they were and clips five, for 28 extra probes
+    /// across all fourteen books put together. The cap is also safe by construction in a way the
+    /// skip is not: a clipped window is <em>probed</em>, never dropped, so this can only ever find
+    /// more chapters than going uncapped would.
+    /// </para>
+    /// </summary>
+    internal const int MaxSettledWindowSkip = 10;
+
+    /// <summary>
     /// The most <c>--custom</c> marks one file may produce before the rest are dropped. A guard
     /// against a mapping that matches ordinary prose rather than a structural announcement - the
     /// obvious accident being something like <c>--custom "the:the"</c>, which would otherwise place

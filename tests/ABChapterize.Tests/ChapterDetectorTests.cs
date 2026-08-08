@@ -4466,6 +4466,34 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task OverlapSkip_IsCapped_SoOneMarkCannotSettleAWholeBook()
+    {
+        // Fifteen candidates 5 s apart, each 12 s window overlapping the next, so the chain would
+        // otherwise run to the end of the list off chapter one's single confident mark. That is the
+        // BARDIOC.m4b failure of 2026-08-08 in miniature, where one mark settled 6260 windows and
+        // probing resumed eleven hours later; the premise that an overlapping run covers one
+        // transition is only true while the run is short. Capped, the rest are probed - and chapter
+        // two, scripted well past the cap, has to be found, which is what a runaway chain loses.
+        var silences = new List<Silence>();
+        for (var i = 0; i < 15; i++)
+            silences.Add(new(598.5 + 5 * i, 600 + 5 * i));
+
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            silences,
+            s =>
+            {
+                s.Add(600, Seg(0.5, " Chapter one."));
+                s.Add(660, Seg(0.5, " Chapter two."));
+            });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l =>
+            l.Contains($"{DetectionTuning.MaxSettledWindowSkip} overlapping window(s) skipped") &&
+            l.Contains("chain capped"));
+    }
+
+    [Fact]
     public async Task ReadAhead_DoesNotCacheATailTheRecognizerLeftUntranscribed()
     {
         // "BARDIOC.m4b" (2026-08-02) in miniature, the failure that made CacheableEnd necessary: the
