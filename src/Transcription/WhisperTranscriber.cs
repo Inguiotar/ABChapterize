@@ -81,7 +81,8 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     }
 
     /// <inheritdoc/>
-    public async Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct)
+    public async Task<List<TranscriptSegment>> TranscribeAsync(
+        float[] samples, CancellationToken ct, Action<double>? onProgressSeconds = null)
     {
         var result = new List<TranscriptSegment>();
         if (samples.Length < FfmpegClient.SampleRate / 2)
@@ -91,6 +92,10 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
         {
             result.Add(new TranscriptSegment(
                 seg.Start.TotalSeconds, seg.End.TotalSeconds, seg.Text, seg.Probability));
+            // The enumeration is already segment-by-segment, so this is the recognizer's own
+            // position falling out of a loop that was running anyway - no callback registered with
+            // the native side, no second pass, nothing measured that was not already here.
+            onProgressSeconds?.Invoke(seg.End.TotalSeconds);
         }
         return result;
     }

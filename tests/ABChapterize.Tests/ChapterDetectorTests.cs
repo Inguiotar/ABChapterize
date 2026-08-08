@@ -190,6 +190,12 @@ public sealed class ChapterDetectorTests : IDisposable
         /// is being used.</summary>
         public Action? OnTranscribe { get; set; }
 
+        /// <summary>Called after every progress report this transcriber makes, once the detector's
+        /// own handler has seen it. <see cref="OnTranscribe"/>'s counterpart for the *inside* of a
+        /// long transcription: the only moment at which a test can sample what a chunk still being
+        /// recognized has told the progress tracker.</summary>
+        public Action<double>? OnProgressReported { get; set; }
+
         /// <summary>
         /// Returns whatever scripted speech actually begins inside the window just decoded,
         /// re-based to that window's own start - the same contract Whisper has, and the reason a
@@ -209,7 +215,10 @@ public sealed class ChapterDetectorTests : IDisposable
         /// </summary>
         /// <param name="samples">Ignored; the decode's own boundaries carry the information.</param>
         /// <param name="ct">Ignored; nothing here blocks.</param>
-        public Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct)
+        /// <param name="onProgressSeconds">Reported per segment, as the real recognizer does, so a
+        /// test can observe what a long transcription tells the progress bar on its way through.</param>
+        public Task<List<TranscriptSegment>> TranscribeAsync(
+            float[] samples, CancellationToken ct, Action<double>? onProgressSeconds = null)
         {
             OnTranscribe?.Invoke();
             var (start, duration) = _audio.DecodeWindows[^1];
@@ -227,6 +236,11 @@ public sealed class ChapterDetectorTests : IDisposable
                 .Select(x => new TranscriptSegment(
                     x.Absolute - start, x.End - start, x.seg.Text, x.seg.Probability))
                 .ToList();
+            foreach (var segment in segments)
+            {
+                onProgressSeconds?.Invoke(segment.EndSeconds);
+                OnProgressReported?.Invoke(segment.EndSeconds);
+            }
             return Task.FromResult(segments);
         }
 
@@ -3940,7 +3954,7 @@ public sealed class ChapterDetectorTests : IDisposable
         upgrade.Add(660, Seg(0, " Chapter two."));
         var profile = Options().ResolveProfile("en");
         var refiner = new PreciseMarkRefiner(
-            audio, Options(), default, probing.TranscribeAsync,
+            audio, Options(), default, (samples, ct) => probing.TranscribeAsync(samples, ct),
             (samples, language, ct) =>
             {
                 Assert.Equal("en", language);
@@ -3966,7 +3980,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // both outcomes agree on the mark.
         var audio = new FakeAudioSource();
         var probing = new ScriptedTranscriber(audio);
-        var refiner = new PreciseMarkRefiner(audio, Options(), default, probing.TranscribeAsync);
+        var refiner = new PreciseMarkRefiner(
+            audio, Options(), default, (samples, ct) => probing.TranscribeAsync(samples, ct));
         var profile = Options().ResolveProfile("en");
 
         var result = await refiner.RefinePreciseMarkAsync(
@@ -3980,7 +3995,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // is what makes the count above evidence that no retry ran rather than a coincidence.
         var alsoDeaf = new ScriptedTranscriber(audio);
         var retrying = new PreciseMarkRefiner(
-            audio, Options(), default, probing.TranscribeAsync,
+            audio, Options(), default, (samples, ct) => probing.TranscribeAsync(samples, ct),
             (samples, _, ct) => alsoDeaf.TranscribeAsync(samples, ct));
         audio.DecodeWindows.Clear();
         await retrying.RefinePreciseMarkAsync(
@@ -5297,6 +5312,45 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.DoesNotContain(log, l => l.Contains("chapter 1 found in gap"));
         Assert.DoesNotContain(log, l => l.Contains("chapter 3 found in gap"));
         Assert.Contains(log, l => l.Contains("chapter 2 found in gap"));
+    }
+
+    [Fact]
+    public async Task Pass3_MovesTheBarWhileAChunkIsStillBeingTranscribed()
+    {
+        // The same single-chunk gap as the test above ([0.25, 500], well under the 600 s chunk
+        // size), and that is what makes the assertion mean anything: with one chunk in the phase
+        // nothing has been *booked* while it runs, so any progress at all during it can only have
+        // come from the recognizer's own position inside the call. Without it the bar stands still
+        // for the whole transcription - minutes of audio per chunk, and on a long gap the better
+        // part of an hour with nothing to show that the run is alive.
+        var audio = new FakeAudioSource { Silences = [new(495, 500)] };
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(0, Seg(0.5, " Chapter one."));
+        transcriber.Add(500, Seg(0.3, " Chapter three."));
+        transcriber.Add(0.25, Seg(0.25, " Chapter one."), Seg(200.25, " Chapter two."),
+                        Seg(494.75, " Chapter three."));
+
+        var work = new WorkTracker();
+        var duringPass3 = new List<double>();
+        transcriber.OnProgressReported = _ =>
+        {
+            if (work.PhaseLabel == "Pass 3")
+                duringPass3.Add(work.Fraction);
+        };
+
+        var detector = new ChapterDetector(Options("--max-jingle-length", "0"), audio, transcriber);
+        var result = await detector.DetectAsync(
+            _file, Info, work, new DetectionLog(_ => { }, null), CancellationToken.None);
+
+        AssertChapters([new(1, 0.25), new(2, 200.25), new(3, 500.05)], result.Chapters);
+        // The first segment already moves it, and nothing ever moves it backwards - which is not
+        // free, since a segment end may overshoot the audio it was given or arrive out of order
+        // once a window re-segments. The samples after the chunk's own transcription (mark
+        // refinement, still inside the phase) repeat its final value rather than adding to it.
+        Assert.NotEmpty(duringPass3);
+        Assert.True(duringPass3[0] > 0, $"the bar had not moved at the first report ({duringPass3[0]})");
+        Assert.Equal(duringPass3.OrderBy(f => f), duringPass3);
+        Assert.All(duringPass3, f => Assert.InRange(f, 0.0, 1.0));
     }
 
     [Fact]
@@ -6742,7 +6796,8 @@ public sealed class ChapterDetectorTests : IDisposable
     /// at all (confirmed while designing these tests). Testing the method directly sidesteps that
     /// entirely.</summary>
     private (PreciseMarkRefiner Refiner, LanguageProfile Profile) MakeVerifier(ScriptedTranscriber transcriber)
-        => (new PreciseMarkRefiner(transcriber.Audio, Options(), default, transcriber.TranscribeAsync),
+        => (new PreciseMarkRefiner(transcriber.Audio, Options(), default,
+                (samples, ct) => transcriber.TranscribeAsync(samples, ct)),
             Options().ResolveProfile("en"));
 
     [Fact]

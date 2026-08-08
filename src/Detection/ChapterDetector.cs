@@ -2042,12 +2042,16 @@ public sealed class ChapterDetector
     /// <param name="transcriber">Recognizer to use; defaults to the pass-2 transcriber. Pass 3
     /// passes <see cref="_pass3Transcriber"/> so a distinct <c>--pass3-model</c> can do the gap
     /// work while the audio and time still count toward the same statistics.</param>
+    /// <param name="onProgressSeconds">Forwarded to
+    /// <see cref="ITranscriber.TranscribeAsync"/>; only the long Pass 3 chunks pass one.</param>
     private async Task<List<TranscriptSegment>> TranscribeCountingAsync(
-        float[] samples, CancellationToken ct, ITranscriber? transcriber = null)
+        float[] samples, CancellationToken ct, ITranscriber? transcriber = null,
+        Action<double>? onProgressSeconds = null)
     {
         _whisperAudioSeconds += samples.Length / (double)FfmpegClient.SampleRate;
         var watch = Stopwatch.StartNew();
-        var segments = await (transcriber ?? _transcriber).TranscribeAsync(samples, ct);
+        var segments = await (transcriber ?? _transcriber)
+            .TranscribeAsync(samples, ct, onProgressSeconds);
         _whisperTranscribeSeconds += watch.Elapsed.TotalSeconds;
         return segments;
     }
@@ -2139,8 +2143,22 @@ public sealed class ChapterDetector
                 : null;
             var chunkEnd = seam ?? naturalEnd;
 
-            var samples = await _audio.DecodePcmAsync(file, chunkStart, chunkEnd - chunkStart, info.InputDecoder, ct);
-            var segments = await TranscribeCountingAsync(samples, ct, _pass3Transcriber);
+            var chunkSeconds = chunkEnd - chunkStart;
+            var samples = await _audio.DecodePcmAsync(file, chunkStart, chunkSeconds, info.InputDecoder, ct);
+            // A chunk is minutes of audio in one recognizer call, and without this the bar stands
+            // still for all of it - on a long gap, for the better part of an hour. Whisper hands
+            // back its segments as it produces them, so its own position through the chunk is free
+            // for the taking; the transient progress is cleared by the Advance below, exactly as
+            // Pass 1's decode progress is. Held to a monotonic maximum inside the chunk because
+            // neither property can be assumed of the raw ends: they are not strictly ordered once a
+            // window re-segments, and one overshooting the audio it was given is common enough to
+            // walk the bar into the next chunk's budget.
+            var reachedSeconds = 0.0;
+            var segments = await TranscribeCountingAsync(samples, ct, _pass3Transcriber, segmentEnd =>
+            {
+                reachedSeconds = Math.Max(reachedSeconds, Math.Min(segmentEnd, chunkSeconds));
+                work.SetPhaseProgress((long)(reachedSeconds * bytesPerSecond));
+            });
             LogTranscript($"transcribed gap chunk @{FormatTimestamp(chunkStart)}", segments);
             var freshAbs = ShiftSegments(segments, chunkStart);
 
@@ -2224,7 +2242,7 @@ public sealed class ChapterDetector
                 await ScanUnnumberedRetriesAsync(file, info, chunkStart, chunkEnd, matchSegments, profile,
                     found, remaining, knownChapters, allSilences, nonSpeechRegions, speechSegments, work, ct);
 
-            work.Advance((long)((chunkEnd - chunkStart) * bytesPerSecond));
+            work.Advance((long)(chunkSeconds * bytesPerSecond));
 
             // Everything this gap was meant to recover is found, so stop and let the caller move
             // on. The unscanned remainder still counts as this gap's work done - advance it, or

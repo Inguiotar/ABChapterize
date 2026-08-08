@@ -74,14 +74,15 @@ public sealed class Pass3Transcriber : ITranscriber, IAsyncDisposable
     /// <inheritdoc/>
     /// <remarks>Loading the model here, rather than in the constructor, is what makes this the
     /// transcriber that costs nothing until a gap opens.</remarks>
-    public async Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct)
+    public async Task<List<TranscriptSegment>> TranscribeAsync(
+        float[] samples, CancellationToken ct, Action<double>? onProgressSeconds = null)
     {
         if (_inner == null)
         {
             var path = await ModelCatalog.EnsureModelAsync(_model, ct);
             _inner = new WhisperTranscriber(path, _language, _threads, _forceCpu, _gpuDevice);
         }
-        return await _inner.TranscribeAsync(samples, ct);
+        return await _inner.TranscribeAsync(samples, ct, onProgressSeconds);
     }
 
     /// <inheritdoc/>

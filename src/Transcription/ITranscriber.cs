@@ -25,8 +25,17 @@ public interface ITranscriber
     /// </summary>
     /// <param name="samples">The audio samples.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <param name="onProgressSeconds">Called as each segment is recognized, with that segment's
+    /// end in seconds relative to the chunk - the recognizer's own position within the audio it was
+    /// handed. Whisper emits segments as it goes, so this costs nothing and is the only signal of
+    /// life a long transcription has; a probe window a few seconds long has no use for it and
+    /// passes null. Neither monotonic nor bounded by the chunk length: segment ends are not
+    /// strictly ordered once a window re-segments, and one that overshoots the audio it was given
+    /// is common enough that a caller must expect it (see
+    /// <see cref="ABChapterize.Detection.RegionProber"/>'s cache-end handling for the same hazard).</param>
     /// <returns>Recognized segments in chronological order, timed relative to the chunk.</returns>
-    Task<List<TranscriptSegment>> TranscribeAsync(float[] samples, CancellationToken ct);
+    Task<List<TranscriptSegment>> TranscribeAsync(
+        float[] samples, CancellationToken ct, Action<double>? onProgressSeconds = null);
 
     /// <summary>
     /// Detects the most likely spoken language of a short audio clip, without transcribing it.

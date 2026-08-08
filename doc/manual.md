@@ -2282,7 +2282,11 @@ where every mark is an
 announcement without a number, the state shows the plain total instead:
 `mk 12`. Pass 2's percentage follows the probe position within the
 file's play time, so it can move nonlinearly — and, briefly, backwards,
-when a sequence gap makes the detector re-probe earlier candidates.
+when a sequence gap makes the detector re-probe earlier candidates. Pass 3
+transcribes in chunks of several minutes each, and the bar follows the
+recognizer's own position through the chunk it is working on rather than
+jumping once per finished chunk — so a long gap keeps showing that something
+is happening throughout.
 
 Once detection finishes, the bar switches to a final `Muxing...` phase while
 the chapter markings are written into the file — worth watching on a large
