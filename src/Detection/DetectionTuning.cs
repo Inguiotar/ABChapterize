@@ -225,7 +225,7 @@ internal static class DetectionTuning
     internal const double SegmentLeadTrimToleranceSeconds = 0.5;
 
     /// <summary>
-    /// The shortest span this codebase treats as "plausibly a real jingle", used two ways.
+    /// The shortest span this codebase treats as "plausibly a real jingle", used three ways.
     /// (1) A VAD non-speech region whose longest contiguous run falls below it (see
     /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/> for why the longest run, not the
     /// merged span) is dropped rather than ever becoming a candidate: too short for a jingle at
@@ -233,7 +233,9 @@ internal static class DetectionTuning
     /// --max-jingle-length auto, an observed phrase offset below it means "this chapter had no
     /// jingle (or an ultra-short one)" and is excluded from tightening the probe window - some
     /// books only play the jingle for some chapters, and such a chapter says nothing about the
-    /// window a full-length jingle needs.
+    /// window a full-length jingle needs. (3) It is the floor <see cref="JingleCensus"/> counts the
+    /// --verbose jingle tally at, so that tally means the same thing as the two decisions above and
+    /// cannot drift away from them.
     /// </summary>
     internal const double MinJingleObservationSeconds = 2.0;
 

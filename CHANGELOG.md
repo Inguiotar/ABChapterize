@@ -105,6 +105,15 @@ earn a round number.
   segment of a single token, whose probability fluctuates far more than a whole phrase's, so a low
   value there says much less about the mark.
 
+- **`--verbose` now counts the book's jingles after pass 1.** The non-speech regions the
+  voice-activity pre-pass reports mix music in with ordinary pauses, so their number never
+  said whether a book has chapter music at all. A second line now tallies the jingles among
+  them — a stretch of at least two seconds that is neither speech nor silence — and gives
+  their shortest, longest and average length. It costs nothing (both signals are already in
+  hand) and arrives in the first seconds of a run, which is roughly when you would want to
+  know whether `--mark-before-jingle` is worth adding and what `--max-jingle-length` has to
+  cover. `--debug` lists each jingle with its position.
+
 ### Changed
 - **The default is now a small model for finding chapters and `turbo` for filling the gaps**
   (`-m small -M turbo`), where both used to be `turbo`. This is not a speed compromise: the

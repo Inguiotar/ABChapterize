@@ -2304,7 +2304,12 @@ receives plain text.
 name, everything the pipeline does:
 
 - probe result (duration, codec/profile, existing chapter marks),
-- the silence count of pass 1,
+- the silence count of pass 1 and, when the VAD pre-pass ran, its non-speech
+  region count followed by a jingle tally: how many of those regions hold at
+  least two seconds of sound that is neither speech nor silence, with the
+  shortest, longest and average length of those. A book whose chapters open
+  with music says so here, in the first few seconds of a run, and the lengths
+  are the figures [`--max-jingle-length`](#detection-behaviour) has to cover,
 - each probe window and pass-3 chunk as a `<length>@<time>` header line,
 - every accepted chapter detection with the exact mark position, confidence
   and the loudness of the audio right at that position (e.g. `-58.3 dBFS`;
@@ -2350,7 +2355,7 @@ there, so one log can collect a whole library's worth of runs.
 (`book.m4b.debug.log`), holding everything the ordinary log carries plus the
 raw material behind it: the settings and probe result the run worked from,
 every silence found (including the short ones `--min-silence-length` rejects),
-every voice-activity segment and non-speech region, every Whisper transcript
+every voice-activity segment, non-speech region and jingle, every Whisper transcript
 segment by segment, and the mark-refinement probes that appear nowhere else.
 It switches logging on by itself and leaves the console alone, so
 `--debug` on its own gives you a quiet run and a full file. Expect a few MB

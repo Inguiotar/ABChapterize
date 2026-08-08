@@ -1687,11 +1687,18 @@ public sealed class ChapterDetector
               (_options.AutoMinSilence ? " (adaptive threshold)" : "")
             : $"Pass 1: {allSilences.Count} silence(s) found, none probed " +
               "(--min-silence-length 0 - jingles only)");
+        // Derived from the two lists above and nothing else, so it costs no audio work - see
+        // JingleCensus for why the regions alone do not answer "how many jingles does this book
+        // have". Empty without the VAD pre-pass, which is why it is only logged with it.
+        var jingles = JingleCensus.Measure(nonSpeechRegions, allSilences);
         if (_vad != null)
+        {
             // The speech-segment count carries no extra information (a non-speech region is just
             // the gap between two consecutive speech segments), so only the regions are logged.
             _log?.Invoke($"Pass 1: {nonSpeechRegions.Count} non-speech region(s) found");
-        DumpPass1Signals(allSilences, nonSpeechRegions, speechSegments);
+            _log?.Invoke($"Pass 1: {JingleCensus.Describe(jingles)}");
+        }
+        DumpPass1Signals(allSilences, nonSpeechRegions, speechSegments, jingles);
 
         return new Pass1Result(allSilences, silences, nonSpeechRegions, speechSegments);
     }
@@ -1713,15 +1720,18 @@ public sealed class ChapterDetector
     /// which are flagged so the subset Pass 2 actually works from stays visible.</param>
     /// <param name="nonSpeechRegions">The merged non-speech regions, empty without the VAD pre-pass.</param>
     /// <param name="speechSegments">The raw VAD speech segments, empty without the VAD pre-pass.</param>
+    /// <param name="jingles">The audible part of those regions (see <see cref="JingleCensus"/>),
+    /// listed as well as counted: the --verbose line says how long this book's jingles run, and the
+    /// listing says which chapter openings the outliers in it belong to.</param>
     private void DumpPass1Signals(
         List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
-        List<SpeechSegment> speechSegments)
+        List<SpeechSegment> speechSegments, List<Jingle> jingles)
     {
         if (_debug is not { } debug)
             return;
 
         debug($"Pass 1 detail: {allSilences.Count} silence(s), {speechSegments.Count} VAD speech " +
-              $"segment(s), {nonSpeechRegions.Count} non-speech region(s)");
+              $"segment(s), {nonSpeechRegions.Count} non-speech region(s), {jingles.Count} jingle(s)");
         foreach (var s in allSilences)
             debug($"  silence {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +
                   $"({s.EndSeconds - s.StartSeconds:0.00} s)" +
@@ -1733,6 +1743,9 @@ public sealed class ChapterDetector
         foreach (var r in nonSpeechRegions)
             debug($"  non-speech {FormatTimestamp(r.StartSeconds)}-{FormatTimestamp(r.EndSeconds)} " +
                   $"({r.EndSeconds - r.StartSeconds:0.00} s)");
+        foreach (var j in jingles)
+            debug($"  jingle {FormatTimestamp(j.StartSeconds)}-{FormatTimestamp(j.EndSeconds)} " +
+                  $"({j.LengthSeconds:0.00} s)");
     }
 
     /// <summary>
