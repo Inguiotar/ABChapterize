@@ -127,6 +127,18 @@ earn a round number.
   `--no-trailing-scan` buys that time back for a library you have already checked. It is read
   once and never twice now, so the price is bounded at a single pass over the tail.
 
+- **`--min-silence-length auto` now follows a narrator with short chapter breaks all the way
+  down.** The adaptive threshold could tighten as much as a book warranted but never loosen
+  past the 1.5 seconds it started at, so a book whose chapter breaks sit just under that line
+  — a common enough shape, and one where every single chapter is affected — had none of them
+  probed at all; they were left to the later, slower gap-filling passes, and the occasional one
+  was lost outright. The starting point is still 1.5 seconds, but the threshold may now settle
+  as low as 0.8 seconds when the book's own chapter breaks turn out that short. Expect such a
+  book to spend more time in pass 2 and much less in pass 3; a book with normal breaks is
+  unaffected, since the threshold only comes down on the evidence of chapters already found.
+  An explicit `--min-silence-length` is untouched — the value you give is still the shortest
+  pause that will ever be looked at.
+
 - **`--chapter-count` now switches the blind trailing scan off.** Telling the run how many
   chapters a book has is a statement about what is in the tail, so it replaces the speculative
   sweep instead of running alongside it: the numbers still owed are hunted directly, the search

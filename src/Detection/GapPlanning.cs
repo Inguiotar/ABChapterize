@@ -126,7 +126,15 @@ internal static class GapPlanning
     /// The silence-length bands Pass 2.5 sweeps a still-open gap with, longest first: one band per
     /// <see cref="DetectionTuning.SubFloorSweepBandCount"/>, each
     /// <see cref="DetectionTuning.SubFloorSweepBandSeconds"/> wide, the first ending exactly at
-    /// <paramref name="floorSeconds"/> so no silence Pass 2 already probed is swept again.
+    /// <paramref name="floorSeconds"/> so no silence the run's own demand admitted is swept again.
+    /// <para>
+    /// "The run's demand" rather than "everything Pass 2 could have reached": under
+    /// <c>--min-silence-length auto</c> the threshold can talk itself down to
+    /// <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/>, so on a book whose breaks are
+    /// short some of these bands were within Pass 2's reach after all. Sweeping them anyway is not
+    /// waste - Pass 2.5 probes on the <c>--pass3-model</c> recognizer, so a second look at the same
+    /// audio is a different reading and the reason the pass exists at all.
+    /// </para>
     /// <para>
     /// Anchoring the bands to the effective <c>--min-silence-length</c> rather than to fixed
     /// absolute lengths is what makes them mean the same thing on every run: the sweeps ask "how
@@ -139,8 +147,8 @@ internal static class GapPlanning
     /// audio nothing ever looked at. Internal for unit testing.
     /// </para>
     /// </summary>
-    /// <param name="floorSeconds">The run's effective --min-silence-length, i.e. the shortest
-    /// silence Pass 2 was willing to probe.</param>
+    /// <param name="floorSeconds">The run's --min-silence-length, i.e. the shortest silence it
+    /// opened by demanding.</param>
     /// <param name="storedFloorSeconds">The shortest silence Pass 1 retained at all
     /// (<see cref="DetectionTuning.MinStoredSilenceSeconds"/>, or the floor when that is lower).</param>
     /// <returns>The bands as half-open [min, max) intervals, longest first; empty when the floor

@@ -92,9 +92,10 @@ source. Only what affects using the tool is covered here.
 ### Pass 1 — silence scan (and VAD pre-pass)
 
 ffmpeg's `silencedetect` filter finds every silence of at least
-`--min-silence-length` seconds (default, and floor with `auto`: 1.5) below
-`--noise-floor` dBFS (normally −35), in one quick decode pass over the whole
-file. Chapter announcements in audiobooks practically always follow such a
+`--min-silence-length` seconds (default: 1.5) below `--noise-floor` dBFS
+(normally −35), in one quick decode pass over the whole file. With `auto` the
+scan keeps everything down to 0.8 seconds, since pass 2's threshold may come
+down that far. Chapter announcements in audiobooks practically always follow such a
 pause. If the scan ends prematurely (e.g. because of a damaged file), the file
 is aborted with an error instead of silently reporting "no chapters".
 
@@ -264,8 +265,12 @@ from pass 1. As chapters are found it learns how long this book's real
 inter-chapter breaks are and stops probing clearly shorter in-chapter pauses,
 so far fewer Whisper probes are needed without a fixed guess; should a chapter
 later turn up out of sequence, everything skipped since the previous chapter
-is re-probed before pass 3 has to step in. Giving `--min-silence-length` an
-explicit numeric value disables this and probes every silence at or above it.
+is re-probed before pass 3 has to step in. The threshold starts at 1.5 seconds
+and moves in both directions: a book with generous breaks gets fewer probes,
+and one whose breaks are shorter than 1.5 seconds is followed down to as
+little as 0.8 seconds rather than losing those chapters to pass 3. Giving
+`--min-silence-length` an explicit numeric value disables this and probes
+every silence at or above it.
 See the [`-n` reference](#detection-behaviour) for the knob itself.
 
 By default (`--max-jingle-length auto`), the jingle probe window self-tightens
@@ -884,13 +889,17 @@ Two things are worth knowing before reaching for it:
 
 `-n`, `--min-silence-length <seconds|auto>`
 : Minimum silence duration (0, or 0.1–60, default: `auto`) that counts as a
-  potential chapter break; the silence scan always uses this as its floor
-  (1.5 by default, and as `auto`'s floor). By default (`auto`), pass 2
+  potential chapter break. An explicit value is used as given and nothing
+  shorter is ever probed; `auto` treats 1.5 seconds as the starting point
+  instead. By default (`auto`), pass 2
   self-tightens the probing threshold to 75% of the *shortest* anchor
-  silence observed so far as chapters are found (raised once at the second
+  silence observed so far as chapters are found (set at the second
   mark, only ever lowered after that), re-probing everything it skipped
   whenever a sequence gap turns up, so far fewer Whisper probes are needed
-  without a fixed guess — see [Pass 2 — probing](#pass-2--probing). An explicit
+  without a fixed guess. That threshold can settle *below* the 1.5-second
+  starting point, as low as 0.8 seconds, for a narrator whose chapter breaks
+  are shorter than the default assumes — see
+  [Pass 2 — probing](#pass-2--probing). An explicit
   numeric value disables this and probes every silence at or above it
   instead; this is still the main manual speed knob if `auto`'s heuristic
   doesn't suit a particular audiobook: if the pauses are unusually generous

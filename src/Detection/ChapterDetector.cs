@@ -1262,9 +1262,11 @@ public sealed class ChapterDetector
     /// <summary>
     /// Pass 2.5's second half, for a gap its ordinary re-probe left open: sweeps the silences that
     /// sit just <em>below</em> --min-silence-length, one narrow band at a time and longest first,
-    /// stopping the moment the gap's last missing chapter turns up. Silences that short are the one
-    /// thing Pass 2 structurally cannot reach - Pass 1 filters its candidate list at the floor, and
-    /// the adaptive threshold only ever moves upwards from there - yet Pass 1 stored them all
+    /// stopping the moment the gap's last missing chapter turns up. Silences that short are what
+    /// Pass 2 reaches last or not at all: its threshold opens at --min-silence-length and only comes
+    /// down as far as this book's own marked-up breaks argue it down (see
+    /// <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/>), so a gap left open is by
+    /// definition one where that argument was never made. Pass 1 stored them all regardless
     /// (<see cref="DetectionTuning.MinStoredSilenceSeconds"/>), so the material is already in hand
     /// and each band costs a handful of probe windows.
     /// <para>
@@ -1568,12 +1570,13 @@ public sealed class ChapterDetector
         // for - and it is also what makes every jingle a candidate, since a VAD region is otherwise
         // dropped as a duplicate of the silence leading it (see RegionProber's BuildCandidates).
         var silences = _options.ProbeSilences
-            ? allSilences.Where(s => s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds).ToList()
+            ? allSilences.Where(s => s.EndSeconds - s.StartSeconds >= _options.ProbeSilenceFloorSeconds).ToList()
             : [];
 
         _log?.Invoke(_options.ProbeSilences
-            ? $"Pass 1: {silences.Count} silence(s) of >= {_options.MinSilenceSeconds:0.#} s found" +
-              (_options.AutoMinSilence ? " (adaptive threshold)" : "")
+            ? $"Pass 1: {silences.Count} silence(s) of >= {_options.ProbeSilenceFloorSeconds:0.##} s found" +
+              (_options.AutoMinSilence
+                  ? $" (adaptive threshold, starting at {_options.MinSilenceSeconds:0.##} s)" : "")
             : $"Pass 1: {allSilences.Count} silence(s) found, none probed " +
               "(--min-silence-length 0 - jingles only)");
         if (_vad != null)
@@ -1598,8 +1601,9 @@ public sealed class ChapterDetector
     /// timestamp.
     /// </para>
     /// </summary>
-    /// <param name="allSilences">Every silence found, including those below --min-silence-length,
-    /// which are flagged so the subset Pass 2 actually works from stays visible.</param>
+    /// <param name="allSilences">Every silence found, including those too short to be probed at
+    /// all; the ones at or above <see cref="CliOptions.ProbeSilenceFloorSeconds"/> are flagged so
+    /// the subset Pass 2 actually works from stays visible.</param>
     /// <param name="nonSpeechRegions">The merged non-speech regions, empty without the VAD pre-pass.</param>
     /// <param name="speechSegments">The raw VAD speech segments, empty without the VAD pre-pass.</param>
     private void DumpPass1Signals(
@@ -1614,7 +1618,7 @@ public sealed class ChapterDetector
         foreach (var s in allSilences)
             debug($"  silence {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +
                   $"({s.EndSeconds - s.StartSeconds:0.00} s)" +
-                  (_options.ProbeSilences && s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds
+                  (_options.ProbeSilences && s.EndSeconds - s.StartSeconds >= _options.ProbeSilenceFloorSeconds
                       ? " *" : ""));
         foreach (var s in speechSegments)
             debug($"  speech {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +

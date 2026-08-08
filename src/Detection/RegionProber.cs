@@ -260,17 +260,18 @@ internal sealed class RegionProber
     /// unthrottled. Probing proceeds unthrottled until the second mark is found (its anchor silence
     /// is the first real inter-chapter break - the silence before the first mark is typically the
     /// intro/title silence, often longer, so it must not be used to tighten). From there each
-    /// mark's anchor silence proposes <see cref="AdaptiveTightenFactor"/> times its own length, and
-    /// this is the running <em>minimum</em> of those proposals - the first one raises the effective
-    /// threshold from the floor, every later one can only lower it (see
+    /// mark's anchor silence proposes <see cref="AdaptiveTightenFactor"/> times its own length,
+    /// bounded below by <see cref="CliOptions.ProbeSilenceFloorSeconds"/>, and this is the running
+    /// <em>minimum</em> of those proposals - the first one sets the effective threshold, in either
+    /// direction from the starting demand, and every later one can only lower it (see
     /// <see cref="AdaptiveTightenFactor"/> for why a raise is never safe).
     /// </summary>
     private double? _adaptedThresholdSeconds;
 
     /// <summary>The silence length a candidate must reach to be probed at all; the
-    /// --min-silence-length floor until <see cref="_adaptedThresholdSeconds"/> starts moving it.
-    /// Without --min-silence-length auto every candidate is probed unconditionally and this never
-    /// changes, exactly as before that feature existed.</summary>
+    /// --min-silence-length the run opened at until <see cref="_adaptedThresholdSeconds"/> starts
+    /// moving it, up or down. Without --min-silence-length auto every candidate is probed
+    /// unconditionally and this never changes, exactly as before that feature existed.</summary>
     private double _threshold;
 
     /// <summary>
@@ -344,8 +345,10 @@ internal sealed class RegionProber
     /// sit <em>below</em> --min-silence-length, which changes three things and nothing else: every
     /// one of them is probed (the threshold that excluded them is exactly what the sweep is
     /// suspending, so consulting it again would skip the entire band), the adaptive threshold is
-    /// left alone (it can never drop below the floor, so a sweep could only ever tighten itself out
-    /// of its own band), and neither the region-start candidate nor the VAD jingle regions are
+    /// left alone (a sweep's marks are recovered from silences the run's own demand had already
+    /// ruled out, so they are the last thing that should be teaching it what a break looks like -
+    /// and a tightening one would skip the rest of its own band), and neither the region-start
+    /// candidate nor the VAD jingle regions are
     /// probed again - the ordinary attempt on this gap already covered both, and a sweep re-running
     /// them would pay a full window decode per band for audio it has read once.
     /// </summary>
@@ -1717,10 +1720,13 @@ internal sealed class RegionProber
             return RejectProbeMark(what, phraseAbs,
                 $"the nearest silence ends {phraseAbs - anchor.EndSeconds:0.0} s before it, " +
                 $"more than the {PhraseLatestStart:0.#} s allowed");
-        if (anchor.EndSeconds - anchor.StartSeconds < _env.Options.MinSilenceSeconds)
+        // Judged against the floor rather than the starting demand, so this stays the same rule
+        // Pass 1 used to decide which silences are candidates at all: a pause Pass 2 is willing to
+        // probe on its own must not then be refused as an anchor for what that probe heard.
+        if (anchor.EndSeconds - anchor.StartSeconds < _env.Options.ProbeSilenceFloorSeconds)
             return RejectProbeMark(what, phraseAbs,
                 $"the silence before it is only {anchor.EndSeconds - anchor.StartSeconds:0.00} s long, " +
-                $"below --min-silence-length {_env.Options.MinSilenceSeconds:0.##} s");
+                $"below the {_env.Options.ProbeSilenceFloorSeconds:0.##} s --min-silence-length floor");
         return (Math.Max(0, phraseAbs - MarkLead), anchor, null);
     }
 
@@ -1921,8 +1927,8 @@ internal sealed class RegionProber
     /// <param name="after">What was just marked, for the log line.</param>
     private void AdoptProposedThreshold(string after)
     {
-        // The first set is a raise from the floor ("tightened"), everything after can only ever be
-        // a lowering.
+        // The first set can go either way from the starting demand; everything after it can only
+        // ever be a lowering.
         var newThreshold = _adaptedThresholdSeconds ?? _env.Options.MinSilenceSeconds;
         if (newThreshold != _threshold)
             _env.Log?.Invoke($"threshold {(newThreshold > _threshold ? "tightened" : "lowered")} " +
@@ -1932,16 +1938,19 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Folds one anchor silence's proposal into <see cref="_adaptedThresholdSeconds"/>, keeping the
-    /// running minimum. Never below the --min-silence-length floor: Pass 1 never reports candidates
-    /// shorter than the floor in the first place, so a threshold below it would skip nothing at all.
-    /// Does nothing when the mark had no anchor silence (it sat on a VAD region instead).
+    /// running minimum. Never below <see cref="CliOptions.ProbeSilenceFloorSeconds"/>, which is
+    /// where Pass 1 cut its candidate list: a threshold under the shortest candidate in existence
+    /// would skip nothing at all. Note this is the floor, not the starting demand - the threshold
+    /// may end up well below the --min-silence-length the run opened at, which is the whole point of
+    /// a book whose chapter breaks turn out shorter than the default assumes. Does nothing when the
+    /// mark had no anchor silence (it sat on a VAD region instead).
     /// </summary>
     /// <param name="markSilence">The silence the mark actually fell into, or null.</param>
     private void ProposeThreshold(Silence? markSilence)
     {
         if (markSilence is not { } silence)
             return;
-        var proposed = Math.Max(_env.Options.MinSilenceSeconds,
+        var proposed = Math.Max(_env.Options.ProbeSilenceFloorSeconds,
             AdaptiveTightenFactor * (silence.EndSeconds - silence.StartSeconds));
         _adaptedThresholdSeconds = Math.Min(_adaptedThresholdSeconds ?? proposed, proposed);
     }

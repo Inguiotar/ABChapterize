@@ -320,8 +320,9 @@ use `.`, whatever the machine's locale says.
 ## How it works
 
 1. **Pass 1 — silence scan:** ffmpeg finds every silence longer than
-   `--min-silence-length` (default, and floor with `auto`: 1.5 s) and quieter
-   than `--noise-floor` (normally −35 dBFS) in one quick pass.
+   `--min-silence-length` (default: 1.5 s; with `auto`, everything down to
+   0.8 s is kept in reserve for step 2) and quieter than `--noise-floor`
+   (normally −35 dBFS) in one quick pass.
 1b. **VAD pre-pass (default; skipped only with `--max-jingle-length 0` and no
    `--mark-before-jingle`):** a bundled voice-activity model
    ([Silero VAD](https://github.com/snakers4/silero-vad)) scans the whole file
@@ -345,10 +346,13 @@ use `.`, whatever the machine's locale says.
    silence before the first mark is usually the intro/title silence, often
    longer than the breaks between chapters, so it's not used to tighten),
    the probing threshold sits at 75% of the *shortest* chapter-break
-   silence observed so far — raised once, then only ever lowered — so
+   silence observed so far — set once, then only ever lowered — so
    shorter in-chapter pauses stop being probed once real inter-chapter
    breaks are established; everything skipped since the last mark is
-   re-probed the moment a sequence gap turns up. An explicit
+   re-probed the moment a sequence gap turns up. It starts at 1.5 s and can
+   move either way from there, down to 0.8 s, so a narrator whose chapter
+   breaks are shorter than the default assumes is followed down instead of
+   costing chapters. An explicit
    `--min-silence-length` value disables
    this and probes every silence at or above it instead. The jingle probe
    window (`--max-jingle-length` plus 5 seconds for the phrase itself)

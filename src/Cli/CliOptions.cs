@@ -499,9 +499,10 @@ public sealed class CliOptions
     /// <summary>
     /// Minimum silence duration in seconds that counts as a potential chapter break
     /// (--min-silence-length / -n). Every such silence triggers a Whisper probe, so an
-    /// explicit higher value can reduce the number of probes further still. This is always
-    /// the silence scan's floor (1.5 by default); see <see cref="AutoMinSilence"/> for the
-    /// default self-tightening behavior applied on top of it during probing.
+    /// explicit higher value can reduce the number of probes further still. With an explicit
+    /// value this is the whole story; with the default "auto" it is where probing starts, and
+    /// the threshold moves from there - see <see cref="AutoMinSilence"/> for the adaptation and
+    /// <see cref="ProbeSilenceFloorSeconds"/> for how far down it reaches.
     /// </summary>
     public double MinSilenceSeconds { get; private set; } = 1.5;
 
@@ -524,11 +525,27 @@ public sealed class CliOptions
 
     /// <summary>
     /// True (the default) unless --min-silence-length was given an explicit numeric value:
-    /// the silence scan (Pass 1) still uses the 1.5 s floor, but <see cref="ChapterDetector"/>
-    /// self-tightens the probing threshold after each chapter mark instead of probing every
-    /// silence found. "auto" can also be given explicitly for clarity.
+    /// <see cref="MinSilenceSeconds"/> is where probing <em>starts</em>, and
+    /// <see cref="ChapterDetector"/> then moves the threshold after each chapter mark - up, to skip
+    /// silences this book's own breaks say are too short to be one, or back down as far as
+    /// <see cref="ProbeSilenceFloorSeconds"/> when they turn out shorter than the starting demand.
+    /// "auto" can also be given explicitly for clarity.
     /// </summary>
     public bool AutoMinSilence { get; private set; } = true;
+
+    /// <summary>
+    /// The shortest silence Pass 2 may ever probe, and therefore where Pass 1 cuts its candidate
+    /// list. With an explicit --min-silence-length that is the value given, which stays fixed for
+    /// the whole run; with "auto" the threshold moves within
+    /// [<see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/>, ...] and the candidate list has
+    /// to reach the bottom of that range for the lowering half of the adaptation to have anything
+    /// to admit. <see cref="Math.Min(double, double)"/> rather than the constant outright so a
+    /// starting demand below the floor stays the binding one.
+    /// </summary>
+    public double ProbeSilenceFloorSeconds
+        => AutoMinSilence
+            ? Math.Min(MinSilenceSeconds, DetectionTuning.AdaptiveSilenceFloorSeconds)
+            : MinSilenceSeconds;
 
     /// <summary>
     /// Whether a long enough silence is by itself a reason to probe - true for every value of
@@ -548,14 +565,14 @@ public sealed class CliOptions
 
     /// <summary>
     /// The shortest silence Pass 1 retains - normally <see cref="DetectionTuning.MinStoredSilenceSeconds"/>,
-    /// or <see cref="MinSilenceSeconds"/> where the user asked for something shorter still. Never
+    /// or <see cref="ProbeSilenceFloorSeconds"/> where probing reaches shorter still. Never
     /// follows <see cref="MinSilenceSeconds"/> down to 0: a scan with no minimum length reports
     /// every sample under the threshold as its own silence, and the list this floor governs is one
     /// mark placement depends on rather than one probing does.
     /// </summary>
     public double StoredSilenceFloorSeconds
         => ProbeSilences
-            ? Math.Min(MinSilenceSeconds, DetectionTuning.MinStoredSilenceSeconds)
+            ? Math.Min(ProbeSilenceFloorSeconds, DetectionTuning.MinStoredSilenceSeconds)
             : DetectionTuning.MinStoredSilenceSeconds;
 
     /// <summary>Suppress per-file output; warnings and errors are still shown (--quiet / -q).</summary>
