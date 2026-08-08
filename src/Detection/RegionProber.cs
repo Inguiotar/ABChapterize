@@ -1001,6 +1001,16 @@ internal sealed class RegionProber
         if (start < _cacheFrom || start >= _cacheTo)
             return (await DecodeFullWindowAsync(start, plan, ct), null);
 
+        var expectAt = plan.Candidates[plan.Index].ExpectAt;
+        if (CacheHidesTheExpectation(start, expectAt))
+        {
+            _env.Log?.Invoke(
+                $"re-reading the window at {FormatTimestamp(start)} - the cached transcript covers " +
+                $"{FormatTimestamp(expectAt)}, where this candidate expects its announcement, only " +
+                "inside a segment that began before the window");
+            return (await DecodeFullWindowAsync(start, plan, ct), null);
+        }
+
         if (plan.End <= _cacheTo)
             // Fully contained in the cached span: reuse its transcript wholesale, no Whisper at all.
             // The (larger) cache is deliberately left untouched so a later candidate starting within
@@ -1009,6 +1019,39 @@ internal sealed class RegionProber
 
         return await DecodeOverlapTailAsync(start, plan, ct);
     }
+
+    /// <summary>
+    /// Whether the overlap cache covers this window's expectation point only inside a segment that
+    /// began before the window - in which case the cache cannot be reused, because
+    /// <see cref="WindowSlice"/> is about to drop that segment and leave the scan with a hole
+    /// exactly where the candidate is looking.
+    /// <para>
+    /// "The Forever War" chapter 1 (2026-08-08) is the case on record, and the shape is not exotic.
+    /// The candidate at 0:01:14.36 was handed 23.2 s spanning two announcements - the publisher's
+    /// title card, a 5 s pause, then "Chapter 1" - and Whisper returned the whole window as one
+    /// run-on segment reading "And now, the FOREVER WAR." (p=0.62), the announcement simply absent
+    /// from it. That is ordinary recognizer behaviour on a long window and not something this pass
+    /// can prevent. What it can prevent is the second half: the chapter's <em>own</em> candidate at
+    /// 0:01:21.66 - whose window opens 3 s before the announcement and reads "CHAPTER 1" cleanly
+    /// when decoded (verified with the wprobe harness) - was served that run-on from the cache,
+    /// and the segment starting 7 s before its window was then dropped as out of range. The chapter
+    /// was lost with no pass ever having read it, and, being chapter 1, no sequence gap to notice.
+    /// </para>
+    /// <para>
+    /// Deliberately not "the cache has nothing at the expectation": an empty stretch of cache is
+    /// genuinely quiet audio, and re-reading it would only find it quiet again - the whole-book
+    /// re-decode the overlap cache's original bargain exists to avoid (see
+    /// <see cref="CacheableEnd"/>'s residual). The trigger is the opposite case, where the audio
+    /// <em>was</em> transcribed and this window merely has no reading of its own to show for it.
+    /// It is rare by construction: a candidate's expectation is the far side of its own pause, so a
+    /// single segment reaching from before the window to past that point is one that swallowed a
+    /// candidate-grade silence whole, which is the run-on signature itself.
+    /// </para>
+    /// </summary>
+    /// <param name="start">Absolute start of the window.</param>
+    /// <param name="expectAt">Where this candidate expects its announcement.</param>
+    private bool CacheHidesTheExpectation(double start, double expectAt)
+        => _cacheSegmentsAbs.Any(s => s.StartSeconds < start && s.EndSeconds > expectAt);
 
     /// <summary>
     /// The part of a decoded or cached span that belongs to one window: the segments starting inside

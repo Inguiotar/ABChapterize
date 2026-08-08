@@ -200,6 +200,15 @@ earn a round number.
 
 ### Fixed
 
+- **A chapter is no longer lost to a neighbouring window's transcript being reused.** Probe
+  windows overlap, and rather than pay to transcribe the same seconds twice, a window reuses
+  what the window before it already heard. The recognizer, though, sometimes hands back a long
+  stretch of audio as one unbroken sentence — and a sentence that began before the current
+  window cannot be placed within it, so it is discarded, leaving a hole precisely where that
+  window's own candidate expected its announcement, with no fresh audio to fill it. A window
+  in that position is now read on its own instead of reusing anything. It costs one extra
+  transcription on the rare window it applies to; every other window reuses exactly as before.
+
 - **A multi-word `--chapter-phrase` is no longer defeated by where the recognizer breaks its
   sentences.** If the announcement came back split — "Première partie." and then
   "Chapitre 19." — a phrase containing a space could not match across the break, and the chapter

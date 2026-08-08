@@ -4559,6 +4559,30 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task OverlapReuse_IsRefused_WhenACachedSegmentHidesTheCandidatesExpectation()
+    {
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            [new(595, 600), new(609, 613), new(618, 621)],
+            s =>
+            {
+                // Window one's whole span came back as a single run-on segment - the shape that
+                // lost "The Forever War" its chapter 1. It covers window two's expectation and
+                // starts before window two, so the slice drops it and leaves a hole exactly there.
+                s.Add(597, new TranscriptSegment(0, 23, " And now the title.", 0.62));
+                // Heard only by window two's own short decode, not by window one's longer one -
+                // which is why reuse loses the chapter outright: both windows end at the same
+                // seam, so reuse leaves window two with no fresh audio to read at all.
+                s.AddWithin(20, 611, Seg(0, " Chapter one."));
+            });
+
+        Assert.Contains(log, l => l.StartsWith("re-reading the window at 0:10:10.00"));
+        Assert.Contains(audio.DecodeWindows, w => Math.Abs(w.Start - 610) < 0.01);
+        var chapter = Assert.Single(result.Chapters);
+        Assert.Equal(1, chapter.Number);
+    }
+
+    [Fact]
     public async Task ConfidentMark_SkipsTheRemainingWindowsOfItsOverlapSequence()
     {
         // Same layout as above, but chapter one is found confidently: the mark settles the
