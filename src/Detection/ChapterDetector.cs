@@ -357,6 +357,10 @@ public sealed class ChapterDetector
             allSilences, silences, nonSpeechRegions, speechSegments,
             earlyAbortSeconds, expectedStartChapter, _transcriber);
 
+        // The shortest chapter break any region measured, which is what decides whether the sweep
+        // below has anything to do. Taken across regions rather than per region: it is a statement
+        // about the narrator, and a region that found only one mark measured nothing at all.
+        double? measuredBreakSeconds = null;
         foreach (var region in regions)
         {
             var prober = new RegionProber(
@@ -366,10 +370,16 @@ public sealed class ChapterDetector
             belowExpectedStartNumber = prober.BelowExpectedStartNumber;
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
+            if (prober.AdaptedThresholdSeconds is { } measured)
+                measuredBreakSeconds = Math.Min(measuredBreakSeconds ?? measured, measured);
 
             if (earlyAborted || belowExpectedStartNumber != null)
                 break;
         }
+
+        if (!earlyAborted && belowExpectedStartNumber == null && !_options.IgnoreChapterNumbers &&
+            measuredBreakSeconds is { } breakSeconds && breakSeconds < _options.MinSilenceSeconds)
+            await SweepAdaptiveSubFloorAsync(pass2Ctx, found, namedFound, language, breakSeconds, ct);
 
         var chapters = await ReconcileSequenceAsync(found, namedFound, pass2Ctx, language.Profile, ct);
         _log?.Invoke("Pass 2 finished");
@@ -1374,6 +1384,105 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Pass 2's own sub-floor sweep: for a book whose marks measured its chapter breaks shorter than
+    /// --min-silence-length, re-visits the gaps in the numbering with the pauses between
+    /// <paramref name="bandFloorSeconds"/> and that demand - the ones the run was never willing to
+    /// probe, on a narrator whose breaks say it should have been.
+    /// <para>
+    /// <strong>Why this is a separate sweep and not simply a wider candidate list.</strong> The
+    /// obvious implementation - have Pass 1 keep everything down to
+    /// <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/> and let the threshold admit what it
+    /// likes - was built first and measured, and it is wrong. Pass 2's candidate list is not only a
+    /// list of places to look: it is the grid the windows are planned on, so a shared border is
+    /// where one decode <em>stops</em> and the next resumes, and read-ahead, transcript caching and
+    /// VAD jingle-candidate selection all read it too. Extra entries therefore re-cut the decodes of
+    /// the whole book, and Whisper's reading of a stretch depends on the window it arrives in.
+    /// Measured on a 25-minute BARDIOC clip (2026-08-08, build 257): going from 27 candidates to 200
+    /// re-cut the last two minutes from 49.4 s and 34.9 s decodes into 28.8, 19.8 and 13.5 s, and
+    /// chapter 2's announcement at 0:24:44.73 - heard comfortably by the long decode - fell 1.2 s
+    /// short of the end of a short one and was lost, along with the jingle re-read that inherits
+    /// that end. A sweep cannot do this: it builds its own candidate list
+    /// (<see cref="RegionProber"/>'s sweeping mode) and never touches the grid the ordinary walk
+    /// used, so it is additive by construction.
+    /// </para>
+    /// <para>
+    /// Gaps only, and budgeted, for the reason the band is cheap in the first place: the sweep is
+    /// worth its probes where a chapter is known to be missing, and
+    /// <see cref="DetectionTuning.SubFloorSweepBudgetFraction"/> of what transcribing the gap would
+    /// cost keeps it the cheaper bet even when it finds nothing. Without both, a book that measures
+    /// a 0.54 s break - "Die Dritte Macht", 2026-07-28 - would pin the band at
+    /// [0.8, 1.5) across its whole fifteen hours, which on a file of that length is thousands of
+    /// probes for pauses no chapter is missing behind.
+    /// </para>
+    /// <para>
+    /// Runs on the pass-2 recognizer and before pass 2.5, so a chapter this recovers costs a handful
+    /// of probe windows instead of the heavier model's gap re-probe and, failing that, pass 3
+    /// transcribing the gap end to end. Pass 2.5's own sweep still follows for whatever this leaves,
+    /// and reads the same audio through the upgrade model, which is a genuinely different answer.
+    /// </para>
+    /// </summary>
+    /// <param name="ctx">Pass 2's probe context, whose silence list the band replaces.</param>
+    /// <param name="found">The chapter accumulator, added to in place.</param>
+    /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
+    /// <param name="language">The file's settled language resolution.</param>
+    /// <param name="bandFloorSeconds">The shortest chapter break Pass 2's marks measured, i.e. the
+    /// bottom of the band to sweep.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task SweepAdaptiveSubFloorAsync(
+        Pass2Context ctx, List<DetectedChapter> found, List<DetectedMark> namedFound,
+        LanguageState language, double bandFloorSeconds, CancellationToken ct)
+    {
+        var known = Normalize(found);
+        var work = FindGaps(known, ctx.Info.DurationSeconds, _options.ExpectedStartChapter)
+            .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(known, gap, _options.ExpectedStartChapter)))
+            .Where(g => g.Missing.Count > 0)
+            .ToList();
+        if (work.Count == 0)
+            return;
+
+        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : ProbeSecondsPlain;
+        var windowsPerProbe = ChunkWindows(probeSeconds);
+        var env = BuildProbeEnvironment();
+        _log?.Invoke(
+            $"pass 2: this book's chapter breaks measure down to {bandFloorSeconds:0.0#} s, below the " +
+            $"{_options.MinSilenceSeconds:0.0#} s probing started at - sweeping the gaps for pauses in between");
+
+        foreach (var (gap, missing) in work)
+        {
+            var stillMissing = StillMissing(missing, found);
+            if (stillMissing.Count == 0)
+                continue;
+            var band = SilencesInBand(ctx.AllSilences, gap, bandFloorSeconds, _options.MinSilenceSeconds);
+            if (band.Count == 0)
+                continue;
+
+            var wouldSpend = band.Count * windowsPerProbe;
+            var budget = SubFloorSweepBudgetFraction * ChunkWindows(gap.ToSeconds - gap.FromSeconds);
+            if (wouldSpend > budget)
+            {
+                _log?.Invoke(
+                    $"pass 2: skipping the sub-floor sweep of {FormatTimestamp(gap.FromSeconds)} - " +
+                    $"{FormatTimestamp(gap.ToSeconds)} - {band.Count} probe(s) would cost " +
+                    $"{wouldSpend} decode window(s), past the {budget:0.#} it may spend on this gap");
+                continue;
+            }
+
+            _log?.Invoke(
+                $"pass 2: sweeping {band.Count} silence(s) of {bandFloorSeconds:0.0#}-" +
+                $"{_options.MinSilenceSeconds:0.0#} s for " +
+                $"chapter{(stillMissing.Count > 1 ? "s" : "")} {string.Join(", ", stillMissing)}");
+            var region = new DetectionRegion(
+                gap.FromSeconds, gap.ToSeconds, stillMissing[0] - 1, stillMissing[^1] + 1);
+            var prober = new RegionProber(
+                env, ctx with { Silences = band }, region, found, namedFound, language,
+                sweepingSubFloorSilences: true);
+            await prober.RunAsync(ct);
+            _customLimitHit |= prober.CustomLimitHit;
+            _sequenceRestartSkips += prober.SequenceRestartSkips;
+        }
+    }
+
+    /// <summary>
     /// How many <see cref="DetectionTuning.WhisperChunkSeconds"/> decode windows a stretch of audio
     /// of this length costs to recognize. Rounded up because a partial window is a whole one to the
     /// recognizer, which is exactly why this is the unit a short probe and a long transcription can
@@ -1570,13 +1679,12 @@ public sealed class ChapterDetector
         // for - and it is also what makes every jingle a candidate, since a VAD region is otherwise
         // dropped as a duplicate of the silence leading it (see RegionProber's BuildCandidates).
         var silences = _options.ProbeSilences
-            ? allSilences.Where(s => s.EndSeconds - s.StartSeconds >= _options.ProbeSilenceFloorSeconds).ToList()
+            ? allSilences.Where(s => s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds).ToList()
             : [];
 
         _log?.Invoke(_options.ProbeSilences
-            ? $"Pass 1: {silences.Count} silence(s) of >= {_options.ProbeSilenceFloorSeconds:0.##} s found" +
-              (_options.AutoMinSilence
-                  ? $" (adaptive threshold, starting at {_options.MinSilenceSeconds:0.##} s)" : "")
+            ? $"Pass 1: {silences.Count} silence(s) of >= {_options.MinSilenceSeconds:0.#} s found" +
+              (_options.AutoMinSilence ? " (adaptive threshold)" : "")
             : $"Pass 1: {allSilences.Count} silence(s) found, none probed " +
               "(--min-silence-length 0 - jingles only)");
         if (_vad != null)
@@ -1601,9 +1709,8 @@ public sealed class ChapterDetector
     /// timestamp.
     /// </para>
     /// </summary>
-    /// <param name="allSilences">Every silence found, including those too short to be probed at
-    /// all; the ones at or above <see cref="CliOptions.ProbeSilenceFloorSeconds"/> are flagged so
-    /// the subset Pass 2 actually works from stays visible.</param>
+    /// <param name="allSilences">Every silence found, including those below --min-silence-length,
+    /// which are flagged so the subset Pass 2 actually works from stays visible.</param>
     /// <param name="nonSpeechRegions">The merged non-speech regions, empty without the VAD pre-pass.</param>
     /// <param name="speechSegments">The raw VAD speech segments, empty without the VAD pre-pass.</param>
     private void DumpPass1Signals(
@@ -1618,7 +1725,7 @@ public sealed class ChapterDetector
         foreach (var s in allSilences)
             debug($"  silence {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +
                   $"({s.EndSeconds - s.StartSeconds:0.00} s)" +
-                  (_options.ProbeSilences && s.EndSeconds - s.StartSeconds >= _options.ProbeSilenceFloorSeconds
+                  (_options.ProbeSilences && s.EndSeconds - s.StartSeconds >= _options.MinSilenceSeconds
                       ? " *" : ""));
         foreach (var s in speechSegments)
             debug($"  speech {FormatTimestamp(s.StartSeconds)}-{FormatTimestamp(s.EndSeconds)} " +

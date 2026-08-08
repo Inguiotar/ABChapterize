@@ -144,7 +144,7 @@ public sealed class DebugLog : IDisposable
     private static string DescribeMinSilence(CliOptions o)
         => !o.ProbeSilences ? "0 (jingles only)"
             : o.AutoMinSilence
-                ? $"auto (from {o.MinSilenceSeconds:0.##} s, floor {o.ProbeSilenceFloorSeconds:0.##} s)"
+                ? $"auto (from {o.MinSilenceSeconds:0.##} s, sweeping to {o.AdaptiveFloorSeconds:0.##} s)"
             : $"{o.MinSilenceSeconds:0.##} s";
 
     /// <param name="o">The run's validated options.</param>

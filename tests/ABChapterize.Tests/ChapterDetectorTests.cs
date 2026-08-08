@@ -2115,15 +2115,10 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task Pass25_StopsSweeping_AsSoonAsTheGapsLastMissingChapterIsFound()
     {
-        // Bands run longest-first and the sweep ends the moment nothing is missing, so the bottom
-        // band never runs and the 1.05 s silence at 1000 is never swept. Scripting a second,
-        // duplicate announcement there makes the omission provable rather than merely plausible: if
-        // the bottom band ran, its decode would show up.
-        // The count, not the absence, is what says so. 1000 is a Pass 2 candidate in its own right
-        // (the candidate list reaches down to the adaptive floor, well below this 1.05 s silence),
-        // it is skipped there for sitting under the run's 1.5 s starting threshold, and pass 2's
-        // sequence-gap re-probe then reads it once unconditionally. A sweep of that band would make
-        // it two.
+        // Bands run longest-first and the sweep ends the moment nothing is missing, so the 1.05 s
+        // silence at 1000 - which would be swept by the bottom band - is never probed at all.
+        // Scripting a second, duplicate announcement there makes the omission provable rather than
+        // merely plausible: if the bottom band ran, that decode would show up.
         var log = new List<string>();
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
             Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
@@ -2143,7 +2138,7 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters([new(1, 0.25), new(2, 900.25), new(3, 1199.95)], result.Chapters);
         Assert.Contains(log, l => l.Contains("sub-floor sweep closed the gap at 1.4-1.5 s"));
         Assert.DoesNotContain(log, l => l.Contains("1.0-1.1 s"));
-        Assert.Equal(1, pass3.Audio.DecodeStarts.Count(d => Math.Abs(d - 1000) < 1e-6));
+        Assert.DoesNotContain(pass3.Audio.DecodeStarts, d => Math.Abs(d - 1000) < 1e-6);
     }
 
     [Fact]
@@ -2173,9 +2168,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Pass25_DoesNotSweep_WhenItsOwnReProbeAlreadyClosedTheGap()
     {
         // The sweep is the fallback, not a second helping: with the gap closed by the ordinary
-        // re-probe at 600, the 1.45 s silence at 900 is never swept even though it is in range.
-        // As in Pass25_StopsSweeping_..., the decode count rather than its absence is the evidence -
-        // pass 2's own sequence-gap re-probe reads that silence once before pass 2.5 begins.
+        // re-probe at 600, the 1.4 s silence at 900 stays untouched even though it is in range.
         var log = new List<string>();
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
             Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
@@ -2190,7 +2183,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         AssertChapters([new(1, 0.25), new(2, 600.25), new(3, 1199.95)], result.Chapters);
         Assert.DoesNotContain(log, l => l.Contains("sweeping"));
-        Assert.Equal(1, pass3.Audio.DecodeStarts.Count(d => Math.Abs(d - 900) < 1e-6));
+        Assert.DoesNotContain(pass3.Audio.DecodeStarts, d => Math.Abs(d - 900) < 1e-6);
     }
 
     [Fact]
@@ -2670,48 +2663,58 @@ public sealed class ChapterDetectorTests : IDisposable
     public void AutoMinSilence_StartsAtTheDemand_ButItsFloorSitsWellBelowIt()
     {
         Assert.Equal(1.5, Options().MinSilenceSeconds, 3);
-        Assert.Equal(DetectionTuning.AdaptiveSilenceFloorSeconds, Options().ProbeSilenceFloorSeconds, 3);
-        // An explicit length is the whole story - no adaptation, so nothing below it is ever probed.
-        Assert.Equal(2.0, Options("--min-silence-length", "2.0").ProbeSilenceFloorSeconds, 3);
+        Assert.Equal(DetectionTuning.AdaptiveSilenceFloorSeconds, Options().AdaptiveFloorSeconds, 3);
+        // An explicit length is the whole story - no adaptation, so nothing below it is ever looked at.
+        Assert.Equal(2.0, Options("--min-silence-length", "2.0").AdaptiveFloorSeconds, 3);
         // A demand already under the floor stays the binding one.
-        Assert.Equal(0.6, Options("--min-silence-length", "0.6").ProbeSilenceFloorSeconds, 3);
+        Assert.Equal(0.6, Options("--min-silence-length", "0.6").AdaptiveFloorSeconds, 3);
     }
 
     [Fact]
-    public async Task AutoMinSilence_LowersTheThreshold_BelowTheStartingDemand()
+    public async Task AdaptiveSubFloorSweep_RecoversAChapterBehindASubDemandPause()
     {
-        // Chapter 2's anchor silence is 1.6 s - only just over the 1.5 s the run starts at - and
-        // lowers the threshold to 1.2 s (0.75x), under the starting demand. Chapter 3's 1.4 s break
-        // therefore has to be both a candidate at all (the list is cut at the adaptive floor, not at
-        // --min-silence-length) and above the lowered threshold. Chapter 3 is the last mark, so
-        // nothing bounds a gap around it and no later pass could recover it: if it is skipped it is
-        // lost, which is exactly the shape of a narrator whose breaks sit on the default's line.
-        var (result, _, audio) = await DetectFullAsync(
+        // Chapter 2's anchor silence is 1.6 s - only just over the 1.5 s the run starts at - so the
+        // threshold measures this book's breaks at 1.2 s (0.75x), below the starting demand. That
+        // measurement is the only evidence in the run that 1.5 s was too strict for this narrator,
+        // and chapter 3's 1.4 s break is exactly what it predicts: never a pass 2 candidate, but
+        // swept once chapter 4 reveals the gap. The real shape is "Paula Monti" (2026-07-31), whose
+        // five missed chapters all sat behind pauses of 1.39-1.49 s.
+        var (result, log, _) = await DetectWithLogAsync(
             Options("--max-jingle-length", "0"),
-            [new(598.4, 600), new(898.6, 900)],
+            [new(598.4, 600), new(898.6, 900), new(1198.5, 1200)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(600, Seg(0.3, " Chapter two."));
                 s.Add(900, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
             });
 
         Assert.False(result.GapRemains);
-        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
-        Assert.Contains(900.0, audio.DecodeStarts);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        // 1.13 s, not the 1.2 s chapter 2 alone would give: chapter 4's own 1.5 s anchor lowers the
+        // running minimum again (0.75 x 1.5) before the sweep reads it.
+        Assert.Contains(log, l => l.Contains("measure down to 1.13 s, below the 1.5 s"));
+        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.13-1.5 s for chapter 3"));
     }
 
     [Fact]
-    public async Task AutoMinSilence_NeverReachesBelowTheAdaptiveFloor()
+    public async Task AdaptiveSubFloorSweep_LeavesThePass2CandidateGridAlone()
     {
-        // The same book, except chapter 3's break is 0.7 s - under
-        // DetectionTuning.AdaptiveSilenceFloorSeconds, so Pass 1 never offers it as a candidate no
-        // matter how far the threshold has come down (it stands at 1.2 s here). The floor is what
-        // stops the adaptation from eventually probing every clause pause in the book, and a pause
-        // that short is left to Pass 2.5's sub-floor sweep and Pass 3 instead.
+        // The same book without chapter 4, so nothing bounds a gap around chapter 3 and the sweep
+        // has nowhere to run. The 1.4 s pause must then never be decoded at all: it is not a pass 2
+        // candidate and must not become one just because the threshold measured 1.2 s.
+        //
+        // This is the whole point of sweeping separately rather than widening pass 1's candidate
+        // list. That list is the grid the probe windows are planned on - a shared border is where
+        // one decode stops and the next resumes - so an extra entry re-cuts the decodes around it,
+        // and Whisper's reading of a stretch depends on the window it arrives in. Measured on a
+        // BARDIOC clip (2026-08-08): widening the list re-cut the last two minutes from 49.4 s and
+        // 34.9 s decodes into 28.8, 19.8 and 13.5 s, and a chapter announcement that the long decode
+        // heard comfortably fell 1.2 s short of a short one's end and was lost.
         var (result, _, audio) = await DetectFullAsync(
             Options("--max-jingle-length", "0"),
-            [new(598.4, 600), new(899.3, 900)],
+            [new(598.4, 600), new(898.6, 900)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
@@ -4733,7 +4736,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Contains(log, l =>
             l.Contains("skipped chapter 2 at 0:10:09.00") &&
             l.Contains("the silence before it is only 0.60 s long") &&
-            l.Contains("below the 1.5 s --min-silence-length floor"));
+            l.Contains("below --min-silence-length 1.5 s"));
     }
 
     [Fact]

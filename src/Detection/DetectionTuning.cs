@@ -736,33 +736,31 @@ internal static class DetectionTuning
     internal const double AdaptiveTightenFactor = 0.75;
 
     /// <summary>
-    /// How short a silence --min-silence-length auto may talk itself down to
+    /// How short a chapter break --min-silence-length auto may end up believing in
     /// (<see cref="RegionProber.ProposeThreshold"/>), independent of the length the run
     /// <em>starts</em> at. The two are separate questions: --min-silence-length is the demand a run
     /// opens with, this is how far the book's own inter-chapter breaks may argue it down once they
-    /// have been measured. Pass 1's candidate list is cut here rather than at --min-silence-length
-    /// (see <see cref="CliOptions.ProbeSilenceFloorSeconds"/>), because a threshold below the
-    /// shortest candidate in existence would skip nothing and the whole lowering half of the
-    /// adaptation was unreachable while the two values were one.
+    /// have been measured. What the threshold reaches below the starting demand does not widen the
+    /// candidate grid - it sizes <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/>, which is
+    /// where the reasoning behind that separation is written down.
     /// <para>
     /// 0.8 s is where the evidence sits. "Paula Monti" (2026-07-31, 4 h 34 min, French) lost five
     /// chapters to pauses of 1.39-1.49 s - that narrator's non-jingle chapter break simply sits on
     /// the 1.5 s line - and "Die Dritte Macht" (2026-07-28, 15 h 10 min) had a genuine inter-chapter
     /// silence of 0.54 s. Below <see cref="MinStoredSilenceSeconds"/> nothing is retained by Pass 1
-    /// to probe in the first place, so the reachable range is [0.5, 1.5); 0.8 covers the sub-floor
+    /// to sweep in the first place, so the reachable range is [0.5, 1.5); 0.8 covers the sub-floor
     /// sweep's whole span (<see cref="SubFloorSweepBandCount"/> bands reaching 1.0 s) with room to
     /// spare while leaving the very shortest stored band - ordinary clause pauses, which is what
-    /// that floor was chosen to catch - out of Pass 2's reach.
+    /// that floor was chosen to catch - out of reach.
     /// </para>
     /// <para>
-    /// The cost is real and worth knowing before this number is moved again: because
-    /// <see cref="RegionProber.ProposeThreshold"/> keeps a running <em>minimum</em>, one tight
-    /// transition anywhere in a book pins the threshold at this floor for the rest of the run - on
-    /// "Die Dritte Macht" that 0.54 s silence proposes 0.41 s, i.e. the floor, from the chapter it
-    /// belongs to onwards. Every silence at or above the floor is then probed. The order of
-    /// magnitude, measured on "Stalker.m4b" (2026-07-28, 13 h 28 min): 1032 silences of >= 1.5 s
-    /// against 5962 of >= 1.0 s. Lowering this floor buys reach into exactly the pauses Pass 2.5's
-    /// sub-floor sweep was invented to reach after the fact, and pays for it in Pass 2 probes.
+    /// The reason the sweep is gap-bounded and budgeted rather than run over whole regions is this
+    /// floor's one sharp edge: <see cref="RegionProber.ProposeThreshold"/> keeps a running
+    /// <em>minimum</em>, so one tight transition anywhere pins the measurement here for the rest of
+    /// the book - "Die Dritte Macht"'s 0.54 s silence proposes 0.41 s, i.e. the floor, from its own
+    /// chapter onwards. The band would then be the full [0.8, 1.5) over fifteen hours, and the order
+    /// of magnitude that implies, measured on "Stalker.m4b" (2026-07-28, 13 h 28 min): 1032 silences
+    /// of >= 1.5 s against 5962 of >= 1.0 s.
     /// </para>
     /// </summary>
     internal const double AdaptiveSilenceFloorSeconds = 0.8;

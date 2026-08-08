@@ -261,12 +261,21 @@ internal sealed class RegionProber
     /// is the first real inter-chapter break - the silence before the first mark is typically the
     /// intro/title silence, often longer, so it must not be used to tighten). From there each
     /// mark's anchor silence proposes <see cref="AdaptiveTightenFactor"/> times its own length,
-    /// bounded below by <see cref="CliOptions.ProbeSilenceFloorSeconds"/>, and this is the running
+    /// bounded below by <see cref="CliOptions.AdaptiveFloorSeconds"/>, and this is the running
     /// <em>minimum</em> of those proposals - the first one sets the effective threshold, in either
     /// direction from the starting demand, and every later one can only lower it (see
     /// <see cref="AdaptiveTightenFactor"/> for why a raise is never safe).
     /// </summary>
     private double? _adaptedThresholdSeconds;
+
+    /// <summary>
+    /// What this region's marks measured this book's chapter breaks to be, or null where nothing
+    /// ever qualified. Read after <see cref="RunAsync"/> by
+    /// <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/>: below --min-silence-length it is
+    /// the only evidence in the run that the starting demand was too strict for this narrator, and
+    /// it is evidence the region paid for either way.
+    /// </summary>
+    internal double? AdaptedThresholdSeconds => _adaptedThresholdSeconds;
 
     /// <summary>The silence length a candidate must reach to be probed at all; the
     /// --min-silence-length the run opened at until <see cref="_adaptedThresholdSeconds"/> starts
@@ -485,59 +494,9 @@ internal sealed class RegionProber
     /// subset a sequence-gap re-probe forms.</param>
     /// <param name="index">Index within <paramref name="list"/>.</param>
     private double WindowEndFor(IReadOnlyList<ProbeCandidate> list, int index)
-        => PlanWindowEnd(list[index].Start, NextProbedStart(list, index),
+        => PlanWindowEnd(list[index].Start,
+            index + 1 < list.Count ? list[index + 1].Start : null,
             _probeSeconds, _region.ToSeconds, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
-
-    /// <summary>
-    /// The next candidate start <see cref="GapPlanning.PlanWindowEnd"/> is allowed to share a border
-    /// with: the ordinary grid only, never a sub-floor extra (see <see cref="IsSubFloorExtra"/>).
-    /// Null when there is none, which makes this window stand-alone.
-    /// <para>
-    /// This is what keeps the extras additive. A shared border does not merely mark where one
-    /// window's interest ends - it is where the decode itself stops and the next one resumes, so an
-    /// extra candidate inserted between two ordinary ones splits one decode into two shorter ones.
-    /// Whisper's reading of a stretch depends on the window it arrives in, which is a property this
-    /// tool relies on elsewhere and must not stumble over here: the same audio read in two pieces is
-    /// not the same evidence.
-    /// </para>
-    /// <para>
-    /// Measured, on a 25-minute BARDIOC clip (2026-08-08, build 257). Widening the candidate list
-    /// from 27 to 200 re-cut the decodes over the last two minutes - 49.4 s and 34.9 s became 28.8,
-    /// 19.8 and 13.5 s - and chapter 2's announcement at 0:24:44.73, which the long decode heard
-    /// comfortably, fell 1.2 s short of the end of a 19.8 s one and was dropped by the recognizer,
-    /// then missed again by the jingle re-read (which inherits the same end) and by the next window
-    /// (which starts after it). One chapter lost to framing alone, with the candidate that
-    /// eventually found it present and unchanged in both runs.
-    /// </para>
-    /// </summary>
-    /// <param name="list">The candidate sequence being walked.</param>
-    /// <param name="index">Index within <paramref name="list"/> of the window being planned.</param>
-    private double? NextProbedStart(IReadOnlyList<ProbeCandidate> list, int index)
-    {
-        for (var i = index + 1; i < list.Count; i++)
-            if (!IsSubFloorExtra(list[i]))
-                return list[i].Start;
-        return null;
-    }
-
-    /// <summary>
-    /// Whether this candidate exists only because --min-silence-length auto may talk its threshold
-    /// below the length the run opened at (see
-    /// <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/>). Such a candidate is a bonus probe
-    /// laid on top of the grid Pass 2 has always used, and it is bounded to that role: it may be
-    /// probed, and it may not reshape any other window (<see cref="NextProbedStart"/>). Judged
-    /// against --min-silence-length rather than the current threshold, so the grid is the same one
-    /// on every run of a given file no matter what the adaptation does in between.
-    /// <para>
-    /// Neither a sweep's list nor a gap re-probe's has extras in it: a sweep's candidates <em>are</em>
-    /// its grid, and a re-probe decodes every candidate it was handed, so both want their borders
-    /// shared as usual.
-    /// </para>
-    /// </summary>
-    /// <param name="candidate">The candidate to judge.</param>
-    private bool IsSubFloorExtra(ProbeCandidate candidate)
-        => !_sweeping && !_reprobing && candidate.Silence is { } silence &&
-           silence.EndSeconds - silence.StartSeconds < _env.Options.MinSilenceSeconds;
 
     /// <summary>
     /// How far a decode that must cover up to <c>plan.End</c> is allowed to read on past it: the
@@ -1770,13 +1729,10 @@ internal sealed class RegionProber
             return RejectProbeMark(what, phraseAbs,
                 $"the nearest silence ends {phraseAbs - anchor.EndSeconds:0.0} s before it, " +
                 $"more than the {PhraseLatestStart:0.#} s allowed");
-        // Judged against the floor rather than the starting demand, so this stays the same rule
-        // Pass 1 used to decide which silences are candidates at all: a pause Pass 2 is willing to
-        // probe on its own must not then be refused as an anchor for what that probe heard.
-        if (anchor.EndSeconds - anchor.StartSeconds < _env.Options.ProbeSilenceFloorSeconds)
+        if (anchor.EndSeconds - anchor.StartSeconds < _env.Options.MinSilenceSeconds)
             return RejectProbeMark(what, phraseAbs,
                 $"the silence before it is only {anchor.EndSeconds - anchor.StartSeconds:0.00} s long, " +
-                $"below the {_env.Options.ProbeSilenceFloorSeconds:0.##} s --min-silence-length floor");
+                $"below --min-silence-length {_env.Options.MinSilenceSeconds:0.##} s");
         return (Math.Max(0, phraseAbs - MarkLead), anchor, null);
     }
 
@@ -1988,19 +1944,21 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Folds one anchor silence's proposal into <see cref="_adaptedThresholdSeconds"/>, keeping the
-    /// running minimum. Never below <see cref="CliOptions.ProbeSilenceFloorSeconds"/>, which is
-    /// where Pass 1 cut its candidate list: a threshold under the shortest candidate in existence
-    /// would skip nothing at all. Note this is the floor, not the starting demand - the threshold
-    /// may end up well below the --min-silence-length the run opened at, which is the whole point of
-    /// a book whose chapter breaks turn out shorter than the default assumes. Does nothing when the
-    /// mark had no anchor silence (it sat on a VAD region instead).
+    /// running minimum. Bounded below by <see cref="CliOptions.AdaptiveFloorSeconds"/>, not by the
+    /// --min-silence-length the run opened at, so this can settle under the starting demand and
+    /// thereby say something Pass 2 could not otherwise know: that this book's chapter breaks are
+    /// shorter than the default assumes. Nothing in Pass 2 acts on the part below the demand - the
+    /// candidate grid does not reach there and must not (see
+    /// <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/>) - it is read afterwards, as the
+    /// measurement that sizes the sweep. Does nothing when the mark had no anchor silence (it sat on
+    /// a VAD region instead).
     /// </summary>
     /// <param name="markSilence">The silence the mark actually fell into, or null.</param>
     private void ProposeThreshold(Silence? markSilence)
     {
         if (markSilence is not { } silence)
             return;
-        var proposed = Math.Max(_env.Options.ProbeSilenceFloorSeconds,
+        var proposed = Math.Max(_env.Options.AdaptiveFloorSeconds,
             AdaptiveTightenFactor * (silence.EndSeconds - silence.StartSeconds));
         _adaptedThresholdSeconds = Math.Min(_adaptedThresholdSeconds ?? proposed, proposed);
     }
