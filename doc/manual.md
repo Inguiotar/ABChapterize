@@ -283,6 +283,14 @@ later turn up out of sequence, everything skipped since the previous chapter
 is re-probed before pass 3 has to step in. Giving `--min-silence-length` an
 explicit numeric value disables this and probes every silence at or above it.
 
+Only chapters found at a *pause* teach it. One found at a jingle is left out:
+the pause in front of a jingle is the run-up to the music, not the break
+between two chapters, and it is routinely a different length — so learning
+from it would move the threshold away from the breaks that still have to be
+found. It also means a book whose chapters all open with a jingle never
+narrows its threshold at all, which costs nothing: those chapters are being
+found at the jingles, not at the pauses.
+
 That measurement also runs the other way. When a book's own chapter breaks
 turn out *shorter* than the 1.5 seconds probing started at — a narrator whose
 pauses simply sit under the default — the figure settles below the starting
@@ -912,8 +920,9 @@ Two things are worth knowing before reaching for it:
   shorter is ever looked at; `auto` treats 1.5 seconds as the starting point
   instead. By default (`auto`), pass 2
   self-tightens the probing threshold to 75% of the *shortest* anchor
-  silence observed so far as chapters are found (set at the second
-  mark, only ever lowered after that), re-probing everything it skipped
+  silence observed so far as chapters are found at a pause (set at the second
+  such mark, only ever lowered after that; chapters found at a jingle teach it
+  nothing — see [Pass 2](#pass-2--probing)), re-probing everything it skipped
   whenever a sequence gap turns up, so far fewer Whisper probes are needed
   without a fixed guess. Should that figure come out *below* the 1.5-second
   starting point — a narrator whose chapter breaks are shorter than the

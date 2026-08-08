@@ -135,6 +135,12 @@ earn a round number.
   whether the voice-activity pre-pass runs, and `0` still means "no jingles here, look only
   at the pauses".
 
+  `--min-silence-length auto` now learns only from chapters found at a pause. A chapter
+  found at a jingle used to teach it from the hush in front of the music, which measures the
+  run-up to a jingle rather than the break between two chapters and is routinely a different
+  length — so on a book that plays jingles the threshold could drift away from the breaks it
+  still had to find, in either direction. Books without jingles are unaffected.
+
 - **The default is now a small model for finding chapters and `turbo` for filling the gaps**
   (`-m small -M turbo`), where both used to be `turbo`. This is not a speed compromise: the
   model that finds chapters listens to windows a few seconds long, and the large models are

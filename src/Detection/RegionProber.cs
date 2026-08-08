@@ -115,12 +115,13 @@ internal readonly record struct Pass2Context(
 /// <param name="WindowSeconds">This candidate's own probe window length, or null to use the pass's
 /// shared <see cref="RegionProber"/> window - which is what the gap re-probe and the recovery
 /// passes do.</param>
-/// <param name="SpansJingle">True for a jingle a VAD blip sits inside, whose window deliberately
-/// covers the music as well as the speech behind it, because the announcement may be embedded in
-/// the jingle rather than following it.</param>
+/// <param name="FromJingle">True for a candidate the classification built around a jingle rather
+/// than a pause, which is what bars its marks from teaching --min-silence-length auto anything (see
+/// <see cref="RegionProber.ThresholdSilenceFor"/>). False for every candidate of a recovery pass,
+/// including its VAD-region ones: they keep the behaviour that predates the classification.</param>
 internal readonly record struct ProbeCandidate(
     double Start, Silence? Silence, NonSpeechRegion? VadRegion,
-    double? ExpectAtSeconds = null, double? WindowSeconds = null, bool SpansJingle = false)
+    double? ExpectAtSeconds = null, double? WindowSeconds = null, bool FromJingle = false)
 {
     /// <summary>Where this candidate expects its announcement - its own start unless the
     /// classification put the expectation somewhere else.</summary>
@@ -141,8 +142,11 @@ internal readonly record struct WindowPlan(
 
 /// <summary>One chapter mark a probe window produced.</summary>
 /// <param name="Number">The detected chapter number.</param>
-/// <param name="MarkSilence">The silence the mark falls into, or null when it sits on a VAD region
-/// (or on nothing at all) - the input to the --min-silence-length auto tightening.</param>
+/// <param name="ThresholdSilence">The silence this mark may teach --min-silence-length auto from,
+/// or null where it must teach it nothing - see <see cref="RegionProber.ThresholdSilenceFor"/>.
+/// Deliberately not "the silence the mark fell into": tightening is this field's only consumer, and
+/// naming it after the measurement rather than the geometry keeps the two from being confused the
+/// next time something wants to know where a mark landed.</param>
 /// <param name="Confidence">Whisper's confidence for the segment the phrase was found in, which
 /// decides whether this mark settles its whole overlapping window sequence.</param>
 /// <param name="ReachSeconds">How far into its window the announcement <em>ended</em>, i.e. the
@@ -153,7 +157,7 @@ internal readonly record struct WindowPlan(
 /// before the phrase is complete. The two diverge exactly when the mark's anchor is not the
 /// candidate that triggered the probe.</param>
 internal readonly record struct ProbeMark(
-    int Number, Silence? MarkSilence, double Confidence, double ReachSeconds);
+    int Number, Silence? ThresholdSilence, double Confidence, double ReachSeconds);
 
 /// <summary>
 /// Runs Pass 2 candidate probing for a single <see cref="DetectionRegion"/>, appending every
@@ -617,7 +621,7 @@ internal sealed class RegionProber
         return new ProbeCandidate(start, null, region,
             ExpectAtSeconds: jingle.AnnouncementSeconds,
             WindowSeconds: jingle.AnnouncementSeconds - start + ExpectedAnnouncementSeconds,
-            SpansJingle: spans);
+            FromJingle: true);
     }
 
     /// <summary>
@@ -1455,7 +1459,7 @@ internal sealed class RegionProber
 
         if (teachesThreshold)
         {
-            ProposeThreshold(markSilence);
+            ProposeThreshold(ThresholdSilenceFor(candidate, markSilence));
             AdoptProposedThreshold($"\"{match.Title}\"");
         }
         if (!match.Phrase.Repeatable)
@@ -1711,11 +1715,14 @@ internal sealed class RegionProber
                          $"){LowConfidenceNote(match.Confidence)}" +
                          MissingNote(missingNumbers));
 
+        // ObserveJingleLength gets the real anchor either way: it is measuring the jingle, which is
+        // exactly the quantity a jingle candidate's mark does know something about.
         ObserveJingleLength(phraseAbs, start, markSilence, markRegion);
         // start is the candidate's own position (see ProbeAsync), so the window-relative phrase end
         // is already the reach measured from the candidate.
         return new ProbeMark(
-            number, markSilence, match.Confidence, match.PhraseEndSeconds);
+            number, ThresholdSilenceFor(candidate, markSilence), match.Confidence,
+            match.PhraseEndSeconds);
     }
 
     /// <summary>
@@ -2039,11 +2046,12 @@ internal sealed class RegionProber
                 // proposal cannot lower the running minimum and this is a no-op for it; both go
                 // through the same guard rather than the caller having to remember which list a
                 // candidate came from. Only genuine gap-fillers count either way; a re-detection of
-                // a chapter outside this gap must not lower anything.
+                // a chapter outside this gap must not lower anything - and a mark a jingle candidate
+                // recovered brings nothing to fold in at all (see ThresholdSilenceFor).
                 if (!missing.Remove(gapMark.Number))
                     continue;
                 if (_env.Options.AutoMinSilence)
-                    ProposeThreshold(gapMark.MarkSilence);
+                    ProposeThreshold(gapMark.ThresholdSilence);
                 ProposeJingleWindow(gapMark.Number, gapMark.ReachSeconds);
             }
             if (missing.Count > 0)
@@ -2066,17 +2074,18 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Folds one accepted mark's anchor silence into the --min-silence-length auto threshold and
-    /// announces an actual change. <see cref="_lastNumber"/> having a value means this is at least
+    /// Folds one accepted mark's <see cref="ProbeMark.ThresholdSilence"/> into the
+    /// --min-silence-length auto threshold and announces an actual change.
+    /// <see cref="_lastNumber"/> having a value means this is at least
     /// the second mark found, so that silence is a real inter-chapter break - not the
     /// intro-to-chapter-1 silence, which is routinely longer than that and would otherwise
     /// over-tighten the threshold from the very first mark.
     /// </summary>
-    /// <param name="mark">The mark whose anchor silence to fold in.</param>
+    /// <param name="mark">The mark whose silence to fold in, if it brought one.</param>
     private void TightenThreshold(ProbeMark mark)
     {
         if (_lastNumber.HasValue)
-            ProposeThreshold(mark.MarkSilence);
+            ProposeThreshold(mark.ThresholdSilence);
         AdoptProposedThreshold($"chapter {mark.Number}");
     }
 
@@ -2102,18 +2111,54 @@ internal sealed class RegionProber
     /// shorter than the default assumes. Nothing in Pass 2 acts on the part below the demand - the
     /// candidate grid does not reach there and must not (see
     /// <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/>) - it is read afterwards, as the
-    /// measurement that sizes the sweep. Does nothing when the mark had no anchor silence (it sat on
-    /// a VAD region instead).
+    /// measurement that sizes the sweep. Does nothing when the mark brought no silence to teach from
+    /// - it sat on a VAD region, or <see cref="ThresholdSilenceFor"/> withheld one.
     /// </summary>
-    /// <param name="markSilence">The silence the mark actually fell into, or null.</param>
-    private void ProposeThreshold(Silence? markSilence)
+    /// <param name="thresholdSilence">The silence to learn from, or null to learn nothing.</param>
+    private void ProposeThreshold(Silence? thresholdSilence)
     {
-        if (markSilence is not { } silence)
+        if (thresholdSilence is not { } silence)
             return;
         var proposed = Math.Max(_env.Options.AdaptiveFloorSeconds,
             AdaptiveTightenFactor * (silence.EndSeconds - silence.StartSeconds));
         _adaptedThresholdSeconds = Math.Min(_adaptedThresholdSeconds ?? proposed, proposed);
     }
+
+    /// <summary>
+    /// What a mark may teach the --min-silence-length auto threshold: its own anchor silence, unless
+    /// a jingle candidate found it, in which case nothing.
+    /// <para>
+    /// The threshold's whole job is to say how long this book's chapter-break <em>pauses</em> run,
+    /// because that is what decides which pauses become candidates. A jingle candidate's mark
+    /// anchors to the hush leading into the music (<see cref="JingleGeometry.ResolveJingleAnchor"/>),
+    /// which is a different quantity entirely - it measures the transition's lead-in, not the break
+    /// between two chapters - and feeding it in distorts the threshold in whichever direction that
+    /// hush happens to differ. Both directions cost: the running minimum lowering puts pauses back
+    /// on the grid that this book never announces a chapter after, and the very first proposal (the
+    /// one allowed to raise it) can put the threshold above the real breaks and skip them outright.
+    /// It also feeds <see cref="AdaptedThresholdSeconds"/>, which sizes Pass 2.5's sub-floor sweep,
+    /// so a wrong reading here buys wrong bands there.
+    /// </para>
+    /// <para>
+    /// Known consequence, accepted: a book whose every mark came from a jingle now measures no
+    /// break at all, so <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/> never fires for it
+    /// - the sweep runs only where a measured break came in under --min-silence-length. That sweep
+    /// used to be reachable on such a book whenever some jingle's hush happened to be short, which
+    /// is not evidence about its pauses and so was never a reason to run. A chapter it would have
+    /// caught (a mixed book, where some chapters open with a jingle and the missing ones sit behind
+    /// a short pause) now falls through to the gap passes instead, which is slower but not blind.
+    /// </para>
+    /// <para>
+    /// Not extended to the recovery passes' own VAD-region candidates, which keep proposing exactly
+    /// as they always have: their candidate lists are deliberately frozen at pre-classification
+    /// behaviour, and the same argument applies to them, so this is a boundary to revisit rather
+    /// than a distinction to defend.
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The candidate whose window produced the mark.</param>
+    /// <param name="markSilence">The silence the mark actually anchored to, or null.</param>
+    private static Silence? ThresholdSilenceFor(ProbeCandidate candidate, Silence? markSilence)
+        => candidate.FromJingle ? null : markSilence;
 
     /// <summary>
     /// Widens the --max-jingle-length auto window to whatever a gap-recovered chapter actually needed

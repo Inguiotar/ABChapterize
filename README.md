@@ -349,7 +349,9 @@ use `.`, whatever the machine's locale says.
    silence observed so far — set once, then only ever lowered — so
    shorter in-chapter pauses stop being probed once real inter-chapter
    breaks are established; everything skipped since the last mark is
-   re-probed the moment a sequence gap turns up. Where that measurement comes
+   re-probed the moment a sequence gap turns up. Only chapters found at a
+   pause teach it: the hush in front of a jingle measures the run-up to the
+   music rather than the break between two chapters. Where that measurement comes
    out *below* the 1.5 s probing started at — a narrator whose chapter breaks
    are simply shorter than the default assumes — the gaps left in the
    numbering are swept for pauses in between, down to 0.8 s. An explicit

@@ -4291,6 +4291,41 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoMinSilence_AJingleCandidatesMark_TeachesTheThresholdNothing()
+    {
+        // The sibling case the test above cannot reach: that jingle had no silence anywhere near
+        // it, so its mark brought nothing to tighten from and the threshold was safe by accident.
+        // This one has a 4 s hush in front of the music (996-1000), which the mark duly anchors to
+        // (ResolveJingleAnchor), and off the back of which it would once have proposed 0.75 x 4 = 3 s.
+        // It must not. That hush measures the lead-in to a music transition; the threshold is only
+        // ever about how long this book's chapter-break *pauses* run, because that is what decides
+        // which pauses become candidates at all - and a book whose jingles are led by a hush longer
+        // than its pauses would have the threshold raised straight past the pauses it still needs.
+        //
+        // Chapter 3 is the control: an identical 4 s pause, found as an ordinary pause candidate,
+        // and it does propose exactly that 3 s. The two differ in nothing but which class found them.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks"),
+            [new(595, 600), new(996, 1000), new(1496, 1500)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1020, Seg(0, " Chapter two."));      // the speech behind the jingle
+                s.Add(1500, Seg(0.3, " Chapter three."));
+            },
+            // VAD stops hearing speech where the hush starts, so the region opens at 996 and the
+            // hush's end lies inside it - which is what LeadingSilence requires to call it the
+            // jingle's lead-in rather than an unrelated pause. The music itself is 1000-1020.
+            new FakeVad { Speech = [new(0, 996), new(1020, 3600)] });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.DoesNotContain(log, l => l.Contains("threshold") && l.Contains("after chapter 2"));
+        // Chapter 3's proposal is therefore the first one to land, which is what makes the
+        // absence above a real measurement: drop the rule and this line moves to chapter 2.
+        Assert.Contains(log, l => l.Contains($"threshold tightened to {3.0:0.##} s after chapter 3"));
+    }
+
+    [Fact]
     public async Task LowConfidenceSegment_CarriesConfidence_AndIsFlagged()
     {
         var result = await DetectAsync(
