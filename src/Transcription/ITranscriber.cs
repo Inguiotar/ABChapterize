@@ -4,7 +4,8 @@
 
 namespace ABChapterize.Transcription;
 
-/// <summary>A transcribed text segment with absolute timing.</summary>
+/// <summary>A transcribed text segment with its timing, relative to the start of the decoded
+/// window it came from.</summary>
 /// <param name="StartSeconds">Segment start in seconds, relative to the decoded audio window.</param>
 /// <param name="EndSeconds">Segment end in seconds, relative to the decoded audio window.</param>
 /// <param name="Text">Recognized text.</param>

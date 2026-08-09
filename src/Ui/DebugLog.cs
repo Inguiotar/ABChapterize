@@ -134,12 +134,8 @@ public sealed class DebugLog : IDisposable
         MoveToFollowedPath();
     }
 
-    /// <summary>
-    /// The settings the header records: every option whose value changes what detection does, as
-    /// resolved rather than as typed. Presentation-only options (<c>--quiet</c>, <c>--color</c>, the
-    /// bar) are left out - they cannot explain a mark, and a header nobody finishes reading is a
-    /// header nobody reads.
-    /// </summary>
+    /// <summary>How the <c>--min-silence-length</c> line reads: the probing floor in force, and in
+    /// automatic mode the range the adaptive threshold may sweep through.</summary>
     /// <param name="o">The run's validated options.</param>
     private static string DescribeMinSilence(CliOptions o)
         => !o.ProbeSilences ? "0 (jingles only)"
@@ -147,6 +143,12 @@ public sealed class DebugLog : IDisposable
                 ? $"auto (from {o.MinSilenceSeconds:0.##} s, sweeping to {o.AdaptiveFloorSeconds:0.##} s)"
             : $"{o.MinSilenceSeconds:0.##} s";
 
+    /// <summary>
+    /// The settings the header records: every option whose value changes what detection does, as
+    /// resolved rather than as typed. Presentation-only options (<c>--quiet</c>, <c>--color</c>, the
+    /// bar) are left out - they cannot explain a mark, and a header nobody finishes reading is a
+    /// header nobody reads.
+    /// </summary>
     /// <param name="o">The run's validated options.</param>
     private static IEnumerable<string> DescribeSettings(CliOptions o)
     {

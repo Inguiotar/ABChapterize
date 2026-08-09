@@ -9,7 +9,7 @@ namespace ABChapterize.Language.Parsers;
 /// "sette", "ventuno", "trecentoventidue", "centottantotto". The mandatory vowel elision
 /// of the tens ("ventuno", "ventotto") and the optional elision after the hundreds
 /// ("centotto"/"centootto") are both handled, as is the accent on "ventitré". Ordinals
-/// are understood too — the irregular 1st-10th ("capitolo primo") and every regular
+/// are understood too - the irregular 1st-10th ("capitolo primo") and every regular
 /// "-esimo" form ("ventunesimo", "centesimo"), since Italian chapters are customarily
 /// announced that way.
 /// </summary>

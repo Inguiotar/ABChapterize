@@ -7,7 +7,7 @@ namespace ABChapterize.Language.Parsers;
 /// <summary>
 /// Parses French spoken numbers 0-999: "sept", "vingt et un", "soixante-dix",
 /// "quatre-vingt-dix-neuf", "deux cent trente-quatre". Hyphenated and space-separated
-/// transcriptions work equally. Ordinals are understood too — "chapitre premier" as well
+/// transcriptions work equally. Ordinals are understood too - "chapitre premier" as well
 /// as every regular "-ième" form ("vingt et unième", "quatre-vingtième", "centième"),
 /// since French chapters may be announced either way.
 /// </summary>

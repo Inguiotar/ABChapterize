@@ -10,8 +10,9 @@ namespace ABChapterize.Language.Parsers;
 /// too ("Första kapitlet", "tjugoförsta"): the regular pattern appends "-de" or "-nde" to
 /// the cardinal, with a handful of irregular stems (första, andra, tredje, fjärde, sjätte)
 /// for the low numbers, and in a compound only the last part inflects ("hundratjugotredje"
-/// = 123rd, "hundra" stays cardinal). Since Swedish chapters are usually announced with a
-/// plain cardinal ("Kapitel tjugoett"), ordinal-first announcements are understood too.
+/// = 123rd, "hundra" stays cardinal). Swedish chapters are usually announced with a plain
+/// cardinal ("Kapitel tjugoett"), but an ordinal-first announcement ("Första kapitlet") is
+/// understood as well.
 /// </summary>
 public sealed class SwedishNumberParser : INumberWordParser
 {

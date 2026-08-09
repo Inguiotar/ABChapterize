@@ -189,13 +189,13 @@ internal sealed class LanguageResolver
         if (!decided)
         {
             _log?.Invoke($"language auto-detection inconclusive after {attempts.Count} probe(s) " +
-                         $"({DescribeTally(tally)}); no majority, falling back to en");
+                         $"({DescribeTally(tally)}); no clear winner, falling back to en");
             return new LanguageState(_options.ResolveProfile("en"), NullIfEmpty(best.Language), best.Probability);
         }
 
         var winner = tally[0];
         _log?.Invoke($"language auto-detection inconclusive after {attempts.Count} probe(s) " +
-                     $"({DescribeTally(tally)}); majority vote -> {winner.Language} " +
+                     $"({DescribeTally(tally)}); {winner.Language} named most often " +
                      $"(best p={winner.Best:0.00})");
         return new LanguageState(_options.ResolveProfile(winner.Language), winner.Language, winner.Best);
     }

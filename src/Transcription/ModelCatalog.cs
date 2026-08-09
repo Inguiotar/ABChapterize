@@ -110,13 +110,16 @@ public static class ModelCatalog
     /// </summary>
     /// <param name="model">Validated model selector from the command line.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
+    /// <param name="report">Where to write the download's own lines, or null for the console;
+    /// see <see cref="Report"/>.</param>
     /// <exception cref="AppError">
     /// Thrown when the download fails; the message contains step-by-step manual instructions.
     /// Also when a custom model file has disappeared since the command line was parsed - which is
     /// worth its own check because the pass-3 model is only resolved once a file reaches pass 3,
     /// possibly hours into a run.
     /// </exception>
-    public static async Task<string> EnsureModelAsync(string model, CancellationToken ct)
+    public static async Task<string> EnsureModelAsync(
+        string model, CancellationToken ct, Action<string>? report = null)
     {
         if (IsCustom(model))
         {
@@ -135,14 +138,14 @@ public static class ModelCatalog
 
         var url = BaseUrl + m.FileName;
         var tempPath = path + ".download";
-        Console.WriteLine(
+        Report(report,
             $"Whisper model \"{model}\" not found - downloading it now (about {m.ApproxSize}, one time only)...");
         try
         {
             Directory.CreateDirectory(dir);
-            await DownloadAsync(url, tempPath, m.Sha256, m.Sha3_256, ct);
+            await DownloadAsync(url, tempPath, m.Sha256, m.Sha3_256, report, ct);
             File.Move(tempPath, path, overwrite: true);
-            Console.WriteLine($"Model downloaded and verified at {path}");
+            Report(report, $"Model downloaded and verified at {path}");
             return path;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -155,6 +158,31 @@ public static class ModelCatalog
             try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* best effort */ }
         }
     }
+
+    /// <summary>
+    /// Writes one of a download's own lines to wherever it is being reported. Null means the
+    /// console, which is where the run's model is fetched from - before any progress bar exists. A
+    /// <c>--pass3-model</c> is resolved hours into a run with the bar live and redrawing four times
+    /// a second, so <see cref="Pass3Transcriber"/> passes a reporter that goes through the renderer
+    /// instead; two things writing to the same terminal line garble both.
+    /// </summary>
+    /// <param name="report">The caller's reporter, or null for the console.</param>
+    /// <param name="line">The line to write.</param>
+    private static void Report(Action<string>? report, string line)
+    {
+        if (report != null)
+            report(line);
+        else
+            Console.WriteLine(line);
+    }
+
+    /// <summary>How often the console's single-line download display is rewritten in place.</summary>
+    private const int ConsoleProgressIntervalMs = 250;
+
+    /// <summary>How often a <em>reported</em> download emits a progress line. Far rarer than the
+    /// console's, because these scroll past instead of overwriting one another - see
+    /// <see cref="DownloadAsync"/>.</summary>
+    private const int ReportedProgressIntervalMs = 5000;
 
     /// <summary>
     /// Streams a URL into a file, showing a single-line console progress display, while hashing
@@ -171,9 +199,11 @@ public static class ModelCatalog
     /// <param name="targetPath">Destination file; overwritten when it exists.</param>
     /// <param name="expectedSha256">Pinned SHA-256 digest (lowercase hex) the download must match.</param>
     /// <param name="expectedSha3_256">Pinned SHA3-256 digest (lowercase hex) the download must match.</param>
+    /// <param name="report">Where to write progress, or null for the console's in-place display.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     private static async Task DownloadAsync(
-        string url, string targetPath, string expectedSha256, string expectedSha3_256, CancellationToken ct)
+        string url, string targetPath, string expectedSha256, string expectedSha3_256,
+        Action<string>? report, CancellationToken ct)
     {
         using var http = new HttpClient();
         // The overall transfer may take arbitrarily long; stalls are detected per read instead.
@@ -220,16 +250,21 @@ public static class ModelCatalog
                 sha3?.AppendData(chunk.Span);
                 done += read;
 
-                if (!Console.IsOutputRedirected && Environment.TickCount64 - lastReport >= 250)
+                var interval = report != null ? ReportedProgressIntervalMs : ConsoleProgressIntervalMs;
+                if ((report != null || !Console.IsOutputRedirected)
+                    && Environment.TickCount64 - lastReport >= interval)
                 {
                     lastReport = Environment.TickCount64;
                     var line = total is > 0
-                        ? $"\rDownloading... {done * 100 / total.Value,3}% ({done >> 20} of {total.Value >> 20} MB)"
-                        : $"\rDownloading... {done >> 20} MB";
-                    Console.Write(line + "   ");
+                        ? $"Downloading... {done * 100 / total.Value,3}% ({done >> 20} of {total.Value >> 20} MB)"
+                        : $"Downloading... {done >> 20} MB";
+                    if (report != null)
+                        report(line);
+                    else
+                        Console.Write("\r" + line + "   ");
                 }
             }
-            if (!Console.IsOutputRedirected)
+            if (report == null && !Console.IsOutputRedirected)
                 Console.Write("\r" + new string(' ', 50) + "\r");
 
             if (total is > 0 && done != total.Value)

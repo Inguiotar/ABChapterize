@@ -87,14 +87,14 @@ internal static class RefinedNumberVote
         {
             log?.Invoke(
                 $"the mark refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as " +
-                $"{winner} ({count} of {total} probes), but that does not fit the sequence " +
+                $"{winner} ({count} of {total} readings), but that does not fit the sequence " +
                 $"{bounds.Describe()} - leaving it at {heard}");
             return null;
         }
 
         log?.Invoke(
             $"the mark refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as {winner} " +
-            $"({count} of {total} probes, from windows framed on the announcement) - " +
+            $"({count} of {total} readings, from windows framed on the announcement) - " +
             "correcting the number, the mark stays where it is");
         return winner;
     }

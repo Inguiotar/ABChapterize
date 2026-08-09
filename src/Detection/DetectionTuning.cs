@@ -857,9 +857,11 @@ internal static class DetectionTuning
         [(2.0, 15.0), (12.0, 45.0)];
 
     /// <summary>
-    /// How many of a mark refinement's own probes must have read a chapter number before their
-    /// verdict may overrule the detecting window's (<see cref="RefinedNumberVote"/>). The winner
-    /// additionally needs a strict majority, so this is really "at least two against one".
+    /// How many numbered readings a mark refinement's own probes must yield between them before
+    /// their verdict may overrule the detecting window's (<see cref="RefinedNumberVote"/>). The
+    /// winner additionally needs a strict majority, so this is really "at least two against one".
+    /// Readings rather than probes: one probe transcript carrying two numbered matches votes
+    /// twice, which is what the corpus figures below were measured on.
     /// <para>
     /// The whole check is free - those probes are transcribed either way, and only their yes/no
     /// answer used to be kept - and the ten-book test run of 2026-08-01 says it is also close to

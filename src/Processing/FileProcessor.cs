@@ -282,7 +282,8 @@ public sealed class FileProcessor
             // separate instance either way - gap work reuses the run's own transcriber.
             pass3 = _options.Pass3Model != _options.Model
                 ? new Pass3Transcriber(_options.Pass3Model, initialLanguage,
-                    _options.EffectiveWhisperThreads, _options.CpuOnly, gpu.Selected?.Index)
+                    _options.EffectiveWhisperThreads, _options.CpuOnly, gpu.Selected?.Index,
+                    _progress.Announce)
                 : null;
 
             if (!_options.Quiet)
@@ -522,7 +523,8 @@ public sealed class FileProcessor
     /// </summary>
     /// <param name="pending">The file to process and the checkpoint it belongs to.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
-    /// <param name="detector">A detector borrowed from the run's pool for the duration of this file.</param>
+    /// <param name="detector">The run's single detector, reused for every file: there is one
+    /// per run rather than one per file, and files are processed strictly one at a time.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ProcessOneAsync(
         PendingFile pending, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
@@ -556,7 +558,8 @@ public sealed class FileProcessor
     /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
     /// <param name="work">Its progress tracker, already started.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
-    /// <param name="detector">A detector borrowed from the run's pool for the duration of this file.</param>
+    /// <param name="detector">The run's single detector, reused for every file: there is one
+    /// per run rather than one per file, and files are processed strictly one at a time.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The name the file was renamed to (a ".missing-marks" tag added or dropped), or
     /// null when it kept its own.</returns>
@@ -592,7 +595,8 @@ public sealed class FileProcessor
     /// detection run whose result one of the report/write stages below writes out.
     /// </summary>
     /// <param name="ctx">The file's context.</param>
-    /// <param name="detector">A detector borrowed from the run's pool for the duration of this file.</param>
+    /// <param name="detector">The run's single detector, reused for every file: there is one
+    /// per run rather than one per file, and files are processed strictly one at a time.</param>
     /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The name the file was renamed to, or null when it kept its own.</returns>

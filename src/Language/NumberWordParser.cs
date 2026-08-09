@@ -80,7 +80,7 @@ public static class NumberWordParser
 
     /// <summary>
     /// Tries to extract a number from the end of <paramref name="text"/>, which is the
-    /// transcribed text immediately preceding the chapter phrase — the "Erstes Kapitel" /
+    /// transcribed text immediately preceding the chapter phrase - the "Erstes Kapitel" /
     /// "Birinci Bölüm" / "2. Kapitel" announcement order. The number must end exactly at
     /// the phrase, so a number that merely occurs earlier in the sentence does not count.
     /// </summary>

@@ -75,7 +75,9 @@ public sealed class DanishNumberParser : INumberWordParser
         ("tres", 60), ("halvfjerds", 70), ("firs", 80), ("halvfems", 90),
     ];
 
-    /// <summary>The fixed "en" prefix compounds always use for one, regardless of gender.</summary>
+    /// <summary>Unit words usable as the first part of an "&lt;unit&gt;og&lt;tens&gt;" compound.
+    /// Standard Danish always writes one as "en" here whatever the noun's gender; "et" is admitted
+    /// too, a transcript being no authority on spelling.</summary>
     private static readonly Dictionary<string, int> UnitsForCompound = new()
     {
         ["en"] = 1, ["et"] = 1, ["to"] = 2, ["tre"] = 3, ["fire"] = 4, ["fem"] = 5,

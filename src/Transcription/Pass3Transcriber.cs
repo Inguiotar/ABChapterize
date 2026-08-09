@@ -40,6 +40,10 @@ public sealed class Pass3Transcriber : ITranscriber, IAsyncDisposable
     private readonly bool _forceCpu;
     private readonly int? _gpuDevice;
 
+    /// <summary>Where this model's download reports itself, since it happens mid-run with the
+    /// progress bar on screen - see <see cref="ModelCatalog.EnsureModelAsync"/>.</summary>
+    private readonly Action<string>? _report;
+
     /// <summary>Language the model runs in. Kept here rather than only on <see cref="_inner"/>
     /// because <see cref="ChangeLanguage"/> is normally called while there is no model yet - the
     /// caller sets the file's language up front, and the model is built later, on the first gap that
@@ -61,14 +65,18 @@ public sealed class Pass3Transcriber : ITranscriber, IAsyncDisposable
     /// (--cpu-only, see <see cref="CliOptions.CpuOnly"/>).</param>
     /// <param name="gpuDevice">Forwarded likewise, so pass 3 lands on the same GPU the rest of the
     /// run chose (--use-gpu, see <see cref="CliOptions.UseGpu"/>).</param>
+    /// <param name="report">Where a download of this model announces itself. Unlike the run's own
+    /// model, this one is fetched with the progress bar already running, so it must not write to
+    /// the console directly.</param>
     public Pass3Transcriber(string model, string language, int threads, bool forceCpu = false,
-        int? gpuDevice = null)
+        int? gpuDevice = null, Action<string>? report = null)
     {
         _model = model;
         _language = language;
         _threads = threads;
         _forceCpu = forceCpu;
         _gpuDevice = gpuDevice;
+        _report = report;
     }
 
     /// <inheritdoc/>
@@ -79,7 +87,7 @@ public sealed class Pass3Transcriber : ITranscriber, IAsyncDisposable
     {
         if (_inner == null)
         {
-            var path = await ModelCatalog.EnsureModelAsync(_model, ct);
+            var path = await ModelCatalog.EnsureModelAsync(_model, ct, _report);
             _inner = new WhisperTranscriber(path, _language, _threads, _forceCpu, _gpuDevice);
         }
         return await _inner.TranscribeAsync(samples, ct, onProgressSeconds);

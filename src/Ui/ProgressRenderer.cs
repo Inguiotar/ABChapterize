@@ -64,7 +64,7 @@ public sealed class WorkTracker
     /// <param name="bytes">Bytes processed so far by the current work item.</param>
     public void SetPhaseProgress(long bytes) => Interlocked.Exchange(ref _phaseCurrentBytes, Math.Max(0, bytes));
 
-    /// <summary>Books finished work within the current phase and clears the transient progress.</summary>
+    /// <summary>Records finished work within the current phase and clears the transient progress.</summary>
     /// <param name="bytes">The full byte size of the finished work item.</param>
     public void Advance(long bytes)
     {
@@ -542,6 +542,12 @@ public sealed class ProgressRenderer : IDisposable
     /// the shell prompt never inherits a bar section's color.</summary>
     public void Dispose()
     {
+        // Drop the slot before stopping the timer. Timer.Dispose does not wait for a callback
+        // already in flight, and after a Ctrl+C this runs with a file still active, so a late tick
+        // could draw one more bar underneath the abort message. A callback already inside the lock
+        // finishes first; one arriving after this finds no slot and returns.
+        lock (_lock)
+            _slot = null;
         _timer?.Dispose();
         if (_interactive)
             TrySetCursorVisible(true);

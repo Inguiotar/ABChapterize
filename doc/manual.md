@@ -1174,13 +1174,13 @@ or, when the first samples were doubtful and the vote decided it:
 ```
 [14:03:38] book.m4b: language probe at 1:41:07.10 inconclusive: de (p=0.44, below 0.60)
 [14:03:41] book.m4b: language probe at 3:47:41.85 inconclusive: en (p=0.51, below 0.60)
-[14:03:52] book.m4b: language auto-detection inconclusive after 5 probe(s) (de x3, en x2); majority vote -> de (best p=0.50)
+[14:03:52] book.m4b: language auto-detection inconclusive after 5 probe(s) (de x3, en x2); de named most often (best p=0.50)
 ```
 
 or, when nothing could be agreed on at all:
 
 ```
-[14:05:10] book.m4b: language auto-detection inconclusive after 5 probe(s) (tr x2, nl x2, pl x1); no majority, falling back to en
+[14:05:10] book.m4b: language auto-detection inconclusive after 5 probe(s) (tr x2, nl x2, pl x1); no clear winner, falling back to en
 ```
 
 Pin a fixed language with `--lang <code>` to skip per-file detection

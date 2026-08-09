@@ -43,9 +43,9 @@ public static class FfmpegLocator
               "Hint: set the environment variable FFMPEG_DIR to ffmpeg's base directory or " +
               "straight to the directory holding the binaries - both work, e.g. " +
               "set FFMPEG_DIR=C:\\Tools\\ffmpeg"
-            : "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR and $FFMPEG_DIR/bin, " +
-              "PATH, ./ffmpeg, ~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg, /snap/bin, " +
-              "~/bin and ~/.local/bin.\n" +
+            : "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR/bin and $FFMPEG_DIR " +
+              "itself, PATH, ./ffmpeg, ~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg/bin, " +
+              "/opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.\n" +
               "Hint: install ffmpeg with your package manager (e.g. sudo apt install ffmpeg) " +
               "or set the environment variable FFMPEG_DIR to the directory containing the binaries.");
     }

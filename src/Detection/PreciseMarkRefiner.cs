@@ -401,10 +401,10 @@ internal sealed class PreciseMarkRefiner
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Where sound resumes after the pause in front of the announcement, or
+    /// <returns>Where sound resumes after the pause in front of the announcement;
     /// <paramref name="onset"/> unchanged when no silence closed within
-    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> before it, or when too little audio decoded
-    /// to measure.</returns>
+    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> before it, and the floor itself when the
+    /// decoded window cannot be measured - see the two guards for why that way round.</returns>
     private async Task<double> AnchorOnsetToSoundAsync(
         double onset, IReadOnlyList<Silence> silences, string file, string? inputDecoder,
         CancellationToken ct)
@@ -419,6 +419,11 @@ internal sealed class PreciseMarkRefiner
             file, floor, onset - floor + PreciseMarkCheckWindowSeconds, inputDecoder, ct);
         var frame = (int)(PreciseMarkQuietWindowSeconds * FfmpegClient.SampleRate);
         var frames = frame > 0 ? samples.Length / frame : 0;
+        // An unmeasurable window falls back to the floor rather than to the onset, and the choice
+        // is the measurement above rather than caution: the sound really starts within 0.1 s of the
+        // silence end in 113 of 114 marks, while the plateau edge is late by up to half a second by
+        // construction - so the silence end is the better answer even unverified, and it errs
+        // towards silence where the onset errs onto the announcement's first word.
         if (frames < 1)
             return floor;
 
@@ -433,7 +438,7 @@ internal sealed class PreciseMarkRefiner
 
         var peak = energy.Max();
         if (peak <= 0)
-            return floor;
+            return floor; // digitally silent over the announcement itself: as above
         var threshold = peak / Math.Pow(10, PreciseMarkOnsetFloorDb / 10);
         var sustain = Math.Max(1, (int)Math.Round(PreciseMarkOnsetSustainSeconds / PreciseMarkQuietWindowSeconds));
 

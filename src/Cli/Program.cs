@@ -112,10 +112,14 @@ public static class Program
             Console.WriteLine($"  {device}");
 
         // The indices are printed for completeness, but the names are what --use-gpu is for; see
-        // GpuDevice's remarks for why an index is worth less than it looks.
+        // GpuDevice's remarks for why an index is worth less than it looks. The example names a
+        // discrete card wherever there is one, for the same reason GpuSelector prefers it:
+        // enumeration order differs between session types on one machine, so "the last device" is
+        // not a meaningful thing to point somebody at.
+        var example = devices.LastOrDefault(d => d.Kind == GpuDeviceKind.Discrete) ?? devices[^1];
         Console.WriteLine();
         Console.WriteLine("Pass any distinctive part of a name to --use-gpu, e.g. --use-gpu "
-            + FirstWordOf(devices[^1].Name).ToLowerInvariant() + ".");
+            + FirstWordOf(example.Name).ToLowerInvariant() + ".");
         return 0;
     }
 

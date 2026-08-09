@@ -258,6 +258,13 @@ earn a round number.
   real chapter beginning right after a short prologue keeps its mark, since its number
   continues the sequence, and the first chapter of a book is never dropped this way.
 
+- **Downloading a `--pass3-model` no longer scrambles the progress display.** Unlike the
+  main model, a separate pass-3 model is fetched only when a book actually needs it, which
+  is well into a run with the progress bar already on screen — and the download's own
+  percentage line and the bar then fought over the same line of the terminal, leaving both
+  unreadable for as long as the transfer took. The download now reports itself on lines of
+  its own, and lands in the log file alongside everything else.
+
 
 ## [0.10.1] — 2026-08-04
 

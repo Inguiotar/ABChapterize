@@ -207,7 +207,7 @@ public sealed class SpanishNumberParser : INumberWordParser
     /// <summary>
     /// Matches one scale word below <paramref name="ceiling"/>, either bare ("vigésimo") or with
     /// a unit fused onto it ("vigesimoprimero"). The fused form appends the gender vowel of the
-    /// scale, which elides against a unit that starts with the same vowel — hence
+    /// scale, which elides against a unit that starts with the same vowel - hence
     /// "decimoctavo" for "decimo" + "octavo".
     /// </summary>
     /// <param name="s">One normalized word.</param>

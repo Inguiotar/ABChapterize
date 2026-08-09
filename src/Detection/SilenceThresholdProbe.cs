@@ -84,7 +84,7 @@ internal static class SilenceThresholdProbe
         double? previous = null;
         for (var k = 0; k < NoiseProbeExcerpts; k++)
         {
-            var start = Math.Max(0, first + span * k / (NoiseProbeExcerpts - 1));
+            var start = Math.Max(0, first + span * k / Math.Max(1, NoiseProbeExcerpts - 1));
             // A file shorter than one excerpt yields the same position every time; handing ffmpeg
             // the same seek eight times would pay for eight identical decodes.
             if (previous is { } last && start - last < NoiseProbeFrameSeconds)
@@ -174,8 +174,12 @@ internal static class SilenceThresholdProbe
         var levels = double.IsFinite(measured.FloorDb)
             ? $"room tone {measured.FloorDb:0.#}"
             : "room tone silent";
-        return $"silence threshold {thresholdDb:0.#} dBFS (auto: {levels}, " +
-               $"speech {measured.SpeechDb:0.#} dBFS" +
+        // Speech gets the same treatment as the floor rather than being printed raw: Unmeasured
+        // carries negative infinity in both fields, and "speech -Infinity dBFS" is not a level.
+        var speech = double.IsFinite(measured.SpeechDb)
+            ? $"speech {measured.SpeechDb:0.#} dBFS"
+            : "nothing audible";
+        return $"silence threshold {thresholdDb:0.#} dBFS (auto: {levels}, {speech}" +
                (measured.Adjusted ? ", adjusted from the default" : "") + ")";
     }
 }

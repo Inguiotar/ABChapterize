@@ -68,11 +68,12 @@ public sealed class PortugueseNumberParser : INumberWordParser
     };
 
     /// <summary>
-    /// Ordinal scale words 10th-100th, in descending order so that a run like
-    /// "centésimo vigésimo primeiro" (121st) can require each rank to be smaller than the last.
-    /// Several carry a European/Brazilian doublet, which is why one value has more than one key.
+    /// Ordinal scale words 10th-100th, as stems without their gender vowel, in descending order so
+    /// that a run like "centésimo vigésimo primeiro" (121st) can require each rank to be smaller
+    /// than the last. Several carry a European/Brazilian doublet, which is why some values appear
+    /// in more than one entry.
     /// </summary>
-    private static readonly (string Word, int Value)[] OrdinalScales =
+    private static readonly (string Stem, int Value)[] OrdinalScales =
     [
         ("centesim", 100), ("nonagesim", 90),
         ("octogesim", 80), ("oitogesim", 80),
@@ -183,9 +184,9 @@ public sealed class PortugueseNumberParser : INumberWordParser
     /// <param name="scale">Receives the scale's value on success.</param>
     private static bool TryScale(string s, int ceiling, out int scale)
     {
-        foreach (var (word, value) in OrdinalScales)
+        foreach (var (stem, value) in OrdinalScales)
         {
-            if (value < ceiling && (s == word + "o" || s == word + "a"))
+            if (value < ceiling && (s == stem + "o" || s == stem + "a"))
             {
                 scale = value;
                 return true;
