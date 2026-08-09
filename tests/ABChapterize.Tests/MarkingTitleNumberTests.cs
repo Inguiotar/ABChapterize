@@ -40,7 +40,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
 
     /// <summary>The profile a file resolved to <paramref name="language"/> would be verified with.</summary>
     /// <param name="language">Two-letter code.</param>
-    /// <param name="options">Extra command line options, e.g. an explicit --title.</param>
+    /// <param name="options">Extra command line options, e.g. an explicit --chapter-title.</param>
     private LanguageProfile Profile(string language, params string[] options)
         => CliOptions.Parse([.. options, _file])!.ResolveProfile(language);
 
@@ -237,13 +237,13 @@ public sealed class MarkingTitleNumberTests : IDisposable
         => AssertReadsNothing("Chapter to the End", Profile("en"));
 
     /// <summary>
-    /// A file this tool marked under an explicit --title is read back by that word, not by the
+    /// A file this tool marked under an explicit --chapter-title is read back by that word, not by the
     /// phrase it listens for - the two are separate options and a --verify run has to survive both
     /// being set.
     /// </summary>
     [Fact]
     public void AnExplicitTitleWord_IsAnAnchorOfItsOwn()
-        => AssertReads("Section Seven", Profile("en", "--title", "Section"), 7);
+        => AssertReads("Section Seven", Profile("en", "--chapter-title", "Section"), 7);
 
     /// <summary>
     /// Titles with no chapter identity at all stay unreadable, which is what keeps them out of

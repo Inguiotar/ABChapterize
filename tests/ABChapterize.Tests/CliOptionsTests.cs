@@ -211,7 +211,7 @@ public sealed class CliOptionsTests : IDisposable
         // for some of them.
         var options = ParseFile(
             "--chapter-phrase", "[fr]/(?:premi|1).re partie.? chapitre/;[en]section",
-            "--title", "[fr]Chapitre;[en]Section")!;
+            "--chapter-title", "[fr]Chapitre;[en]Section")!;
 
         Assert.Equal("/(?:premi|1).re partie.? chapitre/", options.ResolveProfile("fr").ChapterPhrase);
         Assert.Equal("section", options.ResolveProfile("en").ChapterPhrase);
@@ -220,12 +220,83 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void ChapterTitle_IsTheDocumentedSpelling()
+    {
+        var options = ParseFile("--chapter-title", "Section")!;
+
+        Assert.Equal("Section", options.ResolveProfile("en").Title);
+    }
+
+    [Fact]
+    public void Title_StillWorks_AsTheUndocumentedOldSpelling()
+    {
+        // --title was renamed to --chapter-title in 0.11.0 and kept working silently: nothing about
+        // it was wrong except the name, so a script or a shell history carrying it must not break.
+        // It is gone from every doc, which is what the usage-text assertion below pins.
+        var options = ParseFile("--title", "Section")!;
+
+        Assert.Equal("Section", options.ResolveProfile("en").Title);
+        Assert.Equal(ParseFile("--chapter-title", "Section")!.RunFingerprint, options.RunFingerprint);
+    }
+
+    [Fact]
+    public void ShortFormT_MeansChapterTitle()
+    {
+        var options = ParseFile("-t", "Section")!;
+
+        Assert.Equal("Section", options.ResolveProfile("en").Title);
+    }
+
+    [Fact]
+    public void UsageText_NamesChapterTitleAndNotTheOldSpelling()
+    {
+        // The half of the rename that cannot be checked by parsing: --title keeps working but must
+        // not be advertised anywhere, or the two spellings start propagating side by side again.
+        Assert.Contains("--chapter-title", CliOptions.UsageText);
+        Assert.DoesNotMatch(@"(?<!-)--title\b", CliOptions.UsageText);
+    }
+
+    [Fact]
+    public void UsageText_GroupsPhrasesWithTitlesAndKeepsIgnoreChapterNumbersWithTheSafetyNets()
+    {
+        // The option groups are a documented surface of their own - "where do I look for this" -
+        // and the three sections below are the ones whose membership has been deliberately chosen
+        // rather than inherited. Pinned by section boundaries so a stray option cannot drift in.
+        var text = CliOptions.UsageText;
+        string Section(string header, string next)
+        {
+            var from = text.IndexOf(header, StringComparison.Ordinal);
+            Assert.True(from >= 0, $"usage text has no \"{header}\" section");
+            var to = text.IndexOf(next, from, StringComparison.Ordinal);
+            Assert.True(to > from, $"\"{next}\" does not follow \"{header}\"");
+            return text[from..to];
+        }
+
+        var phrases = Section("Phrases & titles:", "Detection safety nets:");
+        foreach (var option in new[]
+                 {
+                     "--chapter-phrase", "--prologue-phrase", "--epilogue-phrase", "--custom",
+                     "--custom-file", "--chapter-title", "--intro-title", "--prologue-title",
+                     "--epilogue-title",
+                 })
+            Assert.Contains(option, phrases);
+
+        var safetyNets = Section("Detection safety nets:", "Output & review:");
+        Assert.Contains("--ignore-chapter-numbers", safetyNets);
+
+        var performance = Section("Performance:", "Info:");
+        Assert.Contains("--cpu-only", performance);
+        Assert.Contains("--use-gpu", performance);
+        Assert.Contains("--whisper-threads", performance);
+    }
+
+    [Fact]
     public void PerLanguage_LeavesUnnamedLanguagesOnTheirOwnDefaults()
     {
         // The property that makes the feature additive: naming French does not impose French on the
         // German files in the same run - they get the German defaults, exactly as if the option had
         // never been given.
-        var profile = ParseFile("--chapter-phrase", "[fr]chapitre", "--title", "[fr]Chapitre")!
+        var profile = ParseFile("--chapter-phrase", "[fr]chapitre", "--chapter-title", "[fr]Chapitre")!
             .ResolveProfile("de");
 
         Assert.Equal("/kapitel/", profile.ChapterPhrase);
@@ -235,7 +306,7 @@ public sealed class CliOptionsTests : IDisposable
     [Fact]
     public void PerLanguage_UsesAnUntaggedEntryAsTheFallback()
     {
-        var options = ParseFile("--title", "[fr]Chapitre;Section")!;
+        var options = ParseFile("--chapter-title", "[fr]Chapitre;Section")!;
 
         Assert.Equal("Chapitre", options.ResolveProfile("fr").Title);
         Assert.Equal("Section", options.ResolveProfile("de").Title);
@@ -267,7 +338,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("[fr]Chapitre;[fr]Chapitre")]   // the same language twice
     [InlineData("[fr]Chapitre;A;B")]            // two entries claiming to be the fallback
     public void PerLanguage_IsRejected_WhenTheSpecContradictsItself(string spec)
-        => Assert.Throws<CliError>(() => ParseFile("--title", spec));
+        => Assert.Throws<CliError>(() => ParseFile("--chapter-title", spec));
 
     [Fact]
     public void PerLanguage_ChecksEveryLanguagesOwnEntryForEmptiness()
@@ -303,8 +374,8 @@ public sealed class CliOptionsTests : IDisposable
     [Fact]
     public void PerLanguage_DistinguishesTwoSpecsThatAgreeOnTheFallbackLanguage()
         => Assert.NotEqual(
-            ParseFile("--title", "[en]Section;[fr]Chapitre")!.RunFingerprint,
-            ParseFile("--title", "[en]Section;[de]Kapitel")!.RunFingerprint);
+            ParseFile("--chapter-title", "[en]Section;[fr]Chapitre")!.RunFingerprint,
+            ParseFile("--chapter-title", "[en]Section;[de]Kapitel")!.RunFingerprint);
 
     [Fact]
     public void Custom_AccumulatesAcrossRepeatedOptions()
@@ -374,7 +445,7 @@ public sealed class CliOptionsTests : IDisposable
 
     [Theory]
     [InlineData("--chapter-phrase", "part")]
-    [InlineData("--title", "Part")]
+    [InlineData("--chapter-title", "Part")]
     public void IgnoreChapterNumbers_StillTakesTheChapterPhraseOptions(string opt, string value)
         => Assert.True(ParseFile("--ignore-chapter-numbers", opt, value)!.IgnoreChapterNumbers);
 
@@ -505,7 +576,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--verify")]
     // The titles are not detection settings, but an imported mark carries the sidecar's own title
     // and no intro mark is prepended, so they are equally inert and equally refused.
-    [InlineData("--title", "Chapter")]
+    [InlineData("--chapter-title", "Chapter")]
     [InlineData("--intro-title", "Intro")]
     [InlineData("--prologue-title", "Prologue")]
     [InlineData("--epilogue-title", "Epilogue")]
@@ -1191,7 +1262,7 @@ public sealed class CliOptionsTests : IDisposable
         // a GPU to refuse nor one to pick.
         Assert.Throws<CliError>(() => ParseDir("--revert", "--use-gpu", "gtx"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--max-chapters", "50"));
-        Assert.Throws<CliError>(() => ParseDir("--revert", "--title", "Teil"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--chapter-title", "Teil"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--intro-title", "Vorwort"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--min-silence-length", "2"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--max-jingle-length", "20"));

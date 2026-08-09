@@ -118,6 +118,20 @@ earn a round number.
 
 ### Changed
 
+- **`--title` is now `--chapter-title`.** Every other option naming a part of a book says which
+  part - `--chapter-phrase`, `--intro-title`, `--prologue-title` - while a bare `--title` read
+  like the book's own title rather than the word put in front of each chapter number. The short
+  form is still `-t`, and `--title` still works exactly as before; it is simply no longer
+  documented, so nothing that already uses it needs changing.
+
+- **The option groups in `--help` and the documentation have been rearranged.** The phrase
+  options and the title options now sit together in one "Phrases & titles" group, since choosing
+  what to listen for and choosing what to call the result is one decision made at one time;
+  `--ignore-chapter-numbers` has moved to "Detection safety nets", alongside the other options
+  that bound what the run is willing to believe about chapter numbers; and `--cpu-only` and
+  `--use-gpu` have moved to "Performance", which is where someone looking to make a run faster
+  will look for them. No option changed its meaning, and nothing was added or removed.
+
 - **Pass 2 now frames each probe around what it expects to hear there, instead of handing
   every candidate the same window.** A pause and a jingle are different promises: after a
   pause the announcement follows within seconds, behind a jingle it is the first speech

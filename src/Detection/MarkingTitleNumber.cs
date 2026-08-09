@@ -118,7 +118,7 @@ internal static class MarkingTitleNumber
 
     /// <summary>
     /// Reads a number sitting next to one language's chapter wording. Both the phrase and the title
-    /// word are tried, because they need not be the same string: <c>--title</c> changes what this
+    /// word are tried, because they need not be the same string: <c>--chapter-title</c> changes what this
     /// tool writes into a file without changing what it listens for, so a file this tool marked as
     /// "Section 5" is unreadable by a phrase of "chapter" alone.
     /// </summary>

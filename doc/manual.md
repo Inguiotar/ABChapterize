@@ -443,14 +443,14 @@ More than ten missing chapters are not spelled out — the tag is just
 automatically by a later run: a gap that wide usually means detection went
 off the rails somewhere, which is worth a look before handing the file back
 to another automatic attempt. See
-[`--max-chapter-number`](#handling-of-pre-existing-chapters) for the most
+[`--max-chapter-number`](#detection-safety-nets) for the most
 common cause.
 
 A later run over a *numbered* tagged file picks it up automatically (unless
 `--force` is given): the chapters already committed are trusted outright,
 and only the still-tagged gap(s) get their own pass 2 and, if needed, pass 3,
 exactly as after a failed `--verify` (see
-[`--verify`](#handling-of-pre-existing-chapters)). If that completes the
+[`--verify`](#detection-safety-nets)). If that completes the
 sequence, the file is renamed back to its original name; if a gap is still
 unresolved, it is re-tagged with the (possibly shorter) remaining list.
 `--force` bypasses this and redoes the file from scratch instead, discarding
@@ -583,7 +583,7 @@ chapter announcements.
 
 The options that reason in chapter numbers are rejected rather than silently
 ignored: `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
-`--chapter-count` and `--verify`. `--chapter-phrase` and `--title` remain
+`--chapter-count` and `--verify`. `--chapter-phrase` and `--chapter-title` remain
 perfectly useful and are accepted.
 
 ### The intro chapter
@@ -746,126 +746,12 @@ so that logs and reports stay comparable regardless of regional settings.
   detection entirely. Either way, for the languages listed in
   [section 7](#7-languages-and-number-recognition), the resolved language
   enables number-word parsing and localizes the defaults of
-  `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--title`,
+  `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--chapter-title`,
   `--intro-title`, `--prologue-title` and `--epilogue-title` (per file with
   `auto`).
   `abchapterize --lang de buch.m4b` finds "Kapitel eins" and writes
   "Kapitel 1" without further options; so does plain `abchapterize buch.m4b`,
   via auto-detection.
-
-`-c`, `--chapter-phrase <p>`
-: The word or phrase that announces a chapter (default: `/chapter/`,
-  localized by `--lang` — see [section 7](#7-languages-and-number-recognition)
-  for every language's default). Matching is always case-insensitive. Two
-  forms:
-
-  - A literal word/phrase: `--chapter-phrase Teil`. The chapter number is
-    expected directly after it ("Teil sieben") or, failing that, directly
-    before it ("Siebter Teil") — see section 7.
-  - A regular expression between slashes: `--chapter-phrase "/part (\d+)/"`.
-    If the regexp contains a capturing group, the group must capture the
-    chapter number as digits; without a group, the number is parsed from the
-    surrounding words as with a literal phrase.
-  - The word `none` (**experimental**), for a book that announces a chapter by
-    speaking its number and nothing else — see
-    [Bare numbers](#bare-numbers-as-announcements) below.
-
-  For a batch run over books in more than one language, the value may also be
-  written **per language**: entries separated by `;`, each opened by a `[xx]`
-  language tag.
-
-  ```
-  --chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/;[en]section"
-  --title          "[fr]Chapitre;[en]Section"
-  --custom         "[fr]/scène/:Scène;[en]/scene/:Scene"
-  ```
-
-  With `--lang auto` each file resolves its own language and takes that
-  language's entry. One entry may be left untagged, which makes it the
-  fallback for the languages the value does not name; without one, those
-  languages keep their own built-in default, exactly as if the option had not
-  been given. A value carrying no tag anywhere is taken whole, semicolons
-  included, so a phrase written for an earlier version still means what it
-  did; a semicolon inside a tagged entry is written `\;`. The same syntax
-  works for `--title`, `--intro-title`, `--prologue-phrase`,
-  `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`.
-
-#### Bare numbers as announcements
-
-**Experimental.** This mode has been calibrated against a single book so far.
-It works and it is meant to be used, but check what it produces rather than
-trusting it the way you would a phrase-based run, and expect the rules behind it
-to keep moving between releases.
-
-`--chapter-phrase none` says this book has no chapter phrase at all: the
-narrator simply says "Seventeen." and reads on. What counts as an announcement
-is then a **number spoken alone** — one with a pause on either side of it,
-rather than one occurring inside a sentence. "Seventeen." is an announcement;
-"Seventeen men stood at the gate" is not, and neither is a year, a price or a
-house number read out in the prose. A number that ends its sentence still
-counts even when the recognizer runs it together with what follows
-("Seventeen. He was late again."), which is common and no longer costs the
-chapter.
-
-Later passes look harder than the first one does, and then check their work
-against the pauses the file actually has: an announcement they turn up is only
-marked if it is flanked by real non-speech on both sides — roughly a second of
-silence or jingle in front of it, and at least a third of a second behind it. A
-run's `--verbose` output names both measurements and both thresholds when a
-candidate is dropped for that reason.
-
-Everything else about a run is unaffected: the prologue, the epilogue and every
-`--custom` mapping still match their own phrases as usual, and marks are placed
-and refined exactly as they are for a phrase-based book.
-
-Two things are worth knowing before reaching for it:
-
-- **It leans entirely on the chapter numbering.** With a phrase there are two
-  independent signals, and a stray number in the prose fails the first of them.
-  Here the number is all there is, and what rejects a false one is that it does
-  not continue the sequence. `--ignore-chapter-numbers`, which switches that
-  check off, is therefore refused in combination with it — the pair would mark
-  every number spoken alone anywhere in the book.
-- **It is per language,** like every other value of this option, so a batch may
-  hold one series announcing "Kapitel 17" and another just saying "Seventeen":
-  `--chapter-phrase "[en]none;[de]/kapitel/"`.
-
-`-p`, `--prologue-phrase <p>`
-: The word or phrase that announces a prologue (default: `/prolog/`,
-  localized by `--lang`). Takes the same literal and `/regexp/` forms as
-  `--chapter-phrase`, but no number is parsed or expected — including `none`,
-  which is just the word here, there being no number for it to stand in for.
-  Only accepted before the first chapter has been found; see
-  [Prologue and epilogue](#prologue-and-epilogue). An empty string switches
-  prologue detection off.
-
-`-g`, `--epilogue-phrase <p>`
-: The same for the epilogue (default: `/epilog/`, localized by `--lang`),
-  only accepted once at least one chapter has been found. An empty string
-  switches epilogue detection off.
-
-`-u`, `--custom <mappings>`
-: Extra `phrase:title` mappings, separated by `;`, e.g.
-  `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A
-  phrase is a word or a `/regexp/` and parses no number; a match anywhere in
-  the file becomes a mark titled after the colon, as often as the phrase
-  occurs. Titles may reference the phrase's capturing groups as `$1`, `$2` or
-  by name. Repeat the option to add further mappings. Never localized — but a
-  mapping may open with a `[xx]` language tag, which restricts it to files that
-  resolve to that language; untagged mappings apply to every file. See
-  [Custom marks](#custom-marks) for the full syntax and the per-file limit.
-
-`-U`, `--custom-file <path>`
-: Read `--custom` mappings from a text file, one per line; blank lines and
-  lines starting with `#` are ignored.
-
-`--ignore-chapter-numbers`
-: Detect chapter announcements as usual, but form no opinion about the numbers
-  in them: no sequence, no gaps, no missing chapters. The spoken number still
-  reaches the title. Cannot be combined with `--pass3-model`,
-  `--expected-start-chapter`, `--max-chapter-number`, `--chapter-count` or
-  `--verify`. See
-  [Detecting chapters without believing their numbers](#detecting-chapters-without-believing-their-numbers).
 
 `-m`, `--model <name>`
 : Whisper model used to find the chapters: `tiny`, `base`, `small`
@@ -898,25 +784,6 @@ Two things are worth knowing before reaching for it:
   heavier model both keep it. The pass-3 model is downloaded and loaded lazily — only
   if and when a file actually needs it — so naming a model here costs nothing on
   a clean run.
-
-`-C`, `--cpu-only`
-: Forces Whisper onto the CPU backend instead of the fastest available
-  hardware acceleration (CUDA, then Vulkan, then CPU — see
-  [section 9](#9-gpu-acceleration)). The Silero VAD pre-pass already always
-  runs on CPU regardless of this option, so it only affects Whisper. Useful
-  to leave a GPU free for other work, or to sidestep a flaky/unsupported GPU
-  backend.
-
-`--use-gpu <name>`
-: Run Whisper on the GPU whose name contains `<name>`, matched
-  case-insensitively against any part of it — `--use-gpu gtx`, `--use-gpu uhd`.
-  A single discrete GPU is preferred automatically, so this is only needed to
-  force the integrated card, or to choose between several discrete ones. A
-  request matching no GPU, or more than one, stops the run and lists what is
-  available. A bare number is taken as a device index if one exists, for the
-  machine with two identical cards. Vulkan only, and not combinable with
-  `--cpu-only`. See
-  [Picking a GPU on a multi-GPU machine](#picking-a-gpu-on-a-multi-gpu-machine).
 
 `-n`, `--min-silence-length <seconds|auto>`
 : The shortest pause probed as a potential chapter break (0, or 0.1–60,
@@ -1115,6 +982,141 @@ Two things are worth knowing before reaching for it:
   to a quarter of its current width per recovery. `auto` implies a nonzero ceiling, so
   it cannot mean "no jingle expected."
 
+### Phrases and titles
+
+What the run listens for, and what it calls the marks it makes. All of these
+accept the per-language `[xx]` syntax described under `--chapter-phrase`, though
+`--custom` reads the tag differently: it restricts a mapping to one language
+rather than localizing it, a custom phrase never being translated for you.
+
+`-c`, `--chapter-phrase <p>`
+: The word or phrase that announces a chapter (default: `/chapter/`,
+  localized by `--lang` — see [section 7](#7-languages-and-number-recognition)
+  for every language's default). Matching is always case-insensitive. Two
+  forms:
+
+  - A literal word/phrase: `--chapter-phrase Teil`. The chapter number is
+    expected directly after it ("Teil sieben") or, failing that, directly
+    before it ("Siebter Teil") — see section 7.
+  - A regular expression between slashes: `--chapter-phrase "/part (\d+)/"`.
+    If the regexp contains a capturing group, the group must capture the
+    chapter number as digits; without a group, the number is parsed from the
+    surrounding words as with a literal phrase.
+  - The word `none` (**experimental**), for a book that announces a chapter by
+    speaking its number and nothing else — see
+    [Bare numbers](#bare-numbers-as-announcements) below.
+
+  For a batch run over books in more than one language, the value may also be
+  written **per language**: entries separated by `;`, each opened by a `[xx]`
+  language tag.
+
+  ```
+  --chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/;[en]section"
+  --chapter-title  "[fr]Chapitre;[en]Section"
+  --custom         "[fr]/scène/:Scène;[en]/scene/:Scene"
+  ```
+
+  With `--lang auto` each file resolves its own language and takes that
+  language's entry. One entry may be left untagged, which makes it the
+  fallback for the languages the value does not name; without one, those
+  languages keep their own built-in default, exactly as if the option had not
+  been given. A value carrying no tag anywhere is taken whole, semicolons
+  included, so a phrase written for an earlier version still means what it
+  did; a semicolon inside a tagged entry is written `\;`. The same syntax
+  works for `--chapter-title`, `--intro-title`, `--prologue-phrase`,
+  `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`.
+
+#### Bare numbers as announcements
+
+**Experimental.** This mode has been calibrated against a single book so far.
+It works and it is meant to be used, but check what it produces rather than
+trusting it the way you would a phrase-based run, and expect the rules behind it
+to keep moving between releases.
+
+`--chapter-phrase none` says this book has no chapter phrase at all: the
+narrator simply says "Seventeen." and reads on. What counts as an announcement
+is then a **number spoken alone** — one with a pause on either side of it,
+rather than one occurring inside a sentence. "Seventeen." is an announcement;
+"Seventeen men stood at the gate" is not, and neither is a year, a price or a
+house number read out in the prose. A number that ends its sentence still
+counts even when the recognizer runs it together with what follows
+("Seventeen. He was late again."), which is common and no longer costs the
+chapter.
+
+Later passes look harder than the first one does, and then check their work
+against the pauses the file actually has: an announcement they turn up is only
+marked if it is flanked by real non-speech on both sides — roughly a second of
+silence or jingle in front of it, and at least a third of a second behind it. A
+run's `--verbose` output names both measurements and both thresholds when a
+candidate is dropped for that reason.
+
+Everything else about a run is unaffected: the prologue, the epilogue and every
+`--custom` mapping still match their own phrases as usual, and marks are placed
+and refined exactly as they are for a phrase-based book.
+
+Two things are worth knowing before reaching for it:
+
+- **It leans entirely on the chapter numbering.** With a phrase there are two
+  independent signals, and a stray number in the prose fails the first of them.
+  Here the number is all there is, and what rejects a false one is that it does
+  not continue the sequence. `--ignore-chapter-numbers`, which switches that
+  check off, is therefore refused in combination with it — the pair would mark
+  every number spoken alone anywhere in the book.
+- **It is per language,** like every other value of this option, so a batch may
+  hold one series announcing "Kapitel 17" and another just saying "Seventeen":
+  `--chapter-phrase "[en]none;[de]/kapitel/"`.
+
+`-p`, `--prologue-phrase <p>`
+: The word or phrase that announces a prologue (default: `/prolog/`,
+  localized by `--lang`). Takes the same literal and `/regexp/` forms as
+  `--chapter-phrase`, but no number is parsed or expected — including `none`,
+  which is just the word here, there being no number for it to stand in for.
+  Only accepted before the first chapter has been found; see
+  [Prologue and epilogue](#prologue-and-epilogue). An empty string switches
+  prologue detection off.
+
+`-g`, `--epilogue-phrase <p>`
+: The same for the epilogue (default: `/epilog/`, localized by `--lang`),
+  only accepted once at least one chapter has been found. An empty string
+  switches epilogue detection off.
+
+`-u`, `--custom <mappings>`
+: Extra `phrase:title` mappings, separated by `;`, e.g.
+  `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A
+  phrase is a word or a `/regexp/` and parses no number; a match anywhere in
+  the file becomes a mark titled after the colon, as often as the phrase
+  occurs. Titles may reference the phrase's capturing groups as `$1`, `$2` or
+  by name. Repeat the option to add further mappings. Never localized — but a
+  mapping may open with a `[xx]` language tag, which restricts it to files that
+  resolve to that language; untagged mappings apply to every file. See
+  [Custom marks](#custom-marks) for the full syntax and the per-file limit.
+
+`-U`, `--custom-file <path>`
+: Read `--custom` mappings from a text file, one per line; blank lines and
+  lines starting with `#` are ignored.
+
+`-t`, `--chapter-title <word>`
+: Word used to build chapter titles; the chapter number is appended
+  (default: `Chapter`, localized by `--lang` — e.g. `Kapitel` with
+  `--lang de`). "Chapter 1", "Chapter 2", …
+
+`-i`, `--intro-title <word>`
+: Title of the synthetic intro chapter covering the audio before the first
+  detected mark (default: `Intro`, localized by `--lang` — see the table
+  in [section 7](#7-languages-and-number-recognition)). See
+  [The intro chapter](#the-intro-chapter).
+
+`-P`, `--prologue-title <word>`
+: Title written for a detected prologue (default: `Prologue`, localized by
+  `--lang`). See [Prologue and epilogue](#prologue-and-epilogue).
+
+`-G`, `--epilogue-title <word>`
+: Title written for a detected epilogue (default: `Epilogue`, localized by
+  `--lang`).
+
+A `--custom` mark's title comes from its own mapping instead of from an option
+of its own; see [Custom marks](#custom-marks).
+
 ### Auto language detection
 
 With `--lang auto` (the default - no `--lang` needed at all), each file's
@@ -1202,6 +1204,11 @@ skipped (reported as "skipped").
   considered bogus (some publishers write a "chapter" every few minutes) and
   discarded, even without `--force`. Files at or below the threshold are
   still skipped unless `--force` is also given.
+
+### Detection safety nets
+
+Bounds on what detection is willing to believe, and on how long it keeps
+looking. None of these is needed for an ordinary book.
 
 `-a`, `--early-abort <minutes>`
 : Always on by default (60 minutes; pass `0` to disable it entirely and
@@ -1298,6 +1305,14 @@ skipped (reported as "skipped").
   be confused with
   `--max-chapters`, which counts a file's *pre-existing* marks rather than the
   numbers heard in the audio.
+
+`--ignore-chapter-numbers`
+: Detect chapter announcements as usual, but form no opinion about the numbers
+  in them: no sequence, no gaps, no missing chapters. The spoken number still
+  reaches the title. Cannot be combined with `--pass3-model`,
+  `--expected-start-chapter`, `--max-chapter-number`, `--chapter-count` or
+  `--verify`. See
+  [Detecting chapters without believing their numbers](#detecting-chapters-without-believing-their-numbers).
 
 `-V`, `--verify`
 : Checks one specific claim about every existing mark: *this mark is titled
@@ -1542,30 +1557,6 @@ The details worth knowing:
   [section 4](#4-how-chapters-are-written--file-safety)), so there is nothing
   to clean up first.
 
-### Titles
-
-`-t`, `--title <word>`
-: Word used to build chapter titles; the chapter number is appended
-  (default: `Chapter`, localized by `--lang` — e.g. `Kapitel` with
-  `--lang de`). "Chapter 1", "Chapter 2", …
-
-`-i`, `--intro-title <word>`
-: Title of the synthetic intro chapter covering the audio before the first
-  detected mark (default: `Intro`, localized by `--lang` — see the table
-  in [section 7](#7-languages-and-number-recognition)). See
-  [The intro chapter](#the-intro-chapter).
-
-`-P`, `--prologue-title <word>`
-: Title written for a detected prologue (default: `Prologue`, localized by
-  `--lang`). See [Prologue and epilogue](#prologue-and-epilogue).
-
-`-G`, `--epilogue-title <word>`
-: Title written for a detected epilogue (default: `Epilogue`, localized by
-  `--lang`).
-
-A `--custom` mark's title comes from its own mapping instead of from an option
-of its own; see [Custom marks](#custom-marks).
-
 ### Output
 
 `-q`, `--quiet`
@@ -1712,7 +1703,7 @@ touching Whisper at all.
   `--max-jingle-length`, `--min-silence-length`, `--noise-floor`,
   `--early-abort`, `--expected-start-chapter`, `--max-chapter-number`,
   `--chapter-count`, `--no-trailing-scan`, `--verify` — nor with the title
-  options `--title`,
+  options `--chapter-title`,
   `--intro-title`, `--prologue-title` and `--epilogue-title`, since an
   imported mark carries the title the sidecar gives it and no intro mark is
   prepended — nor with `--export`, `--revert` or
@@ -1763,14 +1754,34 @@ touching Whisper at all.
   In the plain-text format, blank lines and lines starting with `;` or `#`
   are ignored, so notes can be added freely between chapters.
 
-### Thread counts
+### Performance
 
 Files are always processed one at a time, so each one gets the whole machine.
-Both options below take a number or `auto`, and `auto` means one thread per
-**physical** CPU core — not per hardware thread. Hyperthreads add a little on
-machines where they help and cost a great deal on machines where they do not,
-and nothing here can tell which machine it is running on; if you know yours
-better, say so with an explicit number. Neither option is valid with `--revert`
+
+`-C`, `--cpu-only`
+: Forces Whisper onto the CPU backend instead of the fastest available
+  hardware acceleration (CUDA, then Vulkan, then CPU — see
+  [section 9](#9-gpu-acceleration)). The Silero VAD pre-pass already always
+  runs on CPU regardless of this option, so it only affects Whisper. Useful
+  to leave a GPU free for other work, or to sidestep a flaky/unsupported GPU
+  backend.
+
+`--use-gpu <name>`
+: Run Whisper on the GPU whose name contains `<name>`, matched
+  case-insensitively against any part of it — `--use-gpu gtx`, `--use-gpu uhd`.
+  A single discrete GPU is preferred automatically, so this is only needed to
+  force the integrated card, or to choose between several discrete ones. A
+  request matching no GPU, or more than one, stops the run and lists what is
+  available. A bare number is taken as a device index if one exists, for the
+  machine with two identical cards. Vulkan only, and not combinable with
+  `--cpu-only`. See
+  [Picking a GPU on a multi-GPU machine](#picking-a-gpu-on-a-multi-gpu-machine).
+
+The two thread counts below both take a number or `auto`, and `auto` means one
+thread per **physical** CPU core — not per hardware thread. Hyperthreads add a
+little on machines where they help and cost a great deal on machines where they
+do not, and nothing here can tell which machine it is running on; if you know
+yours better, say so with an explicit number. Neither is valid with `--revert`
 or `--no-op`, which do no work to spread out.
 
 `--vad-threads <n|auto>`
@@ -1877,7 +1888,7 @@ Where two of the three readings would fit the same word, the language's own
 number words win over the Roman reading: French "dix" is ten, not 509.
 
 For these languages, `--lang` also localizes the defaults of
-`--chapter-phrase`, `--title` and `--intro-title`:
+`--chapter-phrase`, `--chapter-title` and `--intro-title`:
 
 | `--lang` | Default phrase | Default title word | Default intro title |
 | --- | --- | --- | --- |
@@ -2020,7 +2031,7 @@ for it — pass 3, or one of the second opinions pass 2 asks a heavier model for
 The voice-activity pre-pass wants memory of its own on top, and unlike the model
 that amount is yours to choose: about 40 MB per `--vad-threads` thread, so around
 480 MB with the default of one per physical core on a 12-core machine. See
-[thread counts](#thread-counts).
+[performance options](#performance).
 
 ABChapterize does not check any of this up front. If the memory is not there,
 you will find out from the model loader or the operating system rather than

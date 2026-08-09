@@ -690,7 +690,7 @@ public sealed class CliOptions
     /// </summary>
     public int EffectiveWhisperThreads => WhisperThreads ?? ProcessorTopology.PhysicalCoreCount;
 
-    /// <summary>Word used to build chapter titles; the chapter number is appended (--title / -t, default "Chapter", localized by --lang).</summary>
+    /// <summary>Word used to build chapter titles; the chapter number is appended (--chapter-title / -t, default "Chapter", localized by --lang).</summary>
     public string Title { get; private set; } = "Chapter";
 
     /// <summary>
@@ -775,7 +775,7 @@ public sealed class CliOptions
         // what it asked for. The letter is free to be reused once that error is dropped.
         ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['L'] = "--trailing-scan",
         ['F'] = "--filter", ['X'] = "--max-jingle-length",
-        ['n'] = "--min-silence-length", ['t'] = "--title", ['i'] = "--intro-title",
+        ['n'] = "--min-silence-length", ['t'] = "--chapter-title", ['i'] = "--intro-title",
         ['p'] = "--prologue-phrase", ['P'] = "--prologue-title",
         ['g'] = "--epilogue-phrase", ['G'] = "--epilogue-title",
         ['u'] = "--custom", ['U'] = "--custom-file",
@@ -1020,14 +1020,14 @@ public sealed class CliOptions
                 "--mark-before-jingle, --quick-marks, --mark-lead, --max-jingle-length, --min-silence-length, " +
                 "--noise-floor, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, --verify, " +
-                "--title, --intro-title, --prologue-title and --epilogue-title " +
+                "--chapter-title, --intro-title, --prologue-title and --epilogue-title " +
                 "have no effect and cannot be combined with it.");
 
         // --ignore-chapter-numbers removes the chapter-number sequence detection is otherwise built
         // around, and with it every option that reasons in those numbers. Rejecting them outright
         // beats silently ignoring them: each one names an expectation about numbers this run will
         // never form an opinion about, so accepting it would promise something that cannot happen.
-        // --chapter-phrase and --title stay legal - the phrase is still what is listened for and the
+        // --chapter-phrase and --chapter-title stay legal - the phrase is still what is listened for
         // title word is still what the mark is called.
         // A bare number is recognized as an announcement only by being in sequence - see
         // PhraseMatching's FindBareNumbers - and --ignore-chapter-numbers is exactly the switch that
@@ -1266,6 +1266,14 @@ public sealed class CliOptions
             case "--expected-start-chapter": ExpectedStartChapter = ParseExpectedStartChapter(nextParam()); _expectedStartSet = true; return true;
             case "--chapter-count": ChapterCount = ParseChapterCount(nextParam()); _chapterCountSet = true; return true;
             case "--verify-threshold": VerifyFailThreshold = ParseNonNegativeInt("--verify-threshold", nextParam()); return true;
+            // --title is the pre-0.11.0 spelling. Still accepted and no longer documented: every
+            // other option naming a part of a book says which part (--chapter-phrase,
+            // --intro-title, --prologue-title), and a bare --title read like the book's own title
+            // rather than the word put in front of a chapter number. Silent rather than
+            // deprecated-with-a-warning because nothing about it was wrong - only its name - and
+            // "name" is what the spec records, so an error about a bad value still quotes
+            // whichever spelling was typed.
+            case "--chapter-title":
             case "--title": Title = nextParam(); _titleSpec = new(Title, name); return true;
             case "--intro-title": IntroTitle = nextParam(); _introSpec = new(IntroTitle, name); return true;
             case "--prologue-phrase": ProloguePhrase = nextParam(); _prologuePhraseSpec = new(ProloguePhrase, name); return true;
@@ -1557,7 +1565,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// Resolves the chapter phrase, title word and intro title for the given language: an
-    /// explicit --chapter-phrase/--title/--intro-title always wins; otherwise the localized
+    /// explicit --chapter-phrase/--chapter-title/--intro-title always wins; otherwise the localized
     /// default for <paramref name="language"/> is used (English defaults for languages without
     /// an entry in <see cref="LanguageRegistry"/>). Called once at parse time for an explicit
     /// --lang (building <see cref="DefaultProfile"/>), and once per file by
@@ -1760,80 +1768,8 @@ public sealed class CliOptions
                                     language. For these
                                     languages, --lang also localizes the defaults of
                                     --chapter-phrase, --prologue-phrase, --epilogue-phrase,
-                                    --title, --intro-title, --prologue-title and
+                                    --chapter-title, --intro-title, --prologue-title and
                                     --epilogue-title (per-file with "auto").
-          -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
-                                    /chapter/, localized by --lang).
-                                    Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
-                                    The regexp may contain one capturing group "(\d+)" in place of
-                                    the chapter number; otherwise the number is expected to follow
-                                    the phrase. Matching is always case-insensitive.
-                                    For a batch over books in different languages the value may be
-                                    written per language: entries separated by semicolons, each
-                                    opened by a "[xx]" language tag, e.g.
-                                      --chapter-phrase "[fr]/chapitre/;[en]section"
-                                    One entry may be left untagged, as the fallback for languages
-                                    the spec does not name; without one, those keep their own
-                                    built-in default. A value carrying no tag at all is taken
-                                    whole, semicolons included, so an existing phrase still means
-                                    what it did. The same syntax works for --title, --intro-title,
-                                    --prologue-phrase, --prologue-title, --epilogue-phrase,
-                                    --epilogue-title and --custom.
-                                    [EXPERIMENTAL] The value "none" says this book announces a
-                                    chapter by speaking its number and nothing else
-                                    ("Seventeen."), with no phrase at all: a number heard standing
-                                    alone between two pauses is then the announcement. Since the
-                                    number is the only signal there is, such a mark is accepted
-                                    only where it continues the chapter sequence - which is why
-                                    "none" cannot be combined with --ignore-chapter-numbers. Per
-                                    language like any other value, e.g. "[en]none;chapitre".
-                                    Experimental because it has been calibrated against a single
-                                    book so far: expect to check its results, and expect the rules
-                                    behind them to keep moving.
-          -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: /prolog/,
-                                    localized by --lang). Accepts a "/regexp/" like
-                                    --chapter-phrase, but parses no number: a match becomes one
-                                    untitled-by-number mark carrying --prologue-title. Only
-                                    accepted before the first chapter has been found, so a later
-                                    mention in the prose cannot produce a second mark; if the
-                                    phrase turns up more than once before then, the last
-                                    occurrence wins (front matter often lists what is coming
-                                    before the narrator announces it). Pass an empty string to
-                                    switch prologue detection off.
-          -g, --epilogue-phrase <p> Same for the epilogue (default: /epilog/, localized by
-                                    --lang), mirrored: only accepted once at least one chapter
-                                    has been found. Pass an empty string to switch it off.
-          -u, --custom <mappings>   Extra phrase-to-title mappings, "phrase:title" pairs separated
-                                    by semicolons, e.g.
-                                      --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"
-                                    A phrase is a word or a "/regexp/" and parses no number; a
-                                    match anywhere in the file becomes a mark titled after the
-                                    colon, as often as the phrase occurs (up to
-                                    {DetectionTuning.MaxCustomMarksPerFile} marks per file, after
-                                    which the rest are dropped with a note). Only the first colon
-                                    delimits, so a title may contain more of them; a "/regexp/"
-                                    phrase ends at its closing slash instead, so a colon inside it
-                                    is just a colon. Write "\;" for a semicolon inside a regexp.
-                                    A title may reference the phrase's capturing groups by number
-                                    ($1, $2) or by name, in .NET's own substitution syntax ("$$"
-                                    writes a literal dollar sign). Repeat the option to add further
-                                    mappings. Never localized - a phrase is taken exactly as
-                                    written - but a mapping may open with a "[xx]" language tag,
-                                    which restricts it to files that resolve to that language;
-                                    untagged mappings apply to every file.
-          -U, --custom-file <path>  Read --custom mappings from a text file, one per line. Blank
-                                    lines and lines starting with "#" are ignored, and semicolons
-                                    need no escaping here since line breaks separate the mappings.
-              --ignore-chapter-numbers
-                                    Detect chapter announcements as usual, but form no opinion about
-                                    the numbers in them. Every announcement heard becomes a mark
-                                    where it is heard, keeping whatever number was spoken in its
-                                    title, and no sequence gap is ever found or filled: passes 2.5
-                                    and 3 never run and no file is tagged ".missing-marks". For
-                                    books that restart their count per part, or number nothing at
-                                    all. Cannot be combined with --pass3-model,
-                                    --expected-start-chapter, --max-chapter-number,
-                                    --chapter-count or --verify.
           -m, --model <name>        Whisper model used to find the chapters: tiny, base, small,
                                     medium, turbo or large (default: small), or "custom:<path>" for
                                     a GGML model file of your own, e.g.
@@ -1856,21 +1792,6 @@ public sealed class CliOptions
                                     re-probe of the gap with it before pass 3 transcribes the region
                                     in full - which the default pairing does. Loaded and downloaded
                                     lazily, only when a file actually reaches pass 2.5 or pass 3.
-          -C, --cpu-only            Force Whisper onto the CPU backend instead of the fastest
-                                    available hardware acceleration. The Silero VAD pre-pass
-                                    already always runs on CPU regardless of this option, so it
-                                    only affects Whisper. Useful to leave a GPU free for other
-                                    work, or to sidestep a flaky/unsupported GPU backend.
-              --use-gpu <name>      Run Whisper on the GPU whose name contains <name>, matched
-                                    case-insensitively, e.g. "--use-gpu gtx" or "--use-gpu uhd".
-                                    See --list-gpus for the names on this machine. A number is
-                                    read as a device index if the machine has one, which is only
-                                    needed for two identical cards. Without this option a single
-                                    discrete GPU is preferred automatically, so it is normally
-                                    needed only to force the integrated one, or to choose among
-                                    several discrete cards. The chosen GPU is named in the
-                                    startup line either way. Vulkan only; the CUDA backend keeps
-                                    its own device 0.
           -j, --mark-before-jingle  A short jingle may precede the chapter phrase; anchor the
                                     mark to it instead of the default fixed offset (see
                                     --max-jingle-length below). A silence scan and a
@@ -1973,6 +1894,86 @@ public sealed class CliOptions
                                     two words looks like a chapter break. An explicit level
                                     fixes the threshold for the whole run.
 
+        Phrases & titles:
+          -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
+                                    /chapter/, localized by --lang).
+                                    Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
+                                    The regexp may contain one capturing group "(\d+)" in place of
+                                    the chapter number; otherwise the number is expected to follow
+                                    the phrase. Matching is always case-insensitive.
+                                    For a batch over books in different languages the value may be
+                                    written per language: entries separated by semicolons, each
+                                    opened by a "[xx]" language tag, e.g.
+                                      --chapter-phrase "[fr]/chapitre/;[en]section"
+                                    One entry may be left untagged, as the fallback for languages
+                                    the spec does not name; without one, those keep their own
+                                    built-in default. A value carrying no tag at all is taken
+                                    whole, semicolons included, so an existing phrase still means
+                                    what it did. The same syntax works for --chapter-title,
+                                    --intro-title, --prologue-phrase, --prologue-title,
+                                    --epilogue-phrase,
+                                    --epilogue-title and --custom.
+                                    [EXPERIMENTAL] The value "none" says this book announces a
+                                    chapter by speaking its number and nothing else
+                                    ("Seventeen."), with no phrase at all: a number heard standing
+                                    alone between two pauses is then the announcement. Since the
+                                    number is the only signal there is, such a mark is accepted
+                                    only where it continues the chapter sequence - which is why
+                                    "none" cannot be combined with --ignore-chapter-numbers. Per
+                                    language like any other value, e.g. "[en]none;chapitre".
+                                    Experimental because it has been calibrated against a single
+                                    book so far: expect to check its results, and expect the rules
+                                    behind them to keep moving.
+          -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: /prolog/,
+                                    localized by --lang). Accepts a "/regexp/" like
+                                    --chapter-phrase, but parses no number: a match becomes one
+                                    untitled-by-number mark carrying --prologue-title. Only
+                                    accepted before the first chapter has been found, so a later
+                                    mention in the prose cannot produce a second mark; if the
+                                    phrase turns up more than once before then, the last
+                                    occurrence wins (front matter often lists what is coming
+                                    before the narrator announces it). Pass an empty string to
+                                    switch prologue detection off.
+          -g, --epilogue-phrase <p> Same for the epilogue (default: /epilog/, localized by
+                                    --lang), mirrored: only accepted once at least one chapter
+                                    has been found. Pass an empty string to switch it off.
+          -u, --custom <mappings>   Extra phrase-to-title mappings, "phrase:title" pairs separated
+                                    by semicolons, e.g.
+                                      --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"
+                                    A phrase is a word or a "/regexp/" and parses no number; a
+                                    match anywhere in the file becomes a mark titled after the
+                                    colon, as often as the phrase occurs (up to
+                                    {DetectionTuning.MaxCustomMarksPerFile} marks per file, after
+                                    which the rest are dropped with a note). Only the first colon
+                                    delimits, so a title may contain more of them; a "/regexp/"
+                                    phrase ends at its closing slash instead, so a colon inside it
+                                    is just a colon. Write "\;" for a semicolon inside a regexp.
+                                    A title may reference the phrase's capturing groups by number
+                                    ($1, $2) or by name, in .NET's own substitution syntax ("$$"
+                                    writes a literal dollar sign). Repeat the option to add further
+                                    mappings. Never localized - a phrase is taken exactly as
+                                    written - but a mapping may open with a "[xx]" language tag,
+                                    which restricts it to files that resolve to that language;
+                                    untagged mappings apply to every file.
+          -U, --custom-file <path>  Read --custom mappings from a text file, one per line. Blank
+                                    lines and lines starting with "#" are ignored, and semicolons
+                                    need no escaping here since line breaks separate the mappings.
+          -t, --chapter-title <word>
+                                    Word used for chapter titles; the chapter number is appended
+                                    (default: Chapter, localized by --lang).
+          -i, --intro-title <word>  Title of the chapter mark covering the audio before the
+                                    first detected mark, e.g. a prelude (default: Intro,
+                                    localized by --lang, e.g. "Giriş" with --lang tr).
+          -P, --prologue-title <word>
+                                    Title written for a detected prologue (default: Prologue,
+                                    localized by --lang, e.g. "Prolog" with --lang de).
+          -G, --epilogue-title <word>
+                                    Title written for a detected epilogue (default: Epilogue,
+                                    localized by --lang).
+                                    A --custom mark's title comes from its own mapping instead.
+                                    All four accept the per-language "[xx]" syntax described
+                                    under --chapter-phrase.
+
         Detection safety nets:
           -a, --early-abort <minutes>
                                     Abort a file's detection outright, leaving it unchanged as
@@ -2034,6 +2035,16 @@ public sealed class CliOptions
                                     combining with it. Reaching the count does not end the
                                     search: an epilogue or a --custom phrase may still follow.
                                     Counted from --expected-start-chapter where that is given.
+              --ignore-chapter-numbers
+                                    Detect chapter announcements as usual, but form no opinion about
+                                    the numbers in them. Every announcement heard becomes a mark
+                                    where it is heard, keeping whatever number was spoken in its
+                                    title, and no sequence gap is ever found or filled: passes 2.5
+                                    and 3 never run and no file is tagged ".missing-marks". For
+                                    books that restart their count per part, or number nothing at
+                                    all. Cannot be combined with --pass3-model,
+                                    --expected-start-chapter, --max-chapter-number,
+                                    --chapter-count or --verify.
           -V, --verify              Check pre-existing chapter markings against the audio
                                     instead of trusting them blindly: a short window around
                                     each marking is probed for the chapter phrase and the
@@ -2068,22 +2079,6 @@ public sealed class CliOptions
                                     stretches around them. Without this option the line is
                                     drawn where the failures start to outnumber the confirmed
                                     markings.
-
-        Chapter titles:
-          -t, --title <word>        Word used for chapter titles; the chapter number is appended
-                                    (default: Chapter, localized by --lang).
-          -i, --intro-title <word>  Title of the chapter mark covering the audio before the
-                                    first detected mark, e.g. a prelude (default: Intro,
-                                    localized by --lang, e.g. "Giriş" with --lang tr).
-          -P, --prologue-title <word>
-                                    Title written for a detected prologue (default: Prologue,
-                                    localized by --lang, e.g. "Prolog" with --lang de).
-          -G, --epilogue-title <word>
-                                    Title written for a detected epilogue (default: Epilogue,
-                                    localized by --lang).
-                                    A --custom mark's title comes from its own mapping instead.
-                                    All four accept the per-language "[xx]" syntax described
-                                    under --chapter-phrase.
 
         Output & review:
           -d, --dry-run             Run detection but write nothing; print the chapters that
@@ -2187,7 +2182,22 @@ public sealed class CliOptions
                                     marks read below 0.50 confidence, which are the ones worth a
                                     manual check.
 
-        Performance (files are always processed one at a time, so each gets the whole machine):
+        Performance:
+          -C, --cpu-only            Force Whisper onto the CPU backend instead of the fastest
+                                    available hardware acceleration. The Silero VAD pre-pass
+                                    already always runs on CPU regardless of this option, so it
+                                    only affects Whisper. Useful to leave a GPU free for other
+                                    work, or to sidestep a flaky/unsupported GPU backend.
+              --use-gpu <name>      Run Whisper on the GPU whose name contains <name>, matched
+                                    case-insensitively, e.g. "--use-gpu gtx" or "--use-gpu uhd".
+                                    See --list-gpus for the names on this machine. A number is
+                                    read as a device index if the machine has one, which is only
+                                    needed for two identical cards. Without this option a single
+                                    discrete GPU is preferred automatically, so it is normally
+                                    needed only to force the integrated one, or to choose among
+                                    several discrete cards. The chosen GPU is named in the
+                                    startup line either way. Vulkan only; the CUDA backend keeps
+                                    its own device 0.
               --vad-threads <n|auto>
                                     Threads for the voice-activity pre-pass of pass 1 (default:
                                     auto - one per physical CPU core). Each thread holds about
