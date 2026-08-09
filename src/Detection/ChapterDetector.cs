@@ -1903,7 +1903,10 @@ public sealed class ChapterDetector
             profile.AnnouncementFor(
                 BareNumberReading.SpokenAloneAtSegmentStart, n => n == match.Number),
             language, phraseAbs, phraseEndAbs, windowStart + windowLen,
-            [], ct);
+            // No Pass 1, so neither anchor has anything to work from: no silence list, and no VAD
+            // region whose end would say where the music gives way to speech. Both are skipped, which
+            // is the fraction of a second this mode trades away - see the remarks above.
+            [], null, ct);
         var shift = Math.Abs(refined.Mark - marking.StartSeconds);
         if (shift < VerifyFixMinShiftSeconds)
             return null;

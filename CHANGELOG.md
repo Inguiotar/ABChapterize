@@ -200,6 +200,17 @@ earn a round number.
 
 ### Fixed
 
+- **Chapter marks land less late on a book that plays music into every chapter.** A mark is
+  normally placed against the end of the pause in front of the announcement, which is found by
+  measuring the audio itself. Music is not a pause, so where a jingle led into the chapter there
+  was nothing to measure against and the mark simply kept the position the announcement was first
+  recognised at - always a little after the words actually begin, and liable to move by a tenth of
+  a second from one run to the next for no reason a listener could hear. Such a mark now anchors
+  to the point where the music gives way to speech, by up to a tenth of a second and no further,
+  so a misjudged reading of that point can only cost a fraction of the mark lead instead of
+  dropping the mark into the middle of the music. Books whose chapters open with a plain pause are
+  unaffected, and so is any mark already sitting at or before that point.
+
 - **A chapter is no longer lost to a neighbouring window's transcript being reused.** Probe
   windows overlap, and rather than pay to transcribe the same seconds twice, a window reuses
   what the window before it already heard. The recognizer, though, sometimes hands back a long

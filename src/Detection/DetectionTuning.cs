@@ -727,6 +727,31 @@ internal static class DetectionTuning
     internal const double PreciseMarkSilenceAnchorSeconds = 1.0;
 
     /// <summary>
+    /// How far <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/> may pull an onset back onto
+    /// the point where the <em>music</em> in front of it gives way to speech - the jingle's
+    /// counterpart to the silence floor, used only where no silence closed within
+    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> and so nothing else can correct the plateau
+    /// edge's known late bias.
+    /// <para>
+    /// Capped rather than trusted outright, because the voice-activity detector's idea of where
+    /// speech resumes is occasionally far out: replaying the fourteen-book corpus's own logs
+    /// (2026-08-09), 116 of the 264 marks that take the no-floor branch have a jingle's speech
+    /// resumption within reach of their onset, and the edge sits a median of 0.05 s behind it, 88 %
+    /// within 0.10 s and none further than 0.20 s - but two marks in "Gruelfin.m4b" (3:31:20 and
+    /// 12:04:50) have VAD hearing speech 2.54 s and 2.65 s before the announcement, and anchoring
+    /// straight to that would plant those marks in the middle of the music. The cap keeps the
+    /// correction worth having on the tail without letting one bad reading move a mark by seconds.
+    /// </para>
+    /// <para>
+    /// Set to <see cref="PreciseMarkFixedStepSeconds"/>, and that identity is the argument for the
+    /// value rather than a coincidence to tidy away: the onset is the output of a search that walks
+    /// in steps of exactly that size, so it is only ever known to within one of them. A correction
+    /// bounded by one step claims no more precision than the search that produced it.
+    /// </para>
+    /// </summary>
+    internal const double PreciseMarkMusicAnchorCapSeconds = PreciseMarkFixedStepSeconds;
+
+    /// <summary>
     /// How far below the loudest thing in its window <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/>
     /// still counts audio as the pause rather than as the announcement. Relative to that peak - the
     /// announcement's own level - rather than an absolute dBFS figure, so a quietly mastered book

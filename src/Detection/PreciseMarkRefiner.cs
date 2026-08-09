@@ -289,6 +289,9 @@ internal sealed class PreciseMarkRefiner
     /// <param name="silences">Every silence Pass 1 stored, chronological, for
     /// <see cref="AnchorOnsetToSoundAsync"/>. Empty is a valid input - a file whose audio offered no
     /// silence at all, or a caller that has none to hand - and simply skips that step.</param>
+    /// <param name="speechResumesAt">Where the non-speech region this announcement follows gives way
+    /// to speech, or null where the mark anchored to no region (no VAD pre-pass, or a plain pause).
+    /// The jingle's stand-in for a silence floor - see <see cref="AnchorOnsetToSoundAsync"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirmed/corrected mark (already correct, corrected in either direction, or
     /// left as given when neither model could confirm it), quiet-snapped as a final step, paired
@@ -296,7 +299,7 @@ internal sealed class PreciseMarkRefiner
     internal async Task<PreciseMarkResult> RefinePreciseMarkAsync(
         double mark, string file, string? inputDecoder, AnnouncementMatcher announcement, string language,
         double phraseAbs, double phraseEndAbs, double transcriptEnd,
-        IReadOnlyList<Silence> silences, CancellationToken ct)
+        IReadOnlyList<Silence> silences, double? speechResumesAt, CancellationToken ct)
     {
         var readings = new List<List<TranscriptSegment>>();
         _phraseReadings = readings;
@@ -325,13 +328,15 @@ internal sealed class PreciseMarkRefiner
             var heard = onset != null;
             if (onset is { } found)
             {
-                var anchored = await AnchorOnsetToSoundAsync(
-                    found, silences, file, inputDecoder, ct);
+                var (anchored, fromMusic) = await AnchorOnsetToSoundAsync(
+                    found, silences, speechResumesAt, file, inputDecoder, ct);
                 anchoredOnset = anchored;
                 if (anchored != found)
                     _log?.Invoke(
                         $"onset {FormatTimestamp(found)} anchored back to {FormatTimestamp(anchored)}, " +
-                        "where sound resumes after the pause in front of the announcement");
+                        (fromMusic
+                            ? "where the music in front of the announcement gives way to speech"
+                            : "where sound resumes after the pause in front of the announcement"));
                 result = Math.Max(0, anchored - _options.MarkLeadSeconds);
                 _log?.Invoke(result == mark
                     ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
@@ -387,12 +392,19 @@ internal sealed class PreciseMarkRefiner
     /// working backward from the onset would stop there instead.
     /// </para>
     /// <para>
-    /// Never moves the onset later, and never runs at all without a silence to start from - which
-    /// is why the correction stays silent on the books that need it least, a jingle being music
-    /// rather than silence and leaving no floor within
-    /// <see cref="PreciseMarkSilenceAnchorSeconds"/>. An onset that already falls <em>inside</em> a
+    /// Never moves the onset later. An onset that already falls <em>inside</em> a
     /// silence is likewise left alone: the last silence to close before it is then a different,
     /// earlier one, far outside that tolerance.
+    /// </para>
+    /// <para>
+    /// A jingle is music rather than silence and leaves no floor within
+    /// <see cref="PreciseMarkSilenceAnchorSeconds"/>, so on a book that plays one into every
+    /// announcement none of the above could run and the mark kept the raw plateau edge - which is
+    /// how "Stalker.m4b" chapter 24 came to sit 0.12 s later in one build than another for no
+    /// better reason than a changed probe window. <see cref="AnchorOnsetToMusicEdge"/> covers that
+    /// case from the other side, with the region's own speech resumption standing in for the floor.
+    /// Measured over the corpus, 264 of 440 refined marks reach this branch; 60 % of a book's marks
+    /// is typical and four books reach it with every mark they have.
     /// </para>
     /// </summary>
     /// <param name="onset">The onset <see cref="FindOnsetEdgeAsync"/> converged on; also the
@@ -401,16 +413,21 @@ internal sealed class PreciseMarkRefiner
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Where sound resumes after the pause in front of the announcement;
-    /// <paramref name="onset"/> unchanged when no silence closed within
-    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> before it, and the floor itself when the
-    /// decoded window cannot be measured - see the two guards for why that way round.</returns>
-    private async Task<double> AnchorOnsetToSoundAsync(
-        double onset, IReadOnlyList<Silence> silences, string file, string? inputDecoder,
-        CancellationToken ct)
+    /// <param name="speechResumesAt">Where the non-speech region in front of the announcement ends,
+    /// or null when the mark anchored to none - see <see cref="AnchorOnsetToMusicEdge"/>.</param>
+    /// <returns>Where sound resumes after the pause in front of the announcement, paired with
+    /// whether it was the music edge that moved it (which only words the log line). The floor
+    /// itself when the decoded window cannot be measured - see the two guards for why that way
+    /// round.</returns>
+    private async Task<(double Onset, bool FromMusic)> AnchorOnsetToSoundAsync(
+        double onset, IReadOnlyList<Silence> silences, double? speechResumesAt, string file,
+        string? inputDecoder, CancellationToken ct)
     {
         if (PrecedingSilenceEnd(onset, silences) is not { } floor)
-            return onset;
+        {
+            var atMusic = AnchorOnsetToMusicEdge(onset, speechResumesAt);
+            return (atMusic, atMusic != onset);
+        }
 
         // Reaches past the onset so the loudest sample in the window is the announcement's own,
         // whatever the onset itself happened to land on - the level everything below is judged
@@ -425,7 +442,7 @@ internal sealed class PreciseMarkRefiner
         // construction - so the silence end is the better answer even unverified, and it errs
         // towards silence where the onset errs onto the announcement's first word.
         if (frames < 1)
-            return floor;
+            return (floor, false);
 
         var energy = new double[frames];
         for (var f = 0; f < frames; f++)
@@ -438,7 +455,7 @@ internal sealed class PreciseMarkRefiner
 
         var peak = energy.Max();
         if (peak <= 0)
-            return floor; // digitally silent over the announcement itself: as above
+            return (floor, false); // digitally silent over the announcement itself: as above
         var threshold = peak / Math.Pow(10, PreciseMarkOnsetFloorDb / 10);
         var sustain = Math.Max(1, (int)Math.Round(PreciseMarkOnsetSustainSeconds / PreciseMarkQuietWindowSeconds));
 
@@ -451,10 +468,35 @@ internal sealed class PreciseMarkRefiner
             for (var k = 0; k < sustain && loud; k++)
                 loud = energy[f + k] >= threshold;
             if (loud)
-                return Math.Round(sound, 6);
+                return (Math.Round(sound, 6), false);
         }
-        return onset;
+        return (onset, false);
     }
+
+    /// <summary>
+    /// The jingle's answer to <see cref="PrecedingSilenceEnd"/>: where the music in front of the
+    /// announcement gives way to speech, as the voice-activity pre-pass measured it. Used only
+    /// where no silence is in reach, and only to pull the onset <em>back</em>, by at most
+    /// <see cref="PreciseMarkMusicAnchorCapSeconds"/> - that cap is the whole design, and its
+    /// remarks carry the measurements behind it.
+    /// <para>
+    /// Three ways to decline, all of them the same judgement: this reading is not close enough to
+    /// the onset to be about the same announcement. A resumption <em>after</em> the onset belongs to
+    /// speech the announcement already started (or the announcement is spoken over the music, where
+    /// the region ends behind it); one further back than
+    /// <see cref="PreciseMarkSilenceAnchorSeconds"/> is a different transition entirely, held to the
+    /// same reach a silence floor is; and no region at all means the VAD pre-pass did not run or the
+    /// mark sits at a plain pause, where the silence path above is the right one and has already
+    /// had its turn.
+    /// </para>
+    /// </summary>
+    /// <param name="onset">The onset the search converged on; also the latest position returned.</param>
+    /// <param name="speechResumesAt">End of the non-speech region the mark anchored to, or null.</param>
+    private static double AnchorOnsetToMusicEdge(double onset, double? speechResumesAt)
+        => speechResumesAt is { } resumes &&
+           resumes <= onset && onset - resumes <= PreciseMarkSilenceAnchorSeconds
+            ? Math.Max(onset - PreciseMarkMusicAnchorCapSeconds, resumes)
+            : onset;
 
     /// <summary>
     /// The end of the last silence to close within <see cref="PreciseMarkSilenceAnchorSeconds"/>

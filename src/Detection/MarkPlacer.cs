@@ -191,9 +191,13 @@ internal sealed class MarkPlacer
         var number = chapter?.Number;
         if (_options.PreciseMark)
         {
+            // statRegion is this mark's own resolved jingle, so its end is where the music in front
+            // of the announcement gives way to speech - the stand-in for a silence floor on a book
+            // that plays one into every chapter. Null for a plain pause and without a VAD pre-pass.
             var refined = await _refiner.RefinePreciseMarkAsync(
                 time, ctx.File, ctx.InputDecoder, ctx.Announcement, ctx.Language,
-                phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ctx.AllSilences, ct);
+                phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ctx.AllSilences,
+                statRegion?.EndSeconds, ct);
             (time, phraseHeard, onset) = (refined.Mark, refined.PhraseHeard, refined.OnsetSeconds);
             if (chapter is { } check &&
                 RefinedNumberVote.Recount(
