@@ -3341,6 +3341,50 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AnnouncementLostInAThirtySecondJingleWindow_IsRecoveredByTheOnePassReread()
+    {
+        // The same book's prologue, lost a second time and to a different width (Gruelfin.m4b,
+        // build 280, 2026-08-09). Nothing is inside the music here: the announcement is the first
+        // speech behind it, exactly where a jingle candidate expects one, so VAD contradicts
+        // nothing and the re-read above cannot fire. What loses it is the window's own planned
+        // width - a JingleLeadInSeconds run-up plus ExpectedAnnouncementSeconds is 30.0 s to the
+        // second, and 30.0 s is the width WhisperChunkSeconds exists to warn about. Measured on the
+        // real audio at 0:03:20.19: read at 22.0, 23.5 and 25.0 s, gone at 27.0 and 30.0 s.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks", "--mark-before-jingle"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.AddWithin(25, 660, Seg(0, " Chapter two.")); // the 30 s jingle window misses it
+            },
+            // No bridged blip, so this is the plain jingle shape: the window opens 8 s into the
+            // music at 652 and expects the announcement at 660, where speech resumes.
+            new FakeVad { Speech = [new(0, 610), new(613, 640), new(660, 3600)] });
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("wider than one recognizer pass"));
+    }
+
+    [Fact]
+    public async Task ASilenceCandidatesWindow_IsNotRereadInOnePass()
+    {
+        // What bounds the cost of the re-read above. A pause's window is SilenceLeadInSeconds plus
+        // ExpectedAnnouncementSeconds, one phrase margin inside a chunk already, so re-reading it
+        // could only produce the same answer from the same framing - and a book has hundreds of
+        // pauses that announce nothing, every one of which would otherwise buy a second decode.
+        // The recovery passes are covered by the same gate, their candidates being unclassified.
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks", "--mark-before-jingle"),
+            [new(610, 613)],
+            s => s.Add(0, Seg(0.5, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 3600)] }); // unbroken speech: no jingle, no jingle candidate
+
+        Assert.DoesNotContain(log, l => l.Contains("wider than one recognizer pass"));
+    }
+
+    [Fact]
     public async Task TrailingNarrationSwallowedIntoTheRegionHead_IsTrimmedOff_MarkAtTrueJingleStart()
     {
         // Real-world failure (Perry Rhodan "Die Dritte Macht", chapters 18/21, 2026-07-22): the

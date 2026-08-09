@@ -852,10 +852,14 @@ internal sealed class RegionProber
             candidate, start, windowEnd, segments, trimmedAbs, mergeBoundarySegIndex, ct);
 
         // A window that yielded nothing at all - no chapter, no prologue, no --custom mark - is the
-        // only one worth a second look; one that produced a mark has already told this candidate's
-        // story.
+        // only one worth another look; one that produced a mark has already told this candidate's
+        // story. The two re-reads answer different questions and neither subsumes the other: one
+        // asks about speech VAD heard and the transcript does not account for, the other about an
+        // announcement the candidate expected and a window too wide to hear it in.
         if (marks.Count == 0 && _namedFound.Count == namedBefore)
             marks = await RereadJingleSpeechAsync(candidate, start, windowEnd, trimmedAbs, ct);
+        if (marks.Count == 0 && _namedFound.Count == namedBefore)
+            marks = await RereadInOnePassAsync(candidate, start, windowEnd, ct);
         if (marks.Count == 0)
             marks = await RecoverUnnumberedAnnouncementsAsync(
                 candidate, start, windowEnd, segments, trimmedAbs, ct);
@@ -972,6 +976,79 @@ internal sealed class RegionProber
                 s => s.StartSeconds < b.EndSeconds && s.EndSeconds > b.StartSeconds))
             .Cast<SpeechSegment?>()
             .FirstOrDefault();
+
+    /// <summary>
+    /// Third look at an empty window, for the shape <see cref="RereadJingleSpeechAsync"/> cannot
+    /// see: the announcement is exactly where a jingle candidate expects it - in the first speech
+    /// behind the music rather than inside it - and the recognizer dropped it because the window is
+    /// wider than a single Whisper pass. Nothing here contradicts VAD, so there is no unheard blip
+    /// to find; the evidence is only that this candidate expected an announcement and was asked for
+    /// it at a width known to lose them.
+    /// <para>
+    /// Gruelfin.m4b's prologue is the case on record, twice over. It was lost first to a 50 s window
+    /// (2026-07-30, see <see cref="WhisperChunkSeconds"/>) and again to build 280's classified one
+    /// (2026-08-09), which is <see cref="JingleLeadInSeconds"/> plus
+    /// <see cref="ExpectedAnnouncementSeconds"/> = exactly <see cref="WhisperChunkSeconds"/> wide -
+    /// the one width that constant exists to warn about. Re-measured on the live decode at
+    /// 0:03:20.19 with ggml-small, "Prolog." is read at 22.0, 23.5 and 25.0 s and gone at 27.0 and
+    /// 30.0 s, identically on both of this project's machines. So the re-read keeps the window's own
+    /// start and merely stops it at <see cref="JingleRereadWindowSeconds"/>: the same single-pass
+    /// width the rest of the tool probes at, and the widest one measured to still hear this word.
+    /// </para>
+    /// <para>
+    /// Through the probing model, not a <c>--pass3-model</c> upgrade, unlike the blip re-read. What
+    /// was measured is that this model hears the announcement at this width; the failure is the
+    /// framing's alone, and an upgrade would load a model the file may otherwise never need.
+    /// </para>
+    /// <para>
+    /// Narrowing the window at planning time instead was rejected by measurement: 2 of the fourteen-
+    /// book corpus's 220 jingle marks are accepted 26.2 s and 28.3 s into their window
+    /// ("Die Dritte Macht" 8:06:31, "Die Maahks" 10:11:27, 2026-08-09), so a narrower window would
+    /// have traded this prologue for them. Running only where the window came back empty can add a
+    /// mark but can never move one, which is what makes it safe to reach for - and it is confined to
+    /// the primary scan's own planned windows, so no recovery pass pays a second decode for it.
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The candidate whose window came back empty.</param>
+    /// <param name="start">Absolute start of that window, kept as the re-read's start so the phrase
+    /// timing rule and the jingle run-up stay exactly what this candidate planned.</param>
+    /// <param name="windowEnd">Absolute planned end of that window.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The marks the re-read produced, or an empty list when it did not run or found
+    /// nothing.</returns>
+    private async Task<List<ProbeMark>> RereadInOnePassAsync(
+        ProbeCandidate candidate, double start, double windowEnd, CancellationToken ct)
+    {
+        // Only where the width being complained about is the classification's own plan. A recovery
+        // pass and a gap re-probe hand every candidate the pass's shared, deliberately wide window
+        // (WindowSeconds null, see WindowEndFor), and narrowing that back to a single pass is the
+        // exact opposite of the reframing they widened it for - besides buying a second decode on
+        // every empty candidate of the passes that already cost the most.
+        if (!candidate.IsJingle || _reprobing || candidate.WindowSeconds is null)
+            return [];
+        if (windowEnd - start <= JingleRereadWindowSeconds)
+            return [];
+        var to = start + JingleRereadWindowSeconds;
+        // A jingle long enough to push its own expectation out of the shortened window is not this
+        // failure: re-reading it would ask about audio the announcement is not in. Those are the
+        // embedded shape's business, and the blip re-read above has already had its turn at them.
+        if (candidate.ExpectAt > to - PhraseMarginSeconds)
+            return [];
+
+        _env.Log?.Invoke(
+            $"nothing heard in the {windowEnd - start:0.0} s window at {FormatTimestamp(start)}, " +
+            $"which is wider than one recognizer pass - re-reading it at {to - start:0.0} s");
+
+        var samples = await _env.Audio.DecodePcmAsync(
+            _ctx.File, start, to - start, _ctx.Info.InputDecoder, ct);
+        var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
+        _env.LogTranscript($"one-pass re-read {to - start:0.0}s@{FormatTimestamp(start)}", fresh);
+
+        var freshAbs = TrimLeadingNonSpeech(
+            ShiftSegments(fresh, start), _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
+        return await ScanWindowForMarksAsync(
+            candidate, start, to, ShiftSegments(freshAbs, -start), freshAbs, null, ct);
+    }
 
     /// <summary>
     /// Produces the probe window's full transcript in absolute file time, assembled from the

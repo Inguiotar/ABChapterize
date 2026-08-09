@@ -127,8 +127,18 @@ internal static class DetectionTuning
     /// Sized by what a Whisper pass costs, not by what an announcement needs. Recognition runs on a
     /// fixed <see cref="WhisperChunkSeconds"/> mel whatever the window holds, so a 7 s window costs
     /// exactly what a 27 s one does and there is no reason at all to be stingy - the only thing
-    /// shortening buys is decode I/O, which is negligible beside the recognition. This plus
-    /// <see cref="SilenceLeadInSeconds"/> stays inside one chunk, which is the real constraint.
+    /// shortening buys is decode I/O, which is negligible beside the recognition. Staying inside one
+    /// chunk is the real constraint, and this plus <see cref="SilenceLeadInSeconds"/> does.
+    /// </para>
+    /// <para>
+    /// This plus <see cref="JingleLeadInSeconds"/> does <em>not</em>: it is exactly
+    /// <see cref="WhisperChunkSeconds"/>, the width that constant records as losing an announcement
+    /// outright, and build 280 duly lost Gruelfin.m4b's prologue to it (2026-08-09). Neither number
+    /// was moved to fix that - the lead-in is generous for its own measured reasons, and trimming
+    /// this one would have cost the two corpus marks accepted 26.2 s and 28.3 s into their windows.
+    /// The remedy sits after the fact instead, in
+    /// <see cref="RegionProber.RereadInOnePassAsync"/>, which re-reads an empty jingle window at a
+    /// single-pass width. Anything that changes either constant should re-read that method first.
     /// </para>
     /// <para>
     /// Calibrated 2026-08-08 by replaying the classification over the fourteen-book corpus's own
@@ -608,6 +618,18 @@ internal static class DetectionTuning
     /// at 17.5 s and at 23.5 s, and at 30.0 s and 50.0 s yields the narration alone with the word
     /// gone. It was a 50 s window that probed it live, because --max-jingle-length auto had not yet
     /// seen a jingle to narrow the window with, and the prologue was simply never heard.
+    /// </para>
+    /// <para>
+    /// The same book lost it again in build 280 (2026-08-09), to a window one second short of a
+    /// chunk's worth of narration rather than twenty: the classified jingle candidate opens
+    /// <see cref="JingleLeadInSeconds"/> into the music and runs
+    /// <see cref="ExpectedAnnouncementSeconds"/> past the announcement, which is exactly 30.0 s.
+    /// Re-measured on that live decode at 0:03:20.19 with ggml-small: read at 22.0, 23.5 and 25.0 s,
+    /// gone at 27.0 and 30.0 s. Two things worth keeping from it - the cliff is between 25 and 27 s
+    /// and not at 30, so <see cref="MinAdaptiveProbeSeconds"/>'s phrase margin of headroom is the
+    /// whole of the safety margin rather than a rounding; and this window transcribes identically on
+    /// the GTX 1070 and the Radeon 890M, word for word and timestamp for timestamp, which is rare
+    /// enough (see the project notes on cross-machine reproducibility) to be worth stating.
     /// </para>
     /// </summary>
     internal const double WhisperChunkSeconds = 30.0;
