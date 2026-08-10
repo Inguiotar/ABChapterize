@@ -13,7 +13,7 @@ release is whatever felt big enough to deserve one — the program has turned in
 different animal, or a headline feature landed, or it has simply grown up enough to
 earn a round number.
 
-## [0.11.0] — unreleased
+## [0.11.0] — 2026-08-10
 
 ### Added
 
