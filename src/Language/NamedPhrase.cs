@@ -61,6 +61,25 @@ public sealed record NamedPhrase(
     string Kind, Regex Regex, string Title, NamedPhraseScope Scope, bool Repeatable = false,
     bool RequiresLeadIn = false)
 {
+    /// <summary><see cref="Kind"/> of the built-in prologue phrase. A constant because two rules
+    /// outside the phrase itself key on it - the epilogue's end-of-book placement check and the
+    /// expected-start-chapter a detected prologue implies - and a kind spelled out at each of them
+    /// is a string nothing would catch when it changes.</summary>
+    public const string PrologueKind = "prologue";
+
+    /// <summary><see cref="Kind"/> of the built-in epilogue phrase; see <see cref="PrologueKind"/>
+    /// for why it is named here.</summary>
+    public const string EpilogueKind = "epilogue";
+
+    /// <summary>Prefix of every <c>--custom</c> mapping's <see cref="Kind"/>, the rest being the
+    /// mapping's 1-based position in the option. What tells a user's own mapping from the two
+    /// built-in phrases, which is the distinction the epilogue's placement check turns on.</summary>
+    public const string CustomKindPrefix = "custom ";
+
+    /// <summary>Whether this phrase is one of the user's own <c>--custom</c> mappings rather than a
+    /// built-in one.</summary>
+    public bool IsCustom => Kind.StartsWith(CustomKindPrefix, StringComparison.Ordinal);
+
     /// <summary>Matches a <c>$1</c>, <c>$12</c> or <c>${name}</c> group reference in a title
     /// template. <c>$$</c> (the escape for a literal <c>$</c>) is not one, and neither is a lone
     /// <c>$</c> before an ordinary word - both are left to <see cref="Match.Result"/>, which reads

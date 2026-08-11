@@ -13,6 +13,18 @@ release is whatever felt big enough to deserve one — the program has turned in
 different animal, or a headline feature landed, or it has simply grown up enough to
 earn a round number.
 
+## [0.12.0] — unreleased
+
+### Changed
+
+- **A detected prologue now implies that the book starts at chapter 1.** A first chapter
+  numbered above 1 is normally trusted outright, because nothing tells a legitimate
+  split-book part from a chapter the scan simply missed — but a book's prologue is in the
+  file that holds its beginning, so once one is found the chapters under the first one
+  detected really are missing, and they are searched for and reported as such.
+  `--expected-start-chapter` still wins where it is given, which is how a split part that
+  carries its own prologue says so.
+
 ## [0.11.0] — 2026-08-10
 
 ### Added

@@ -396,6 +396,14 @@ specific expected number rather than a blind guess — see
 period: a first chapter found within 10 seconds of the file start is still
 taken as-is, not searched past.
 
+A **detected prologue settles that question by itself**: a book's prologue
+sits in the file that holds its beginning, so a file that has one is expected
+to start at chapter 1, and anything missing below the first chapter found is
+searched for exactly as `--expected-start-chapter 1` would have it — and, if
+it stays missing, reported as missing. Passing `--expected-start-chapter`
+overrules the implication, which is what a split-book part carrying its own
+prologue wants (`-e 12`).
+
 A chapter missing *after* the last one found is the one case none of this can
 notice: a gap is a hole in the number sequence, which needs a known chapter on
 either side of it, and there is nothing above the last one to compare against.
@@ -1226,7 +1234,8 @@ looking. None of these is needed for an ordinary book.
 : For a split-book part that does not begin at chapter 1: the chapter number
   this file is expected to start at. Without it (the default), whatever
   number pass 2 finds first is trusted outright and nothing below it is ever
-  searched for — see
+  searched for — unless the file's prologue is detected, which implies a
+  start at chapter 1 all by itself; see
   [Pass 3](#pass-3--gap-filling-only-when-needed). With it, a first chapter
   found *below* `<n>` aborts the file outright, left unchanged and reported
   exactly like a completed scan that found nothing — almost certainly the

@@ -295,6 +295,13 @@ public sealed class CliOptions
     /// reason), the file is aborted and left unchanged if the very first chapter Pass 2 finds is
     /// numbered below this value - almost certainly the wrong file, phrase or language rather than
     /// a gap worth hunting for.
+    /// <para>
+    /// Null does not always leave the question open: detecting a prologue implies a start at
+    /// chapter 1 all by itself, since a book's prologue is in the file that holds its beginning.
+    /// See <see cref="ABChapterize.Detection.GapPlanning.ExpectedStartFor"/>, and note that setting
+    /// this option is also how that implication is overruled - a split part whose own prologue
+    /// precedes chapter 12 is described by <c>-e 12</c>.
+    /// </para>
     /// </summary>
     public int? ExpectedStartChapter { get; private set; }
 
@@ -1598,10 +1605,10 @@ public sealed class CliOptions
     private IReadOnlyList<NamedPhrase> ResolveNamedPhrases(string language, ILanguage defaults)
     {
         var named = new List<NamedPhrase>();
-        Add("prologue", _prologuePhraseSpec?.For(language) ?? defaults.ProloguePhrase,
+        Add(NamedPhrase.PrologueKind, _prologuePhraseSpec?.For(language) ?? defaults.ProloguePhrase,
             _prologueTitleSpec?.For(language) ?? defaults.PrologueTitle,
             NamedPhraseScope.BeforeFirstChapter, requiresLeadIn: true);
-        Add("epilogue", _epiloguePhraseSpec?.For(language) ?? defaults.EpiloguePhrase,
+        Add(NamedPhrase.EpilogueKind, _epiloguePhraseSpec?.For(language) ?? defaults.EpiloguePhrase,
             _epilogueTitleSpec?.For(language) ?? defaults.EpilogueTitle,
             NamedPhraseScope.AfterFirstChapter, requiresLeadIn: true);
         for (var i = 0; i < _customMappings.Count; i++)
@@ -1613,7 +1620,7 @@ public sealed class CliOptions
             if (_customMappings[i].Language is { } code &&
                 !string.Equals(code, language, StringComparison.OrdinalIgnoreCase))
                 continue;
-            Add($"custom {i + 1}", _customMappings[i].Phrase, _customMappings[i].Title,
+            Add($"{NamedPhrase.CustomKindPrefix}{i + 1}", _customMappings[i].Phrase, _customMappings[i].Title,
                 NamedPhraseScope.Anywhere, repeatable: true);
         }
         return named;

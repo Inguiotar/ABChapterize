@@ -4,6 +4,7 @@
 
 using ABChapterize.Audio;
 using ABChapterize.Cli;
+using ABChapterize.Language;
 using static ABChapterize.Detection.DetectionTuning;
 
 namespace ABChapterize.Detection;
@@ -57,6 +58,38 @@ internal static class GapPlanning
     /// derive a contiguous range from.</param>
     internal readonly record struct GapRecoveryPlan(
         List<DetectionRegion> Regions, double? TrailingFrom, List<int> TrailingTargets);
+
+    /// <summary>
+    /// The chapter number this file's sequence is expected to start at, which is what opens a
+    /// leading gap at all (see <see cref="FindGaps"/>): <c>--expected-start-chapter</c> when the
+    /// user named one, else 1 once a prologue has been detected, else null - no expectation, and
+    /// whatever number Pass 2 found first is the book's start.
+    /// <para>
+    /// A prologue is the one piece of evidence detection can produce for itself that this file
+    /// holds the beginning of a book. <see cref="FindGaps"/> refuses to assume "1" precisely because
+    /// a low first number is ambiguous - a split-book part legitimately starts at chapter 12, and
+    /// this tool is pointed at such files routinely - but a part that starts at chapter 12 does not
+    /// carry the book's prologue. So the mark that resolves the ambiguity is the same mark whose
+    /// absence leaves it open, and the assumption is only made where it has been earned.
+    /// </para>
+    /// <para>
+    /// Not applied to <c>--expected-start-chapter</c>'s <em>abort</em> half
+    /// (<see cref="RegionProber.IsBelowExpectedStart"/>, fed from
+    /// <see cref="Pass2Context.ExpectedStartChapter"/>): that gives up on a whole file, and a book
+    /// numbering its opening section "chapter 0" would then be abandoned over a prologue rather than
+    /// over anything the user asked for. What this value earns is the right to hunt the chapters
+    /// under the first one found, never the right to stop.
+    /// </para>
+    /// </summary>
+    /// <param name="options">The run's options, for the explicit expectation and for
+    /// <see cref="CliOptions.IgnoreChapterNumbers"/>, under which there is no sequence to start.</param>
+    /// <param name="named">The named marks known so far - the prologue among them, if it was
+    /// found.</param>
+    internal static int? ExpectedStartFor(CliOptions options, IReadOnlyList<DetectedMark> named)
+        => options.ExpectedStartChapter ??
+           (!options.IgnoreChapterNumbers && named.Any(m => m.Kind == NamedPhrase.PrologueKind)
+               ? 1
+               : null);
 
     /// <summary>
     /// Determines the regions to fully transcribe: between every pair of consecutive detected

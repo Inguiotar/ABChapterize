@@ -85,6 +85,19 @@ public sealed class ChapterDetector
     /// <see cref="_customLimitHit"/> above. Reset per file.</summary>
     private int _sequenceRestartSkips;
 
+    /// <summary>The current file's named marks, as a live view rather than a snapshot: the very
+    /// list every <see cref="RegionProber"/> of the file appends to, so
+    /// <see cref="ExpectedStartChapter"/> answers with what is known at the moment it is asked. Set
+    /// per file, and empty until then.</summary>
+    private IReadOnlyList<DetectedMark> _namedMarks = [];
+
+    /// <summary>The chapter number this file's sequence is expected to start at - see
+    /// <see cref="GapPlanning.ExpectedStartFor"/>, which is where the rule lives. Read instead of
+    /// <see cref="CliOptions.ExpectedStartChapter"/> everywhere below that plans a gap or counts
+    /// what is missing; the option itself is what Pass 2's abort half still gets, for the reason
+    /// given there.</summary>
+    private int? ExpectedStartChapter => ExpectedStartFor(_options, _namedMarks);
+
     /// <summary>Creates a detector bound to the given tools and options.</summary>
     /// <param name="options">Validated command line options.</param>
     /// <param name="audio">Audio source used for silence detection and PCM decoding.</param>
@@ -108,10 +121,15 @@ public sealed class ChapterDetector
 
     /// <summary>Sets the per-file log sinks and rebuilds <see cref="_marks"/> around them, so its
     /// mark-placement log lines land in the same sinks as the rest of this file's detection log and
-    /// its per-chapter measurements start empty for the new file.</summary>
+    /// its per-chapter measurements start empty for the new file. Every entry point into the
+    /// detector passes through here, which is what makes it the place to clear per-file state that
+    /// is not a counter (see <see cref="_namedMarks"/>).</summary>
     /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     private void SetLog(DetectionLog log)
     {
+        // Emptied here rather than in each entry point, so no path into the detector can carry the
+        // previous file's prologue into this one's expected-start question.
+        _namedMarks = [];
         _log = log.Fanout();
         _plainLog = log.Plain;
         _debug = log.Debug;
@@ -206,16 +224,19 @@ public sealed class ChapterDetector
                 confirmed.Add(new DetectedChapter(number, marking.StartSeconds));
         confirmed = Normalize(confirmed);
         var namedSeed = CarryOverNamedMarkings(info, profile);
+        // Before the gap search below, which asks where the sequence starts: a prologue the previous
+        // run wrote into the file speaks for that just as one detected fresh does.
+        _namedMarks = namedSeed;
 
         // Gaps are re-derived from the committed markings rather than the tag's own number list, so
         // this always agrees with what FindGaps/MissingNumbersInGap would say about the file's
         // actual content right now. ExpectedStartChapter is passed through so a leading
         // missing-marks tag resolves to the same gap as the run that produced it.
-        var regions = FindGaps(confirmed, info.DurationSeconds, _options.ExpectedStartChapter)
+        var regions = FindGaps(confirmed, info.DurationSeconds, ExpectedStartChapter)
             .Select(gap =>
             {
                 var boundChapter = confirmed.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds);
-                var lowerNumber = boundChapter.Number != 0 ? boundChapter.Number : (_options.ExpectedStartChapter ?? 1) - 1;
+                var lowerNumber = boundChapter.Number != 0 ? boundChapter.Number : (ExpectedStartChapter ?? 1) - 1;
                 return new DetectionRegion(
                     gap.FromSeconds, gap.ToSeconds, lowerNumber,
                     confirmed.First(c => c.TimeSeconds == gap.ToSeconds).Number);
@@ -334,6 +355,9 @@ public sealed class ChapterDetector
         // The named marks travel alongside rather than inside `found`: they have no chapter number,
         // and everything below - gaps, sequence progress, Pass 2.5's targets - reasons in numbers.
         var namedFound = new List<DetectedMark>(namedSeed);
+        // The list itself, not a copy: ExpectedStartChapter reads it whenever it is asked, and a
+        // prologue found halfway through Pass 2 has to count from that moment on.
+        _namedMarks = namedFound;
 
         // --early-abort (0 disables it): once Pass 2 has probed this many minutes of play time
         // without finding a single chapter, further probing is pointless - give up rather than
@@ -455,8 +479,8 @@ public sealed class ChapterDetector
         LanguageProfile? profile, CancellationToken ct)
     {
         var repaired = await RepairSequenceOutliersAsync(
-            found, _options.ExpectedStartChapter, _log, ReReadAtMark(ctx, profile), ct);
-        return DropNamedMarkEchoes(repaired, named, _options.ExpectedStartChapter, _log);
+            found, ExpectedStartChapter, _log, ReReadAtMark(ctx, profile), ct);
+        return DropNamedMarkEchoes(repaired, named, ExpectedStartChapter, _log);
     }
 
     /// <summary>
@@ -499,10 +523,10 @@ public sealed class ChapterDetector
         LanguageProfile? profile, CancellationToken ct)
     {
         var settled = await SettleCollidingMarksAsync(
-            chapters, _options.ExpectedStartChapter, _log, ReReadAtMark(ctx, profile), ct);
+            chapters, ExpectedStartChapter, _log, ReReadAtMark(ctx, profile), ct);
         // Again rather than only before Pass 2.5, because Pass 3 places marks of its own and a gap
         // reaching into a named announcement is exactly where it would place one.
-        return DropNamedMarkEchoes(settled, named, _options.ExpectedStartChapter, _log);
+        return DropNamedMarkEchoes(settled, named, ExpectedStartChapter, _log);
     }
 
     /// <summary>
@@ -854,7 +878,7 @@ public sealed class ChapterDetector
         double bytesPerSecond, LanguageProfile profile, (double From, List<int> Targets)? trailingFallback,
         bool trailingScanAllowed, CancellationToken ct)
     {
-        var gaps = FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter);
+        var gaps = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter);
         if (gaps.Count > 0)
         {
             work.BeginPhase("Pass 3",
@@ -869,13 +893,13 @@ public sealed class ChapterDetector
             _log?.Invoke($"transcribing suspicious region " +
                          $"{FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)}");
             var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
-                MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter),
+                MissingNumbersInGap(chapters, gap, ExpectedStartChapter),
                 // Whatever this leaves open goes to the shifted re-read below, unless a downgraded
                 // --pass3-model has switched that off - so the seams go too. See snapSeams.
                 snapSeams: _options.Pass3ModelIsDowngrade,
                 allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work, profile, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
-            var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
+            var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
         }
@@ -913,7 +937,7 @@ public sealed class ChapterDetector
                 allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
                 profile, chapters, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
-            var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
+            var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
             _log?.Invoke("Pass 3 finished (trailing)");
@@ -990,10 +1014,10 @@ public sealed class ChapterDetector
         // Recomputed rather than carried over from the loop above: a gap Pass 3 closed only in part
         // has become one or more narrower gaps around what it did find, and those remainders - not
         // the original span - are what is left to read again.
-        foreach (var gap in FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter))
+        foreach (var gap in FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter))
             chapters = await RescanRegionShiftedAsync(
                 file, info, work, chapters, gap.FromSeconds, gap.ToSeconds,
-                MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter),
+                MissingNumbersInGap(chapters, gap, ExpectedStartChapter),
                 allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, profile, "", ct);
         return chapters;
     }
@@ -1046,7 +1070,7 @@ public sealed class ChapterDetector
             allSilences, nonSpeechRegions,
             speechSegments, bytesPerSecond, work, profile, chapters, ct);
         chapters = Normalize(chapters.Concat(fills).ToList());
-        var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
+        var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke(fills.Count > 0
@@ -1209,8 +1233,8 @@ public sealed class ChapterDetector
         // Only the gaps that actually name a missing chapter are worth re-probing, and only those
         // are budgeted for below - a gap whose numbers are all accounted for would otherwise inflate
         // the phase total and stop the bar from ever reaching 100 %.
-        var work25 = FindGaps(chapters, info.DurationSeconds, _options.ExpectedStartChapter)
-            .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(chapters, gap, _options.ExpectedStartChapter)))
+        var work25 = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter)
+            .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(chapters, gap, ExpectedStartChapter)))
             .Where(g => g.Missing.Count > 0)
             .ToList();
         if (work25.Count == 0)
@@ -1266,7 +1290,7 @@ public sealed class ChapterDetector
 
         var recovered = found.Count - knownCount;
         chapters = Normalize(found);
-        var (highest, missingNumbers) = ChapterProgress(chapters, _options.ExpectedStartChapter);
+        var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke(recovered > 0
@@ -1439,8 +1463,8 @@ public sealed class ChapterDetector
         LanguageState language, double bandFloorSeconds, CancellationToken ct)
     {
         var known = Normalize(found);
-        var work = FindGaps(known, ctx.Info.DurationSeconds, _options.ExpectedStartChapter)
-            .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(known, gap, _options.ExpectedStartChapter)))
+        var work = FindGaps(known, ctx.Info.DurationSeconds, ExpectedStartChapter)
+            .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(known, gap, ExpectedStartChapter)))
             .Where(g => g.Missing.Count > 0)
             .ToList();
         if (work.Count == 0)
@@ -1551,7 +1575,7 @@ public sealed class ChapterDetector
         // a spoken year must not be able to declare two thousand chapters lost (see
         // DetectedChapter.NumberUnverified).
         var missing = new List<int>();
-        if (_options.ExpectedStartChapter is { } expectedStart && chapters.Count > 0 &&
+        if (ExpectedStartChapter is { } expectedStart && chapters.Count > 0 &&
             !chapters[0].NumberUnverified)
             for (var n = expectedStart; n < chapters[0].Number; n++)
                 missing.Add(n);
@@ -1843,7 +1867,7 @@ public sealed class ChapterDetector
                 failed++;
             else
                 confirmedChapters.Add(new DetectedChapter(expected, corrected ?? marking.StartSeconds));
-            var (highest, missingNumbers) = ChapterProgress(confirmedChapters, _options.ExpectedStartChapter);
+            var (highest, missingNumbers) = ChapterProgress(confirmedChapters, ExpectedStartChapter);
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
             work.Advance(1);
@@ -2431,7 +2455,7 @@ public sealed class ChapterDetector
         // Built before the context, because the refinement's own matcher is held to the same
         // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
         var check = new NumberCheck(match.Number, profile,
-            BracketingBounds(phraseAbs, knownChapters, found, _options.ExpectedStartChapter));
+            BracketingBounds(phraseAbs, knownChapters, found, ExpectedStartChapter));
         var markCtx = new MarkContext(
             file, inputDecoder,
             profile.AnnouncementFor(
@@ -2452,7 +2476,7 @@ public sealed class ChapterDetector
         var number = placed.Number!.Value;
         found.Add(new DetectedChapter(number, time, match.Confidence));
         remaining?.Remove(number);
-        var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), _options.ExpectedStartChapter);
+        var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), ExpectedStartChapter);
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke($"chapter {number} found in gap, mark placed at {FormatTimestamp(time)} " +

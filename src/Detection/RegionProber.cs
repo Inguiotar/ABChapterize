@@ -1860,7 +1860,11 @@ internal sealed class RegionProber
                 "mark, but not counting the chapters under it as missing");
 
         _found.Add(new DetectedChapter(number, time, match.Confidence, unverified));
-        var (highest, missingNumbers) = ChapterProgress(_found, _env.Options.ExpectedStartChapter);
+        // Through ExpectedStartFor rather than off the option, so the "still missing" note starts
+        // counting the chapters under the first one found the moment a prologue says this file
+        // holds the book's beginning - which the progress display would otherwise only learn of
+        // once Pass 2 was over and gap planning took the same view.
+        var (highest, missingNumbers) = ChapterProgress(_found, ExpectedStartFor(_env.Options, _namedFound));
         _ctx.Work.HighestChapter = highest;
         _ctx.Work.MissingChapters = missingNumbers.Count;
         _env.Log?.Invoke($"chapter {number} detected, mark placed at {FormatTimestamp(time)} " +

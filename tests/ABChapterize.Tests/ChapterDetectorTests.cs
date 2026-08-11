@@ -1202,6 +1202,88 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Prologue_ImpliesAStartAtChapterOne_AndTheLeadingGapIsHunted()
+    {
+        // No --expected-start-chapter, but the prologue says this file holds the book's beginning,
+        // so chapters 1-3 under the first one found are really missing rather than another part's.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Prologue."));
+                s.Add(1200, Seg(0.2, " Chapter four."));
+            });
+
+        Assert.True(result.GapRemains);
+        Assert.Equal([1, 2, 3], result.MissingNumbers);
+        AssertChapters([new(4, 1199.95)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task NoPrologue_LeavesTheLeadingGapUnraised()
+    {
+        // The same book without the prologue is indistinguishable from a split-book part starting
+        // at chapter 4 - which is exactly why nothing is hunted below it.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200)],
+            s => s.Add(1200, Seg(0.2, " Chapter four.")));
+
+        Assert.False(result.GapRemains);
+        Assert.Empty(result.MissingNumbers);
+        AssertChapters([new(4, 1199.95)], result.Chapters);
+    }
+
+    [Fact]
+    public async Task ExpectedStartChapter_OverrulesThePrologueImplication()
+    {
+        // A split part carrying its own prologue is described by -e: the option wins, so nothing
+        // under chapter 4 is hunted even though a prologue was found.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0", "--expected-start-chapter", "4"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Prologue."));
+                s.Add(1200, Seg(0.2, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Empty(result.MissingNumbers);
+        AssertNamed([("prologue", "Prologue", 0.25)], result);
+    }
+
+    [Fact]
+    public void ExpectedStartFor_PrefersTheOption_OverThePrologueImplication()
+    {
+        var options = Options("--expected-start-chapter", "12");
+        Assert.Equal(12, GapPlanning.ExpectedStartFor(options, [Prologue()]));
+        Assert.Equal(12, GapPlanning.ExpectedStartFor(options, []));
+    }
+
+    [Fact]
+    public void ExpectedStartFor_ImpliesOne_OnlyWhenAPrologueWasFound()
+    {
+        var options = Options();
+        Assert.Equal(1, GapPlanning.ExpectedStartFor(options, [Prologue()]));
+        Assert.Null(GapPlanning.ExpectedStartFor(options, []));
+        Assert.Null(GapPlanning.ExpectedStartFor(
+            options, [new DetectedMark("custom 1", "Interlude", 100)]));
+    }
+
+    [Fact]
+    public void ExpectedStartFor_ImpliesNothing_WithoutAChapterSequence()
+    {
+        // --ignore-chapter-numbers has no numbered sequence for a start to be the start of.
+        Assert.Null(GapPlanning.ExpectedStartFor(
+            Options("--ignore-chapter-numbers"), [Prologue()]));
+    }
+
+    /// <summary>A detected prologue mark, for the expected-start-chapter rule's own tests.</summary>
+    private static DetectedMark Prologue() => new(NamedPhrase.PrologueKind, "Prologue", 0.25);
+
+    [Fact]
     public async Task SequenceGap_IsResolved_ByFullTranscription()
     {
         // The probe after the first silence hears nothing, so pass 2 yields chapters 1 and 3;
