@@ -645,6 +645,22 @@ internal static class DetectionTuning
     internal const double JingleRereadWindowSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
 
     /// <summary>
+    /// How far <see cref="RegionProber.RereadJingleMusicAsync"/> advances between two of the tiles it
+    /// reads a jingle's music with. One <see cref="JingleRereadWindowSeconds"/> less two phrase
+    /// margins, so consecutive tiles overlap by twice the longest announcement expected here: an
+    /// announcement can then never fall across a tile border without landing whole inside one of the
+    /// two - the same guarantee a spanning window gave, at a width the recognizer can still hear a
+    /// lone word in.
+    /// <para>
+    /// Two margins rather than one, because both ends of an announcement have to clear the border:
+    /// one margin would guarantee only that a phrase <em>starting</em> before the border is complete
+    /// in the earlier tile, and the case this exists for - a word or two spoken over music - is
+    /// exactly where the recognizer needs the run-up as much as the tail.
+    /// </para>
+    /// </summary>
+    internal const double JingleMusicTileStepSeconds = JingleRereadWindowSeconds - 2 * PhraseMarginSeconds;
+
+    /// <summary>
     /// Floor under the --max-jingle-length auto probe window (see
     /// <see cref="RegionProber.ObserveJingleLength"/>), applied beneath the ceiling so an explicit
     /// --max-jingle-length still wins outright. A book whose jingles are all short would otherwise

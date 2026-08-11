@@ -3477,6 +3477,51 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task JingleMusic_IsReadInOverlappingTiles_WhenTheAnnouncementIsDeepInsideIt()
+    {
+        // A 60 s jingle with the announcement spoken 35 s into it. The speech window opens 8 s
+        // before the music ends and cannot reach that far back; the music is read afterwards in
+        // 25 s tiles stepping 15 s, and the announcement lands whole inside the second of them.
+        // What this must never do again is span the whole jingle in one window - 60 s of decode is
+        // twice Whisper's chunk, and a lone word inside music is exactly what that loses.
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--quick-marks"),
+            [new(995, 1000)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1035, Seg(0, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 1000), new(1035, 1035.3), new(1060, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Contains(1000.0, audio.DecodeStarts);
+        Assert.Contains(1015.0, audio.DecodeStarts);
+        Assert.DoesNotContain(audio.DecodeStarts, d => d < 1000 && d > 900);
+        Assert.Contains(log, l => l.StartsWith("chapter 2 detected") &&
+                                  l.Contains(", embedded in a jingle)"));
+    }
+
+    [Fact]
+    public async Task JingleMusic_IsNotRead_WhenTheSpeechBehindItAnswers()
+    {
+        // The order is the corpus's: eleven times out of twelve the announcement follows the music,
+        // so the music is only ever read when the window behind it came back empty.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks"),
+            [new(995, 1000)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1060, Seg(0, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 1000), new(1035, 1035.3), new(1060, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.DoesNotContain(log, l => l.Contains("reading its music"));
+    }
+
+    [Fact]
     public async Task TheJingleReread_GoesThroughThePass3Model_WhereTheRunHasAnUpgrade()
     {
         // The re-read fixes the framing; where a better recognizer is available it fixes both halves
@@ -4646,14 +4691,15 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(0, Seg(0.5, " Chapter one."));      // the region start: no class to report
                 s.Add(600, Seg(0.3, " Chapter two."));    // a pause
                 s.Add(1020, Seg(0, " Chapter three."));   // the speech behind a plain jingle
-                s.Add(1430, Seg(0, " Chapter four."));    // behind a jingle with a blip in it
+                s.Add(1410, Seg(0, " Chapter four."));    // spoken over the music, 20 s into it
             },
-            // Jingle one (1000-1020) is unbroken. Jingle two (1400-1430) carries a 0.3 s musical
-            // transient at 1410, short enough for the census to bridge rather than split on, which
-            // is what makes it the embedded shape - the announcement might be spoken over the music.
+            // Jingle one (1000-1020) is unbroken. Jingle two (1390-1430) carries the announcement
+            // itself as a 0.3 s VAD blip at 1410, short enough for the census to bridge rather than
+            // split on - which is what licenses reading the music at all. The speech window opens at
+            // 1422 (8 s before the music ends) and cannot reach 1410; only the music tiles do.
             new FakeVad
             {
-                Speech = [new(0, 1000), new(1020, 1400), new(1410, 1410.3), new(1430, 3600)],
+                Speech = [new(0, 1000), new(1020, 1390), new(1410, 1410.3), new(1430, 3600)],
             });
 
         Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));

@@ -119,10 +119,15 @@ internal readonly record struct Pass2Context(
 /// the input to <see cref="RegionProber.ThresholdSilenceFor"/>. It does not reach window sizing,
 /// which <see cref="RegionProber"/>'s own classification flag governs: a recovery pass labels its
 /// candidates truthfully while still probing them all with the pass's shared window.</param>
+/// <param name="MusicFromSeconds">Where this candidate's music begins, when the announcement may be
+/// spoken <em>over</em> it rather than after it; null otherwise. Not a window of its own - the
+/// window still opens on the speech behind the music - but the licence for
+/// <see cref="RegionProber.RereadJingleMusicAsync"/> to tile the music once that window comes back
+/// empty. See <see cref="RegionProber.JingleCandidate"/> for why the two are separate looks.</param>
 internal readonly record struct ProbeCandidate(
     double Start, Silence? Silence, NonSpeechRegion? VadRegion,
     double? ExpectAtSeconds = null, double? WindowSeconds = null,
-    CandidateClass Class = CandidateClass.None)
+    CandidateClass Class = CandidateClass.None, double? MusicFromSeconds = null)
 {
     /// <summary>Where this candidate expects its announcement - its own start unless the
     /// classification put the expectation somewhere else.</summary>
@@ -633,16 +638,33 @@ internal sealed class RegionProber
                 .OrderBy(j => j.StartSeconds)
                 .ToList();
 
-    /// <summary>Turns one jingle into its candidate: a window on the speech behind it, or - when a
-    /// bridged VAD blip says the announcement may be inside the music - one spanning the jingle
-    /// itself as well.</summary>
+    /// <summary>
+    /// Turns one jingle into its candidate: a window on the speech behind the music, opening a
+    /// <see cref="JingleLeadInSeconds"/> run-up inside it.
+    /// <para>
+    /// A bridged VAD blip inside the music - the one evidence available that the announcement is
+    /// spoken <em>over</em> the jingle rather than after it - does not change that window. It used
+    /// to: such a candidate started at the jingle's first note and ran
+    /// <see cref="ExpectedAnnouncementSeconds"/> past the announcement, a width bounded by nothing
+    /// but the music's own length, and 9 of the corpus's 20 marks found that way came from windows
+    /// of 33 s or more, four of them 51-60 s. That is the width
+    /// <see cref="WhisperChunkSeconds"/> exists to warn about, shipped by the very classification
+    /// that was meant to retire it.
+    /// </para>
+    /// <para>
+    /// So the two possibilities become two looks instead of one window: the speech behind the music
+    /// first, and the music itself only when that comes back empty (see
+    /// <see cref="RereadJingleMusicAsync"/>, which tiles it at single-pass width). The order is the
+    /// corpus's: 225 marks sit after the music against 20 inside it, so the second look is rarely
+    /// paid for at all - and where it is, it reads the music in framings the recognizer can
+    /// actually hear a word in.
+    /// </para>
+    /// </summary>
     /// <param name="jingle">The jingle to probe around.</param>
     private ProbeCandidate JingleCandidate(Jingle jingle)
     {
         var spans = jingle.BridgedBlips > 0;
-        var start = spans
-            ? jingle.StartSeconds
-            : Math.Max(jingle.StartSeconds, jingle.AnnouncementSeconds - JingleLeadInSeconds);
+        var start = Math.Max(jingle.StartSeconds, jingle.AnnouncementSeconds - JingleLeadInSeconds);
         // The merged VAD region this jingle sits in, when there is one: ResolveAnnouncementMark
         // prefers the candidate's own region over any other when the phrase falls inside it, and a
         // jingle candidate without it would lose that preference to a neighbouring region.
@@ -654,7 +676,10 @@ internal sealed class RegionProber
         return new ProbeCandidate(start, null, region,
             ExpectAtSeconds: jingle.AnnouncementSeconds,
             WindowSeconds: jingle.AnnouncementSeconds - start + ExpectedAnnouncementSeconds,
-            Class: spans ? CandidateClass.JingleEmbedded : CandidateClass.Jingle);
+            Class: CandidateClass.Jingle,
+            // Only where the music actually reaches back past the run-up: a jingle shorter than
+            // that is already inside this window, and tiling it would re-read what was just read.
+            MusicFromSeconds: spans && jingle.StartSeconds < start ? jingle.StartSeconds : null);
     }
 
     /// <summary>
@@ -860,6 +885,8 @@ internal sealed class RegionProber
             marks = await RereadJingleSpeechAsync(candidate, start, windowEnd, trimmedAbs, ct);
         if (marks.Count == 0 && _namedFound.Count == namedBefore)
             marks = await RereadInOnePassAsync(candidate, start, windowEnd, ct);
+        if (marks.Count == 0 && _namedFound.Count == namedBefore)
+            marks = await RereadJingleMusicAsync(candidate, ct);
         if (marks.Count == 0)
             marks = await RecoverUnnumberedAnnouncementsAsync(
                 candidate, start, windowEnd, segments, trimmedAbs, ct);
@@ -875,13 +902,13 @@ internal sealed class RegionProber
     /// transcript segment has any words for means the recognizer lost it rather than that it is not
     /// there.
     /// <para>
-    /// Losing it is a framing artifact before it is anything else: crossing
-    /// <see cref="WhisperChunkSeconds"/> is what does it (see that constant for Gruelfin.m4b's
-    /// prologue, the case on record), so the re-read asks for the same announcement inside a
-    /// single-pass window. Confined to windows that actually crossed the boundary, since below it
-    /// the second decode would be the same framing as the first and could only produce the same
-    /// answer - and, where the run has a <c>--pass3-model</c> upgrade, put through that recognizer
-    /// rather than the probing one, for the reason the decode itself documents.
+    /// Losing it is a framing artifact before it is anything else: window width is what does it (see
+    /// <see cref="WhisperChunkSeconds"/> for Gruelfin.m4b's prologue, the case on record), so the
+    /// re-read asks for the same announcement inside a window narrow enough to end just past the
+    /// blip. Confined to windows the re-read really does narrow, since re-reading the same span
+    /// would be the same framing and could only produce the same answer - and, where the run has a
+    /// <c>--pass3-model</c> upgrade, put through that recognizer rather than the probing one, for the
+    /// reason the decode itself documents.
     /// </para>
     /// <para>
     /// The re-read window ends a phrase margin past the blip - far enough for the number after
@@ -905,14 +932,21 @@ internal sealed class RegionProber
         ProbeCandidate candidate, double start, double windowEnd,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
     {
-        if (_env.Vad == null || windowEnd - start <= WhisperChunkSeconds)
+        if (_env.Vad == null)
             return [];
         if (FindUnheardJingleSpeech(start, windowEnd, trimmedAbs) is not { } blip)
             return [];
 
         var to = Math.Min(windowEnd, blip.EndSeconds + PhraseMarginSeconds);
         var from = Math.Max(start, to - JingleRereadWindowSeconds);
-        if (to - from <= PhraseMarginSeconds)
+        // Too short to hold an announcement, or no narrower than the window that already failed on
+        // it - the second being the honest form of the chunk-boundary test this used to make. That
+        // test asked whether the window crossed WhisperChunkSeconds, which classified jingle windows
+        // land on exactly (JingleLeadInSeconds + ExpectedAnnouncementSeconds = 30.0) and so never
+        // crossed, leaving the re-read reachable only from a recovery pass's wider window. What it
+        // was reaching for is that a re-read of the same span is the same framing and can only
+        // produce the same answer, and that is what is asked here.
+        if (to - from <= PhraseMarginSeconds || to - from >= windowEnd - start)
             return [];
 
         // Both remedies at once where the run has an upgrade model: a re-framed window and a better
@@ -1048,6 +1082,70 @@ internal sealed class RegionProber
             ShiftSegments(fresh, start), _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
         return await ScanWindowForMarksAsync(
             candidate, start, to, ShiftSegments(freshAbs, -start), freshAbs, null, ct);
+    }
+
+    /// <summary>
+    /// Last look at an empty jingle window, and the only one that reads the music itself: tiles
+    /// [<see cref="ProbeCandidate.MusicFromSeconds"/>, the window's own start] with overlapping
+    /// windows of <see cref="JingleRereadWindowSeconds"/>, stepping
+    /// <see cref="JingleMusicTileStepSeconds"/>, and stops at the first tile that yields a mark.
+    /// <para>
+    /// This is the second half of what one spanning window used to do (see
+    /// <see cref="JingleCandidate"/>), and the reason it is tiled rather than spanned is the one
+    /// <see cref="WhisperChunkSeconds"/> records: past a chunk the recognizer drops a lone word
+    /// outright, and an announcement spoken over music is exactly a lone word. On the corpus this is
+    /// one tile for any jingle up to 20 s - which 11 of its 16 books never exceed - and two up to
+    /// 34 s, so the worst case costs the two chunks the old 50 s ceiling was already paying.
+    /// </para>
+    /// <para>
+    /// The overlap is two phrase margins, so an announcement cannot fall across a tile border
+    /// without landing whole inside a neighbour. Every tile is decoded on its own: nothing is served
+    /// from the overlap cache, nothing it reads becomes cache, and the decode never reads ahead. All
+    /// three would hand a tile - or its successor - a framing from another window, and the framing
+    /// is the entire content of this second look (the same reasoning that reverted the gap
+    /// re-probe's transcript reuse). It is also what lets the tiles bypass window-end seam snapping,
+    /// which could otherwise stretch one back past a chunk: nothing stitches to a tile, so no seam
+    /// has to be found for it.
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The jingle candidate whose speech window came back empty.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The marks a tile produced, or an empty list when none did or the candidate has no
+    /// music to read.</returns>
+    private async Task<List<ProbeMark>> RereadJingleMusicAsync(
+        ProbeCandidate candidate, CancellationToken ct)
+    {
+        if (candidate.MusicFromSeconds is not { } musicFrom)
+            return [];
+        // Reported as what it is: a mark found here was heard inside the music, which is exactly
+        // what the "embedded in a jingle" note counts.
+        var tileCandidate = candidate with { Class = CandidateClass.JingleEmbedded };
+        var namedBefore = _namedFound.Count;
+        _env.Log?.Invoke(
+            $"nothing heard behind the jingle at {FormatTimestamp(candidate.Start)} - reading its " +
+            $"music from {FormatTimestamp(musicFrom)} in {JingleRereadWindowSeconds:0.#} s steps");
+
+        for (var from = musicFrom; from < candidate.Start; from += JingleMusicTileStepSeconds)
+        {
+            ct.ThrowIfCancellationRequested();
+            var to = Math.Min(from + JingleRereadWindowSeconds, _region.ToSeconds);
+            if (to - from <= PhraseMarginSeconds)
+                break;
+            var samples = await _env.Audio.DecodePcmAsync(
+                _ctx.File, from, to - from, _ctx.Info.InputDecoder, ct);
+            var fresh = await _env.TranscribeCounting(samples, ct, _ctx.Transcriber);
+            _env.LogTranscript($"jingle music {to - from:0.0}s@{FormatTimestamp(from)}", fresh);
+
+            var freshAbs = TrimLeadingNonSpeech(
+                ShiftSegments(fresh, from), _ctx.AllSilences, _ctx.NonSpeechRegions, true);
+            var marks = await ScanWindowForMarksAsync(
+                tileCandidate, from, to, ShiftSegments(freshAbs, -from), freshAbs, null, ct);
+            // A named mark counts as an answer too, even though it is not returned: it goes straight
+            // into the accumulator, and the tiles after it would only re-hear the same announcement.
+            if (marks.Count > 0 || _namedFound.Count > namedBefore)
+                return marks;
+        }
+        return [];
     }
 
     /// <summary>
