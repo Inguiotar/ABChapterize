@@ -15,6 +15,17 @@ earn a round number.
 
 ## [0.12.0] — unreleased
 
+### Added
+
+- **`--named-mark-distance <seconds>` keeps a named mark from crowding a chapter.** A
+  prologue, epilogue or `--custom` mark landing within 10 seconds of a chapter mark (the
+  new default) is no longer written as an entry of its own: the chapter keeps its
+  position, and the named mark contributes its title in brackets — "Chapter 10
+  (Interlude)". Two entries a few seconds apart are worse than one, since scrubbing to a
+  chapter then lands you either in the tail of the previous section or a little way into
+  the new one depending on which you hit. Several crowding marks are appended in file
+  order; `--named-mark-distance 0` writes everything separately, as before.
+
 ### Changed
 
 - **The epilogue mark now has to follow the book's last chapter.** "Epilogue" is an

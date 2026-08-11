@@ -566,6 +566,32 @@ At most 100 custom marks are written per file. Beyond that the rest are
 dropped and the file's summary line says so: a phrase that matches ordinary
 prose (`--custom "the:the"`) would otherwise pepper a whole book with marks.
 
+### Named marks that land beside a chapter
+
+A named mark — prologue, epilogue or `--custom` — sitting within
+`--named-mark-distance` seconds of a chapter mark (10 by default) is not written
+as an entry of its own. The chapter keeps its position, and the named mark
+contributes its title in brackets:
+
+```
+0:00:00.000  Intro
+2:14:07.500  Chapter 10 (Interlude)
+```
+
+Two entries a few seconds apart are worse than one: scrubbing to a chapter lands
+the listener either in the tail of the previous section or a little way into the
+new one, depending on which of the two they hit, and nobody asked for that
+choice. Nothing is lost — the title survives — and the chapter wins the
+position, being the mark people navigate by. Several named marks crowding one
+chapter are appended in file order, separated by commas.
+
+This is also what settles a chapter announcement and a named phrase spoken in
+the same breath ("Chapter ten. Interlude."), which are found by two separate
+searches and can only be compared once both have their final positions.
+
+`--named-mark-distance 0` switches the whole thing off and writes every mark
+separately, however close together they fall.
+
 ### Detecting chapters without believing their numbers
 
 `--ignore-chapter-numbers` leaves detection working exactly as it normally
@@ -1114,6 +1140,13 @@ Two things are worth knowing before reaching for it:
 `-U`, `--custom-file <path>`
 : Read `--custom` mappings from a text file, one per line; blank lines and
   lines starting with `#` are ignored.
+
+`-D`, `--named-mark-distance <seconds>`
+: How close a named mark (prologue, epilogue, `--custom`) may come to a chapter
+  mark before the two are written as one entry (default: 10). The chapter keeps
+  its position and the named mark contributes its title in brackets —
+  "Chapter 10 (Interlude)". `0` writes every mark separately. See
+  [Named marks that land beside a chapter](#named-marks-that-land-beside-a-chapter).
 
 `-t`, `--chapter-title <word>`
 : Word used to build chapter titles; the chapter number is appended

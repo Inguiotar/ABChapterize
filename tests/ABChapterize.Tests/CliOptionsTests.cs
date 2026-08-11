@@ -573,6 +573,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--early-abort", "30")]
     [InlineData("--expected-start-chapter", "5")]
     [InlineData("--max-chapter-number", "50")]
+    [InlineData("--named-mark-distance", "5")]
     [InlineData("--verify")]
     // The titles are not detection settings, but an imported mark carries the sidecar's own title
     // and no intro mark is prepended, so they are equally inert and equally refused.
@@ -1461,6 +1462,33 @@ public sealed class CliOptionsTests : IDisposable
         // "Mark exactly at the onset" is a legitimate taste, not a mistake - unlike the other
         // duration options, whose zero would mean "no silence/jingle at all" and break their logic.
         Assert.Equal(0, ParseFile("--mark-lead", "0")!.MarkLeadSeconds);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("601")]
+    [InlineData("abc")]
+    public void InvalidNamedMarkDistances_AreRejected(string value)
+    {
+        Assert.Throws<CliError>(() => ParseFile("--named-mark-distance", value));
+    }
+
+    [Fact]
+    public void NamedMarkDistance_DefaultsToTenSeconds_AndIsOverridable()
+    {
+        Assert.Equal(10, ParseFile()!.NamedMarkDistanceSeconds);
+        Assert.Equal(2.5, ParseFile("--named-mark-distance", "2.5")!.NamedMarkDistanceSeconds);
+        Assert.Equal(2.5, ParseFile("-D", "2,5")!.NamedMarkDistanceSeconds);
+        // Zero is how the merging is switched off, so it is a value rather than a mistake.
+        Assert.Equal(0, ParseFile("--named-mark-distance", "0")!.NamedMarkDistanceSeconds);
+    }
+
+    [Fact]
+    public void NamedMarkDistance_ChangesTheRunFingerprint()
+    {
+        // It decides which marks a file ends up with, so a resumed batch must not mix two values.
+        Assert.NotEqual(
+            ParseFile()!.RunFingerprint, ParseFile("--named-mark-distance", "5")!.RunFingerprint);
     }
 
     [Fact]

@@ -162,6 +162,8 @@ public sealed class DebugLog : IDisposable
         foreach (var mapping in o.CustomMappings)
             yield return $"custom {(mapping.Language is { } code ? $"[{code}] " : "")}" +
                          $"{mapping.Phrase} -> \"{mapping.Title}\"";
+        yield return "named-mark-distance " +
+                     (o.NamedMarkDistanceSeconds > 0 ? $"{o.NamedMarkDistanceSeconds:0.##} s" : "off");
         yield return $"noise-floor {(o.AutoNoiseFloor ? "auto" : $"{o.NoiseFloorDb:0.#} dBFS")}";
         yield return $"min-silence-length {DescribeMinSilence(o)}, " +
                      $"max-jingle-length {(o.AutoMaxJingle ? $"auto (ceiling {o.MaxJingleSeconds:0.#} s)" : $"{o.MaxJingleSeconds:0.#} s")}, " +

@@ -119,6 +119,20 @@ public sealed class CliOptions
     private readonly List<CustomMapping> _customMappings = [];
 
     /// <summary>
+    /// How close a named mark (prologue, epilogue, <c>--custom</c>) may come to a chapter mark
+    /// before the two are written as one entry (--named-mark-distance / -D, default 10 s; 0 switches
+    /// the merging off and lets both stand wherever they fall).
+    /// <para>
+    /// Two marks a few seconds apart are two entries a player scrubs through, one of which lands the
+    /// listener in the last sentence of what came before - a distinction the chapter list is not the
+    /// place to make. Which of the two is the useful one is never in question, so the chapter keeps
+    /// its position and the named mark keeps only its title, appended in brackets:
+    /// "Chapter 10 (Interlude)". See <see cref="ABChapterize.Processing.FileProcessor.BuildChapters"/>.
+    /// </para>
+    /// </summary>
+    public double NamedMarkDistanceSeconds { get; private set; } = 10;
+
+    /// <summary>
     /// Whether the chapter numbers heard in an announcement are reasoned about
     /// (<c>--ignore-chapter-numbers</c>). The announcements themselves are still detected and still
     /// become marks either way; what this drops is everything built on the numbers forming a
@@ -787,7 +801,7 @@ public sealed class CliOptions
         ['n'] = "--min-silence-length", ['t'] = "--chapter-title", ['i'] = "--intro-title",
         ['p'] = "--prologue-phrase", ['P'] = "--prologue-title",
         ['g'] = "--epilogue-phrase", ['G'] = "--epilogue-title",
-        ['u'] = "--custom", ['U'] = "--custom-file",
+        ['u'] = "--custom", ['U'] = "--custom-file", ['D'] = "--named-mark-distance",
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
         ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
@@ -796,7 +810,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet;
+    private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
 
     // The phrase and title options, each holding what was given for every language, per language,
     // or nothing at all when the option was not given - in which case the language's own default
@@ -830,7 +844,7 @@ public sealed class CliOptions
            || UseGpu != null || VadThreads != null || WhisperThreads != null
            || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _jingleLenSet || _minSilenceSet || _earlyAbortSet || _markLeadSet || _expectedStartSet
-           || _chapterCountSet || _noiseFloorSet
+           || _chapterCountSet || _noiseFloorSet || _namedMarkDistanceSet
            || _phraseSpec != null || _titleSpec != null || _introSpec != null
            || _prologuePhraseSpec != null || _prologueTitleSpec != null
            || _epiloguePhraseSpec != null || _epilogueTitleSpec != null
@@ -868,6 +882,7 @@ public sealed class CliOptions
                 $"recurse={Recurse}", $"backup={Backup}", $"force={Force}",
                 $"lang={Language}", $"phrase={ChapterPhrase}", $"title={Title}", $"intro={IntroTitle}",
                 $"prologue={ProloguePhrase}/{PrologueTitle}", $"epilogue={EpiloguePhrase}/{EpilogueTitle}",
+                $"nameddistance={NamedMarkDistanceSeconds}",
                 $"ignorenumbers={IgnoreChapterNumbers}",
                 $"custom={string.Join('|', _customMappings.Select(m => $"{m.Language}:{m.Phrase}=>{m.Title}"))}",
                 $"model={Model}", $"pass3={Pass3Model}",
@@ -1022,13 +1037,14 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || o.Verify || o._titleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || o.Verify || o._titleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --mark-lead, --max-jingle-length, --min-silence-length, " +
                 "--noise-floor, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, --verify, " +
+                "--named-mark-distance, " +
                 "--chapter-title, --intro-title, --prologue-title and --epilogue-title " +
                 "have no effect and cannot be combined with it.");
 
@@ -1289,6 +1305,7 @@ public sealed class CliOptions
             case "--prologue-title": PrologueTitle = nextParam(); _prologueTitleSpec = new(PrologueTitle, name); return true;
             case "--epilogue-phrase": EpiloguePhrase = nextParam(); _epiloguePhraseSpec = new(EpiloguePhrase, name); return true;
             case "--epilogue-title": EpilogueTitle = nextParam(); _epilogueTitleSpec = new(EpilogueTitle, name); return true;
+            case "--named-mark-distance": NamedMarkDistanceSeconds = ParseNamedMarkDistance(nextParam()); _namedMarkDistanceSet = true; return true;
             case "--custom": _customMappings.AddRange(CustomMappingParser.ParseSpec(nextParam())); return true;
             case "--custom-file": _customMappings.AddRange(CustomMappingParser.ParseFile(nextParam())); return true;
             case "--filter": ParseFilter(nextParam()); return true;
@@ -1552,6 +1569,19 @@ public sealed class CliOptions
         if (!int.TryParse(value, out var n) || n < 1)
             throw new CliError($"Invalid --max-chapter-number value \"{value}\": expected a chapter number of 1 or higher.");
         return n;
+    }
+
+    /// <summary>Parses the --named-mark-distance parameter into a number of seconds, or 0 for "let
+    /// every mark stand where it is". Capped at 600 for the same reason
+    /// <see cref="ParseJingleLength"/> is: a value past that is a typo, and one large enough to
+    /// swallow whole chapters would quietly turn a book's marking into a single entry.</summary>
+    /// <param name="value">The raw parameter.</param>
+    private static double ParseNamedMarkDistance(string value)
+    {
+        if (!NumberCulture.TryParseDecimal(value, out var s) || s < 0 || s > 600)
+            throw new CliError(
+                $"Invalid --named-mark-distance value \"{value}\": expected 0 or seconds between 0 and 600.");
+        return s;
     }
 
     /// <summary>Parses the --expected-start-chapter parameter into a chapter number of 1 or higher.</summary>
@@ -1970,6 +2000,13 @@ public sealed class CliOptions
           -U, --custom-file <path>  Read --custom mappings from a text file, one per line. Blank
                                     lines and lines starting with "#" are ignored, and semicolons
                                     need no escaping here since line breaks separate the mappings.
+          -D, --named-mark-distance <seconds>
+                                    How close a prologue, epilogue or --custom mark may come to a
+                                    chapter mark before the two are written as one entry
+                                    (default: 10). The chapter keeps its position; the named mark
+                                    contributes its title in brackets, e.g.
+                                    "Chapter 10 (Interlude)". Pass 0 to write every mark
+                                    separately however close together they fall.
           -t, --chapter-title <word>
                                     Word used for chapter titles; the chapter number is appended
                                     (default: Chapter, localized by --lang).

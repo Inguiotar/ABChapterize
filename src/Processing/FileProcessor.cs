@@ -469,7 +469,9 @@ public sealed class FileProcessor
     /// <summary>
     /// Turns a detection result's chapters into titled <see cref="Chapter"/>s - merging in the
     /// named marks (prologue, epilogue, --custom), which are detected separately precisely because they carry no
-    /// chapter number (see <see cref="DetectedMark"/>) and meet the numbered ones only here - and,
+    /// chapter number (see <see cref="DetectedMark"/>) and meet the numbered ones only here, one of
+    /// them folding into a chapter's own title where it lands too close to it (see
+    /// <see cref="MergeCrowdedNamedMarks"/>) - and,
     /// when the first one starts past the very beginning and something was actually spoken there,
     /// prepends the intro chapter: audiobooks open with a prelude, and the mp4 muxer would
     /// otherwise snap the first mark to 0:00. When nothing precedes the first mark's phrase but
@@ -480,23 +482,117 @@ public sealed class FileProcessor
     /// unit testing.
     /// </summary>
     /// <param name="result">The file's detection result.</param>
-    /// <returns>The chapters to write and a note (" + intro" or "") for the summary line.</returns>
-    internal static (List<Chapter> Chapters, string IntroNote) BuildChapters(DetectionResult result)
+    /// <param name="namedMarkDistanceSeconds">How close a named mark may come to a chapter before
+    /// the two are written as one entry (<see cref="CliOptions.NamedMarkDistanceSeconds"/>); 0
+    /// leaves every mark where it is.</param>
+    /// <returns>The chapters to write, a note (" + intro" or "") for the summary line, and how many
+    /// named marks were merged away - which only the caller reporting named marks at all has any
+    /// use for.</returns>
+    internal static (List<Chapter> Chapters, string IntroNote, int MergedNamedMarks) BuildChapters(
+        DetectionResult result, double namedMarkDistanceSeconds)
     {
         // A named mark sharing a chapter's exact timestamp sorts after it, so a prologue heard in
         // the same breath as chapter 1 cannot displace the numbered entry a player scrubs by.
-        var chapters = result.Chapters
-            .Select(c => (c.TimeSeconds, Title: $"{result.Profile.Title} {c.Number}", Named: 0))
-            .Concat(result.NamedMarks.Select(m => (m.TimeSeconds, m.Title, Named: 1)))
-            .OrderBy(c => c.TimeSeconds).ThenBy(c => c.Named)
-            .Select(c => new Chapter(c.TimeSeconds, c.Title))
+        var entries = result.Chapters
+            .Select(c => new MarkEntry(c.TimeSeconds, $"{result.Profile.Title} {c.Number}", false, true))
+            .Concat(result.NamedMarks.Select(m => new MarkEntry(
+                m.TimeSeconds, m.Title, true, m.Kind == result.Profile.ChapterAnnouncement.Kind)))
+            .OrderBy(c => c.TimeSeconds).ThenBy(c => c.Named ? 1 : 0)
             .ToList();
+        var merged = MergeCrowdedNamedMarks(entries, namedMarkDistanceSeconds);
+        var chapters = entries.Select(e => new Chapter(e.TimeSeconds, e.Title)).ToList();
         if (chapters.Count > 0 && chapters[0].StartSeconds > 0 && result.LeadInHasSpeech)
         {
             chapters.Insert(0, new Chapter(0, result.Profile.IntroTitle));
-            return (chapters, " + intro");
+            return (chapters, " + intro", merged);
         }
-        return (chapters, "");
+        return (chapters, "", merged);
+    }
+
+    /// <summary>One mark on its way into the written chapter list, while it is still known where it
+    /// came from - which is what <see cref="MergeCrowdedNamedMarks"/> needs and a
+    /// <see cref="Chapter"/> no longer says.</summary>
+    /// <param name="TimeSeconds">Position of the mark.</param>
+    /// <param name="Title">The title it is written under, so far.</param>
+    /// <param name="Named">Whether it came from the named marks rather than the chapter sequence -
+    /// the tiebreak that keeps a numbered entry ahead of a named one at the same timestamp.</param>
+    /// <param name="IsChapter">Whether it counts as a chapter for the merge below. Not simply
+    /// <c>!Named</c>: under <c>--ignore-chapter-numbers</c> the chapter announcements are themselves
+    /// named marks, and they are still what a nearby interlude belongs to.</param>
+    private readonly record struct MarkEntry(
+        double TimeSeconds, string Title, bool Named, bool IsChapter);
+
+    /// <summary>
+    /// Folds every named mark that sits within <paramref name="distanceSeconds"/> of a chapter into
+    /// that chapter's own entry, appending its title in brackets: "Chapter 10 (Interlude)".
+    /// <para>
+    /// Two entries a few seconds apart are worse than one. A player scrubbing by chapter lands the
+    /// listener either in the last sentence of the previous section or a few seconds into the new
+    /// one, depending on which of the two they hit, and no listener asked to make that distinction.
+    /// The chapter always wins the position, being the entry the whole tool exists to place and the
+    /// one people navigate by; the named mark keeps the only part of itself that carries any
+    /// information here, its title. Nothing is silently lost, which is what makes discarding the
+    /// position defensible.
+    /// </para>
+    /// <para>
+    /// This is also what settles the two marks one probe window can produce from a single
+    /// transcript - a chapter announcement and a named phrase heard in the same breath ("Chapter
+    /// ten. Interlude."). They are found by two independent scans that know nothing of each other,
+    /// so the earliest they can be compared is here, where both have their final positions.
+    /// </para>
+    /// </summary>
+    /// <param name="entries">The merged mark list, ascending in time; edited in place.</param>
+    /// <param name="distanceSeconds">The minimum distance a named mark must keep to stay an entry
+    /// of its own; 0 or less switches the whole thing off.</param>
+    /// <returns>How many named marks were merged away.</returns>
+    private static int MergeCrowdedNamedMarks(List<MarkEntry> entries, double distanceSeconds)
+    {
+        if (distanceSeconds <= 0)
+            return 0;
+        var appended = new Dictionary<int, List<string>>();
+        var merged = new List<int>();
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i] is not { Named: true, IsChapter: false } mark ||
+                NearestChapterWithin(entries, i, distanceSeconds) is not { } chapter)
+                continue;
+            if (!appended.TryGetValue(chapter, out var titles))
+                appended[chapter] = titles = [];
+            titles.Add(mark.Title);
+            merged.Add(i);
+        }
+        foreach (var (index, titles) in appended)
+            entries[index] = entries[index] with
+            {
+                Title = $"{entries[index].Title} ({string.Join(", ", titles)})",
+            };
+        // Backwards, so each removal leaves the indices still to be removed where they were.
+        for (var i = merged.Count - 1; i >= 0; i--)
+            entries.RemoveAt(merged[i]);
+        return merged.Count;
+    }
+
+    /// <summary>The chapter entry a named mark belongs to, or null when none is close enough. Ties
+    /// go to the earlier chapter, which is the one a listener scrubbing backwards reaches first.</summary>
+    /// <param name="entries">The merged mark list, ascending in time.</param>
+    /// <param name="index">The named mark in question.</param>
+    /// <param name="distanceSeconds">The minimum distance that keeps a mark independent; a mark
+    /// exactly that far from a chapter is left alone.</param>
+    private static int? NearestChapterWithin(
+        List<MarkEntry> entries, int index, double distanceSeconds)
+    {
+        int? nearest = null;
+        var closest = distanceSeconds;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (!entries[i].IsChapter)
+                continue;
+            var gap = Math.Abs(entries[i].TimeSeconds - entries[index].TimeSeconds);
+            if (gap >= closest)
+                continue;
+            (nearest, closest) = (i, gap);
+        }
+        return nearest;
     }
 
     /// <summary>
@@ -697,7 +793,7 @@ public sealed class FileProcessor
         _runStats.AccumulateStats(resumed.Stats, ctx.Info.DurationSeconds);
         ctx.Logs.Write(FormatFileStats(resumed.Stats, ctx.Info.DurationSeconds));
         _runStats.AccumulateConfidence(resumed.Chapters);
-        var (chapters, introNote) = BuildChapters(resumed);
+        var (chapters, introNote, _) = BuildChapters(resumed, _options.NamedMarkDistanceSeconds);
 
         return resumed.GapRemains
             ? await ReportIncompleteResumeAsync(ctx, resumed, chapters, introNote, ct)
@@ -959,7 +1055,7 @@ public sealed class FileProcessor
     {
         _warnings++;
         _runStats.AccumulateConfidence(result.Chapters);
-        var (chapters, introNote) = BuildChapters(result);
+        var (chapters, introNote, _) = BuildChapters(result, _options.NamedMarkDistanceSeconds);
         var target = MissingMarksTag.PathFor(ctx.File, result.MissingNumbers);
         var missingList = MissingMarksTag.FormatList(result.MissingNumbers);
         RecordStillMissing(ctx, target, result.MissingNumbers);
@@ -1056,8 +1152,8 @@ public sealed class FileProcessor
         FileContext ctx, DetectionResult result, string discardNote, CancellationToken ct)
     {
         _runStats.AccumulateConfidence(result.Chapters);
-        var (chapters, introNote) = BuildChapters(result);
-        var notes = introNote + discardNote + FormatNamedMarksNote(result) + FormatLowConfidenceNote(result) +
+        var (chapters, introNote, merged) = BuildChapters(result, _options.NamedMarkDistanceSeconds);
+        var notes = introNote + discardNote + FormatNamedMarksNote(result, merged) + FormatLowConfidenceNote(result) +
                     FormatSequenceRestartNote(result) + FormatUnverifiedNumbersNote(result) +
                     FormatLanguageNote(result) + await ExportSidecarAsync(ctx, chapters, ct);
         var what = FormatWrittenCount(result);
@@ -1106,13 +1202,19 @@ public sealed class FileProcessor
     /// were dropped there, which would otherwise look exactly like a mapping that stopped matching
     /// halfway through the book. Empty when neither applies.</summary>
     /// <param name="result">The file's detection result.</param>
-    private static string FormatNamedMarksNote(DetectionResult result)
+    /// <param name="merged">How many of the named marks were folded into a chapter's title rather
+    /// than written as entries of their own (see <see cref="MergeCrowdedNamedMarks"/>). Reported
+    /// because the count above would otherwise promise entries the listing does not have.</param>
+    private static string FormatNamedMarksNote(DetectionResult result, int merged)
     {
         var limitNote = result.CustomMarkLimitHit
             ? $", custom-mark limit of {DetectionTuning.MaxCustomMarksPerFile} reached - further matches dropped"
             : "";
+        var mergedNote = merged > 0
+            ? $" ({merged} of them merged into a neighbouring chapter's title)"
+            : "";
         return result.Chapters.Count > 0 && result.NamedMarks.Count > 0
-            ? $", {result.NamedMarks.Count} named mark(s){limitNote}"
+            ? $", {result.NamedMarks.Count} named mark(s){mergedNote}{limitNote}"
             : limitNote;
     }
 
