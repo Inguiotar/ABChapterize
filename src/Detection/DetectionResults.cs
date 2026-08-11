@@ -68,9 +68,15 @@ public readonly record struct DetectedChapter(
 /// since two detections of one announcement can be walked to quite different marks.</param>
 /// <param name="Repeatable">Copied from the phrase that produced this mark, so the per-file
 /// <c>--custom</c> cap can count what it caps without looking the phrase up again.</param>
+/// <param name="Text">The transcript segment the announcement was heard in (see
+/// <see cref="PhraseMatching.NamedMatch.Text"/>), or empty for a mark carried over from the file's
+/// existing markings, where nothing was heard at all. Kept for exactly one question, asked once per
+/// file at the very end: whether a <c>--custom</c> mapping would have claimed the announcement of a
+/// built-in epilogue that is about to be dropped for sitting mid-book
+/// (<see cref="ChapterDetector.ResolveEpiloguePlacement"/>).</param>
 public readonly record struct DetectedMark(
     string Kind, string Title, double TimeSeconds, double Confidence = 1.0,
-    double PhraseTimeSeconds = 0, bool Repeatable = false);
+    double PhraseTimeSeconds = 0, bool Repeatable = false, string Text = "");
 
 /// <summary>Per-file diagnostic statistics gathered during detection, surfaced per file under
 /// --verbose (or --verbose-transcripts) and aggregated run-wide under --summary. The silence and

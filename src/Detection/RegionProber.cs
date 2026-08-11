@@ -1553,13 +1553,23 @@ internal sealed class RegionProber
     /// says this one adds nothing, which is checked first so a dropped match costs no mark placement
     /// at all (that is where the refinement transcriptions are spent).
     /// <para>
-    /// A non-repeatable phrase replaces any earlier mark of its own kind, so the last match within
-    /// the scope wins rather than the first: front matter routinely mentions what is coming
+    /// A non-repeatable phrase replaces any earlier mark of its own kind, so the last announcement
+    /// within the scope wins rather than the first: front matter routinely mentions what is coming
     /// ("...gelesen von...; Prolog") before the narrator actually announces it, and the real
     /// announcement is by construction the later of the two - whereas nothing follows the genuine
     /// one inside its own scope, which the prologue's closes at chapter 1 and the epilogue's at the
     /// end of the file. The replaced mark's own placement work is simply discarded; at one prologue
     /// and one epilogue per book that costs at most a couple of extra refinement transcriptions.
+    /// </para>
+    /// <para>
+    /// "Later" is measured in the file, not in the order the passes happened to hear things -
+    /// <see cref="ShouldDropNamedMatch"/> holds that half. The two agreed while only Pass 2's
+    /// forward scan produced named marks, and stopped agreeing as soon as the recovery passes did:
+    /// they run after Pass 2 and work backwards through the book's gaps, so a mid-book match found
+    /// late in the run would otherwise replace the real end-of-book announcement Pass 2 had already
+    /// marked. That is precisely what happened to "Corsa nello spazio" (2026-08-05), where
+    /// <c>/epilogo/</c> matching inside "riepilogo" at 13:35:19 displaced the genuine epilogue found
+    /// at 18:18:57.
     /// </para>
     /// </summary>
     /// <param name="match">The named match, in window-relative time.</param>
@@ -1618,7 +1628,8 @@ internal sealed class RegionProber
         if (!match.Phrase.Repeatable)
             _namedFound.RemoveAll(m => m.Kind == match.Phrase.Kind);
         _namedFound.Add(new DetectedMark(
-            match.Phrase.Kind, match.Title, time, match.Confidence, phraseAbs, match.Phrase.Repeatable));
+            match.Phrase.Kind, match.Title, time, match.Confidence, phraseAbs, match.Phrase.Repeatable,
+            match.Text));
         _ctx.Work.NamedMarks = _namedFound.Count;
         _ctx.Work.ExtraMarks = _namedFound.Count(m => m.Kind != ChapterKind);
         _env.Log?.Invoke($"{match.Phrase.Kind} detected (\"{match.Title}\"), mark placed at " +
@@ -1659,6 +1670,10 @@ internal sealed class RegionProber
     /// re-decode the same audio routinely, and without this every such overlap would yield a
     /// duplicate mark a second or two from the first (see
     /// <see cref="DetectionTuning.NamedMarkDedupeSeconds"/>);</description></item>
+    /// <item><description>a non-repeatable phrase already holds a mark from an announcement
+    /// <em>later</em> in the file - see <see cref="AcceptNamedMatchAsync"/> for why the last
+    /// announcement wins and why "last" cannot be read as "most recently
+    /// found";</description></item>
     /// <item><description>the file has reached its --custom mark cap (see
     /// <see cref="DetectionTuning.MaxCustomMarksPerFile"/>), which is reported all the way out to
     /// the file's summary line rather than only logged. Chapter announcements are exempt: under
@@ -1674,7 +1689,10 @@ internal sealed class RegionProber
                                  Math.Abs(m.PhraseTimeSeconds - phraseAbs) < NamedMarkDedupeSeconds))
             return true;
 
-        if (!phrase.Repeatable || phrase.Kind == ChapterKind)
+        if (!phrase.Repeatable)
+            return _namedFound.Any(m => m.Kind == phrase.Kind && m.PhraseTimeSeconds > phraseAbs);
+
+        if (phrase.Kind == ChapterKind)
             return false;
 
         if (_namedFound.Count(m => m.Repeatable && m.Kind != ChapterKind) < MaxCustomMarksPerFile)

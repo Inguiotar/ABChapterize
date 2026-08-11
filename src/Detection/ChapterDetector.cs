@@ -1602,7 +1602,8 @@ public sealed class ChapterDetector
         // --ignore-chapter-numbers that reasoning inverts - the chapters are themselves named marks
         // then, and there is no numbered list whose emptiness could condemn them.
         var named = chapters.Count > 0 || _options.IgnoreChapterNumbers
-            ? namedMarks.OrderBy(m => m.TimeSeconds).ToList()
+            ? ResolveEpiloguePlacement(
+                namedMarks.OrderBy(m => m.TimeSeconds).ToList(), chapters, profile, _log)
             : [];
 
         // Whether the very first mark is preceded by any VAD speech at all - lets FileProcessor's
@@ -1634,6 +1635,105 @@ public sealed class ChapterDetector
             profile, detectedLanguage, detectedProbability, stats, earlyAborted, belowExpectedStartNumber,
             leadInHasSpeech, _customLimitHit, _sequenceRestartSkips,
             unverified.Count > 0 ? unverified : null);
+    }
+
+    /// <summary>
+    /// Holds the built-in epilogue to the one place a book has for it: after its last chapter. A
+    /// mark anywhere else is dropped - or, where one of the user's own <c>--custom</c> mappings
+    /// would have claimed the same announcement, handed over to it.
+    /// <para>
+    /// The scope alone cannot express this. <see cref="NamedPhraseScope.AfterFirstChapter"/> is
+    /// everything detection can check while it runs, since which chapter is the last one is unknown
+    /// until every pass has finished - so the check has to happen here, at the end, where the mark
+    /// is either written or not. What it catches is the word turning up in ordinary prose: "epilogue"
+    /// is a perfectly common noun, Italian "riepilogo" contains "epilogo", and the built-in phrase is
+    /// deliberately short enough to survive a recognizer's spelling.
+    /// </para>
+    /// <para>
+    /// Pure bookkeeping over marks already placed: no audio is consulted, so this needs neither a
+    /// decoder nor a recognizer to test. Internal for that reason, as
+    /// <see cref="DropNamedMarkEchoes"/> is.
+    /// </para>
+    /// <para>
+    /// Mid-book epilogue marks are not a hypothetical - a book in the test corpus has one - and the
+    /// answer for a book that really does divide itself that way is a <c>--custom</c> mapping, which
+    /// names whatever recurring element the user says it does, at whatever position. That is also
+    /// why a dropped mark is offered to those mappings first: the built-in phrase and a mapping can
+    /// match the same words, and a mapping that did would normally have produced a mark of its own
+    /// alongside this one - but not when it was passed over as a duplicate, or when the phrase that
+    /// matched belongs to a language whose mapping was compiled out. Where the mapping's own mark is
+    /// already there, this one is simply dropped: the announcement keeps its mark either way.
+    /// </para>
+    /// </summary>
+    /// <param name="named">The file's named marks, ascending in time.</param>
+    /// <param name="chapters">The file's chapters, ascending in time; empty under
+    /// <c>--ignore-chapter-numbers</c>, where the chapters are themselves named marks.</param>
+    /// <param name="profile">The file's language profile, supplying the <c>--custom</c> mappings a
+    /// dropped mark may still belong to.</param>
+    /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
+    /// <returns><paramref name="named"/> with the epilogue kept, converted or gone.</returns>
+    internal static List<DetectedMark> ResolveEpiloguePlacement(
+        List<DetectedMark> named, List<DetectedChapter> chapters, LanguageProfile profile,
+        Action<string>? log)
+    {
+        var index = named.FindIndex(m => m.Kind == NamedPhrase.EpilogueKind);
+        if (index < 0)
+            return named;
+
+        // Under --ignore-chapter-numbers the chapters live in the named list; either way, a file
+        // with no chapter at all has nothing for the epilogue to be after, so it is left alone.
+        var lastChapter = chapters.Count > 0
+            ? chapters[^1].TimeSeconds
+            : named.Where(m => m.Kind == profile.ChapterAnnouncement.Kind)
+                .Select(m => (double?)m.TimeSeconds).LastOrDefault();
+        var epilogue = named[index];
+        if (lastChapter is not { } last || epilogue.TimeSeconds > last)
+            return named;
+
+        var claimed = ClaimedByCustomMapping(epilogue, named, profile);
+        log?.Invoke(
+            $"the epilogue mark at {FormatTimestamp(epilogue.TimeSeconds)} does not follow the " +
+            $"book's last chapter (at {FormatTimestamp(last)}), so it is no epilogue" +
+            (claimed is { } custom
+                ? $" - keeping it as {custom.Kind} (\"{custom.Title}\")"
+                : $" - dropping it{(epilogue.Text.Length > 0 ? $" (heard as \"{epilogue.Text}\")" : "")}"));
+
+        var resolved = new List<DetectedMark>(named);
+        if (claimed is { } replacement)
+            resolved[index] = replacement;
+        else
+            resolved.RemoveAt(index);
+        return resolved;
+    }
+
+    /// <summary>
+    /// The <c>--custom</c> mark a rejected built-in announcement turns into, or null when no mapping
+    /// claims it. Matched against the transcript segment the announcement was heard in
+    /// (<see cref="DetectedMark.Text"/>), which is what the mappings were run against in the first
+    /// place - so a mark carried over from the file's existing markings, which was never heard at
+    /// all, can only ever be dropped.
+    /// </summary>
+    /// <param name="mark">The mark being rejected.</param>
+    /// <param name="named">Every named mark of the file, for the "a mapping already marked this
+    /// announcement" case.</param>
+    /// <param name="profile">The file's language profile, supplying the mappings.</param>
+    private static DetectedMark? ClaimedByCustomMapping(
+        DetectedMark mark, List<DetectedMark> named, LanguageProfile profile)
+    {
+        if (mark.Text.Length == 0 ||
+            named.Any(m => m.Kind.StartsWith(NamedPhrase.CustomKindPrefix, StringComparison.Ordinal) &&
+                           Math.Abs(m.PhraseTimeSeconds - mark.PhraseTimeSeconds) < NamedMarkDedupeSeconds))
+            return null;
+
+        foreach (var phrase in profile.NamedPhrases.Where(p => p.IsCustom))
+            if (phrase.Regex.Match(mark.Text) is { Success: true } match)
+                return mark with
+                {
+                    Kind = phrase.Kind,
+                    Title = phrase.ResolveTitle(match),
+                    Repeatable = true,
+                };
+        return null;
     }
 
     /// <summary>Result of <see cref="RunPass1Async"/>: every silence/VAD signal Pass 2 and Pass 3

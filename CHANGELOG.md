@@ -17,6 +17,21 @@ earn a round number.
 
 ### Changed
 
+- **The epilogue mark now has to follow the book's last chapter.** "Epilogue" is an
+  ordinary word, and a match sitting between two chapters was never the book's epilogue —
+  it was the word turning up in prose, or an omnibus part ending halfway through the file.
+  Such a mark is dropped, and `--verbose` says which one and why. If you do want a mark
+  there, `--custom` is bound by no position and can claim exactly the same announcements
+  (`--custom "/epilog/:Interlude"`); a mapping of yours that matches the same words even
+  inherits the dropped mark, so it stays where it was under your own title.
+
+- **The prologue and the epilogue now keep the announcement later in the book**, rather
+  than the one heard latest in the run. Both are written at most once per file, and the
+  later announcement wins because front matter tends to name what is coming before the
+  narrator announces it — but the recovery passes work backwards through a book's gaps
+  after the main scan, so a stray match early in the file could displace the real mark
+  found near the end.
+
 - **A detected prologue now implies that the book starts at chapter 1.** A first chapter
   numbered above 1 is normally trusted outright, because nothing tells a legitimate
   split-book part from a chapter the scan simply missed — but a book's prologue is in the

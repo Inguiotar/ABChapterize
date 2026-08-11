@@ -242,7 +242,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | --- | --- |
 | `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `/chapter/`, localized by `--lang`). May be written per language for a mixed batch: `"[fr]/chapitre/;[en]section"`, with one entry optionally left untagged as the fallback. The same syntax works for `--chapter-title`, `--intro-title`, `--prologue-phrase`, `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`. The value `none` (**experimental**) is for a book with no chapter phrase at all, which announces a chapter by speaking its number alone ("Seventeen.") — a number heard between two pauses is then the announcement, and a number inside a sentence is not. |
 | `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `/prolog/`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
-| `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after at least one numbered chapter, at most once per file; an empty value switches epilogue detection off. |
+| `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after the book's last numbered chapter, at most once per file; a match anywhere else is dropped (use `--custom` for a section between chapters). An empty value switches epilogue detection off. |
 | `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched at any point in the file as often as it occurs (up to 100 marks per file), but must be announced just as a chapter phrase must. Titles may reference the phrase's capturing groups as `$1`, `$2` or by name. Repeatable; never localized, though a mapping may open with a `[xx]` tag to restrict it to files in that language. |
 | `-U`, `--custom-file <path>` | Read `--custom` mappings from a text file, one per line (blank and `#` lines ignored). |
 | `-t`, `--chapter-title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
@@ -481,8 +481,10 @@ Alongside the numbered chapters, a "Prologue" and an "Epilogue" mark are
 detected the same way (localized by `--lang`, renamed with `--prologue-title`
 and `--epilogue-title`, re-worded with `--prologue-phrase` and
 `--epilogue-phrase`, switched off with an empty phrase). A prologue only counts
-before the first numbered chapter and an epilogue only after it, at most one of
-each per file.
+before the first numbered chapter and an epilogue only after the *last* one, at
+most one of each per file. For a section between two chapters — an omnibus whose
+inner parts each end with one, say — use `--custom`, which is bound by no
+position.
 
 A synthetic "Intro" mark (localized by `--lang`, customizable with
 `--intro-title`) covers everything before the first detected mark

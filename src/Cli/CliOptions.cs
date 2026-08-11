@@ -97,7 +97,9 @@ public sealed class CliOptions
     /// localized by --lang).</summary>
     public string PrologueTitle { get; private set; } = "Prologue";
 
-    /// <summary>Raw epilogue phrase or "/regexp/" (--epilogue-phrase / -g); empty switches epilogue
+    /// <summary>Raw epilogue phrase or "/regexp/" (--epilogue-phrase / -g), accepted only after the
+    /// book's last chapter (see
+    /// <see cref="ABChapterize.Detection.ChapterDetector.ResolveEpiloguePlacement"/>); empty switches epilogue
     /// detection off, as <see cref="ProloguePhrase"/> does for the prologue.</summary>
     public string EpiloguePhrase { get; private set; } = "epilogue";
 
@@ -1943,7 +1945,10 @@ public sealed class CliOptions
                                     switch prologue detection off.
           -g, --epilogue-phrase <p> Same for the epilogue (default: /epilog/, localized by
                                     --lang), mirrored: only accepted once at least one chapter
-                                    has been found. Pass an empty string to switch it off.
+                                    has been found, and only kept when it follows the book's
+                                    last one - a match between two chapters is prose, or an
+                                    inner part ending, and is dropped. Use --custom for a
+                                    section there. Pass an empty string to switch it off.
           -u, --custom <mappings>   Extra phrase-to-title mappings, "phrase:title" pairs separated
                                     by semicolons, e.g.
                                       --custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"

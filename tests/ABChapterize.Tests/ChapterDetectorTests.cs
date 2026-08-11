@@ -610,6 +610,108 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Epilogue_IsDropped_WhenItDoesNotFollowTheLastChapter()
+    {
+        // "epilogue" is an ordinary word, and a match between two chapters is prose rather than the
+        // book's epilogue - which by definition has no chapter after it.
+        var result = await DetectAsync(
+            Options("--max-jingle-length", "0"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Epilogue."));
+                s.Add(1800, Seg(0.4, " Chapter two."));
+            });
+
+        AssertChapters([new(1, 600.05), new(2, 1800.15)], result.Chapters);
+        Assert.Empty(result.NamedMarks);
+    }
+
+    [Fact]
+    public async Task Epilogue_KeepsTheAnnouncementLaterInTheFile_WhateverPassHeardItFirst()
+    {
+        // Pass 2 marks the real epilogue after the last chapter; pass 2.5 then re-probes the 1-3 gap
+        // with the upgrade model and hears "epilogue" inside chapter 2's prose. Later in the run,
+        // earlier in the book - and the book is what decides.
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--max-jingle-length", "0", "--model", "small", "--pass3-model", "turbo"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800), new(2395, 2400)],
+            pass2 =>
+            {
+                pass2.Add(600, Seg(0.3, " Chapter one."));
+                pass2.Add(1800, Seg(0.4, " Chapter three."));
+                pass2.Add(2400, Seg(0.2, " Epilogue."));
+            },
+            pass3 =>
+            {
+                pass3.Add(1200, Seg(0.2, " Chapter two, in which the epilogue is foretold."));
+                pass3.Add(1800, Seg(0.4, " Chapter three."));
+            });
+
+        // Chapter 2 proves pass 2.5 really read that window, so the mark below survived the match
+        // rather than the match never happening.
+        AssertChapters([new(1, 600.05), new(2, 1199.95), new(3, 1800.15)], result.Chapters);
+        AssertNamed([("epilogue", "Epilogue", 2399.95)], result);
+    }
+
+    [Fact]
+    public void ResolveEpiloguePlacement_HandsAMidBookEpilogueToACustomMapping()
+    {
+        // The mapping matches the same announcement but produced no mark of its own - its own
+        // placement can fail where the epilogue's succeeded, both being refined against their own
+        // phrase. The user asked for a mark on this word, so the mark becomes theirs.
+        var profile = Options("--custom", "/epilog/:Zwischenspiel").DefaultProfile;
+        var resolved = ChapterDetector.ResolveEpiloguePlacement(
+            [new("epilogue", "Epilogue", 1200, PhraseTimeSeconds: 1200.5, Text: "Epilogue.")],
+            [new DetectedChapter(1, 600), new DetectedChapter(2, 1800)], profile, null);
+
+        var mark = Assert.Single(resolved);
+        Assert.Equal("custom 1", mark.Kind);
+        Assert.Equal("Zwischenspiel", mark.Title);
+        Assert.Equal(1200, mark.TimeSeconds);
+        Assert.True(mark.Repeatable);
+    }
+
+    [Fact]
+    public void ResolveEpiloguePlacement_DropsAMidBookEpilogue_WhoseMappingAlreadyMarkedIt()
+    {
+        var profile = Options("--custom", "/epilog/:Zwischenspiel").DefaultProfile;
+        var resolved = ChapterDetector.ResolveEpiloguePlacement(
+            [
+                new("epilogue", "Epilogue", 1200, PhraseTimeSeconds: 1200.5, Text: "Epilogue."),
+                new("custom 1", "Zwischenspiel", 1200, PhraseTimeSeconds: 1200.5, Repeatable: true,
+                    Text: "Epilogue."),
+            ],
+            [new DetectedChapter(1, 600), new DetectedChapter(2, 1800)], profile, null);
+
+        Assert.Equal([("custom 1", "Zwischenspiel")], resolved.Select(m => (m.Kind, m.Title)));
+    }
+
+    [Fact]
+    public void ResolveEpiloguePlacement_KeepsAnEpilogueAfterTheLastChapter()
+    {
+        var resolved = ChapterDetector.ResolveEpiloguePlacement(
+            [new("epilogue", "Epilogue", 1900, Text: "Epilogue.")],
+            [new DetectedChapter(1, 600), new DetectedChapter(2, 1800)],
+            Options().DefaultProfile, null);
+
+        Assert.Equal("epilogue", Assert.Single(resolved).Kind);
+    }
+
+    [Fact]
+    public void ResolveEpiloguePlacement_LeavesAnEpilogueAlone_WhenNoChapterWasFound()
+    {
+        // Nothing for it to be after: with --ignore-chapter-numbers a chapterless named list is all
+        // there is, and dropping the one mark the file yielded would be its own kind of wrong.
+        var resolved = ChapterDetector.ResolveEpiloguePlacement(
+            [new("epilogue", "Epilogue", 1900, Text: "Epilogue.")], [],
+            Options().DefaultProfile, null);
+
+        Assert.Equal("epilogue", Assert.Single(resolved).Kind);
+    }
+
+    [Fact]
     public async Task NamedMarks_AreNotDetected_WhenTheirPhraseIsSwitchedOff()
     {
         var result = await DetectAsync(

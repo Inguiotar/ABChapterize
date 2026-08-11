@@ -50,9 +50,16 @@ internal static partial class PhraseMatching
     /// same time base - the smeared-segment span <see cref="JingleGeometry.ResolveJingleAnchor"/>
     /// needs, exactly as for <see cref="PhraseMatch.PhraseEndSeconds"/>.</param>
     /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
+    /// <param name="Text">The transcript segment the match was found in, whitespace-normalized -
+    /// what a phrase other than this one would have had to match to claim the same announcement.
+    /// Carried because a built-in epilogue dropped for sitting mid-book is offered to the
+    /// <c>--custom</c> mappings before it is discarded, and by then the transcript is long gone (see
+    /// <see cref="ChapterDetector.ResolveEpiloguePlacement"/>). The segment rather than the whole
+    /// window: a window runs to half a minute of narration, and a mapping matching somewhere in
+    /// <em>that</em> says nothing about this announcement.</param>
     internal readonly record struct NamedMatch(
         NamedPhrase Phrase, string Title,
-        double PhraseStartSeconds, double PhraseEndSeconds, double Confidence);
+        double PhraseStartSeconds, double PhraseEndSeconds, double Confidence, string Text = "");
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -295,7 +302,8 @@ internal static partial class PhraseMatching
             var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
             yield return new NamedMatch(
                 profile.ChapterAnnouncement, title,
-                segment.StartSeconds, segment.EndSeconds, segment.Probability);
+                segment.StartSeconds, segment.EndSeconds, segment.Probability,
+                NormalizeWhitespace(segment.Text));
         }
     }
 
@@ -323,7 +331,8 @@ internal static partial class PhraseMatching
                 var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
                 yield return new NamedMatch(
                     phrase, phrase.ResolveTitle(m),
-                    segment.StartSeconds, segment.EndSeconds, segment.Probability);
+                    segment.StartSeconds, segment.EndSeconds, segment.Probability,
+                    NormalizeWhitespace(segment.Text));
             }
         }
     }

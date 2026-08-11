@@ -496,6 +496,17 @@ and within that window the last occurrence wins — front matter frequently list
 what is coming ("read by …, contains a prologue") before the narrator actually
 announces it.
 
+The epilogue is held to one more rule, checked once at the very end of the
+file: it has to **follow the book's last chapter**. Nothing else can be an
+epilogue — a match between two chapters is the word turning up in prose, or an
+inner part of an omnibus ending, and either way the mark would be wrong. Such a
+mark is dropped, and `--verbose` says so. If your books really do have a section
+there and you want it marked, that is what `--custom` is for: a mapping like
+`--custom "/epilog/:Zwischenspiel"` claims exactly the same announcements and is
+bound by no position at all. A mapping of yours that matches the same words as
+the built-in phrase also inherits a dropped epilogue mark, so the mark stays
+where it was under your own title.
+
 Nothing is required of what *follows* the announcement: narrators routinely
 read straight on from "Epilogue" into the epilogue's first sentence.
 
@@ -1084,7 +1095,8 @@ Two things are worth knowing before reaching for it:
   prologue detection off.
 
 `-g`, `--epilogue-phrase <p>`
-: The same for the epilogue (default: `/epilog/`, localized by `--lang`),
+: The same for the epilogue, which is additionally required to follow the
+  book's last chapter (default: `/epilog/`, localized by `--lang`),
   only accepted once at least one chapter has been found. An empty string
   switches epilogue detection off.
 
