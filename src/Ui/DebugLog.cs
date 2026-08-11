@@ -166,7 +166,7 @@ public sealed class DebugLog : IDisposable
                      (o.NamedMarkDistanceSeconds > 0 ? $"{o.NamedMarkDistanceSeconds:0.##} s" : "off");
         yield return $"noise-floor {(o.AutoNoiseFloor ? "auto" : $"{o.NoiseFloorDb:0.#} dBFS")}";
         yield return $"min-silence-length {DescribeMinSilence(o)}, " +
-                     $"max-jingle-length {(o.AutoMaxJingle ? $"auto (ceiling {o.MaxJingleSeconds:0.#} s)" : $"{o.MaxJingleSeconds:0.#} s")}, " +
+                     $"max-jingle-length {o.MaxJingleSeconds:0.#} s, " +
                      $"mark-lead {o.MarkLeadSeconds:0.##} s";
         yield return $"vad-pre-pass {(o.RunVadPrePass ? "on" : "off")}, " +
                      $"mark-refinement {(o.PreciseMark ? "on" : "off (--quick-marks)")}, " +

@@ -65,8 +65,6 @@ internal sealed record ProbeEnvironment(
 /// <param name="Work">Progress tracker for the phase/byte accounting.</param>
 /// <param name="BytesPerSecond">The file's average bytes per second of play time, used to
 /// convert probed play time into the byte-based progress the bar counts in.</param>
-/// <param name="JingleCeilingSeconds">Probe window length ceiling: --max-jingle-length plus
-/// <see cref="PhraseMarginSeconds"/>, never exceeded even while the window self-tightens.</param>
 /// <param name="AllSilences">Every silence Pass 1 retained, down to
 /// <see cref="MinStoredSilenceSeconds"/> - seam snapping and mark anchoring, not candidates.</param>
 /// <param name="Silences">The silences that become probe candidates: the subset at or above
@@ -96,7 +94,7 @@ internal sealed record ProbeEnvironment(
 /// 14. A re-probe is now the <em>best</em> place to question a number, since it alone knows both
 /// ends of the hole it is filling (see <see cref="RegionProber.SequenceBounds"/>).</param>
 internal readonly record struct Pass2Context(
-    string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond, double JingleCeilingSeconds,
+    string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond,
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
     List<SpeechSegment> SpeechSegments, List<Jingle> Jingles, double EarlyAbortSeconds,
     int? ExpectedStartChapter, ITranscriber Transcriber, bool SecondGuessNumbers = true);
@@ -140,9 +138,10 @@ internal readonly record struct ProbeCandidate(
 }
 
 /// <summary>
-/// What made a place a Pass 2 candidate. Three of the four classes the primary scan reasons about;
-/// the fourth - a pause with a jingle right behind it - never becomes a candidate at all, so it has
-/// no value here (see <see cref="RegionProber.BuildClassifiedCandidates"/>).
+/// What made a place a Pass 2 candidate. Three of the four shapes the primary scan reasons about;
+/// the fourth - a pause with a jingle right behind it - never becomes a candidate for it at all, so
+/// it has no value here (see <see cref="RegionProber.CandidatesIn"/>, where a recovery pass keeps
+/// exactly that shape as an ordinary silence).
 /// </summary>
 internal enum CandidateClass
 {
@@ -182,15 +181,8 @@ internal readonly record struct WindowPlan(
 /// next time something wants to know where a mark landed.</param>
 /// <param name="Confidence">Whisper's confidence for the segment the phrase was found in, which
 /// decides whether this mark settles its whole overlapping window sequence.</param>
-/// <param name="ReachSeconds">How far into its window the announcement <em>ended</em>, i.e. the
-/// window width this mark actually required. Distinct from the jingle length
-/// <see cref="RegionProber.ObserveJingleLength"/> measures: that one is anchored to the silence or
-/// region the mark fell into and says how long this book's jingles run, while this is measured from
-/// the candidate the window started at and says how far a window from that candidate has to reach
-/// before the phrase is complete. The two diverge exactly when the mark's anchor is not the
-/// candidate that triggered the probe.</param>
 internal readonly record struct ProbeMark(
-    int Number, Silence? ThresholdSilence, double Confidence, double ReachSeconds);
+    int Number, Silence? ThresholdSilence, double Confidence);
 
 /// <summary>
 /// Runs Pass 2 candidate probing for a single <see cref="DetectionRegion"/>, appending every
@@ -246,24 +238,19 @@ internal sealed class RegionProber
     /// </summary>
     private readonly double _progressOffsetSeconds;
 
-    /// <summary>Current probe window length. Starts at the ceiling with --max-jingle-length, at
-    /// <see cref="PlainProbeSeconds"/> without it, and follows <see cref="_adaptedWindowSeconds"/>
-    /// from the first qualifying jingle observation on.</summary>
-    private double _probeSeconds;
-
-    /// <summary>With --max-jingle-length auto, the adapted probe window:
-    /// <see cref="JingleObservationSafetyFactor"/> times the longest real inter-chapter jingle
-    /// observed so far in this region, plus <see cref="PhraseMarginSeconds"/>, held between
-    /// <see cref="MinAdaptiveProbeSeconds"/> and the ceiling. Null until the first qualifying
-    /// observation; monotonically increasing from then on
-    /// (see <see cref="JingleObservationSafetyFactor"/>).</summary>
-    private double? _adaptedWindowSeconds;
-
-    /// <summary>True while the sequence-gap recovery re-probes skipped candidates at the full
-    /// ceiling window: observations made during the re-probe still feed
-    /// <see cref="_adaptedWindowSeconds"/>, but must not pull <see cref="_probeSeconds"/> back down
-    /// mid-re-probe - the whole point of the reset is that every re-probe runs at the ceiling.</summary>
+    /// <summary>
+    /// True while the sequence-gap recovery re-probes the stretch since the last mark. It makes that
+    /// stretch's candidates a recovery pass's (see <see cref="Recovering"/>) and stops the decodes
+    /// reading ahead (see <see cref="ExtendToPlannedSeam"/>), both for the same reason: what a
+    /// second look is worth is its own framing, and anything shared with the first look throws that
+    /// away.
+    /// </summary>
     private bool _reprobing;
+
+    /// <summary>Where the last accepted mark's own candidate expected its announcement, or null
+    /// before this region has one. The lower bound of a sequence-gap re-probe: the stretch worth a
+    /// second look begins behind the last chapter found, not at the window that found it.</summary>
+    private double? _lastMarkExpectAt;
 
     /// <summary>
     /// While the sequence-gap recovery re-probes, the chapter number that closes the gap - the mark
@@ -353,15 +340,13 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Candidates actually probed since the last accepted mark, each with the window end it was
-    /// probed with. A sequence gap re-probes the subset whose window has since been narrowed by
-    /// --max-jingle-length auto (see <see cref="WiderWindowWouldReach"/>), because a window sized
-    /// off the jingles seen so far can end before an unusually late announcement and come back empty
-    /// from audio that does hold the missing chapter - the same suspicion the ceiling reset already
-    /// applied to <see cref="_skippedSinceLastMark"/>, which has no reason to stop at candidates
-    /// that were never probed. Recording the end each window really got (rather than recomputing it)
-    /// is what keeps the re-probe from re-running windows at a width they already had.
+    /// probed with. Together with <see cref="_skippedSinceLastMark"/> this bounds the stretch a
+    /// sequence gap sends back for a second look: whether a candidate there was probed or passed
+    /// over makes no difference to a pass that rebuilds and re-frames the whole stretch anyway (see
+    /// <see cref="ReprobeGapCandidatesAsync"/>), so what is wanted from both lists is only how far
+    /// back "since the last mark" reaches.
     /// </summary>
-    private readonly List<(ProbeCandidate Candidate, double WindowEnd)> _probedSinceLastMark = [];
+    private readonly List<ProbeCandidate> _probedSinceLastMark = [];
 
     /// <summary>The file's language resolution, settled before Pass 2 started and read-only from
     /// here - see <see cref="LanguageResolver"/>.</summary>
@@ -421,14 +406,30 @@ internal sealed class RegionProber
     private readonly bool _sweeping;
 
     /// <summary>
-    /// Whether this prober classifies its candidates and sizes each window to what that class
-    /// expects (see <see cref="BuildClassifiedCandidates"/>), which is the primary scan's job alone.
-    /// Every recovery pass - the sequence-gap re-probe, the sub-floor sweep, pass 2.5 - keeps the
-    /// older shared-window behaviour on purpose: each of them exists because the primary scan's
-    /// expectations already came up empty somewhere, so re-applying those same expectations is
-    /// exactly what a second look must not do.
+    /// Whether this prober is a recovery pass - pass 2.5, a sub-floor sweep, or (per probe, via
+    /// <see cref="_reprobing"/>) Pass 2's own sequence-gap re-probe - rather than the primary scan.
+    /// It changes two things about the candidates and nothing else:
+    /// <list type="bullet">
+    /// <item><description>the candidate <em>set</em> is the union - every silence and every jingle,
+    /// with none of the primary scan's suppressions. <see cref="BuildCandidates"/> drops a silence
+    /// falling inside a jingle's span on the census's word about where that jingle's announcement
+    /// is, and a pass that exists <em>because</em> the primary scan failed here is the wrong place
+    /// to keep taking that word;</description></item>
+    /// <item><description>the window <em>geometry</em> is the classification's, trimmed - see
+    /// <see cref="RecoveryLeadInTrimSeconds"/> for why a second look reads the same places in a
+    /// different framing rather than in a wider one.</description></item>
+    /// </list>
+    /// <para>
+    /// A --verify gap region is deliberately not one of these: nothing in this run has read that
+    /// audio yet, so it gets the primary scan's own framing exactly as a fresh file would.
+    /// </para>
     /// </summary>
-    private readonly bool _classified;
+    private readonly bool _recovery;
+
+    /// <summary>Whether the candidates being built right now are a recovery pass's: this prober's
+    /// own kind, or - inside Pass 2's sequence-gap re-probe - the stretch that re-probe rebuilds.
+    /// Both want the same union set and the same trimmed framing, for the same reason.</summary>
+    private bool Recovering => _recovery || _reprobing;
 
     /// <summary>Creates a prober for one region.</summary>
     /// <param name="env">The detector-owned tools and callbacks to probe with.</param>
@@ -441,12 +442,12 @@ internal sealed class RegionProber
     /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
     /// <param name="sweepingSubFloorSilences">Whether this is a Pass 2.5 sub-floor sweep; see
     /// <see cref="_sweeping"/>.</param>
-    /// <param name="classifyCandidates">Whether to size windows from the candidate classification;
-    /// see <see cref="_classified"/>. False for every recovery pass.</param>
+    /// <param name="recovery">Whether this is a recovery pass rather than the primary scan; see
+    /// <see cref="_recovery"/>.</param>
     internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
         double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false,
-        bool classifyCandidates = true)
+        bool recovery = false)
     {
         _env = env;
         _ctx = ctx;
@@ -457,8 +458,7 @@ internal sealed class RegionProber
         _language = language;
         _progressOffsetSeconds = progressOffsetSeconds;
         _sweeping = sweepingSubFloorSilences;
-        _classified = classifyCandidates && !sweepingSubFloorSilences;
-        _probeSeconds = env.Options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : PlainProbeSeconds;
+        _recovery = recovery || sweepingSubFloorSilences;
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
         _threshold = env.Options.MinSilenceSeconds;
@@ -492,9 +492,12 @@ internal sealed class RegionProber
                 break;
 
             // Recorded after the marks are applied, so it lands in the list that survives them: this
-            // window is history for whatever gap a *later* mark reveals, never for its own.
+            // window is history for whatever gap a *later* mark reveals, never for its own - and
+            // the same reasoning bounds that later re-probe below, at this mark's own announcement.
             await ApplyProbeMarksAsync(probeMarks, ct);
-            _probedSinceLastMark.Add((candidate, plan.End));
+            _probedSinceLastMark.Add(candidate);
+            if (probeMarks.Count > 0)
+                _lastMarkExpectAt = candidate.ExpectAt;
             ci = SkipSettledWindows(candidates, ci, plan.End, probeMarks);
         }
     }
@@ -527,112 +530,117 @@ internal sealed class RegionProber
     /// </para>
     /// </summary>
     private List<ProbeCandidate> BuildCandidates()
-        => _classified ? BuildClassifiedCandidates() : BuildLegacyCandidates();
-
-    /// <summary>
-    /// The candidate list the recovery passes use: every silence and every silence-less VAD region,
-    /// each probed with the pass's shared window. Kept unchanged from before the classification
-    /// because a recovery pass is looking for what the primary scan's expectations already failed to
-    /// find, so reasoning from those same expectations is the one thing it must not do.
-    /// </summary>
-    private List<ProbeCandidate> BuildLegacyCandidates()
     {
         var candidates = _sweeping
             ? []
-            : new List<ProbeCandidate> { new(_region.FromSeconds, null, null) };
-        candidates.AddRange(_ctx.Silences
-            .Where(s => s.EndSeconds >= _region.FromSeconds && s.EndSeconds < _region.ToSeconds - 1)
-            .Select(s => new ProbeCandidate(s.EndSeconds, s, null, Class: CandidateClass.Silence)));
-        if (_env.Vad == null || _sweeping)
-            return candidates;
-
-        foreach (var vadRegion in _ctx.NonSpeechRegions)
-        {
-            var jingleStart = JingleStart(vadRegion, _ctx.Silences, _ctx.SpeechSegments);
-            if (jingleStart != vadRegion.StartSeconds)
-                continue;
-            if (jingleStart < _region.FromSeconds || jingleStart >= _region.ToSeconds)
-                continue;
-            var length = vadRegion.EndSeconds - jingleStart;
-            if (length < MinJingleObservationSeconds || length > _ctx.JingleCeilingSeconds)
-                continue;
-            // Jingle, never JingleEmbedded: a recovery pass has no census entry to read a bridged
-            // blip out of, and the distinction would buy it nothing anyway - its window is the
-            // pass's shared one, which spans the music either way.
-            candidates.Add(new ProbeCandidate(
-                jingleStart, null, vadRegion, Class: CandidateClass.Jingle));
-        }
+            : new List<ProbeCandidate> { RegionStartCandidate() };
+        candidates.AddRange(CandidatesIn(_region.FromSeconds, _region.ToSeconds));
+        // A jingle candidate opens after its own music, so the list is no longer in silence order.
         return candidates.OrderBy(c => c.Start).ToList();
     }
 
     /// <summary>
-    /// The primary scan's candidate list, where what made a place a candidate also decides where its
-    /// window opens and where in it the announcement is expected. Four shapes, and the classification
-    /// is the whole point - one window shape for all of them is what forced every probe to be as long
-    /// as this book's longest jingle:
+    /// The candidates of one stretch of the region, where what made a place a candidate also decides
+    /// where its window opens and where in it the announcement is expected. Four shapes, and the
+    /// classification is the whole point - one window shape for all of them is what forced every
+    /// probe to be as long as this book's longest jingle:
     /// <list type="bullet">
-    /// <item>a silence with a jingle right behind it is <em>not</em> a candidate: the jingle below
-    /// covers the same transition and knows where its speech resumes, so probing the silence would
-    /// spend a window on the music;</item>
+    /// <item>a silence with a jingle right behind it is <em>not</em> a candidate for the primary
+    /// scan: the jingle below covers the same transition and knows where its speech resumes, so
+    /// probing the silence would spend a window on the music. A recovery pass keeps it, on the
+    /// grounds that the census's word about that transition is exactly what has just failed;</item>
     /// <item>a silence with no jingle behind it expects the announcement immediately after it -
     /// which is what a chapter break without music sounds like;</item>
     /// <item>a jingle expects it where speech resumes (<see cref="Jingle.AnnouncementSeconds"/>),
     /// with the window opening a <see cref="JingleLeadInSeconds"/> run-up earlier inside the music;</item>
-    /// <item>a jingle a VAD blip sits inside gets its whole span probed instead, because that blip
-    /// is the one evidence available that the announcement is spoken <em>over</em> the music rather
-    /// than after it.</item>
+    /// <item>a jingle whose announcement may be spoken over the music instead gets that music read
+    /// afterwards, in tiles - see <see cref="JingleCandidate"/>.</item>
     /// </list>
     /// <para>
     /// Both lead-ins are clamped to non-speech - into the silence, into the music - and never reach
     /// back into the previous narration: <see cref="SilenceLeadInSeconds"/> says why that matters.
+    /// A recovery pass trims both ends of every window; see <see cref="RecoveryLeadInTrimSeconds"/>.
     /// </para>
     /// </summary>
-    private List<ProbeCandidate> BuildClassifiedCandidates()
+    /// <param name="fromSeconds">Start of the stretch; a candidate's own anchor must reach it.</param>
+    /// <param name="toSeconds">End of the stretch, bar its last second - a window from there would be
+    /// clamped to under a second of audio, too little to hold an announcement and enough to cost a
+    /// Whisper pass finding that out. A window can never decode past the region end regardless (see
+    /// <see cref="GapPlanning.PlanWindowEnd"/>'s duration clamp), so nothing else is needed for
+    /// containment.</param>
+    private List<ProbeCandidate> CandidatesIn(double fromSeconds, double toSeconds)
     {
-        var candidates = new List<ProbeCandidate> { RegionStartCandidate() };
-        var jingles = JinglesInRegion();
+        var candidates = new List<ProbeCandidate>();
+        var jingles = _sweeping ? [] : JinglesInRegion(fromSeconds, toSeconds);
+
         foreach (var jingle in jingles)
             candidates.Add(JingleCandidate(jingle));
+        var leadIn = Recovering ? SilenceLeadInSeconds - RecoveryLeadInTrimSeconds : SilenceLeadInSeconds;
         foreach (var silence in _ctx.Silences)
         {
-            if (silence.EndSeconds < _region.FromSeconds || silence.EndSeconds >= _region.ToSeconds - 1)
+            if (silence.EndSeconds < fromSeconds || silence.EndSeconds >= toSeconds - 1)
                 continue;
             // A silence that ends anywhere between a jingle's first note and the speech behind it -
             // its lead-in hush, a dip in the middle of the music, the hush after it - is part of
             // that transition rather than one of its own. Everything a window from here would hear
             // is the jingle's, and the jingle candidate hears it from a better place.
-            if (jingles.Any(j =>
+            if (!Recovering && jingles.Any(j =>
                     silence.EndSeconds >= j.StartSeconds - JinglePhraseMatchToleranceSeconds &&
                     silence.EndSeconds < j.AnnouncementSeconds))
                 continue;
+            var start = Math.Max(silence.StartSeconds, silence.EndSeconds - leadIn);
             candidates.Add(new ProbeCandidate(
-                Math.Max(silence.StartSeconds, silence.EndSeconds - SilenceLeadInSeconds), silence, null,
+                start, silence, null,
                 ExpectAtSeconds: silence.EndSeconds,
-                WindowSeconds: silence.EndSeconds - Math.Max(silence.StartSeconds,
-                                   silence.EndSeconds - SilenceLeadInSeconds) + ExpectedAnnouncementSeconds,
+                WindowSeconds: silence.EndSeconds - start + ReachSeconds,
                 Class: CandidateClass.Silence));
         }
-        // A jingle candidate opens after its own music, so the list is no longer in silence order.
-        return candidates.OrderBy(c => c.Start).ToList();
+        return candidates;
     }
+
+    /// <summary>How far past its expected announcement a window of this pass reaches; see
+    /// <see cref="RecoveryReachTrimSeconds"/> for why a recovery pass reaches less far.</summary>
+    private double ReachSeconds
+        => Recovering ? ExpectedAnnouncementSeconds - RecoveryReachTrimSeconds : ExpectedAnnouncementSeconds;
+
+    /// <summary>
+    /// What one probe of a recovery pass covers - a trimmed lead-in plus a trimmed reach, i.e. the
+    /// widest window a pass of silence candidates can ask for. The recovery sweeps budget themselves
+    /// in Whisper decode windows and need a per-probe cost to do it with; naming it here keeps that
+    /// cost tied to the geometry it is actually measuring rather than to a constant of its own.
+    /// </summary>
+    internal static double RecoveryProbeSeconds
+        => SilenceLeadInSeconds - RecoveryLeadInTrimSeconds +
+           ExpectedAnnouncementSeconds - RecoveryReachTrimSeconds;
 
     /// <summary>The region's own start, which is a candidate in its own right: a book whose first
     /// chapter is announced in the opening seconds has no silence in front of it to trigger one.</summary>
     private ProbeCandidate RegionStartCandidate()
         => new(_region.FromSeconds, null, null,
-            ExpectAtSeconds: _region.FromSeconds, WindowSeconds: ExpectedAnnouncementSeconds);
+            ExpectAtSeconds: _region.FromSeconds, WindowSeconds: ReachSeconds);
 
     /// <summary>
     /// This region's jingles, one per announcement. The census splits a jingle its music dipped
     /// below the noise floor in the middle into two entries sharing that announcement; probing both
     /// would decode the same transition twice, so the earliest entry stands for the whole run - it
-    /// also carries the earliest start, which is what the blip-spanning window needs.
+    /// also carries the earliest start, which is what the music tiling needs.
+    /// <para>
+    /// A recovery pass picks its jingles by where their <em>announcement</em> falls rather than
+    /// where their music starts: the stretch it is re-reading is bounded by two chapter marks, so a
+    /// transition belongs to it when the announcement does, however far back the music reaches.
+    /// The primary scan keeps selecting by the music, where the bound is a whole region and the two
+    /// answers differ only for a jingle straddling its edge.
+    /// </para>
     /// </summary>
-    private List<Jingle> JinglesInRegion()
+    /// <param name="fromSeconds">Start of the stretch the jingles must belong to.</param>
+    /// <param name="toSeconds">End of that stretch.</param>
+    private List<Jingle> JinglesInRegion(double fromSeconds, double toSeconds)
         => _env.Vad == null
             ? []
             : _ctx.Jingles
-                .Where(j => j.StartSeconds >= _region.FromSeconds && j.StartSeconds < _region.ToSeconds)
+                .Select(j => (Jingle: j, At: Recovering ? j.AnnouncementSeconds : j.StartSeconds))
+                .Where(j => j.At >= fromSeconds && j.At < toSeconds)
+                .Select(j => j.Jingle)
                 .GroupBy(j => j.AnnouncementSeconds)
                 .Select(g => g.OrderBy(j => j.StartSeconds).First())
                 .OrderBy(j => j.StartSeconds)
@@ -659,12 +667,19 @@ internal sealed class RegionProber
     /// paid for at all - and where it is, it reads the music in framings the recognizer can
     /// actually hear a word in.
     /// </para>
+    /// <para>
+    /// A recovery pass reads the music of <em>every</em> jingle that way, blip or no blip: the blip
+    /// is the census's evidence, and a pass running because the census's transition failed to yield
+    /// anything is the wrong place to keep asking it. It still costs nothing where the speech window
+    /// answers, that being the order the two looks run in.
+    /// </para>
     /// </summary>
     /// <param name="jingle">The jingle to probe around.</param>
     private ProbeCandidate JingleCandidate(Jingle jingle)
     {
-        var spans = jingle.BridgedBlips > 0;
-        var start = Math.Max(jingle.StartSeconds, jingle.AnnouncementSeconds - JingleLeadInSeconds);
+        var spans = Recovering || jingle.BridgedBlips > 0;
+        var leadIn = Recovering ? JingleLeadInSeconds - RecoveryLeadInTrimSeconds : JingleLeadInSeconds;
+        var start = Math.Max(jingle.StartSeconds, jingle.AnnouncementSeconds - leadIn);
         // The merged VAD region this jingle sits in, when there is one: ResolveAnnouncementMark
         // prefers the candidate's own region over any other when the phrase falls inside it, and a
         // jingle candidate without it would lose that preference to a neighbouring region.
@@ -675,7 +690,7 @@ internal sealed class RegionProber
             .FirstOrDefault();
         return new ProbeCandidate(start, null, region,
             ExpectAtSeconds: jingle.AnnouncementSeconds,
-            WindowSeconds: jingle.AnnouncementSeconds - start + ExpectedAnnouncementSeconds,
+            WindowSeconds: jingle.AnnouncementSeconds - start + ReachSeconds,
             Class: CandidateClass.Jingle,
             // Only where the music actually reaches back past the run-up: a jingle shorter than
             // that is already inside this window, and tiling it would re-read what was just read.
@@ -687,20 +702,18 @@ internal sealed class RegionProber
     /// window's probe runs, rather than pre-planned in bulk: an overlapping neighbor gets the shared
     /// border snapped to a silence mid-point, which moves this window's decode end itself - possibly
     /// past its natural end - rather than merely choosing where to stop reusing cache after the
-    /// fact. Deciding per window also keeps every end consistent with the
-    /// <see cref="_probeSeconds"/> in effect at that moment, with no stale bulk plan to drift from
-    /// what earlier probes actually decoded.
+    /// fact. Deciding per window also keeps every end consistent with the candidate list actually
+    /// being walked, with no stale bulk plan to drift from what earlier probes decoded.
     /// </summary>
-    /// <param name="list">The candidate sequence being walked - the region's own, or the skipped
-    /// subset a sequence-gap re-probe forms.</param>
+    /// <param name="list">The candidate sequence being walked - the region's own, or the one a
+    /// sequence-gap re-probe rebuilds for the stretch since the last mark.</param>
     /// <param name="index">Index within <paramref name="list"/>.</param>
     private double WindowEndFor(IReadOnlyList<ProbeCandidate> list, int index)
         => PlanWindowEnd(list[index].Start,
             index + 1 < list.Count ? list[index + 1].Start : null,
-            // A classified candidate carries its own width; the shared window is what everything
-            // else uses, and what a gap re-probe deliberately falls back to even here (see
-            // ReprobeGapCandidatesAsync, which widens to the ceiling for exactly that reason).
-            _reprobing ? _probeSeconds : list[index].WindowSeconds ?? _probeSeconds,
+            // Every candidate carries the width its own class asks for, recovery ones included, so
+            // the bare reach is only ever the fallback for one built without a class at all.
+            list[index].WindowSeconds ?? ReachSeconds,
             _region.ToSeconds, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
 
     /// <summary>
@@ -787,12 +800,8 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Whether this candidate is passed over without a probe: its silence falls below the
-    /// --min-silence-length auto threshold, or its VAD region has since grown too long for the
-    /// probe window. A VAD candidate qualified against the window at merge time, but that window
-    /// can since have narrowed (--max-jingle-length auto) once a baseline is known - rechecking
-    /// here keeps probing skipping regions too long to be this book's jingle, same as the
-    /// merge-time filter intends after the baseline exists. Either way the candidate is remembered
-    /// for a possible sequence-gap re-probe.
+    /// --min-silence-length auto threshold. The candidate is remembered either way, so a sequence
+    /// gap can put the whole stretch back in question.
     /// <para>
     /// A sub-floor sweep skips nothing: its candidate list <em>is</em> the set it means to probe
     /// (see <see cref="_sweeping"/>).
@@ -803,14 +812,8 @@ internal sealed class RegionProber
     {
         if (_sweeping)
             return false;
-        var belowThreshold = _env.Options.AutoMinSilence && candidate.Silence is { } silence &&
-                             silence.EndSeconds - silence.StartSeconds < _threshold;
-        // Only where the window is the pass's shared one and can therefore have narrowed since the
-        // candidate qualified. A classified candidate's window is cut to its own jingle, so there is
-        // nothing left for it to outgrow.
-        var vadTooLong = !_classified && candidate.VadRegion is { } vadRegion &&
-                         vadRegion.EndSeconds - candidate.Start > _probeSeconds;
-        if (!belowThreshold && !vadTooLong)
+        if (!_env.Options.AutoMinSilence || candidate.Silence is not { } silence ||
+            silence.EndSeconds - silence.StartSeconds >= _threshold)
             return false;
         _skippedSinceLastMark.Add(candidate);
         return true;
@@ -845,8 +848,8 @@ internal sealed class RegionProber
     /// anchor for the phrase-timing rule and for progress, both of which are relative to the
     /// triggering silence rather than to whatever seam the window plan chose.</param>
     /// <param name="plan">The window to probe: its <em>planned</em> end (see
-    /// <see cref="WindowEndFor"/>), possibly snapped away from the natural start plus
-    /// <see cref="_probeSeconds"/>, and the candidates that follow it, which only the decode's
+    /// <see cref="WindowEndFor"/>), possibly snapped away from the natural end its own class asked
+    /// for, and the candidates that follow it, which only the decode's
     /// read-ahead looks at (see <see cref="ExtendToPlannedSeam"/>). Everything below this scans the
     /// planned window and nothing beyond it, whatever the decode read.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -1053,14 +1056,11 @@ internal sealed class RegionProber
     private async Task<List<ProbeMark>> RereadInOnePassAsync(
         ProbeCandidate candidate, double start, double windowEnd, CancellationToken ct)
     {
-        // Only where the width being complained about is the classification's own plan. A recovery
-        // pass and a gap re-probe hand every candidate the pass's shared, deliberately wide window
-        // (WindowSeconds null, see WindowEndFor), and narrowing that back to a single pass is the
-        // exact opposite of the reframing they widened it for - besides buying a second decode on
-        // every empty candidate of the passes that already cost the most.
-        if (!candidate.IsJingle || _reprobing || candidate.WindowSeconds is null)
-            return [];
-        if (windowEnd - start <= JingleRereadWindowSeconds)
+        // A recovery pass's windows are trimmed to well inside a single pass already (see
+        // RecoveryLeadInTrimSeconds), so the width test below is what keeps this off them rather
+        // than a flag of its own: what they need is a different framing, and a narrower window from
+        // the same start is not one.
+        if (!candidate.IsJingle || windowEnd - start <= JingleRereadWindowSeconds)
             return [];
         var to = start + JingleRereadWindowSeconds;
         // A jingle long enough to push its own expectation out of the shortened window is not this
@@ -1990,67 +1990,7 @@ internal sealed class RegionProber
                          $"){LowConfidenceNote(match.Confidence)}" +
                          MissingNote(missingNumbers));
 
-        // ObserveJingleLength gets the real anchor either way: it is measuring the jingle, which is
-        // exactly the quantity a jingle candidate's mark does know something about.
-        ObserveJingleLength(phraseAbs, start, markSilence, markRegion);
-        // start is the candidate's own position (see ProbeAsync), so the window-relative phrase end
-        // is already the reach measured from the candidate.
-        return new ProbeMark(
-            number, ThresholdSilenceFor(candidate, markSilence), match.Confidence,
-            match.PhraseEndSeconds);
-    }
-
-    /// <summary>
-    /// Feeds the jingle length this mark just revealed into the --max-jingle-length auto window
-    /// sizing. Only from the second mark found overall (including any seeded, already-confirmed
-    /// ones) on, so the anchor is a real inter-chapter jingle - not the intro-to-chapter-1 gap,
-    /// which can easily run longer (or shorter) than a book's regular jingles and would otherwise
-    /// size the window off a one-off observation before any real jingle has even been seen. Same
-    /// reasoning as the --min-silence-length auto tightening in <see cref="TightenThreshold"/>.
-    /// <para>
-    /// The length is measured from the silence or region the mark actually falls into: the raw
-    /// offset from this probe's window start would inflate the observation whenever a false, earlier
-    /// in-text pause triggered the probe. With a VAD region as anchor (no leading silence) it runs
-    /// from the region start to the phrase, clipped at the region end - the announcement is often
-    /// spoken inside the jingle, and the region end can itself be inflated when
-    /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/>'s short-speech-gap merge swallowed it;
-    /// either way the phrase bounds the jingle.
-    /// </para>
-    /// </summary>
-    /// <param name="phraseAbs">Absolute phrase start time.</param>
-    /// <param name="start">Absolute start of the probe window, the last-resort anchor.</param>
-    /// <param name="markSilence">The silence the mark fell into, if any.</param>
-    /// <param name="markRegion">The VAD jingle region the mark fell into, if any.</param>
-    private void ObserveJingleLength(
-        double phraseAbs, double start, Silence? markSilence, NonSpeechRegion? markRegion)
-    {
-        if (_env.Vad == null || !_env.Options.AutoMaxJingle || _found.Count <= 1)
-            return;
-
-        var observedLength = markSilence is { } silence
-            ? phraseAbs - silence.EndSeconds
-            : markRegion is { } region
-                ? Math.Min(region.EndSeconds, phraseAbs) - region.StartSeconds
-                : phraseAbs - start;
-        if (observedLength < MinJingleObservationSeconds)
-            return;
-
-        // The window this observation asks for; the adapted window is the running maximum of these
-        // (monotonically increasing - see JingleObservationSafetyFactor), capped at the ceiling so
-        // an outlier can never widen the window past what --max-jingle-length allows. During a gap
-        // re-probe only the maximum moves; _probeSeconds stays at the ceiling until it is done.
-        // The floor sits inside the ceiling, so a deliberately small --max-jingle-length is still
-        // honoured to the second - it is the *automatic* narrowing that must not go below a width
-        // Whisper transcribes reliably (see MinAdaptiveProbeSeconds).
-        var proposed = Math.Min(_ctx.JingleCeilingSeconds,
-            Math.Max(MinAdaptiveProbeSeconds,
-                JingleObservationSafetyFactor * observedLength + PhraseMarginSeconds));
-        _adaptedWindowSeconds = Math.Max(_adaptedWindowSeconds ?? proposed, proposed);
-        if (!_reprobing && _adaptedWindowSeconds.Value != _probeSeconds)
-        {
-            _probeSeconds = _adaptedWindowSeconds.Value;
-            _env.Log?.Invoke($"jingle probe window resized to {_probeSeconds:0.#} s");
-        }
+        return new ProbeMark(number, ThresholdSilenceFor(candidate, markSilence), match.Confidence);
     }
 
     /// <summary>
@@ -2230,50 +2170,36 @@ internal sealed class RegionProber
     /// <param name="ct">Cancellation token.</param>
     private async Task HandleSequenceGapAsync(int previousNumber, int number, CancellationToken ct)
     {
-        // A probed window that heard an unreadable announcement is already queued as skipped by
-        // RecoverUnnumberedAnnouncementsAsync, so it sits in both lists; taking it once keeps the re-probe
-        // from transcribing the same audio twice and the count in the log honest.
-        var widened = _probedSinceLastMark
-            .Where(p => WiderWindowWouldReach(p.Candidate, p.WindowEnd) &&
-                        !_skippedSinceLastMark.Contains(p.Candidate))
-            .Select(p => p.Candidate)
-            .ToList();
+        // The stretch to look at again runs from the last mark's own announcement to the last
+        // expectation looked at since - whether a candidate there was probed or passed over makes no
+        // difference to a pass that rebuilds and re-frames the whole stretch anyway. Bounded by
+        // expectations rather than by window starts because that is what CandidatesIn selects on,
+        // and open at the lower end so the window that produced the last mark is not read again for
+        // a chapter already accepted. The two extra seconds clear CandidatesIn's own "not in the
+        // last second" guard.
+        var after = _lastMarkExpectAt ?? _region.FromSeconds;
+        var since = _skippedSinceLastMark.Concat(_probedSinceLastMark)
+            .Where(c => c.ExpectAt > after).ToList();
         var note = $"sequence gap between chapter {previousNumber} and {number}, ";
-        if (_skippedSinceLastMark.Count == 0 && widened.Count == 0)
+        if (since.Count == 0)
         {
             _env.Log?.Invoke(note + "nothing to re-probe since the last mark - deferred to the gap scan");
             return;
         }
-
-        var candidates = _skippedSinceLastMark.Concat(widened).OrderBy(c => c.Start).ToList();
-        _env.Log?.Invoke(
-            note + $"re-probing {candidates.Count} candidate(s) unconditionally " +
-            $"({_skippedSinceLastMark.Count} skipped, {widened.Count} at a wider window)");
-        await ReprobeGapCandidatesAsync(candidates, previousNumber, number, ct);
+        await ReprobeGapCandidatesAsync(
+            after, since.Max(c => c.ExpectAt) + 2, note, previousNumber, number, ct);
     }
 
     /// <summary>
-    /// Whether a probe window at the ceiling would reach past what this candidate's window actually
-    /// covered, i.e. whether re-probing it can see audio its first probe could not. Compares natural
-    /// spans rather than planned ends: <see cref="GapPlanning.PlanWindowEnd"/>'s seam snapping shifts
-    /// an end by seconds in either direction depending on where the neighbors sit, and a candidate
-    /// whose ceiling window is genuinely wider must not be excluded because its original end happened
-    /// to be snapped forward. Only --max-jingle-length auto can narrow a window in the first place;
-    /// in every other mode <see cref="_probeSeconds"/> is fixed for the region's whole life and this
-    /// is always false, so the widened re-probe costs nothing where it cannot apply.
-    /// </summary>
-    /// <param name="candidate">The candidate that was probed.</param>
-    /// <param name="windowEnd">The end its window was probed with.</param>
-    private bool WiderWindowWouldReach(ProbeCandidate candidate, double windowEnd)
-        => _env.Vad != null && _env.Options.AutoMaxJingle &&
-           Math.Min(candidate.Start + _ctx.JingleCeilingSeconds, _region.ToSeconds) > windowEnd;
-
-    /// <summary>
-    /// Re-probes, unconditionally and at the full ceiling window, the candidates a sequence gap has
-    /// put back in question. They form their own little window sequence, each end computed on the fly
-    /// against its next neighbor in that sequence so adjacent re-probe windows get snapped shared
-    /// borders too; the window width cannot change mid-re-probe (see <see cref="_reprobing"/>), so
-    /// consecutive ends stay consistent for the whole sequence.
+    /// Re-probes, unconditionally and in recovery framing, the stretch a sequence gap has put back in
+    /// question: everything Pass 2 has looked at since the last mark, rebuilt from scratch as a
+    /// recovery candidate list (see <see cref="_recovery"/>) rather than replayed from the candidates
+    /// that were passed over. Rebuilding is what makes it the <em>union</em> set - the silences the
+    /// primary scan suppressed inside a jingle's span are back, and every jingle's music is read
+    /// where its speech window comes up empty - and the trimmed framing is what makes it a second
+    /// look rather than a repetition. They form their own little window sequence, each end computed
+    /// on the fly against its next neighbor in it, so adjacent re-probe windows get snapped shared
+    /// borders too.
     /// <para>
     /// Stops the moment the gap is closed rather than walking the rest of the sequence: the
     /// candidates behind the recovered chapter cover the same audio and have nothing left to find,
@@ -2292,20 +2218,36 @@ internal sealed class RegionProber
     /// number the raised floor now rejects.
     /// </para>
     /// </summary>
-    /// <param name="candidates">The candidates to re-probe, in chronological order.</param>
+    /// <param name="fromSeconds">Start of the stretch to re-probe.</param>
+    /// <param name="toSeconds">End of that stretch.</param>
+    /// <param name="note">The log line's opening, naming the gap that triggered this.</param>
     /// <param name="previousNumber">The chapter number below the gap.</param>
     /// <param name="number">The chapter number above it, i.e. the mark that revealed the gap.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ReprobeGapCandidatesAsync(
-        List<ProbeCandidate> candidates, int previousNumber, int number, CancellationToken ct)
+        double fromSeconds, double toSeconds, string note, int previousNumber, int number,
+        CancellationToken ct)
     {
-        if (_env.Vad != null && _env.Options.AutoMaxJingle && _probeSeconds != _ctx.JingleCeilingSeconds)
-        {
-            _probeSeconds = _ctx.JingleCeilingSeconds;
-            _env.Log?.Invoke($"jingle probe window reset to {_probeSeconds:0.#} s for the re-probe");
-        }
+        // Before the candidates are built: the recovery framing and the union candidate set are the
+        // same flag, and both belong to this list.
         _reprobing = true;
         _gapAbove = number;
+        var candidates = CandidatesIn(fromSeconds, toSeconds)
+            // The lower bound is the last mark's own announcement, and that mark is accepted: a
+            // candidate expecting one there has nothing left to find.
+            .Where(c => c.ExpectAt > fromSeconds)
+            .OrderBy(c => c.Start)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            _env.Log?.Invoke(note + "nothing to re-probe since the last mark - deferred to the gap scan");
+            _reprobing = false;
+            _gapAbove = null;
+            return;
+        }
+        _env.Log?.Invoke(
+            note + $"re-probing {candidates.Count} candidate(s) unconditionally, " +
+            $"{FormatTimestamp(fromSeconds)} - {FormatTimestamp(toSeconds)}");
         var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
         for (var si = 0; si < candidates.Count; si++)
         {
@@ -2314,20 +2256,17 @@ internal sealed class RegionProber
             foreach (var gapMark in gapMarks)
             {
                 _lastNumber = Math.Max(_lastNumber ?? 0, gapMark.Number);
-                // A gap mark recovered from a *skipped* candidate has, by definition, an anchor
-                // silence short enough to have been skipped - fold it into the running minimum so
-                // the threshold can never again sit above a silence proven to precede a chapter. One
-                // recovered from a widened window instead cleared the threshold already, so its
-                // proposal cannot lower the running minimum and this is a no-op for it; both go
-                // through the same guard rather than the caller having to remember which list a
-                // candidate came from. Only genuine gap-fillers count either way; a re-detection of
-                // a chapter outside this gap must not lower anything - and a mark recovered at a
-                // jingle brings nothing to fold in at all (see ThresholdSilenceFor).
+                // A gap mark recovered here may well have an anchor silence short enough to have
+                // been skipped - fold it into the running minimum so the threshold can never again
+                // sit above a silence proven to precede a chapter. One whose silence cleared the
+                // threshold anyway cannot lower the running minimum, so the same call is a no-op for
+                // it. Only genuine gap-fillers count either way; a re-detection of a chapter outside
+                // this gap must not lower anything - and a mark recovered at a jingle brings nothing
+                // to fold in at all (see ThresholdSilenceFor).
                 if (!missing.Remove(gapMark.Number))
                     continue;
                 if (_env.Options.AutoMinSilence)
                     ProposeThreshold(gapMark.ThresholdSilence);
-                ProposeJingleWindow(gapMark.Number, gapMark.ReachSeconds);
             }
             if (missing.Count > 0)
                 continue;
@@ -2338,14 +2277,6 @@ internal sealed class RegionProber
         }
         _reprobing = false;
         _gapAbove = null;
-        // Re-probing done: bring the jingle window back down from the ceiling to the adapted value,
-        // including anything the re-probed marks just taught us.
-        if (_env.Vad != null && _env.Options.AutoMaxJingle &&
-            _adaptedWindowSeconds is { } restoredWindow && _probeSeconds != restoredWindow)
-        {
-            _probeSeconds = restoredWindow;
-            _env.Log?.Invoke($"jingle probe window restored to {_probeSeconds:0.#} s");
-        }
     }
 
     /// <summary>
@@ -2452,58 +2383,6 @@ internal sealed class RegionProber
             CandidateClass.JingleEmbedded => ", embedded in a jingle",
             _ => "",
         };
-
-    /// <summary>
-    /// Widens the --max-jingle-length auto window to whatever a gap-recovered chapter actually needed
-    /// (see <see cref="ProbeMark.ReachSeconds"/>), plus the usual phrase margin. Only gap-recovered
-    /// marks get this: the adapted window is otherwise sized from observed jingle *lengths*, anchored
-    /// to the silence or region each mark fell into rather than to the candidate that triggered the
-    /// probe, and the anti-inflation reason for that is sound - a window sized off every mark's raw
-    /// offset would ratchet up on any book where probes routinely trigger on in-text pauses well
-    /// before the announcement. A gap-recovered mark is the one case where the offset is trustworthy:
-    /// the candidate is corroborated by a chapter that nothing else in the run found, so the reach is
-    /// a measured fact about what this book's windows must span, not a guess off a false trigger.
-    /// Trustworthy is not the same as affordable, though, so a single recovery may lift the window by
-    /// at most <see cref="GapReachGrowthFactor"/>; an outlier reach is honoured over several
-    /// recoveries rather than in one jump that would pin the window near the ceiling for the rest of
-    /// the book.
-    /// <para>
-    /// The gap this closes was real, not theoretical. Measured on BARDIOC.m4b (2026-07-30, 15 h 39
-    /// min, German): chapters 9, 12 and 10 were each missed with their announcement's *onset* already
-    /// inside the window and only ~1.5 s of slack behind it - enough for "Kapitel" and not for the
-    /// number, so the phrase was truncated and no number could be read. The marks anchored to short
-    /// silences immediately before each announcement, so
-    /// <see cref="ObserveJingleLength"/> measured ~1 s, below its 2 s floor, and discarded the
-    /// observation: the window stayed at 23.1 s across both recoveries. The --min-silence-length half
-    /// of the recovery could not compensate either, having already been pinned at its 1.5 s floor
-    /// since chapter 8, which also means the near-anchor silences could never become candidates of
-    /// their own. So neither adaptive mechanism learned anything from recovering chapters 9 and 10,
-    /// and chapter 12 was then lost the same way and cost a second full re-probe. Chapter 9's reach
-    /// would have set the window to ~28 s, which covers chapter 12's ~28.5 s requirement.
-    /// </para>
-    /// </summary>
-    /// <param name="number">The recovered chapter, for the log line.</param>
-    /// <param name="reachSeconds">How far into its window that chapter's announcement ended.</param>
-    private void ProposeJingleWindow(int number, double reachSeconds)
-    {
-        if (_env.Vad == null || !_env.Options.AutoMaxJingle)
-            return;
-        // No safety factor on top: unlike a jingle length, which stands in for jingles not yet seen
-        // and may legitimately be exceeded, this is the exact width one real announcement needed. The
-        // phrase margin is what carries the headroom, and the ceiling caps it either way.
-        var wanted = Math.Min(_ctx.JingleCeilingSeconds, reachSeconds + PhraseMarginSeconds);
-        // A null adapted window means nothing has ever narrowed the ceiling, so the window in effect
-        // *is* the ceiling and any proposal below it would narrow rather than widen - the restore at
-        // the end of the re-probe would then hand the main loop a window smaller than the one it had.
-        var current = _adaptedWindowSeconds ?? _ctx.JingleCeilingSeconds;
-        if (wanted <= current)
-            return;
-        var proposed = Math.Min(wanted, current * GapReachGrowthFactor);
-        _adaptedWindowSeconds = proposed;
-        var capped = proposed < wanted ? $" (capped from {wanted:0.#} s)" : "";
-        _env.Log?.Invoke($"chapter {number} needed {reachSeconds:0.#} s of probe window - " +
-                         $"jingle probe window widened to {proposed:0.#} s{capped}");
-    }
 
     /// <summary>
     /// A confident mark settles its whole overlapping window sequence (consecutive candidates whose

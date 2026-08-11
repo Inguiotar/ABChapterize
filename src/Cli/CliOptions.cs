@@ -484,30 +484,24 @@ public sealed class CliOptions
     public bool PreciseMark => !QuickMarks;
 
     /// <summary>
-    /// Maximum expected jingle duration in seconds (--max-jingle-length / -X, default 45), or 0
-    /// to say no jingle is expected at all. Above 0, the probe window after each silence spans
-    /// this duration plus a flat 5-second margin for the chapter phrase itself, and VAD
-    /// non-speech regions can add extra probe candidates for silence-less jingles; at 0,
-    /// neither happens - Pass 2 falls back to its original fixed probe window, exactly as if
-    /// jingle support did not exist. This is always the ceiling used until a real jingle length
-    /// has been observed; see <see cref="AutoMaxJingle"/> for the default self-tightening
-    /// behavior applied on top of it during probing.
+    /// How far back a jingle may reach in seconds (--max-jingle-length / -X, default 45), or 0 to
+    /// say no jingle is expected at all - which switches the VAD pre-pass off with it (see
+    /// <see cref="RunVadPrePass"/>) and leaves detection working from the file's pauses alone.
+    /// <para>
+    /// Above 0 it no longer sizes a probe window: since the candidate classification, each window is
+    /// cut to its own candidate's geometry - where that pause ends, where that jingle's music stops -
+    /// and a length covering the book's longest jingle is exactly the width that loses a lone word
+    /// (see <see cref="DetectionTuning.WhisperChunkSeconds"/>). What it still bounds is the two
+    /// places that genuinely ask "how far back can this book's music reach": Pass 3's jingle anchor
+    /// lookback and <see cref="PreciseMarkRefiner"/>'s <c>--mark-before-jingle</c> verification span.
+    /// </para>
+    /// <para>
+    /// "auto" is accepted and means the 45 s default. It used to mean more - the probe window
+    /// re-sized itself to 1.25x the longest jingle seen so far - and there is nothing left for that
+    /// to size.
+    /// </para>
     /// </summary>
     public double MaxJingleSeconds { get; private set; } = 45;
-
-    /// <summary>
-    /// True (the default) unless --max-jingle-length was given an explicit numeric value
-    /// (including 0, which also disables jingle probing/VAD entirely - see
-    /// <see cref="RunVadPrePass"/>): <see cref="ChapterDetector"/> starts probing with the
-    /// <see cref="MaxJingleSeconds"/> ceiling, then - from the second jingle mark found (the
-    /// same reasoning as <see cref="AutoMinSilence"/>: the gap before the first mark is not
-    /// necessarily representative) - resizes the probe window to 1.25x the longest jingle observed
-    /// so far plus margin, both up and down as that maximum changes, capped at the original
-    /// ceiling. Chapters with no jingle (or an ultra-short one) are excluded: some audiobooks play
-    /// the jingle only for some chapters, and such a chapter says nothing about the window a full
-    /// jingle needs. "auto" can also be given explicitly for clarity.
-    /// </summary>
-    public bool AutoMaxJingle { get; private set; } = true;
 
     /// <summary>
     /// True whenever the Silero VAD pre-pass should run over a file: either
@@ -891,7 +885,7 @@ public sealed class CliOptions
                 $"chaptercount={ChapterCount}",
                 $"trailingscan={TrailingScan}", $"verify={Verify}/{Fix}", $"verifythreshold={VerifyFailThreshold}",
                 $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}", $"marklead={MarkLeadSeconds}",
-                $"maxjingle={MaxJingleSeconds}/{AutoMaxJingle}", $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
+                $"maxjingle={MaxJingleSeconds}", $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
@@ -1309,7 +1303,7 @@ public sealed class CliOptions
             case "--custom": _customMappings.AddRange(CustomMappingParser.ParseSpec(nextParam())); return true;
             case "--custom-file": _customMappings.AddRange(CustomMappingParser.ParseFile(nextParam())); return true;
             case "--filter": ParseFilter(nextParam()); return true;
-            case "--max-jingle-length": (MaxJingleSeconds, AutoMaxJingle) = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
+            case "--max-jingle-length": MaxJingleSeconds = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--noise-floor": (NoiseFloorDb, AutoNoiseFloor) = ParseNoiseFloor(nextParam()); _noiseFloorSet = true; return true;
             case "--mark-lead": MarkLeadSeconds = ParseMarkLead(nextParam()); _markLeadSet = true; return true;
@@ -1370,19 +1364,19 @@ public sealed class CliOptions
 
     /// <summary>
     /// Parses the --max-jingle-length parameter into 0 (no jingle expected - see
-    /// <see cref="RunVadPrePass"/>), a number of seconds between 1 and 600, or "auto". "auto"
-    /// resolves to the 45 s default ceiling plus <see cref="AutoMaxJingle"/> set, telling
-    /// <see cref="ChapterDetector"/> to self-tighten the probe window as real jingle lengths
-    /// are observed.
+    /// <see cref="RunVadPrePass"/>) or a number of seconds between 1 and 600. "auto" is still
+    /// accepted and resolves to the 45 s default; see <see cref="MaxJingleSeconds"/> for what it
+    /// used to switch on and why nothing is left of it.
     /// </summary>
-    private static (double Seconds, bool Auto) ParseJingleLength(string value)
+    /// <param name="value">The raw parameter.</param>
+    private static double ParseJingleLength(string value)
     {
         if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
-            return (45, true);
+            return 45;
         if (!NumberCulture.TryParseDecimal(value, out var s) ||
             (s != 0 && (s < 1 || s > 600)))
             throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected 0, seconds between 1 and 600, or \"auto\".");
-        return (s, false);
+        return s;
     }
 
     /// <summary>
@@ -1875,21 +1869,16 @@ public sealed class CliOptions
                                     --mark-before-jingle, whose backward walk can only be as
                                     good as the mark it starts from.
           -X, --max-jingle-length <seconds|auto>
-                                    Maximum expected jingle duration (default, and ceiling with
-                                    "auto": 45), or 0 if no jingle is expected at all. Above 0,
-                                    audio is probed for this duration plus 5 seconds (for the
-                                    phrase itself) after each silence; at 0, probing uses its
-                                    original fixed window instead, and the VAD pre-pass is
+                                    How far back a jingle may reach (default 45; "auto" means
+                                    the same 45), or 0 if no jingle is expected at all. Above 0,
+                                    the VAD pre-pass runs and every jingle it finds becomes a
+                                    probe candidate of its own; the value bounds how far back
+                                    the tool believes music can stretch when it places a mark.
+                                    At 0 there are no jingle candidates, and the VAD pre-pass is
                                     skipped entirely unless --mark-before-jingle still needs it.
-                                    With "auto" (the default), starting from the second jingle
-                                    mark found (the first is not necessarily representative),
-                                    the probe window resizes to 1.25x the longest jingle
-                                    actually observed so far plus margin, capped at the ceiling
-                                    - narrower once a book's real jingle length is known, wider
-                                    again if a longer one turns up. An explicit numeric value
-                                    disables this and keeps the window fixed at that value
-                                    throughout - useful if the jingle length is known and
-                                    consistent, or for troubleshooting.
+                                    It no longer sizes any probe window: each window is cut to
+                                    its own candidate - where that pause ends, where that
+                                    jingle's music stops.
           -n, --min-silence-length <seconds|auto>
                                     The shortest pause probed as a potential chapter
                                     break (default: "auto", which starts at 1.5). This

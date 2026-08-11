@@ -85,12 +85,6 @@ internal static class DetectionTuning
     /// <inheritdoc cref="MinAutoSilenceNoiseDb"/>
     internal const double MaxAutoSilenceNoiseDb = -20;
 
-    /// <summary>Probe window length in seconds when --max-jingle-length is 0 (no jingle
-    /// expected). Above 0, the window is --max-jingle-length plus
-    /// <see cref="PhraseMarginSeconds"/> instead, whether or not the VAD pre-pass ends up
-    /// running - see <see cref="CliOptions.RunVadPrePass"/>.</summary>
-    internal const double PlainProbeSeconds = 12;
-
     /// <summary>
     /// The shortest silence Pass 1 keeps (see the <c>allSilences</c>/<c>silences</c> split in
     /// <see cref="ChapterDetector.DetectAsync"/>), regardless of --min-silence-length. Only
@@ -177,6 +171,28 @@ internal static class DetectionTuning
     /// <summary>Flat margin added to --max-jingle-length so the phrase after the jingle still
     /// fits into the probe window.</summary>
     internal const double PhraseMarginSeconds = 5.0;
+
+    /// <summary>
+    /// How much of its lead-in a recovery pass's window gives up against the primary scan's
+    /// (<see cref="SilenceLeadInSeconds"/>, <see cref="JingleLeadInSeconds"/>), and
+    /// <see cref="RecoveryReachTrimSeconds"/> how much of its reach past the expectation.
+    /// <para>
+    /// A recovery pass exists because the primary scan came up empty on this stretch, so the one
+    /// thing it must not do is ask the same question in the same words. It reads the classification
+    /// exactly as the primary scan does - where the pauses are, where the music is, where each
+    /// announcement is expected - and then frames every window differently, because a differently
+    /// framed decode is a different reading of the same audio and that is the whole content of a
+    /// second look (the same reasoning that reverted the gap re-probe's transcript reuse). Trimming
+    /// rather than widening is what keeps it affordable and keeps both recovery windows inside a
+    /// single recognizer pass, where a lone word survives best.
+    /// </para>
+    /// </summary>
+    internal const double RecoveryLeadInTrimSeconds = 2.0;
+
+    /// <summary>How much of its reach past the expected announcement a recovery pass's window gives
+    /// up against <see cref="ExpectedAnnouncementSeconds"/>; see
+    /// <see cref="RecoveryLeadInTrimSeconds"/> for why either is trimmed at all.</summary>
+    internal const double RecoveryReachTrimSeconds = 5.0;
 
     /// <summary>
     /// The fallback lead <see cref="JingleGeometry.ComputeMarkBeforeJingle"/>'s step 5 backs off
@@ -626,8 +642,8 @@ internal static class DetectionTuning
     /// <see cref="ExpectedAnnouncementSeconds"/> past the announcement, which is exactly 30.0 s.
     /// Re-measured on that live decode at 0:03:20.19 with ggml-small: read at 22.0, 23.5 and 25.0 s,
     /// gone at 27.0 and 30.0 s. Two things worth keeping from it - the cliff is between 25 and 27 s
-    /// and not at 30, so <see cref="MinAdaptiveProbeSeconds"/>'s phrase margin of headroom is the
-    /// whole of the safety margin rather than a rounding; and this window transcribes identically on
+    /// and not at 30, so the phrase margin <see cref="JingleRereadWindowSeconds"/> keeps below a
+    /// chunk is the whole of the safety margin rather than a rounding; and this window transcribes identically on
     /// the GTX 1070 and the Radeon 890M, word for word and timestamp for timestamp, which is rare
     /// enough (see the project notes on cross-machine reproducibility) to be worth stating.
     /// </para>
@@ -659,35 +675,6 @@ internal static class DetectionTuning
     /// </para>
     /// </summary>
     internal const double JingleMusicTileStepSeconds = JingleRereadWindowSeconds - 2 * PhraseMarginSeconds;
-
-    /// <summary>
-    /// Floor under the --max-jingle-length auto probe window (see
-    /// <see cref="RegionProber.ObserveJingleLength"/>), applied beneath the ceiling so an explicit
-    /// --max-jingle-length still wins outright. A book whose jingles are all short would otherwise
-    /// narrow the window to a width the recognizer handles badly, and the announcement is then lost
-    /// in exactly the windows the narrowing was supposed to make cheap.
-    /// <para>
-    /// The failure is the recognizer's, not the geometry's. Whisper pads anything shorter than
-    /// <see cref="WhisperChunkSeconds"/> out to a full mel chunk, and the large models degenerate on
-    /// the padding: the whole window comes back as one unpunctuated run-on segment with the
-    /// announcement simply missing from it. Measured on "Paula Monti.m4b" (French, 4:33:37, 25
-    /// chapters, 2026-08-08), whose 4.48 s longest jingle narrows the window to 10.6 s - replaying
-    /// that run's own Pass 2 probe windows through the real recognizer, ggml-large-v3-turbo matched
-    /// the announcement in 4 of 15 windows at 11-22 s and in 13 of 13 at 50 s, while ggml-small
-    /// matched 14 of 14 at the same narrow widths. That is why the book detected perfectly under
-    /// <c>-m small</c> and lost chapters 19 and 21-25 under turbo, and why the floor is a property of
-    /// the window rather than of the model.
-    /// </para>
-    /// <para>
-    /// One phrase margin below the chunk rather than at it, which the same five windows settle by
-    /// measurement: 0 of 5 at 20 s, 5 of 5 at 25 s, 4 of 5 at 30 s and at 50 s. Chapter 22 is the one
-    /// that only 25 s finds. Crossing into a multi-pass decode is its own way of losing an
-    /// announcement - see <see cref="WhisperChunkSeconds"/> for Gruelfin.m4b's prologue, heard at
-    /// 23.5 s and gone at 30.0 s - so the floor keeps every probe a single pass. Same value and the
-    /// same reasoning as <see cref="JingleRereadWindowSeconds"/>.
-    /// </para>
-    /// </summary>
-    internal const double MinAdaptiveProbeSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
 
     /// <summary>
     /// How far <em>before</em> a confirmed or left-as-is mark
@@ -813,40 +800,9 @@ internal static class DetectionTuning
     internal const int SequenceRestartRunLength = 3;
 
     /// <summary>
-    /// With --max-jingle-length auto, the resized probe window is this factor times the longest
-    /// jingle observed so far (plus <see cref="PhraseMarginSeconds"/>), i.e. a 25 % margin for
-    /// normal length variation between chapters. Monotonic: after the first observation (at the
-    /// second mark) sets the window, later ones can only widen it - a window below an observed
-    /// jingle length would by definition have been too short for that chapter. The exact mirror of
-    /// <see cref="AdaptiveTightenFactor"/>.
-    /// </summary>
-    internal const double JingleObservationSafetyFactor = 1.25;
-
-    /// <summary>
-    /// Ceiling on how far a single gap-recovered chapter may widen the --max-jingle-length auto window
-    /// (see <see cref="RegionProber.ProposeJingleWindow"/>): at most this factor times the window in
-    /// effect, so a reach far above it takes several recoveries to be honoured in full instead of one
-    /// jump. Deliberately the same 1.25 as <see cref="JingleObservationSafetyFactor"/> - both answer
-    /// the same question, how far a single observation may move a running maximum.
-    /// <para>
-    /// The cap exists because the window's cost is superlinear in a way the reach figure alone does not
-    /// reveal. Measured on BARDIOC.m4b (2026-07-30, 15 h 39 min, 1575 silences, so ~36 s average
-    /// spacing): at the ~24 s window the run actually used, most candidate windows do not touch each
-    /// other and Pass 2 decoded 593 minutes of audio in 1659 probes (434 in the main loop, 158 inside
-    /// the four gap re-probes). Chapter 10's reach was ~38.5 s, which uncapped proposes ~43.5 s - and
-    /// at that width nearly every candidate overlaps its neighbour, so decoding approaches covering the
-    /// whole file once, ~939 minutes. Because the adapted window is a monotonic maximum, one outlier
-    /// chapter would hold that width for the remaining ~10 hours of the book: several hundred minutes
-    /// added to save the ~85 the re-probes cost. Capped, that same chapter lifts 24 s to 30 s, which
-    /// still covers the 19-25 s reaches the other three recoveries needed.
-    /// </para>
-    /// </summary>
-    internal const double GapReachGrowthFactor = 1.25;
-
-    /// <summary>
     /// With --min-silence-length auto, the Pass 2 probing threshold is this factor times a mark's
-    /// anchor silence length, i.e. a 25 % margin below the shortest observed inter-chapter break,
-    /// mirroring <see cref="JingleObservationSafetyFactor"/>. Monotonic: the first qualifying mark
+    /// anchor silence length, i.e. a 25 % margin below the shortest observed inter-chapter break.
+    /// Monotonic: the first qualifying mark
     /// (the second one found) raises the threshold off the floor, every later mark can only lower
     /// it again - a threshold above an observed inter-chapter silence would by definition skip the
     /// very kind of silence proven to precede this book's chapters.

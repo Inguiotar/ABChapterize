@@ -63,7 +63,6 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.True(o.AutoMinSilence);
         Assert.Equal(45, o.MaxJingleSeconds);
-        Assert.True(o.AutoMaxJingle);
         Assert.Equal(60, o.EarlyAbortMinutes);
         // Jingle-aware probing (the VAD pre-pass) runs by default now, even without
         // --mark-before-jingle - only --max-jingle-length 0 turns it off.

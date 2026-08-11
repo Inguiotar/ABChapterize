@@ -139,11 +139,11 @@ candidate also decides where its window opens and how far it runs:
   Everything a window from there would hear belongs to the jingle behind it,
   and the jingle listens for the same announcement from a better place.
 
-So `--max-jingle-length` no longer decides how wide these windows are — a book's
-jingles cost only the jingles' own probes now, however long they run. It still
-bounds the recovery passes below, and `--mark-before-jingle`'s search; and with
-`--max-jingle-length 0` there are no jingle candidates at all, leaving the pauses
-as the only thing looked at.
+So `--max-jingle-length` no longer decides how wide any window is — a book's
+jingles cost only the jingles' own probes now, however long they run. What it
+still bounds is how far back the tool believes music can reach when it places a
+mark; and with `--max-jingle-length 0` there are no jingle candidates at all,
+leaving the pauses as the only thing looked at.
 
 Each transcript is matched against the chapter phrase (see `--chapter-phrase`),
 and the chapter number is parsed from digits, Roman numerals or number words
@@ -301,37 +301,16 @@ recovered for a handful of probes instead. Nothing else about pass 2 changes:
 the pauses it was willing to probe in the first place are the same either way.
 See the [`-n` reference](#detection-behaviour) for the knob itself.
 
-By default (`--max-jingle-length auto`), the *recovery* window self-tightens the
-same way — the width a re-probe or a pass 2.5 gets, since the primary probing
-above sizes each window from its own candidate. Starting from the second jingle
-mark found (the first is excluded — the gap before it isn't necessarily
-representative), it resizes to 1.25x the longest jingle actually observed so far
-plus the 5-second phrase margin, capped at the 45 s ceiling and never allowed
-below 25 seconds — any narrower and Whisper starts padding the window out and
-misreading it. Giving `--max-jingle-length` an explicit numeric value (including
-`0`) disables this and keeps the width fixed at that value throughout. See the
-[`-X` reference](#detection-behaviour) for the knob itself.
-
-A chapter turning up out of sequence puts every candidate since the previous
-chapter back in question, not just the ones that were passed over: a window
-sized for an announcement close behind its own candidate can end before an
-unusually late one, so those are re-probed at the full ceiling width too. The
-retry stops as soon as the gap is closed. When there is nothing to retry —
-every candidate already had the full window and simply yielded no readable
-announcement — `--verbose` says so, and the gap goes straight to pass 3.
-
-A chapter recovered that way also reports how far into its window its
-announcement ended, and the window widens to cover at least that much for the
-rest of the file. This is the one case where the plain distance from the
-candidate is trusted rather than the jingle length: the candidate is vouched
-for by a chapter nothing else in the run found. It matters for books whose real
-chapter breaks are too short to be probed on their own, where the window has to
-reach the announcement from the previous candidate — without it, the same shape
-of chapter is missed again a few chapters later. One recovery can widen the
-window by no more than a quarter of its current width, though: a wide window
-makes probes overlap and so costs time on every remaining candidate, and a
-single unusual chapter should not decide that for the rest of a long book. A
-reach beyond that is granted over several recoveries.
+A chapter turning up out of sequence puts the whole stretch since the previous
+chapter back in question, not just the candidates that were passed over — and
+that second look is a **re-reading rather than a wider search**. Every pause and
+every jingle in the stretch becomes a candidate again, including the ones the
+first look ruled out because a jingle was thought to cover them, and each is
+framed a little differently from the first time: the window opens later and stops
+sooner, which is what makes the recognizer read the same audio afresh instead of
+returning the answer it already gave. The retry stops as soon as the gap is
+closed. When there is nothing to retry — no candidate at all sits between the two
+chapters — `--verbose` says so, and the gap goes straight to pass 3.
 
 When pass 2 is done, its finds are reconciled into one ascending sequence, since
 chapter numbers rise through a book. Where a mark's number contradicts the marks
@@ -978,54 +957,23 @@ so that logs and reports stay comparable regardless of regional settings.
   announcement. That can happen even together with `--mark-before-jingle`.
 
 `-X`, `--max-jingle-length <seconds|auto>`
-: Longest expected jingle (0, or 1–600); this is always the *recovery* window's
-  ceiling (default, and ceiling with `auto`: 45) — the width a re-probe or a
-  pass 2.5 gets. It no longer sizes the primary probing, which frames each
-  window on its own candidate (see
-  [Pass 2](#pass-2--probing)). Above 0, a VAD pre-pass runs (see
+: How far back a jingle may reach (0, or 1–600; default 45). Above 0, a VAD
+  pre-pass runs (see
   [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) and every jingle it finds
-  becomes a candidate. `0` says no jingle is
-  expected at all: there are no jingle candidates, recovery windows fall back to
-  a fixed 12 seconds, and the
-  VAD pre-pass is skipped entirely unless `--mark-before-jingle` still needs
-  it for mark placement — reproducing this tool's original,
-  pre-jingle-detection behavior. An explicit numeric value (still above 0)
-  disables the self-tightening below and keeps the recovery window fixed at
-  that width throughout — useful if the jingle length is known and
-  consistent, or to shrink the window further for speed. With `auto` (the
-  default), recovery starts
-  at the 45 s ceiling and, from the second jingle mark found (the first is
-  excluded for the same reason as `--min-silence-length auto` excludes the
-  first silence — the gap before it isn't necessarily representative),
-  resizes that window to 1.25x the longest jingle actually observed so
-  far plus the 5-second phrase margin, never past the original ceiling and never
-  below 25 seconds — a shorter window than that is padded out by Whisper before
-  it is transcribed, and the recognizers are markedly worse at reading the
-  result. An explicit value is honoured to the second either way; only the
-  automatic narrowing has a floor. The
-  second mark narrows the window down from the ceiling; after that it only
-  ever widens again (when a longer jingle turns up) — the exact mirror of
-  `--min-silence-length auto`'s lower-only threshold, and for the mirrored
-  reason: a window below an already observed jingle length would be too
-  short for exactly the kind of jingle this book has proven to play. For a
-  silence-less jingle (found via the VAD pre-pass), the observed length
-  comes from the VAD region's own boundaries rather than the distance to
-  the announcement, which can otherwise include a bit of post-jingle
-  silence before the phrase starts. Chapters with no jingle (or an
-  ultra-short one, under 2 seconds) are excluded from this — some
-  audiobooks only play the jingle for some chapters, and such a chapter
-  says nothing about how long the window needs to be for one that does
-  have a full jingle. Same idea as `--min-silence-length auto`, just for
-  the recovery window instead of the silence threshold. A
-  later sequence gap temporarily resets the window back to the ceiling,
-  retries every candidate since the last chapter at that full width — those
-  skipped, and those already probed, whose announcement may simply have sat
-  past the end of a window framed for one closer by — and
-  then returns to the adapted width, including whatever the recovered
-  chapters' own jingles just taught it — and how far into its window a
-  recovered chapter's announcement reached, which may widen the window by up
-  to a quarter of its current width per recovery. `auto` implies a nonzero ceiling, so
-  it cannot mean "no jingle expected."
+  becomes a probe candidate; the value itself bounds the two places that ask how
+  far a book's music can stretch back — pass 3's jingle anchor and
+  `--mark-before-jingle`'s verification of a mark it walked.
+  `0` says no jingle is expected at all: there are no jingle candidates, and the
+  VAD pre-pass is skipped entirely unless `--mark-before-jingle` still needs it
+  for mark placement — reproducing this tool's original, pre-jingle-detection
+  behaviour.
+
+  What it no longer does is size a probe window. Every window is now cut to its
+  own candidate — where that pause ends, where that jingle's music stops — and a
+  window long enough to span a book's longest jingle is exactly the width that
+  loses a one-word announcement. `auto` is still accepted and means the 45 s
+  default; it used to switch on a window that re-sized itself to the longest
+  jingle seen so far, and there is nothing left for that to size.
 
 ### Phrases and titles
 
@@ -2554,8 +2502,8 @@ automatically — rerun it with `--force` (and the new option) once you know
 what went wrong.
 
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes),
-`--max-jingle-length` (smaller probe windows, or `0` if there's no jingle at
-all), `--no-trailing-scan` (skips a final chapter's worth of transcription on
+`--max-jingle-length 0` (no jingle probing at all, where a book has no music at
+its chapter starts), `--no-trailing-scan` (skips a final chapter's worth of transcription on
 every file), and a smaller `--pass3-model` if only the gap-filling pass drags.
 Check that the startup line reports a GPU backend, not CPU.
 

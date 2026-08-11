@@ -26,6 +26,23 @@ earn a round number.
   the new one depending on which you hit. Several crowding marks are appended in file
   order; `--named-mark-distance 0` writes everything separately, as before.
 
+### Changed
+
+- **A missing chapter is now hunted by re-reading its stretch, not by widening the search.**
+  When the chapter numbers leave a hole, everything between the two chapters around it goes
+  back on the list — every pause and every jingle, including the ones the first look ruled
+  out — and each is read again in a slightly different framing. It used to be read again in
+  one deliberately wide window instead, which is the one thing a recognizer handles worst:
+  a window long enough to span a book's longest jingle is exactly the width that loses a
+  one-word announcement. The same goes for pass 2.5 and the gap sweeps.
+
+- **`--max-jingle-length` no longer sizes probe windows.** Since 0.11.0 every window is cut
+  to its own candidate, and this option's remaining job is to say how far back the tool
+  believes a book's music can reach when it places a mark. `0` still means "no jingle
+  expected at all" and switches the music detection off with it; `auto` is still accepted
+  and now simply means the 45-second default, the self-adjusting window it used to switch
+  on having nothing left to adjust.
+
 ### Fixed
 
 - **An announcement spoken over a chapter's jingle is looked for properly.** Where the

@@ -327,7 +327,6 @@ public sealed class ChapterDetector
         _customLimitHit = false;
         _sequenceRestartSkips = 0;
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
-        var jingleCeilingSeconds = _options.MaxJingleSeconds + PhraseMarginSeconds;
 
         var (allSilences, silences, nonSpeechRegions, speechSegments, jingles) =
             await RunPass1Async(file, info, work, bytesPerSecond, ct);
@@ -377,7 +376,7 @@ public sealed class ChapterDetector
         int? belowExpectedStartNumber = null;
 
         var pass2Ctx = new Pass2Context(
-            file, info, work, bytesPerSecond, jingleCeilingSeconds,
+            file, info, work, bytesPerSecond,
             allSilences, silences, nonSpeechRegions, speechSegments, jingles,
             earlyAbortSeconds, expectedStartChapter, _transcriber);
 
@@ -416,7 +415,7 @@ public sealed class ChapterDetector
         if (!_options.IgnoreChapterNumbers)
         {
             if (pass2Completed)
-                chapters = await RunPass25Async(file, info, work, chapters, namedFound, jingleCeilingSeconds,
+                chapters = await RunPass25Async(file, info, work, chapters, namedFound,
                     allSilences, silences, nonSpeechRegions, speechSegments, jingles, bytesPerSecond,
                     language.Profile, ct);
 
@@ -1209,7 +1208,6 @@ public sealed class ChapterDetector
     /// <param name="chapters">The chapters Pass 2 found, in chronological order.</param>
     /// <param name="namedFound">The file's prologue/epilogue accumulator, passed through so a
     /// re-probe on the better model can still notice an announcement Pass 2's model missed.</param>
-    /// <param name="jingleCeilingSeconds">The probe window ceiling Pass 2 was run with.</param>
     /// <param name="allSilences">Every silence from <see cref="RunPass1Async"/>.</param>
     /// <param name="silences">The --min-silence-length subset - Pass 2's own candidates.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions from <see cref="RunPass1Async"/>.</param>
@@ -1223,7 +1221,7 @@ public sealed class ChapterDetector
     private async Task<List<DetectedChapter>> RunPass25Async(
         string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
         List<DetectedMark> namedFound,
-        double jingleCeilingSeconds, List<Silence> allSilences, List<Silence> silences,
+        List<Silence> allSilences, List<Silence> silences,
         List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
         List<Jingle> jingles, double bytesPerSecond, LanguageProfile profile, CancellationToken ct)
     {
@@ -1247,7 +1245,7 @@ public sealed class ChapterDetector
         // and null): they exist to give up on a file that is yielding nothing at all, which is not
         // a question a bounded gap re-probe of an already-productive file gets to reopen.
         var ctx = new Pass2Context(
-            file, info, work, bytesPerSecond, jingleCeilingSeconds,
+            file, info, work, bytesPerSecond,
             allSilences, silences, nonSpeechRegions, speechSegments, jingles,
             double.PositiveInfinity, null, _pass3Transcriber, SecondGuessNumbers: false);
 
@@ -1277,7 +1275,7 @@ public sealed class ChapterDetector
             var prober = new RegionProber(
                 env, ctx, region, found, namedFound,
                 new LanguageState(profile, null, 0),
-                gapSecondsDone - gap.FromSeconds, classifyCandidates: false);
+                gapSecondsDone - gap.FromSeconds, recovery: true);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
@@ -1369,8 +1367,7 @@ public sealed class ChapterDetector
         // the only unit in which a handful of short probes and one long transcription compare
         // honestly: recognition cost is per window, and a 12 s probe costs a whole one just as a
         // 30 s stretch of a Pass 3 chunk does.
-        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : PlainProbeSeconds;
-        var windowsPerProbe = ChunkWindows(probeSeconds);
+        var windowsPerProbe = ChunkWindows(RegionProber.RecoveryProbeSeconds);
         var budget = SubFloorSweepBudgetFraction * ChunkWindows(gap.ToSeconds - gap.FromSeconds);
         var spent = 0;
 
@@ -1470,8 +1467,7 @@ public sealed class ChapterDetector
         if (work.Count == 0)
             return;
 
-        var probeSeconds = _options.MaxJingleSeconds > 0 ? ctx.JingleCeilingSeconds : PlainProbeSeconds;
-        var windowsPerProbe = ChunkWindows(probeSeconds);
+        var windowsPerProbe = ChunkWindows(RegionProber.RecoveryProbeSeconds);
         var env = BuildProbeEnvironment();
         _log?.Invoke(
             $"pass 2: this book's chapter breaks measure down to {bandFloorSeconds:0.0#} s, below the " +
