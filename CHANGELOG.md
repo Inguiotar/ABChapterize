@@ -26,6 +26,15 @@ earn a round number.
   the new one depending on which you hit. Several crowding marks are appended in file
   order; `--named-mark-distance 0` writes everything separately, as before.
 
+### Fixed
+
+- **An announcement spoken over a chapter's jingle is looked for properly.** Where the
+  music might be hiding the announcement rather than preceding it, the tool used to widen
+  one probe window to cover the whole jingle — and a window that long is exactly what makes
+  the recognizer drop a lone word. The music is now read afterwards, and only when the
+  window behind it came up empty, in overlapping pieces short enough to be heard reliably.
+  Nothing else moves: on every mark checked the position is unchanged to the millisecond.
+
 ### Changed
 
 - **The epilogue mark now has to follow the book's last chapter.** "Epilogue" is an
