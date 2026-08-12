@@ -24,6 +24,11 @@ internal readonly record struct Jingle(
 {
     /// <summary>How long the stretch runs, the figure <see cref="JingleCensus"/> reports on.</summary>
     internal double LengthSeconds => EndSeconds - StartSeconds;
+
+    /// <summary>How far back the music reaches from the speech behind it - the quantity a mark
+    /// placed at an announcement has to look back over, which is not the same as
+    /// <see cref="LengthSeconds"/> wherever a hush separates the two.</summary>
+    internal double ReachSeconds => AnnouncementSeconds - StartSeconds;
 }
 
 /// <summary>
@@ -102,6 +107,28 @@ internal static class JingleCensus
         }
         return jingles;
     }
+
+    /// <summary>
+    /// How far back this file's music may reach from an announcement: the longest reach any jingle
+    /// in the census actually showed, plus <see cref="PhraseMarginSeconds"/>. This is the figure the
+    /// two places that ask that question read - Pass 3's anchor lookback and
+    /// <see cref="PreciseMarkRefiner"/>'s --mark-before-jingle verification span - in place of the
+    /// blind 50 s that --max-jingle-length used to hand them.
+    /// <para>
+    /// Measured rather than assumed, so it is tighter than that on every book of the corpus bar one:
+    /// the longest jingles run 6.5 s (Rendezvous With Rama) to 33.7 s (BARDIOC). The exception is
+    /// "Paula Monti" at 67.5 s, a book with a single census entry which is almost certainly a
+    /// musical intro rather than a chapter jingle - if a mark there ever moves for want of a shorter
+    /// lookback, that entry is the first thing to look at.
+    /// </para>
+    /// <para>
+    /// On a book with no jingles at all this collapses to the margin, which is correct: there is no
+    /// music to look back over, and every consumer of it is asking about music.
+    /// </para>
+    /// </summary>
+    /// <param name="jingles">The file's census, empty where VAD found no jingles.</param>
+    internal static double ReachSeconds(IReadOnlyList<Jingle> jingles)
+        => (jingles.Count == 0 ? 0 : jingles.Max(j => j.ReachSeconds)) + PhraseMarginSeconds;
 
     /// <summary>Renders a census as the one --verbose line it is worth: how many jingles the file
     /// has and how long they run. The spread matters as much as the count - a book whose jingles

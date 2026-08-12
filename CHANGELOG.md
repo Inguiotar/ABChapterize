@@ -26,6 +26,21 @@ earn a round number.
   the new one depending on which you hit. Several crowding marks are appended in file
   order; `--named-mark-distance 0` writes everything separately, as before.
 
+### Removed
+
+- **`--max-jingle-length` / `-X` is gone**, and the voice-activity pre-pass it could switch
+  off now runs on every file. Its last job was to say how far back a book's music can reach,
+  which the tool measures from the file's own jingles instead — tighter than the 45-second
+  assumption on nearly every book, and no longer something to get wrong from the command
+  line. A script still passing it gets an error saying so rather than a silent
+  "unknown option". `--min-silence-length 0` (probe only at jingles) no longer conflicts with
+  anything and can be given on its own.
+
+  One consequence worth knowing: the pre-pass is now required, so a failure to load the
+  bundled voice-activity model ends the run instead of quietly continuing without it. It also
+  means a mark can land a shade differently where an announcement is preceded by an unusually
+  long stretch of music.
+
 ### Changed
 
 - **The cheap gap re-probe stops as soon as the gap is closed.** It used to walk the rest of

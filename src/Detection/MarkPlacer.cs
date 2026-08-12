@@ -146,6 +146,14 @@ internal sealed class MarkPlacer
     /// </summary>
     internal PreciseMarkRefiner Refiner => _refiner;
 
+    /// <summary>How far back this file's music reaches (<see cref="JingleCensus.ReachSeconds"/>),
+    /// passed straight through to the refiner, which is where the figure is actually needed. Set
+    /// once per file, after Pass 1 has counted the jingles.</summary>
+    internal double JingleReachSeconds
+    {
+        set => _refiner.JingleReachSeconds = value;
+    }
+
     /// <summary>
     /// Finishes one chapter's mark: precise marking corrects the default-mode position by direct
     /// re-transcription (unless --quick-marks turned it off), --mark-before-jingle then walks the

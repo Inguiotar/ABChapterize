@@ -67,6 +67,14 @@ public sealed class ChapterDetector
     /// file's detection (every probe window and gap chunk, counted each time it is transcribed -
     /// re-probed audio counts again, since Whisper processed it again). Reset per file, reported
     /// as a --verbose/--summary statistic.</summary>
+    /// <summary>
+    /// How far back this file's music reaches (<see cref="JingleCensus.ReachSeconds"/>), set once
+    /// Pass 1 has counted the jingles and read by everything that has to look back over music: Pass
+    /// 3's anchor lookback here, and <see cref="MarkPlacer"/>'s refiner. Starts at the bare margin,
+    /// which is what a run with no VAD pre-pass and a book with no jingles both come to.
+    /// </summary>
+    private double _jingleReachSeconds = PhraseMarginSeconds;
+
     private double _whisperAudioSeconds;
 
     /// <summary>Wall-clock seconds spent inside the Whisper transcription calls for the current
@@ -103,9 +111,8 @@ public sealed class ChapterDetector
     /// <param name="audio">Audio source used for silence detection and PCM decoding.</param>
     /// <param name="transcriber">Loaded speech recognizer.</param>
     /// <param name="vad">Voice activity detector used for the full-file VAD pre-pass (finds
-    /// jingle transitions with no detectable amplitude gap); null when
-    /// <see cref="CliOptions.RunVadPrePass"/> is false, or in tests that don't exercise that
-    /// path.</param>
+    /// jingle transitions with no detectable amplitude gap). Every real run has one since 0.12.0;
+    /// null is for the tests that do not exercise that path.</param>
     /// <param name="pass3Transcriber">Transcriber for pass 3 (gap filling) when
     /// <c>--pass3-model</c> asks for a model other than the main one; null (the default) makes
     /// pass 3 reuse <paramref name="transcriber"/>.</param>
@@ -1761,9 +1768,8 @@ public sealed class ChapterDetector
         List<Jingle> Jingles);
 
     /// <summary>
-    /// Pass 1: scans the whole file for silences and, when the VAD pre-pass is enabled (see
-    /// <see cref="CliOptions.RunVadPrePass"/>), for VAD non-speech regions concurrently over the
-    /// same decode - silencedetect alone never produces a Pass 2 candidate at a chapter transition
+    /// Pass 1: scans the whole file for silences and, in the same decode, for the VAD non-speech
+    /// regions the pre-pass finds - silencedetect alone never produces a Pass 2 candidate at a chapter transition
     /// where the jingle abuts speech on both sides with no amplitude gap; VAD sees that transition
     /// as a non-speech region (music, like silence, reads as non-speech to a speech detector)
     /// regardless of amplitude, so it can catch what silencedetect misses. See <see
@@ -1830,6 +1836,14 @@ public sealed class ChapterDetector
         // from the raw speech segments rather than the merged regions, for the reason JingleCensus
         // gives. Empty without the VAD pre-pass, which is why it is only logged with it.
         var jingles = JingleCensus.Measure(speechSegments, allSilences);
+        // The one figure the census is not merely diagnostic for: how far back this book's music can
+        // reach. Set here rather than passed down, because the two places that ask sit in different
+        // passes and neither has the census in scope.
+        _jingleReachSeconds = JingleCensus.ReachSeconds(jingles);
+        // SetLog runs before every pass, so the placer is never actually null here; the guard is the
+        // compiler's, not a real case.
+        if (_marks is { } marks)
+            marks.JingleReachSeconds = _jingleReachSeconds;
         if (_vad != null)
         {
             // The speech-segment count carries no extra information (a non-speech region is just
@@ -2539,7 +2553,7 @@ public sealed class ChapterDetector
             // since a gap chunk has no probe window start of its own. Feeds default-mode placement
             // and the auto-mechanism statistics; --mark-before-jingle resolves from the
             // default-mode mark instead and does not consume it.
-            var lookback = _options.MaxJingleSeconds + PhraseMarginSeconds;
+            var lookback = _jingleReachSeconds;
             var (anchorSilence, vadRegion) = ResolveJingleAnchor(
                 phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
                 nonSpeechRegions, candidateVadRegion: null, speechSegments, transcript.Segments);

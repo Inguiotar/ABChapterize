@@ -289,9 +289,13 @@ public sealed class FileProcessor
             if (!_options.Quiet)
                 PrintModelBanner(transcriber.RuntimeName, files.Count, pass3 != null, gpu);
 
-            // Only needed for the VAD pre-pass, and the one thing in the run that uses more than one
-            // thread of its own accord.
-            using var vad = _options.RunVadPrePass ? new SileroVadDetector(_options.EffectiveVadThreads) : null;
+            // The one thing in the run that uses more than one thread of its own accord. Always
+            // built since 0.12.0: a file's jingles are what its probe windows and its mark
+            // placement are measured from, so there is no longer a way to ask for a run without
+            // them. A load failure is therefore fatal - it propagates out of here rather than
+            // falling back to the blinder path that used to exist, which would silently produce a
+            // different marking than the one the run asked for.
+            using var vad = new SileroVadDetector(_options.EffectiveVadThreads);
             LogThreadBudget(vad);
 
             var detector = new ChapterDetector(_options, ffmpeg, transcriber, vad, pass3);

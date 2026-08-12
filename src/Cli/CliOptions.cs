@@ -484,36 +484,6 @@ public sealed class CliOptions
     public bool PreciseMark => !QuickMarks;
 
     /// <summary>
-    /// How far back a jingle may reach in seconds (--max-jingle-length / -X, default 45), or 0 to
-    /// say no jingle is expected at all - which switches the VAD pre-pass off with it (see
-    /// <see cref="RunVadPrePass"/>) and leaves detection working from the file's pauses alone.
-    /// <para>
-    /// Above 0 it no longer sizes a probe window: since the candidate classification, each window is
-    /// cut to its own candidate's geometry - where that pause ends, where that jingle's music stops -
-    /// and a length covering the book's longest jingle is exactly the width that loses a lone word
-    /// (see <see cref="DetectionTuning.WhisperChunkSeconds"/>). What it still bounds is the two
-    /// places that genuinely ask "how far back can this book's music reach": Pass 3's jingle anchor
-    /// lookback and <see cref="PreciseMarkRefiner"/>'s <c>--mark-before-jingle</c> verification span.
-    /// </para>
-    /// <para>
-    /// "auto" is accepted and means the 45 s default. It used to mean more - the probe window
-    /// re-sized itself to 1.25x the longest jingle seen so far - and there is nothing left for that
-    /// to size.
-    /// </para>
-    /// </summary>
-    public double MaxJingleSeconds { get; private set; } = 45;
-
-    /// <summary>
-    /// True whenever the Silero VAD pre-pass should run over a file: either
-    /// <see cref="MarkBeforeJingle"/> needs its jingle/VAD-region anchor, or
-    /// <see cref="MaxJingleSeconds"/> is above 0 and Pass 2 may need to widen its probe window
-    /// or add VAD-region candidates for a possible jingle. False only when neither applies -
-    /// <see cref="MarkBeforeJingle"/> is off and <see cref="MaxJingleSeconds"/> is exactly 0 -
-    /// which reproduces this tool's original, pre-jingle-support behavior exactly.
-    /// </summary>
-    public bool RunVadPrePass => MarkBeforeJingle || MaxJingleSeconds > 0;
-
-    /// <summary>
     /// Minimum silence duration in seconds that counts as a potential chapter break
     /// (--min-silence-length / -n). Every such silence triggers a Whisper probe, so an
     /// explicit higher value can reduce the number of probes further still. With an explicit
@@ -571,7 +541,7 @@ public sealed class CliOptions
     /// voice-activity pre-pass found a jingle. For a book whose chapters all open with one, that
     /// removes the hundreds of ordinary in-narration pauses each of which otherwise costs a Whisper
     /// probe; for a book whose chapters do not, it removes the only way of finding them, which is
-    /// why it is off by default and why 0 is refused together with <c>--max-jingle-length 0</c>.
+    /// why it is off by default.
     /// <para>
     /// Only <em>probing</em> is affected. The silence scan itself still runs and still keeps
     /// everything down to <see cref="StoredSilenceFloorSeconds"/>: window seams, transcript
@@ -791,7 +761,7 @@ public sealed class CliOptions
         // script carrying it gets the migration error instead of silently doing the opposite of
         // what it asked for. The letter is free to be reused once that error is dropped.
         ['a'] = "--early-abort", ['e'] = "--expected-start-chapter", ['L'] = "--trailing-scan",
-        ['F'] = "--filter", ['X'] = "--max-jingle-length",
+        ['F'] = "--filter",
         ['n'] = "--min-silence-length", ['t'] = "--chapter-title", ['i'] = "--intro-title",
         ['p'] = "--prologue-phrase", ['P'] = "--prologue-title",
         ['g'] = "--epilogue-phrase", ['G'] = "--epilogue-title",
@@ -804,7 +774,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _jingleLenSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
+    private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
 
     // The phrase and title options, each holding what was given for every language, per language,
     // or nothing at all when the option was not given - in which case the language's own default
@@ -837,7 +807,7 @@ public sealed class CliOptions
            || Export || Import || SimpleMetadata || Verify || Fix || IgnoreProgress
            || UseGpu != null || VadThreads != null || WhisperThreads != null
            || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
-           || _jingleLenSet || _minSilenceSet || _earlyAbortSet || _markLeadSet || _expectedStartSet
+           || _minSilenceSet || _earlyAbortSet || _markLeadSet || _expectedStartSet
            || _chapterCountSet || _noiseFloorSet || _namedMarkDistanceSet
            || _phraseSpec != null || _titleSpec != null || _introSpec != null
            || _prologuePhraseSpec != null || _prologueTitleSpec != null
@@ -885,7 +855,7 @@ public sealed class CliOptions
                 $"chaptercount={ChapterCount}",
                 $"trailingscan={TrailingScan}", $"verify={Verify}/{Fix}", $"verifythreshold={VerifyFailThreshold}",
                 $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}", $"marklead={MarkLeadSeconds}",
-                $"maxjingle={MaxJingleSeconds}", $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
+                $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
@@ -1014,13 +984,6 @@ public sealed class CliOptions
         if (o.NoOp && (o.Revert || o.Cleanup || o.AnyProcessingOptionGiven))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
 
-        // The two options that decide what Pass 2 probes at all. Switching both off leaves it with
-        // no candidates whatsoever, so the run could only ever report that the book has no chapters.
-        if (!o.ProbeSilences && o.MaxJingleSeconds == 0)
-            throw new CliError(
-                "--min-silence-length 0 leaves only the jingles to probe, and --max-jingle-length 0 " +
-                "says there are none: together they would give the search nothing to look at.");
-
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
@@ -1031,11 +994,11 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._jingleLenSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || o.Verify || o._titleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || o.Verify || o._titleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
-                "--mark-before-jingle, --quick-marks, --mark-lead, --max-jingle-length, --min-silence-length, " +
+                "--mark-before-jingle, --quick-marks, --mark-lead, --min-silence-length, " +
                 "--noise-floor, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, --verify, " +
                 "--named-mark-distance, " +
@@ -1303,14 +1266,19 @@ public sealed class CliOptions
             case "--custom": _customMappings.AddRange(CustomMappingParser.ParseSpec(nextParam())); return true;
             case "--custom-file": _customMappings.AddRange(CustomMappingParser.ParseFile(nextParam())); return true;
             case "--filter": ParseFilter(nextParam()); return true;
-            case "--max-jingle-length": MaxJingleSeconds = ParseJingleLength(nextParam()); _jingleLenSet = true; return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--noise-floor": (NoiseFloorDb, AutoNoiseFloor) = ParseNoiseFloor(nextParam()); _noiseFloorSet = true; return true;
             case "--mark-lead": MarkLeadSeconds = ParseMarkLead(nextParam()); _markLeadSet = true; return true;
             case "--vad-threads": VadThreads = ParseThreadCount("--vad-threads", nextParam()); return true;
             case "--whisper-threads": WhisperThreads = ParseThreadCount("--whisper-threads", nextParam()); return true;
-            // Removed in 0.10.0. Kept as a named case rather than left to "Unknown option" so a
-            // script carrying it is told what replaced it instead of only that it is gone.
+            // Removed in 0.10.0 and 0.12.0. Kept as named cases rather than left to "Unknown
+            // option" so a script carrying one is told what replaced it instead of only that it is
+            // gone.
+            case "--max-jingle-length":
+                throw new CliError(
+                    "--max-jingle-length was removed: every probe window is now cut to its own " +
+                    "candidate, and how far a book's music reaches is measured from the file " +
+                    "itself. The voice-activity pre-pass that finds the jingles always runs.");
             case "--jobs":
                 throw new CliError(
                     "--jobs was removed: files are no longer processed several at a time, so that the " +
@@ -1360,23 +1328,6 @@ public sealed class CliOptions
                 $"Unsupported extension(s) in --filter: {string.Join(", ", unsupported)} " +
                 $"(supported: {SupportedExtensionsText}).");
         FilterExtensions = extensions;
-    }
-
-    /// <summary>
-    /// Parses the --max-jingle-length parameter into 0 (no jingle expected - see
-    /// <see cref="RunVadPrePass"/>) or a number of seconds between 1 and 600. "auto" is still
-    /// accepted and resolves to the 45 s default; see <see cref="MaxJingleSeconds"/> for what it
-    /// used to switch on and why nothing is left of it.
-    /// </summary>
-    /// <param name="value">The raw parameter.</param>
-    private static double ParseJingleLength(string value)
-    {
-        if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
-            return 45;
-        if (!NumberCulture.TryParseDecimal(value, out var s) ||
-            (s != 0 && (s < 1 || s > 600)))
-            throw new CliError($"Invalid --max-jingle-length value \"{value}\": expected 0, seconds between 1 and 600, or \"auto\".");
-        return s;
     }
 
     /// <summary>
@@ -1566,9 +1517,9 @@ public sealed class CliOptions
     }
 
     /// <summary>Parses the --named-mark-distance parameter into a number of seconds, or 0 for "let
-    /// every mark stand where it is". Capped at 600 for the same reason
-    /// <see cref="ParseJingleLength"/> is: a value past that is a typo, and one large enough to
-    /// swallow whole chapters would quietly turn a book's marking into a single entry.</summary>
+    /// every mark stand where it is". Capped at 600 because a value past that is a typo, and one
+    /// large enough to swallow whole chapters would quietly turn a book's marking into a single
+    /// entry.</summary>
     /// <param name="value">The raw parameter.</param>
     private static double ParseNamedMarkDistance(string value)
     {
@@ -1826,9 +1777,9 @@ public sealed class CliOptions
                                     in full - which the default pairing does. Loaded and downloaded
                                     lazily, only when a file actually reaches pass 2.5 or pass 3.
           -j, --mark-before-jingle  A short jingle may precede the chapter phrase; anchor the
-                                    mark to it instead of the default fixed offset (see
-                                    --max-jingle-length below). A silence scan and a
-                                    voice-activity (VAD) pre-pass already run over the whole
+                                    mark to it instead of the default fixed offset. A silence
+                                    scan and a
+                                    voice-activity (VAD) pre-pass run over the whole
                                     file regardless of this option, so jingles are found
                                     whether or not they are preceded by a silence: starting
                                     from wherever the mark would otherwise be placed, this
@@ -1868,17 +1819,6 @@ public sealed class CliOptions
                                     it. That can happen even together with
                                     --mark-before-jingle, whose backward walk can only be as
                                     good as the mark it starts from.
-          -X, --max-jingle-length <seconds|auto>
-                                    How far back a jingle may reach (default 45; "auto" means
-                                    the same 45), or 0 if no jingle is expected at all. Above 0,
-                                    the VAD pre-pass runs and every jingle it finds becomes a
-                                    probe candidate of its own; the value bounds how far back
-                                    the tool believes music can stretch when it places a mark.
-                                    At 0 there are no jingle candidates, and the VAD pre-pass is
-                                    skipped entirely unless --mark-before-jingle still needs it.
-                                    It no longer sizes any probe window: each window is cut to
-                                    its own candidate - where that pause ends, where that
-                                    jingle's music stops.
           -n, --min-silence-length <seconds|auto>
                                     The shortest pause probed as a potential chapter
                                     break (default: "auto", which starts at 1.5). This
@@ -1904,9 +1844,7 @@ public sealed class CliOptions
                                     silences at all, leaving only the jingles the
                                     voice-activity pre-pass finds - a large saving on a
                                     book whose every chapter opens with one, and a way to
-                                    miss every chapter that does not. Cannot be combined
-                                    with --max-jingle-length 0, which would leave nothing
-                                    to probe at all.
+                                    miss every chapter that does not.
               --noise-floor <dBFS|auto>
                                     How quiet audio has to be to count as a pause, in dBFS
                                     (default: auto; 0 is full scale, so this is negative).
@@ -2132,8 +2070,7 @@ public sealed class CliOptions
                                     --epilogue-phrase, --custom, --custom-file,
                                     --ignore-chapter-numbers, --model, --pass3-model,
                                     --mark-before-jingle, --quick-marks, --mark-lead,
-                                    --max-jingle-length, --min-silence-length,
-                                    --noise-floor, --early-abort,
+                                    --min-silence-length, --noise-floor, --early-abort,
                                     --expected-start-chapter, --max-chapter-number,
                                     --chapter-count, --no-trailing-scan and --verify.
                                     Also mutually exclusive with --export, --revert,

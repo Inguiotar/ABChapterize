@@ -547,6 +547,32 @@ internal static class DetectionTuning
     internal static readonly double[] PreciseMarkPlateauProbesSeconds = [0.3, 0.6, 0.9, 1.2];
 
     /// <summary>
+    /// How far <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/>'s plateau walk may run from the
+    /// position it set out from, counting resumes.
+    /// <para>
+    /// A runaway guard, not a question about music - which is why it is a constant and not the
+    /// census's jingle reach. The walk climbs forward from a confirmed phrase to the far edge of the
+    /// plateau it sits on; what must never happen is that it climbs on into the <em>next</em>
+    /// chapter's announcement, and what bounds that is how far apart two chapters are, not how long
+    /// this book's jingles run. Handed a census-derived figure it would collapse to a few seconds on
+    /// a book with no jingles and strangle the walk there.
+    /// </para>
+    /// <para>
+    /// 60 s: comfortably past any real plateau (the longest observed runs a few seconds) and
+    /// comfortably short of a chapter. It replaces the <c>--max-jingle-length + margin</c> = 50 s
+    /// this read before 0.12.0, which was that same kind of number arrived at by coincidence of
+    /// value. The 10 s of extra room is deliberate, and is also the one part of removing that option
+    /// which can move an existing mark - a walk that used to stop at the limit can now go further.
+    /// </para>
+    /// <para>
+    /// Capping it by the distance to the next chapter was considered and dropped: Pass 2's forward
+    /// scan has not found that chapter yet, so the constant would still be doing the work almost
+    /// everywhere it matters.
+    /// </para>
+    /// </summary>
+    internal const double PlateauWalkLimitSeconds = 60;
+
+    /// <summary>
     /// How many times <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> may restart its walk after
     /// finding the plateau resuming past an edge (see
     /// <see cref="PreciseMarkPlateauProbesSeconds"/>). A bound rather than a measurement: one

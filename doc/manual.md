@@ -81,8 +81,7 @@ naming one directly as the target is an error.
 ## 3. How detection works
 
 Detection runs in up to three Whisper-transcription passes per file, plus a
-voice-activity (VAD) pre-pass that runs by default (skipped only with
-`--max-jingle-length 0` and no `--mark-before-jingle`). This section is an
+voice-activity (VAD) pre-pass that runs over every file. This section is an
 overview of what each pass does; the machinery that keeps it accurate and
 fast — how probe windows are sized and stitched together word-safely, how
 each mark is pinpointed to its exact position, the transcript caching and the
@@ -113,12 +112,12 @@ embedded in the executable (~2.2 MB, no separate download; see
 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)). Music reads as
 non-speech to a speech detector, the same as silence, so a jingle shows up as
 a non-speech region flanked by speech even when there is no amplitude gap
-around it, and pass 2 gets a candidate at every jingle it finds. This pre-pass
-is skipped only when
-`--max-jingle-length 0` says no jingle is expected at all and
-`--mark-before-jingle` is not given either — reproducing this tool's
-original, pre-jingle-detection behavior exactly (see the `-X` and `-j`
-references below).
+around it, and pass 2 gets a candidate at every jingle it finds. There is no way
+to switch this off: what the pre-pass measures — where each jingle starts and
+where the speech behind it resumes — is what probe windows are cut to and what
+mark placement is measured against, so a run without it would be a different
+tool. A book with no music simply yields no jingles and costs the scan itself,
+which is a fraction of one pass over the file.
 
 ### Pass 2 — probing
 
@@ -139,11 +138,12 @@ candidate also decides where its window opens and how far it runs:
   Everything a window from there would hear belongs to the jingle behind it,
   and the jingle listens for the same announcement from a better place.
 
-So `--max-jingle-length` no longer decides how wide any window is — a book's
-jingles cost only the jingles' own probes now, however long they run. What it
-still bounds is how far back the tool believes music can reach when it places a
-mark; and with `--max-jingle-length 0` there are no jingle candidates at all,
-leaving the pauses as the only thing looked at.
+No setting decides how wide any of these windows is — each is cut to its own
+candidate, so a book's jingles cost only the jingles' own probes however long
+they run. How far back the tool believes music can reach, where that question
+comes up at all (see [Pass 3](#pass-3--gap-filling-only-when-needed) and
+`--mark-before-jingle`), is measured from the file's own jingles rather than
+assumed.
 
 Each transcript is matched against the chapter phrase (see `--chapter-phrase`),
 and the chapter number is parsed from digits, Roman numerals or number words
@@ -169,8 +169,7 @@ over the same audio. The spot is therefore read once more from a window short
 enough to stay inside a single chunk — through the model `--pass3-model` names
 where that is a better one than `--model`, since an announcement quiet enough to
 be dropped is also one a larger model is likelier to recover — and `--verbose`
-says so, naming the recognizer it used. This needs the
-pre-pass, so `--max-jingle-length 0` never does it.
+says so, naming the recognizer it used.
 
 A number that *is* read but cannot plausibly belong where it was heard — one
 that would leave more than three chapters missing in one go, or one below the
@@ -860,9 +859,7 @@ so that logs and reports stay comparable regardless of regional settings.
   simply stop being candidates, and every jingle becomes one instead — including
   the ones led by a silence, which are normally left to that silence's own
   candidate. For a book whose chapters do not open with a jingle it removes the
-  only way of finding them, which is why it is not a default and why it is
-  refused together with `--max-jingle-length 0` (the two of them would leave the
-  search nothing at all to look at).
+  only way of finding them, which is why it is not a default.
 
   What `0` does **not** switch off is the silence scan itself. Pass 1 still runs
   and still keeps every silence it finds: window seams snap to them, transcript
@@ -906,8 +903,8 @@ so that logs and reports stay comparable regardless of regional settings.
 
 `-j`, `--mark-before-jingle`
 : Anchor the chapter mark to the end of the previous
-  chapter's actual narration instead of the default fixed `--mark-lead` offset
-  (see `--max-jingle-length` below): starting from whatever mark default mode
+  chapter's actual narration instead of the default fixed `--mark-lead` offset:
+  starting from whatever mark default mode
   (normally already refined, see `--quick-marks` below)
   found, the mark is walked backward — out of any silence
   it sits in, then, if no real speech is heard right there, back through the
@@ -973,25 +970,6 @@ so that logs and reports stay comparable regardless of regional settings.
   are usually usable for jumping to a chapter, but one can sit *after* the
   chapter phrase instead of before it, so playback starts a moment into the
   announcement. That can happen even together with `--mark-before-jingle`.
-
-`-X`, `--max-jingle-length <seconds|auto>`
-: How far back a jingle may reach (0, or 1–600; default 45). Above 0, a VAD
-  pre-pass runs (see
-  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) and every jingle it finds
-  becomes a probe candidate; the value itself bounds the two places that ask how
-  far a book's music can stretch back — pass 3's jingle anchor and
-  `--mark-before-jingle`'s verification of a mark it walked.
-  `0` says no jingle is expected at all: there are no jingle candidates, and the
-  VAD pre-pass is skipped entirely unless `--mark-before-jingle` still needs it
-  for mark placement — reproducing this tool's original, pre-jingle-detection
-  behaviour.
-
-  What it no longer does is size a probe window. Every window is now cut to its
-  own candidate — where that pause ends, where that jingle's music stops — and a
-  window long enough to span a book's longest jingle is exactly the width that
-  loses a one-word announcement. `auto` is still accepted and means the 45 s
-  default; it used to switch on a window that re-sized itself to the longest
-  jingle seen so far, and there is nothing left for that to size.
 
 ### Phrases and titles
 
@@ -1720,7 +1698,7 @@ touching Whisper at all.
   `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--custom`,
   `--custom-file`, `--ignore-chapter-numbers`, `--model`, `--pass3-model`,
   `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
-  `--max-jingle-length`, `--min-silence-length`, `--noise-floor`,
+  `--min-silence-length`, `--noise-floor`,
   `--early-abort`, `--expected-start-chapter`, `--max-chapter-number`,
   `--chapter-count`, `--no-trailing-scan`, `--verify` — nor with the title
   options `--chapter-title`,
@@ -2377,8 +2355,8 @@ name, everything the pipeline does:
   words — with the shortest, longest and average length of them. A brief vocal
   blip in the music does not split one jingle in two, and counts toward its
   length. A book whose chapters open with music says so here, in the first few
-  seconds of a run, and the lengths are the figures
-  [`--max-jingle-length`](#detection-behaviour) has to cover. The two counts
+  seconds of a run, and the longest of them is the figure everything that has to
+  look back over music is measured against. The two counts
   answer different questions and need not match: the regions are the places
   pass 2 will look, the jingles are what the audio actually holds,
 - each probe window and pass-3 chunk as a `<length>@<time>` header line,
@@ -2519,9 +2497,9 @@ chapters is shortened to a plain `.missing-marks` and is *not* resumed
 automatically — rerun it with `--force` (and the new option) once you know
 what went wrong.
 
-**It's slow** — see the speed knobs: `--min-silence-length` (fewer probes),
-`--max-jingle-length 0` (no jingle probing at all, where a book has no music at
-its chapter starts), `--no-trailing-scan` (skips a final chapter's worth of transcription on
+**It's slow** — see the speed knobs: `--min-silence-length` (fewer probes, or
+`0` for jingles only, on a book whose every chapter opens with
+music), `--no-trailing-scan` (skips a final chapter's worth of transcription on
 every file), and a smaller `--pass3-model` if only the gap-filling pass drags.
 Check that the startup line reports a GPU backend, not CPU.
 

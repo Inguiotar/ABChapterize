@@ -166,10 +166,8 @@ public sealed class DebugLog : IDisposable
                      (o.NamedMarkDistanceSeconds > 0 ? $"{o.NamedMarkDistanceSeconds:0.##} s" : "off");
         yield return $"noise-floor {(o.AutoNoiseFloor ? "auto" : $"{o.NoiseFloorDb:0.#} dBFS")}";
         yield return $"min-silence-length {DescribeMinSilence(o)}, " +
-                     $"max-jingle-length {o.MaxJingleSeconds:0.#} s, " +
                      $"mark-lead {o.MarkLeadSeconds:0.##} s";
-        yield return $"vad-pre-pass {(o.RunVadPrePass ? "on" : "off")}, " +
-                     $"mark-refinement {(o.PreciseMark ? "on" : "off (--quick-marks)")}, " +
+        yield return $"mark-refinement {(o.PreciseMark ? "on" : "off (--quick-marks)")}, " +
                      $"mark-before-jingle {(o.MarkBeforeJingle ? "on" : "off")}";
         yield return $"early-abort {(o.EarlyAbortMinutes > 0 ? $"{o.EarlyAbortMinutes:0.#} min" : "off")}, " +
                      $"expected-start-chapter {o.ExpectedStartChapter?.ToString() ?? "-"}, " +

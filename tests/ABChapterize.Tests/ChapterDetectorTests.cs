@@ -508,7 +508,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task SequentialChapters_AreDetectedAtSilenceEnds()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -527,7 +527,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Prologue_AndEpilogue_AreDetectedAsNamedMarks()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -549,7 +549,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // "the prologue" said inside chapter one is prose, not an announcement - the scope is
         // what keeps it from becoming a second, spurious mark.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -565,7 +565,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Epilogue_IsIgnored_BeforeAnyChapterHasBeenFound()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -583,7 +583,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Front matter routinely names what is coming before the narrator announces it; the real
         // announcement is by construction the later of the two, and only one mark survives.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(295, 300), new(595, 600)],
             s =>
             {
@@ -601,7 +601,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // A book whose chapter announcements were never heard is a failed detection; a lone
         // prologue must not be what makes the file worth rewriting.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--early-abort", "0"),
+            Options("--early-abort", "0"),
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Prologue.")));
 
@@ -615,7 +615,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // "epilogue" is an ordinary word, and a match between two chapters is prose rather than the
         // book's epilogue - which by definition has no chapter after it.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -635,7 +635,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // with the upgrade model and hears "epilogue" inside chapter 2's prose. Later in the run,
         // earlier in the book - and the book is what decides.
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--max-jingle-length", "0", "--model", "small", "--pass3-model", "turbo"),
+            Options("--model", "small", "--pass3-model", "turbo"),
             [new(595, 600), new(1195, 1200), new(1795, 1800), new(2395, 2400)],
             pass2 =>
             {
@@ -715,7 +715,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task NamedMarks_AreNotDetected_WhenTheirPhraseIsSwitchedOff()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--prologue-phrase", "", "--epilogue-phrase", ""),
+            Options("--prologue-phrase", "", "--epilogue-phrase", ""),
             [new(595, 600)],
             s =>
             {
@@ -731,7 +731,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task NamedMarks_AreLocalized_ByLang()
     {
         var result = await DetectAsync(
-            Options("--lang", "de", "--max-jingle-length", "0"),
+            Options("--lang", "de"),
             [new(595, 600)],
             s =>
             {
@@ -748,7 +748,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The whole reason they travel in their own list: a numberless mark between chapter 1 and
         // chapter 2 must leave the sequence - and therefore GapRemains - completely untouched.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -767,7 +767,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Unlike the prologue, a --custom phrase is repeatable: each announcement gets its own mark
         // instead of the last one replacing all the others.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--custom", "zwischenspiel:Zwischenspiel"),
+            Options("--custom", "zwischenspiel:Zwischenspiel"),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -787,7 +787,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Both before the first chapter and after the last: neither scope rule applies to it.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--custom", "/zeit[- ]?tafel/:Zeittafel"),
+            Options("--custom", "/zeit[- ]?tafel/:Zeittafel"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -805,7 +805,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task CustomTitle_ExpandsACapturingGroup()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--custom", "/(interlude|intermezzo)/:The $1"),
+            Options("--custom", "/(interlude|intermezzo)/:The $1"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -827,7 +827,7 @@ public sealed class ChapterDetectorTests : IDisposable
             .Select(i => new Silence(i * 25 - 3, i * 25))
             .ToList();
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--min-silence-length", "1",
+            Options("--min-silence-length", "1",
                     "--custom", "interlude:Interlude"),
             silences,
             s =>
@@ -845,7 +845,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task IgnoreChapterNumbers_MarksEveryAnnouncement_KeepingItsSpokenNumber()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--ignore-chapter-numbers",
+            Options("--ignore-chapter-numbers",
                     "--custom", "zwischenspiel:Zwischenspiel"),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
@@ -868,7 +868,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task IgnoreChapterNumbers_MarksAnAnnouncementThatCarriesNoNumber()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--ignore-chapter-numbers"),
+            Options("--ignore-chapter-numbers"),
             [new(595, 600)],
             s => s.Add(600, Seg(0.3, " Chapter. The rain had not let up.")));
 
@@ -881,7 +881,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // With numbers on, a lone prologue is a failed detection and gets dropped; with them off it
         // is exactly what the run was asked for.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--ignore-chapter-numbers", "--early-abort", "0"),
+            Options("--ignore-chapter-numbers", "--early-abort", "0"),
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Prologue.")));
 
@@ -894,7 +894,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The chapters live in the named list here, so the prologue's scope has to close on those -
         // otherwise "as the prologue explained" would walk the mark into the middle of the book.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--ignore-chapter-numbers"),
+            Options("--ignore-chapter-numbers"),
             [new(295, 300), new(595, 600)],
             s =>
             {
@@ -912,7 +912,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // --early-abort counts "no chapter found"; with the chapters in the named list, those are
         // what proves the file is yielding something.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--ignore-chapter-numbers", "--early-abort", "1",
+            Options("--ignore-chapter-numbers", "--early-abort", "1",
                     "--custom", "interlude:Interlude"),
             [new(27, 30), new(597, 600)],
             s =>
@@ -931,7 +931,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task NumberWords_BeforeThePhrase_AreUnderstood()
     {
         var result = await DetectAsync(
-            Options("--lang", "de", "--max-jingle-length", "0"),
+            Options("--lang", "de"),
             [new(595, 600)],
             s =>
             {
@@ -946,7 +946,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task RegexPhrase_WithCaptureGroup_ParsesTheNumber()
     {
         var result = await DetectAsync(
-            Options("-c", @"/chapter (\d+)/", "--max-jingle-length", "0"),
+            Options("-c", @"/chapter (\d+)/"),
             [new(595, 600)],
             s => s.Add(600, Seg(0.3, " Chapter 12 begins.")));
 
@@ -965,7 +965,7 @@ public sealed class ChapterDetectorTests : IDisposable
         transcriber.Add(0, Seg(0.5, " Chapter one."));
         transcriber.Add(600, Seg(0.25, " Chapter two."));
         var log = new List<string>();
-        var detector = new ChapterDetector(Options("--max-jingle-length", "0"), audio, transcriber);
+        var detector = new ChapterDetector(Options(), audio, transcriber);
 
         await detector.DetectAsync(_file, Info, new WorkTracker(), new DetectionLog(log.Add, null), CancellationToken.None);
 
@@ -983,7 +983,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // precise marking's own probes - which sweep right across 0.25 - cannot be mistaken for the
         // loudness measurement.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--quick-marks"), [new(595, 600)],
+            Options("--quick-marks"), [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Chapter one.")));
 
         Assert.Equal(0.25, Assert.Single(result.Chapters).TimeSeconds);
@@ -996,7 +996,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // "Chapter five hundred and ten" in a three-chapter book is a mishearing, not a chapter:
         // with --max-chapter-number it never enters the sequence, so nothing is left to hunt for.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--max-chapter-number", "12"),
+            Options("--max-chapter-number", "12"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1018,7 +1018,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // become a mark. Without the line, this is indistinguishable from the phrase matcher
         // having missed it entirely.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1041,7 +1041,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the same announcement seen again, not a mention buried in the narration, so the hint
         // that would send someone looking for one is left off.
         var (_, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1071,7 +1071,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // sequence - a repeat that merely equals the last accepted chapter is the ordinary
         // re-detection of an announcement two windows overlapped, and says nothing about parts.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(395, 400), new(795, 800), new(1195, 1200),
              new(1595, 1600), new(1995, 2000), new(2395, 2400)],
             s =>
@@ -1102,7 +1102,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // note on the summary line of ordinary files. Thirteen of the fourteen books measured on
         // 2026-08-03 produced no run of these at all.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -1127,7 +1127,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // sequence refuses to measure the book by it (see DetectedChapter.NumberUnverified) and no
         // pass goes hunting behind it; the summary line says so instead.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1146,7 +1146,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task ChapterNumberAtTheCap_IsStillAccepted()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--max-chapter-number", "2"),
+            Options("--max-chapter-number", "2"),
             [new(595, 600)],
             s =>
             {
@@ -1168,7 +1168,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // against a fixed offset, so this is where the offset itself has to be pinned to the
         // announcement instead. Both onsets are far enough from 0 for a 1.5 s lead not to clamp.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--mark-lead", $"{lead}"),
+            Options("--mark-lead", $"{lead}"),
             [new(295, 300), new(595, 600)],
             s =>
             {
@@ -1183,7 +1183,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task PhraseTooLongAfterSilence_IsIgnored_WithoutJingle()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -1204,7 +1204,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task EarlyAbort_StopsProbing_OnceThresholdReached_WithNoChapterFound()
     {
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--early-abort", "10"),
+            Options("--early-abort", "10"),
             NoChapterSilences,
             _ => { });
 
@@ -1222,7 +1222,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task EarlyAbort_Zero_DisablesTheFeature_AndProbesTheWholeFile()
     {
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--early-abort", "0"),
+            Options("--early-abort", "0"),
             NoChapterSilences,
             _ => { });
 
@@ -1235,7 +1235,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task EarlyAbort_DoesNotFire_OnceAChapterHasBeenFound()
     {
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--early-abort", "10"),
+            Options("--early-abort", "10"),
             NoChapterSilences,
             s => s.Add(300, Seg(0.3, " Chapter one.")));
 
@@ -1248,7 +1248,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task ExpectedStartChapter_Aborts_WhenFirstChapterFoundIsBelowExpectation()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--expected-start-chapter", "15"),
+            Options("--expected-start-chapter", "15"),
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Chapter three.")));
 
@@ -1261,7 +1261,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task ExpectedStartChapter_DoesNotFire_WhenFirstChapterMeetsOrExceedsExpectation()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--expected-start-chapter", "3"),
+            Options("--expected-start-chapter", "3"),
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Chapter three.")));
 
@@ -1275,7 +1275,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Pass 2 only finds chapter 13; with --expected-start-chapter 12, pass 3 must hunt the
         // leading gap for chapter 12 and finds it in the very first chunk.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--expected-start-chapter", "12"),
+            Options("--expected-start-chapter", "12"),
             [new(1195, 1200)],
             s =>
             {
@@ -1294,7 +1294,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Pass 2 finds only chapter 4; with --expected-start-chapter 1, pass 3 hunts for 1-3, but
         // the audio never actually says them, so the leading gap stays unresolved.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--expected-start-chapter", "1"),
+            Options("--expected-start-chapter", "1"),
             [new(1195, 1200)],
             s => s.Add(1200, Seg(0.2, " Chapter four.")));
 
@@ -1309,7 +1309,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // No --expected-start-chapter, but the prologue says this file holds the book's beginning,
         // so chapters 1-3 under the first one found are really missing rather than another part's.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1328,7 +1328,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The same book without the prologue is indistinguishable from a split-book part starting
         // at chapter 4 - which is exactly why nothing is hunted below it.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s => s.Add(1200, Seg(0.2, " Chapter four.")));
 
@@ -1343,7 +1343,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // A split part carrying its own prologue is described by -e: the option wins, so nothing
         // under chapter 4 is hunted even though a prologue was found.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--expected-start-chapter", "4"),
+            Options("--expected-start-chapter", "4"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1393,7 +1393,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // pass-3 chunk's border (natural end 600.5) snaps to the [595, 600] silence's mid-point
         // (597.5), so the second chunk starts exactly there - that is where the phrase is heard.
         var result = await DetectAsync(
-            Options("--quick-marks", "--max-jingle-length", "0"),
+            Options("--quick-marks"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1412,7 +1412,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task UnresolvedSequenceGap_IsReported()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1517,7 +1517,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // chapter 1 already in the first chunk, the gap's sole missing number would be complete and
         // pass 3 would stop before decoding the second chunk at all - see GapCompletes_* below.)
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--expected-start-chapter", "1"),
+            Options("--expected-start-chapter", "1"),
             [new(1195, 1200)],
             s =>
             {
@@ -1537,7 +1537,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // [0, 600] (at 10). The gap's sole missing number is then complete after that chunk, so
         // transcription stops immediately - the second chunk at 590 is never decoded.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--expected-start-chapter", "1"),
+            Options("--expected-start-chapter", "1"),
             [new(1195, 1200)],
             s =>
             {
@@ -1560,7 +1560,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // at chapter 2's own mark, is too close to that chapter's probe window for the scripted
         // transcriber to tell the two decodes apart.)
         var (result, _, audio) = await DetectFullAsync(
-            OptionsWithTrailingScan("--max-jingle-length", "0"),
+            OptionsWithTrailingScan(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1583,7 +1583,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // nothing raises a gap and chapter 3 is never looked for. This is the default, and the
         // reason the trailing scan exists, and --no-trailing-scan is how it is declined.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1603,7 +1603,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the entire book, which is pass 2's job. This also covers the --early-abort and
         // --expected-start-chapter aborts, both of which leave the chapter list empty.
         var (result, _, audio) = await DetectFullAsync(
-            OptionsWithTrailingScan("--max-jingle-length", "0"),
+            OptionsWithTrailingScan(),
             [new(595, 600)],
             s => { });
 
@@ -1621,7 +1621,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // announced *after* chapter 3 is an in-text mention, not a chapter start. Accepting it would
         // report a find that Normalize then quietly drops again.
         var (result, log, _) = await DetectWithLogAsync(
-            OptionsWithTrailingScan("--max-jingle-length", "0"),
+            OptionsWithTrailingScan(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1644,7 +1644,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // segment, which is what says it was spoken between two pauses rather than inside a
         // sentence.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            Options("--chapter-phrase", "none"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1661,7 +1661,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The one thing standing between this mode and a mark on every year, price and street
         // number in the book: an announcement is a segment that is a number and nothing else.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            Options("--chapter-phrase", "none"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1676,7 +1676,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task BareNumbers_AcceptASpelledOutNumberOfSeveralWords()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            Options("--chapter-phrase", "none"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1693,7 +1693,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task BareNumbers_LeaveTheNamedPhrasesAlone()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            Options("--chapter-phrase", "none"),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -1719,7 +1719,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task BareNumbers_AcceptANumberGluedToTheSentenceAfterIt()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            Options("--chapter-phrase", "none"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1740,7 +1740,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task BareNumbers_StillIgnoreANumberOpeningASentence()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-phrase", "none"),
+            Options("--chapter-phrase", "none"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1771,7 +1771,7 @@ public sealed class ChapterDetectorTests : IDisposable
             ],
         };
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1800,7 +1800,7 @@ public sealed class ChapterDetectorTests : IDisposable
             Speech = [new(0, 599.9), new(603, 603.6), new(603.76, 700)],
         };
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--custom", "timeline:Timeline"),
+            Options("--custom", "timeline:Timeline"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1819,7 +1819,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 3 is announced past everything pass 2 found, with no chapter above it to make its absence
         // visible as a sequence gap.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--chapter-count", "3"),
+            Options("--chapter-count", "3"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1842,7 +1842,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Two chapters declared, two found: nothing is owed, so the tail is never touched - which is
         // the whole difference from the blind scan, whose sweep is paid for on every file.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0", "--chapter-count", "2"),
+            Options("--chapter-count", "2"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1864,7 +1864,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // file with nothing able to stop it, so letting it take precedence would quietly hand every
         // --chapter-count run the bill the option exists to avoid.
         var (result, _, audio) = await DetectFullAsync(
-            OptionsWithTrailingScan("--max-jingle-length", "0", "--chapter-count", "2"),
+            OptionsWithTrailingScan("--chapter-count", "2"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1884,7 +1884,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Nothing beyond chapter 2 is in the audio at all. Without a declared count the file would
         // be written out looking complete; with one it is tagged, which is the point.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-count", "4"),
+            Options("--chapter-count", "4"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1903,7 +1903,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // A count is also a cap, the same one --max-chapter-number provides: without it a misheard
         // "chapter thirty" in a three-chapter book leaves twenty-seven chapters "missing".
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--chapter-count", "3"),
+            Options("--chapter-count", "3"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1920,7 +1920,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // A split-book part starting at chapter 5 with three chapters in it runs 5 to 7, not 1 to 3.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-count", "3",
+            Options("--chapter-count", "3",
                     "--expected-start-chapter", "5"),
             [new(595, 600), new(1195, 1200)],
             s =>
@@ -1940,7 +1940,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // epilogue (or any --custom phrase) may still follow, and stopping at the count would cost
         // that mark silently.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0", "--chapter-count", "2"),
+            Options("--chapter-count", "2"),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -1961,8 +1961,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the pass-3 model reads it correctly - so the corrected number can only have come from the
         // re-read, and the mark keeps the position the original reading gave it.
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0",
-                    "--quick-marks"),
+            Options("--model", "base", "--pass3-model", "large", "--quick-marks"),
             [new(595, 600)],
             pass2 =>
             {
@@ -1988,7 +1987,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // window itself at 598.4, both past it. The silence is deliberately short, since the probe
         // window opens a lead-in inside it and a longer one would reach back over the announcement.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--quick-marks"),
+            Options("--quick-marks"),
             [new(598.4, 600)],
             s =>
             {
@@ -2011,7 +2010,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // indistinguishable from an in-text mention of an earlier chapter, so it used to be dropped
         // without appeal and the chapter went missing. Re-reading first recovers it.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--quick-marks"),
+            Options("--quick-marks"),
             [new(595, 600), new(1198.4, 1200)],
             s =>
             {
@@ -2040,7 +2039,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // against the wide window's "Kapitel 40". Here the wide window says three and the refinement
         // says two, and two is what the mark is recorded under.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -2064,7 +2063,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the 3 it would replace. The mark keeps the number the window gave it and the ordinary gap
         // machinery takes over.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -2090,7 +2089,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // chapter 40. Questioned against the hole it is filling, the only readings worth having are
         // the ones that fit in it, and the mender's re-framing supplies one.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--verbose", "--max-jingle-length", "0", "--quick-marks"),
+            Options("--verbose", "--quick-marks"),
             // 2.0 s is below the 3.75 s threshold chapter 2's own 5 s silence sets, so 700 is
             // skipped on the first pass and only the gap re-probe ever decodes it.
             [new(595, 600), new(698, 700), new(1195, 1200)],
@@ -2119,7 +2118,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // window re-hearing a mark already placed - questioning either would spend transcriptions with
         // nothing to gain (and, for the repeat, could only "improve" by inventing the next number).
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--quick-marks"),
+            Options("--quick-marks"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -2142,7 +2141,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // sequence gap. Chapter 2 lives *solely* in the pass-3 transcriber's script, so the gap can
         // only be filled if pass 3 actually routed through it - exactly what --pass3-model sets up.
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200)],
             pass2 =>
             {
@@ -2166,7 +2165,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // gap-chunk seam means only a pass-2-style re-probe can find it - a full pass-3
         // transcription decodes from the gap's start (0) instead and would come up empty.
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(1195, 1200)],
             pass2 =>
             {
@@ -2222,7 +2221,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // more slowly, so pass 2.5 must not run at all - the gap goes straight to pass 3, which
         // here decodes the region from its start and finds chapter 2 there instead.
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "large", "--pass3-model", "base", "--max-jingle-length", "0"),
+            Options("--model", "large", "--pass3-model", "base"),
             [new(595, 600), new(1195, 1200)],
             pass2 =>
             {
@@ -2243,7 +2242,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Pass 2.5 runs (large beats base) but its probe hears nothing, so pass 3 must still get
         // its turn on the very same gap and close it from the full transcription.
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(1195, 1200)],
             pass2 =>
             {
@@ -2264,7 +2263,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // way to "chapter 7" must not be able to plant it here - the region's own bounds reject
         // anything at or above the chapter that closes the gap, so the gap simply stays open.
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(1195, 1200)],
             pass2 =>
             {
@@ -2301,7 +2300,7 @@ public sealed class ChapterDetectorTests : IDisposable
         };
 
         var detector = new ChapterDetector(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0", "--quick-marks"),
+            Options("--model", "base", "--pass3-model", "large", "--quick-marks"),
             audio, pass2, vad: null, pass3Transcriber: pass3);
         var result = await detector.DetectAsync(_file, Info, tracker, default, CancellationToken.None);
 
@@ -2327,7 +2326,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // very thing that lost the announcement on the real file.
         var log = new List<string>();
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(898.55, 900), new(1195, 1200)],
             pass2 =>
             {
@@ -2354,7 +2353,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // merely plausible: if the bottom band ran, that decode would show up.
         var log = new List<string>();
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(898.55, 900), new(998.95, 1000), new(1195, 1200)],
             pass2 =>
             {
@@ -2382,7 +2381,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // rather than stopping at the first band that comes back empty.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(1098.95, 1100), new(1195, 1200)],
             pass2 =>
             {
@@ -2404,7 +2403,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-probe at 600, the 1.4 s silence at 900 stays untouched even though it is in range.
         var log = new List<string>();
         var (result, _, pass3) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(898.55, 900), new(1195, 1200)],
             pass2 =>
             {
@@ -2429,7 +2428,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 2 stays missing, which is exactly the trade being made.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600), new(608.55, 610), new(618.65, 620), new(655, 660)],
             pass2 =>
             {
@@ -2457,7 +2456,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // misses it, the shifted re-read's own single chunk runs 334.5 s from 15.25 and does not.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(295, 300), new(345, 350)],
             pass2 =>
             {
@@ -2481,7 +2480,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // above with the models swapped: the chapter stays missing rather than being paid for.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "large", "--pass3-model", "base", "--max-jingle-length", "0"),
+            Options("--model", "large", "--pass3-model", "base"),
             [new(595, 600), new(645, 650)],
             pass2 =>
             {
@@ -2505,7 +2504,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-read exists for: with no re-read to follow, this transcription snaps its own seams to
         // silences instead, which is what keeps an announcement off a border to begin with.
         var (_, log, _) = await DetectWithLogAsync(
-            OptionsWithTrailingScan("--max-jingle-length", "0"),
+            OptionsWithTrailingScan(),
             [new(595, 600)],
             s => s.Add(600, Seg(0.5, " Chapter one.")));
 
@@ -2520,7 +2519,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // good reason to believe is in the tail, so a second look is worth the same as it is for any
         // sequence gap - and goes by the same model gate.
         var (_, log, _) = await DetectWithLogAsync(
-            OptionsWithTrailingScan("--max-jingle-length", "0", "--chapter-count", "2"),
+            OptionsWithTrailingScan("--chapter-count", "2"),
             [new(595, 600)],
             s => s.Add(600, Seg(0.5, " Chapter one.")));
 
@@ -2537,7 +2536,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var log = new List<string>();
         await DetectWithPass3TranscriberAsync(
             OptionsWithTrailingScan("--model", "large", "--pass3-model", "base",
-                "--max-jingle-length", "0", "--chapter-count", "2"),
+                "--chapter-count", "2"),
             [new(595, 600)],
             pass2 => pass2.Add(600, Seg(0.5, " Chapter one.")),
             pass3 => { },
@@ -2578,7 +2577,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-read in pass 2 is the only thing that can reach an announcement in that position.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0"),
+            Options("--model", "base", "--pass3-model", "large"),
             [new(595, 600)],
             pass2 =>
             {
@@ -2604,7 +2603,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // and carry the original 0.42, or a recovered chapter would report a confidence measured on
         // audio it was not found in.
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0", "--quick-marks"),
+            Options("--model", "base", "--pass3-model", "large", "--quick-marks"),
             [new(595, 600)],
             pass2 =>
             {
@@ -2625,7 +2624,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // mark comes of it. An in-text mention behaves identically.
         var log = new List<string>();
         var (result, _, _) = await DetectWithPass3TranscriberAsync(
-            Options("--model", "base", "--pass3-model", "large", "--max-jingle-length", "0", "--quick-marks"),
+            Options("--model", "base", "--pass3-model", "large", "--quick-marks"),
             [new(595, 600)],
             pass2 =>
             {
@@ -2770,7 +2769,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the threshold to 3.75 s (0.75x); the 3 s silence at 700-703 falls below it and must
         // not be probed at all, but the 5 s silence at 900-905 still is, finding chapter 3.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(700, 703), new(900, 905)],
             s =>
             {
@@ -2797,7 +2796,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Tightening must only start once the second mark is found, using its own (genuine
         // inter-chapter) triggering silence instead.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(10, 40), new(595, 600), new(900, 905)],
             s =>
             {
@@ -2822,7 +2821,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-probe what it skipped since chapter 2 unconditionally, finding chapter 3 there and
         // closing the gap without needing pass 3 at all.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(700, 703), new(900, 905)],
             s =>
             {
@@ -2850,7 +2849,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // is the last one, no later mark could ever trigger a gap recovery for it, so a raised
         // threshold would lose it silently and for good.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(596, 600), new(892, 900), new(1196.5, 1200)],
             s =>
             {
@@ -2874,7 +2873,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Chapter 4's 3.2 s silence sits between the two (3 < 3.2 < 3.75), so it is only
         // probed - and chapter 4, being last, only ever found - if the lowering happened.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(896, 900), new(1196.8, 1200)],
             s =>
             {
@@ -2921,7 +2920,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The real shape is "Paula Monti" (2026-07-31), whose threshold was 1.23 s at the chapter
         // 2-5 gap and 0.8 s by the end of the book.
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(598.4, 600), new(899, 900), new(1198.5, 1200), new(1498.8, 1500),
              new(1798.5, 1800)],
             s =>
@@ -2987,7 +2986,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 34.9 s decodes into 28.8, 19.8 and 13.5 s, and a chapter announcement that the long decode
         // heard comfortably fell 1.2 s short of a short one's end and was lost.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(598.4, 600), new(898.6, 900)],
             s =>
             {
@@ -3009,7 +3008,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // silence - below chapter 2's 3.75 s but above 2.25 s - is still probed and found.
         // Chapter 5 is the last mark, so nothing could recover it if it were skipped.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(697, 700), new(895, 900), new(1197.5, 1200)],
             s =>
             {
@@ -3037,7 +3036,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // numbers above chapter 2. Observed on real audio as four identical marks for one chapter,
         // each paying for its own mark refinement (BARDIOC.m4b, 2026-07-30).
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--verbose", "--max-jingle-length", "0"),
+            Options("--verbose"),
             [new(595, 600), new(698, 700), new(703, 705), new(708, 710), new(1195, 1200)],
             s =>
             {
@@ -3067,7 +3066,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // without the note, this case and "a candidate was declined" look identical from the
         // outside, which is the first thing worth knowing when a chapter goes missing.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--verbose", "--max-jingle-length", "0", "--min-silence-length", "1.5"),
+            Options("--verbose", "--min-silence-length", "1.5"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -3207,7 +3206,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // With an explicit numeric --min-silence-length, adaptive tightening is off: every
         // silence from pass 1 is probed regardless of length or what was found before it.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(700, 703), new(900, 905)],
             s =>
             {
@@ -3227,7 +3226,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // "chapter two" spoken inside chapter 3's probe window is a regression and must
         // not override the already detected chapter sequence.
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600), new(1195, 1200), new(1795, 1800)],
             s =>
             {
@@ -3347,16 +3346,14 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task MaxJingleLengthZero_LeavesThePlainSilenceWindowAlone_AndKeepsTheOffset()
+    public async Task ABookWithNoJingles_KeepsThePlainSilenceWindow_AndTheFixedOffset()
     {
-        // The same layout as DefaultMode_PlacesMarkAtAFixedOffsetBeforeThePhrase_..., but with
-        // --max-jingle-length 0. The option used to narrow Pass 2's window to a plain 12 s and now
-        // changes nothing about it: a silence candidate is sized by what it expects, and "no jingle
-        // expected at all" is what it already assumed. What the option still does is switch the VAD
-        // pre-pass off, so this book has no jingle candidates to find - and the mark placement
-        // formula is unaffected either way, having never depended on the probe width.
+        // The same layout as DefaultMode_PlacesMarkAtAFixedOffsetBeforeThePhrase_..., on a book
+        // where VAD finds no jingle at all. A silence candidate is sized by what it expects and
+        // nothing else, and the mark placement formula never depended on the probe width - which is
+        // what let --max-jingle-length go in 0.12.0 without either of them noticing.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -3370,15 +3367,13 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task MarkBeforeJingleWithMaxJingleLengthZero_StillAnchorsViaVad()
+    public async Task MarkBeforeJingle_AnchorsViaVad()
     {
-        // --mark-before-jingle turns on the VAD pre-pass and its own backward-walk mark
-        // placement (see JingleWithLeadingSilence_MarksInsideThatHush_... for why this lands at
-        // 699.75, a mark lead inside the hush ending at the jingle's true start) even with
-        // --max-jingle-length 0 saying no jingle is expected. The two options stay independent:
-        // one controls where the mark goes, the other whether jingles are looked for at all.
+        // --mark-before-jingle's own backward-walk mark placement (see
+        // JingleWithLeadingSilence_MarksInsideThatHush_... for why this lands at 699.75, a mark
+        // lead inside the hush ending at the jingle's true start).
         var (result, _, audio) = await DetectFullAsync(
-            Options("--quick-marks", "--mark-before-jingle", "--max-jingle-length", "0"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(695, 700)],
             s =>
             {
@@ -3429,7 +3424,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (Silence = null), tightens nothing, and finds chapter three - so the result must be
         // [1, 2, 3], not [1, 2].
         var (result, _, _) = await DetectWithLogAsync(
-            Options("--quick-marks", "--mark-before-jingle", "--max-jingle-length", "auto"),
+            Options("--quick-marks", "--mark-before-jingle"),
             [new(610, 613), new(1000, 1002)],
             s =>
             {
@@ -4080,7 +4075,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // beaten to the microphone by the transient scripted just in front of it - so nothing is
         // ever confirmed and the mark stands where the heuristics left it.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -4106,7 +4101,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // music. Bracketing the matched segment and narrowing in on the phrase finds it anyway,
         // starting from a mark the smeared abs-618 transcript put 7 s early.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "30"),
+            Options("--min-silence-length", "1.5"),
             [new(610, 613)],
             s =>
             {
@@ -4734,7 +4729,7 @@ public sealed class ChapterDetectorTests : IDisposable
     // Retired 2026-08-08 with the Pass 2 restructuring: AutoMaxJingle_MeasuresJingleUpToThePhrase_
     // NotTheInflatedRegionEnd, AutoMaxJingle_DoesNotResizeFromTheFirstMark and AutoMaxJingle_
     // NeverNarrowsTheWindow_AfterALongerJingleWasObserved lived here. All three asserted how the
-    // --max-jingle-length auto window sizing governs the *primary* scan, which it no longer does:
+    // --max-jingle-length auto window sizing governed the *primary* scan, which it stopped doing:
     // a primary candidate carries a window cut to what its own class expects.
     //
     // Retired 2026-08-11 with the recovery-geometry rework, for the same reason one step further on:
@@ -4846,7 +4841,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task LowConfidenceSegment_CarriesConfidence_AndIsFlagged()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -4864,7 +4859,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task HighConfidenceSegments_YieldNoLowConfidenceFlags()
     {
         var result = await DetectAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -4878,7 +4873,7 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task NoSpeechAnywhere_YieldsNoChapters()
     {
-        var result = await DetectAsync(Options("--max-jingle-length", "0"), [new(595, 600)], _ => { });
+        var result = await DetectAsync(Options(), [new(595, 600)], _ => { });
         Assert.Empty(result.Chapters);
         Assert.False(result.GapRemains);
     }
@@ -4906,7 +4901,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the faithful setup here - this test is about reuse, not about the untranscribed case,
         // which ReadAhead_DoesNotCacheATailTheRecognizerLeftUntranscribed covers on its own.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(601, 603)],
             s =>
             {
@@ -4929,7 +4924,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // decodes exactly its own planned span ([597, 608.3], the snapped seam) and the window after
         // it pays for its own tail decode after all.
         var (_, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "20"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(608, 608.6)],
             s => s.Add(600, Seg(0.5, " Chapter one.", confidence: 0.3)));
 
@@ -4952,7 +4947,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // scanned with the window that expects an announcement there, not with the one that read it.
         // Chapter one is scripted at low confidence so its own mark does not settle window 2 away.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(601, 605), new(634, 637)],
             s =>
             {
@@ -4983,7 +4978,7 @@ public sealed class ChapterDetectorTests : IDisposable
             silences.Add(new(598.5 + 5 * i, 600 + 5 * i));
 
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             silences,
             s =>
             {
@@ -5014,7 +5009,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Capping the cache at the transcript's reach sends the next candidate back to the audio,
         // where a shorter decode reads it cleanly.
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(601, 604.5), new(700, 703)],
             s => s.AddWithin(25.0, 605, Seg(0, " Chapter one.")));   // abs 605, in the surplus
 
@@ -5030,7 +5025,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task OverlapReuse_IsRefused_WhenACachedSegmentHidesTheCandidatesExpectation()
     {
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(609, 613), new(618, 621)],
             s =>
             {
@@ -5058,7 +5053,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // fresh tail decode at the border (612), no decode at the candidate start (606), and
         // this works with an explicit --min-silence-length (no adaptive skipping involved).
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(601, 606)],
             s => s.Add(600, Seg(0.5, " Chapter one.")));
 
@@ -5133,7 +5128,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // overlapping candidate at 606 entirely: neither the border (612) nor the candidate
         // start (606) is ever decoded again.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606)],
             s => s.Add(600, Seg(9, " Chapter one.")));
 
@@ -5150,7 +5145,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ("Chapter two had been hard.") must not qualify as a deep-detection anchor, so no
         // chapter two mark may appear anywhere.
         var result = await DetectAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(605, 605.6)],
             s =>
             {
@@ -5170,7 +5165,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // heard, though, so the log has to say so: "never heard" and "heard but unanchorable" call
         // for completely different fixes.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600)],
             s => s.Add(0, Seg(9, " Chapter one.")));
 
@@ -5193,7 +5188,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // an announcement is granted, so there is no anchor for it.
         var word = value.Split(':')[0];
         var (result, log, _) = await DetectWithLogAsync(
-            Options(option, value, "--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options(option, value, "--min-silence-length", "1.5"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -5214,7 +5209,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The other half of the rule: tightening acceptance must not cost a real announcement its
         // mark. This one starts 0.2 s into its window, well inside the 5 s the timing rule grants.
         var result = await DetectAsync(
-            Options("--custom", "zeittafel:Zeittafel", "--max-jingle-length", "0"),
+            Options("--custom", "zeittafel:Zeittafel"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -5232,7 +5227,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the 5 s the timing rule grants. The log names the measured distance, so the rule can be
         // checked against the audio rather than guessed at.
         var (_, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(601, 603)],
             s => s.Add(600, Seg(9, " Chapter one.")));
 
@@ -5249,7 +5244,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The log puts its length next to --min-silence-length, since that is the knob to reach
         // for when the book's own chapter breaks turn out to be shorter than the default.
         var (_, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(605, 605.6)],
             s =>
             {
@@ -5272,7 +5267,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 0.75 x 6 = 4.5 s: chapter three's 2.5 s silence ([897.5, 900]) is only probed - and
         // chapter three, being last, only ever found - if the mark's own silence was used.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(594, 600), new(605, 608), new(897.5, 900)],
             s =>
             {
@@ -5435,7 +5430,7 @@ public sealed class ChapterDetectorTests : IDisposable
         List<Silence> silences = [new(595, 600)];
         Action<ScriptedTranscriber> script = s => s.Add(0, Seg(0.5, " Chapter one."));
 
-        var (_, plain, _) = await DetectWithLogAsync(Options("--max-jingle-length", "0"), silences, script);
+        var (_, plain, _) = await DetectWithLogAsync(Options(), silences, script);
         var (_, full, _) = await DetectWithLogAsync(Options("-T"), silences, script);
 
         var plainHeader = Assert.Single(plain, l => l.StartsWith("probe ") && l.Contains("@0:00:00.00"));
@@ -5464,11 +5459,11 @@ public sealed class ChapterDetectorTests : IDisposable
         // same unreadable announcement and the merge still has to do the work.
         //
         // The geometry is picked so that a tail decode both happens and stays short: the seam sits
-        // at 617.3, and the 25 s window (--max-jingle-length 20 plus the phrase margin) puts window
+        // at 617.3, and the silence candidate's 25 s window puts window
         // 2's end at 631 - past the 630 window 1's single encoder pass covers, so window 1 cannot
         // read ahead over it, and the tail is only 13.7 s.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "20"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(603, 606), new(617, 617.6)],
             s =>
             {
@@ -5612,7 +5607,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // seam target only) sits within the 5 s forward search past the natural end (622) -
         // the decode itself must run 26.6 s, up to the mid-point (623.6).
         var (result, _, audio) = await DetectFullAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(595, 600), new(623.2, 624)],
             s =>
             {
@@ -5723,7 +5718,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // attempt snaps (see TranscribeRegionAsync's snapSeams).
         var (result, log, audio) = await DetectWithLogAsync(
             Options("--model", "large", "--pass3-model", "tiny",
-                    "--min-silence-length", "1.5", "--max-jingle-length", "0"),
+                    "--min-silence-length", "1.5"),
             [new(598, 599), new(1195, 1200)],
             s =>
             {
@@ -5757,7 +5752,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // that had already failed. Unsnapped, chunk 1 of the re-read is chunk 1 of the first
         // attempt moved one shift later, and the same holds for every chunk after it.
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new(598, 599), new(1195, 1200)],
             s =>
             {
@@ -5788,7 +5783,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-detection is new information: both must be ignored outright, with no log line and
         // without nudging chapter 3's mark from 500 down to 495.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(495, 500)],
             s =>
             {
@@ -5831,7 +5826,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 duringPass3.Add(work.Fraction);
         };
 
-        var detector = new ChapterDetector(Options("--max-jingle-length", "0"), audio, transcriber);
+        var detector = new ChapterDetector(Options(), audio, transcriber);
         var result = await detector.DetectAsync(
             _file, Info, work, new DetectionLog(_ => { }, null), CancellationToken.None);
 
@@ -5856,7 +5851,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ([198, 208]) rather than the whole [2.5, 494.5] stretch between the chunk's two
         // segments, and finds the phrase in the first 8 s sub-chunk (starting at 198).
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--quick-marks", "--max-jingle-length", "0"),
+            Options("--quick-marks"),
             [new(495, 500), new(200, 206)],
             s =>
             {
@@ -5884,7 +5879,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // 198 are expected, never something like 50 or 300 that a naive "scan the whole gap"
         // approach would also have visited.
         var (result, _, audio) = await DetectFullAsync(
-            Options("--quick-marks", "--max-jingle-length", "0"),
+            Options("--quick-marks"),
             [new(495, 500), new(200, 206)],
             s =>
             {
@@ -6535,7 +6530,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Pass 3 to transcribing everything between chapters 1 and 90 in search of the 88 it thought
         // were missing.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--quick-marks"),
+            Options("--quick-marks"),
             [new(595, 600)],
             s =>
             {
@@ -6559,7 +6554,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // after Pass 3. Scripted as "Corsa nello spazio" reads: the epilogue's heading runs on into
         // a number, and under a bare-number reading that number is an announcement by definition.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-jingle-length", "0", "--quick-marks"),
+            Options("--quick-marks"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -6591,7 +6586,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // confidence from the first probe window, so the whole file - including the gap-fill
         // pass - must be parsed as German ("Erstes Kapitel" / "Zweites Kapitel").
         var (result, transcriber) = await DetectWithTranscriberAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -6616,7 +6611,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // sample used to be the first probe window, i.e. the file from 0 - which on an audiobook is
         // label music often enough to matter. It must now come from somewhere inside the book.
         var (_, transcriber, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -6636,7 +6631,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // loop, so the two doubtful readings never get a vote - which is the point of re-probing
         // rather than voting on whatever the first sample happened to say.
         var (result, transcriber, audio) = await DetectFullAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -6661,7 +6656,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Nothing ever clears 0.6, so all five samples vote. German leads 3-2 and wins, even though
         // no single probe was ever confident enough to be believed on its own.
         var (result, transcriber) = await DetectWithTranscriberAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -6689,7 +6684,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Two languages level at the top: the samples disagree and nothing breaks the deadlock, so
         // there is no signal to act on and English is all that is left.
         var (result, _) = await DetectWithTranscriberAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -6717,7 +6712,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // was enough to run a German book as English. Five agreeing reads of the same strength now
         // decide it, none of them individually convincing.
         var (result, _) = await DetectWithTranscriberAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new(595, 600)],
             s =>
             {
@@ -6734,7 +6729,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task ExplicitLang_NeverCallsLanguageDetection()
     {
         var (result, transcriber) = await DetectWithTranscriberAsync(
-            Options("--lang", "de", "--max-jingle-length", "0"),
+            Options("--lang", "de"),
             [new(595, 600)],
             s =>
             {
@@ -6775,7 +6770,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Markings at 10 s and 610 s; --verify probes 10 s before each, so windows start at 0 and 600.
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
             s =>
             {
@@ -6795,7 +6790,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Marking at 10 s, window [0, 60), the announcement actually at 40 s.
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0", "--verify", "--fix"),
+            Options("--verify", "--fix"),
             [new Chapter(10, "Chapter 1")],
             s => s.Add(0, Seg(40, " Chapter 1.")));
 
@@ -6814,7 +6809,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task VerifyFix_LeavesAMarkingAlreadyCloseEnoughAlone()
     {
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0", "--verify", "--fix"),
+            Options("--verify", "--fix"),
             [new Chapter(10, "Chapter 1")],
             s => s.Add(0, Seg(10.1, " Chapter 1.")));
 
@@ -6828,7 +6823,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task VerifyFix_LeavesAMarkingTooFarFromItsAnnouncementAlone()
     {
         var (result, _, _) = await VerifyWithTranscriberAsync(
-            Options("--max-jingle-length", "0", "--verify", "--fix"),
+            Options("--verify", "--fix"),
             [new Chapter(10, "Chapter 1")],
             s => s.Add(0, Seg(55, " Chapter 1.")));
 
@@ -6843,7 +6838,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Verify_WithoutFix_NeverCorrectsAMarking()
     {
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0", "--verify"),
+            Options("--verify"),
             [new Chapter(10, "Chapter 1")],
             s => s.Add(0, Seg(40, " Chapter 1.")));
 
@@ -6856,7 +6851,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Verify_Fails_WhenThePhraseIsNotFoundNearby()
     {
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
             s => s.Add(0, Seg(10, " Chapter 1."))); // nothing scripted near the second marking
 
@@ -6869,7 +6864,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task Verify_Fails_WhenTheNumberNearbyDoesNotMatch()
     {
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 1")],
             s => s.Add(0, Seg(10, " Chapter 2."))); // wrong number for this marking
 
@@ -6883,7 +6878,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // "Intro" has no digit and no recognizable number word, so it cannot be checked;
         // with nothing else to disprove, verification passes trivially.
-        var result = await VerifyAsync(Options("--max-jingle-length", "0"), [new Chapter(0, "Intro")], _ => { });
+        var result = await VerifyAsync(Options(), [new Chapter(0, "Intro")], _ => { });
 
         Assert.True(result.Passed);
         Assert.Equal(0, result.Checked);
@@ -6911,7 +6906,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Everything here is about the count - one marking checked and confirmed rather than
         // silently passed over.
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter Two: Seven Days Later")],
             s => s.Add(0, Seg(10, " Chapter 2.")));
 
@@ -6932,7 +6927,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // instead of verifying the book. Resolving upfront, from the first marking with a
         // decodable window regardless of its title, must check both.
         var (result, transcriber, _) = await VerifyWithTranscriberAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Erstes Kapitel"), new Chapter(610, "Zweites Kapitel")],
             s =>
             {
@@ -6955,7 +6950,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // tracker should read the highest *confirmed* number, with the unconfirmed one below it
         // counted as a "(-N)" gap - not the highest pre-existing marking regardless of outcome.
         var (_, _, tracker) = await VerifyWithTranscriberAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2"), new Chapter(1210, "Chapter 3")],
             s =>
             {
@@ -6977,7 +6972,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // this same audio found it. A focused re-transcribe of just that gap (padded by
         // VerifyGapPaddingSeconds on each side) should recover the phrase and confirm the mark.
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 2")],
             s =>
             {
@@ -7002,7 +6997,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // (which, per the real failure this feature fixes, is exactly the case Whisper can miss
         // by judging a long mixed chunk as non-speech on average).
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 2")],
             s =>
             {
@@ -7025,7 +7020,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Same shape as the recovery case above, but the phrase genuinely is not there - the
         // gap retry must not manufacture a false confirmation.
         var result = await VerifyAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 2")],
             s => s.Add(0,
                 new TranscriptSegment(0, 9.1, " Something before."),
@@ -7135,7 +7130,7 @@ public sealed class ChapterDetectorTests : IDisposable
             Options().DefaultProfile, null, 0);
 
         var (result, audio) = await DetectGapsAsync(
-            Options("--quick-marks", "--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--quick-marks", "--min-silence-length", "1.5"),
             verify, [new(28, 30)],
             s => s.Add(30, Seg(0.3, " Chapter 2.")));
 
@@ -7162,7 +7157,7 @@ public sealed class ChapterDetectorTests : IDisposable
             Options().DefaultProfile, null, 0);
 
         var (result, _) = await DetectGapsAsync(
-            Options("--max-jingle-length", "0"), verify, [],
+            Options(), verify, [],
             s => s.Add(610, Seg(300, " Chapter 3.")));
 
         Assert.False(result.GapRemains);
@@ -7183,7 +7178,7 @@ public sealed class ChapterDetectorTests : IDisposable
             Options().DefaultProfile, null, 0);
 
         var (result, _) = await DetectGapsAsync(
-            Options("--max-jingle-length", "0"), verify, [],
+            Options(), verify, [],
             s => s.Add(10, Seg(0.3, " Chapter 3.")));
 
         // Chapter 3 must keep its correct, confirmed timestamp - not the gap probe's mistaken one.
@@ -7220,8 +7215,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // marking (@10, so its own window would start at 0) that --lang auto would otherwise add,
         // keeping the decode-start assertion below solely about the gap-scoped Pass 2 region.
         var (result, audio, _) = await ResumeMissingMarksAsync(
-            Options("--quick-marks", "--lang", "en", "--min-silence-length", "1.5",
-                    "--max-jingle-length", "0"),
+            Options("--quick-marks", "--lang", "en", "--min-silence-length", "1.5"),
             [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [new(28, 30)],
             s => s.Add(30, Seg(0.3, " Chapter 2.")));
 
@@ -7237,7 +7231,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task ResumeMissingMarksAsync_LeavesGapRemains_WithTheStillMissingNumbers_WhenTheGapIsNotFound()
     {
         var (result, _, _) = await ResumeMissingMarksAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
             _ => { }); // nothing scripted for the gap - chapter 2 stays missing
 
@@ -7254,7 +7248,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // still correctly bounded by chapter 1 (@10) and chapter 3 (@50), exactly as if the intro
         // marking were not present at all.
         var (result, _, _) = await ResumeMissingMarksAsync(
-            Options("--min-silence-length", "1.5", "--max-jingle-length", "0"),
+            Options("--min-silence-length", "1.5"),
             [new Chapter(0, "Intro"), new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")],
             [new(28, 30)],
             s => s.Add(30, Seg(0.3, " Chapter 2.")));
@@ -7271,7 +7265,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // the same "de" ResolveProfileFromMarkingsAsync helper both methods now share), regardless
         // of whether the gap itself ends up recovered.
         var (result, _, transcriber) = await ResumeMissingMarksAsync(
-            Options("--max-jingle-length", "0"),
+            Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")], [],
             s => s.DetectedLanguage = ("de", 0.9f));
 
@@ -7410,7 +7404,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // "why was there no candidate here" is answerable only if the rejected ones are in the file
         // too - flagged, so the working subset stays readable.
         var debug = await DetectWithDebugAsync(
-            Options("--debug", "--max-jingle-length", "0", "--min-silence-length", "3"),
+            Options("--debug", "--min-silence-length", "3"),
             [new(595, 600), new(1199, 1200)],
             s => s.Add(0, Seg(0.5, " Chapter one.")));
 
@@ -7438,7 +7432,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // file has no such constraint, and a transcript nobody kept is the one thing a
         // troubleshooting log cannot reconstruct afterwards.
         var debug = await DetectWithDebugAsync(
-            Options("--debug", "--max-jingle-length", "0"),
+            Options("--debug"),
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Chapter one.")));
 
@@ -7454,7 +7448,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The debug file is meant to be the union of both streams, so nobody has to read two files
         // side by side to reconstruct one run.
         var debug = await DetectWithDebugAsync(
-            Options("--debug", "--max-jingle-length", "0"),
+            Options("--debug"),
             [new(595, 600)],
             s => s.Add(0, Seg(0.5, " Chapter one.")));
 
@@ -7467,7 +7461,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // These decodes only ever hand a yes/no answer upwards, so before --debug they could be
         // reconstructed only by re-running them by hand in a throwaway harness.
         var debug = await DetectWithDebugAsync(
-            Options("--debug", "--max-jingle-length", "0"),
+            Options("--debug"),
             [new(595, 600)],
             s =>
             {

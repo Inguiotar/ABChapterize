@@ -51,6 +51,19 @@ internal sealed class PreciseMarkRefiner
 {
     private readonly IAudioSource _audio;
     private readonly CliOptions _options;
+    /// <summary>
+    /// How far back this file's music reaches (<see cref="JingleCensus.ReachSeconds"/>): the span
+    /// <see cref="VerifyMarkBeforeJingleAsync"/> searches back over, since what it is verifying is a
+    /// walk across that music. Set per file once Pass 1 has counted the jingles; the bare margin it
+    /// starts at is what a book with no jingles comes to anyway.
+    /// <para>
+    /// Deliberately not the bound on <see cref="FindOnsetEdgeAsync"/>'s plateau walk, which is a
+    /// runaway guard rather than a question about music - see
+    /// <see cref="DetectionTuning.PlateauWalkLimitSeconds"/>.
+    /// </para>
+    /// </summary>
+    internal double JingleReachSeconds { get; set; } = PhraseMarginSeconds;
+
     private readonly Action<string>? _log;
     private readonly Action<string>? _debug;
     private readonly Func<float[], CancellationToken, Task<List<TranscriptSegment>>> _transcribeCounting;
@@ -625,7 +638,7 @@ internal sealed class PreciseMarkRefiner
         if (!await PreciseMarkPhraseFoundAsync(walked, file, inputDecoder, announcement, ct))
             return walked;
 
-        var span = _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var span = JingleReachSeconds;
         var vadCandidates = speechSegments
             .Where(s => s.StartSeconds < walked && s.StartSeconds >= walked - span)
             .Select(s => s.StartSeconds)
@@ -821,7 +834,7 @@ internal sealed class PreciseMarkRefiner
     {
         // Measured from the position the search set out from, not from wherever a resumed walk
         // restarts, so no number of resumes can add up to walking into the next chapter.
-        var limit = confirmed + _options.MaxJingleSeconds + PhraseMarginSeconds;
+        var limit = confirmed + PlateauWalkLimitSeconds;
         var edge = await WalkPlateauEdgeAsync(confirmed, limit, file, inputDecoder, announcement, ct);
 
         for (var resumes = 0; resumes < PreciseMarkPlateauResumeLimit; resumes++)

@@ -51,8 +51,8 @@ public interface IAudioSource
     /// Scans the whole file for silence periods and, concurrently in the same decode, streams
     /// it as 16 kHz mono 32-bit float PCM in bounded-size chunks for <paramref
     /// name="consumePcm"/> (typically <see cref="IVoiceActivityDetector.DetectSpeechAsync"/>) -
-    /// used whenever the VAD pre-pass runs (see
-    /// <see cref="ABChapterize.Cli.CliOptions.RunVadPrePass"/>, which is the default), where both the silence scan and the VAD pre-pass are needed, so one
+    /// used by the VAD pre-pass, which every run makes: both the silence scan and the pre-pass
+    /// need the same audio, so one
     /// full-file decode (via an `asplit` filter forking into a silencedetect branch and a
     /// resampled-PCM branch) replaces what would otherwise be two independent passes over the
     /// same audio. Plain silence detection alone still uses <see cref="DetectSilencesAsync"/>.

@@ -231,7 +231,6 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model`, `custom:<path>` included (default: `turbo`, or whatever `--model` says if you set that and not this). Pass 3 transcribes long stretches of audio, where the heavier models really are the better recognizers. Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. A model heavier than `--model`'s also enables pass 2.5 — which the default pairing does. Loaded lazily, only if pass 2.5 or pass 3 runs. |
 | `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Where the walk ends on a pause, the mark backs into it by `-k` seconds; a chapter with no jingle at all keeps its ordinary placement. Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
 | `-Q`, `--quick-marks` | **Experimental.** Skip the refinement that normally re-transcribes the audio at every mark to confirm the phrase is really there (see [How it works](#how-it-works)). Faster — saves a handful of transcriptions per chapter — but marks, while usually usable, may end up after the chapter phrase rather than before it, even together with `-j`. |
-| `-X`, `--max-jingle-length <s\|auto>` | How far back a jingle may reach, in seconds (default 45; `auto` means the same 45). It no longer sizes any probe window — every window is cut to its own candidate — but it still bounds how far the tool believes music can stretch back when placing a mark. `0` means "no jingle expected at all": no jingle candidates, and the VAD pre-pass is skipped (unless `-j` still needs it). |
 | `-k`, `--mark-lead <seconds>` | How far in front of the announcement a mark is placed (default 0.35). Purely a matter of taste — marks are located just as precisely whatever this is, it only decides how much lead-in you hear before the narrator starts. Below roughly 0.2 the announcement's opening consonant starts to get clipped; `0` marks the onset itself. Applies with `-j` too: in full where a chapter has no jingle, and as a back-off into the pause before the jingle where there is one (capped at that pause's length). |
 | `-n`, `--min-silence-length <s\|auto>` | The shortest pause probed as a potential chapter break (default: `auto`, which starts at 1.5 s). Probing only — pass 1's scan keeps shorter silences regardless, and marks are placed and refined against them. With `auto` (the default), the probing threshold retunes itself after every mark found, and where it settles *below* the 1.5 s it started at, the gaps left in the numbering are swept for the pauses in between (see [How it works](#how-it-works)); an explicit value probes every silence at or above it instead. `0` switches silence-triggered probing off altogether, leaving only the jingles the voice-activity pre-pass finds — a large saving on a book whose every chapter opens with one, and a way to miss every chapter that does not. The silence scan itself keeps running either way, so marks land exactly where they otherwise would. |
 | `--noise-floor <dBFS\|auto>` | How quiet audio has to be to count as a pause — the other half of `--min-silence-length`'s question (default: `auto`). Normally −35 dBFS, which sits comfortably between the room tone and the narration of any ordinary master. `auto` samples each file first and moves the threshold only where −35 would not: a recording with audible hiss never drops below it, so no pause and no chapter is ever found, and a very quietly mastered one puts the narration itself under it, so every gap between two words looks like a chapter break. |
@@ -323,8 +322,7 @@ use `.`, whatever the machine's locale says.
 1. **Pass 1 — silence scan:** ffmpeg finds every silence longer than
    `--min-silence-length` (default, and starting point with `auto`: 1.5 s) and
    quieter than `--noise-floor` (normally −35 dBFS) in one quick pass.
-1b. **VAD pre-pass (default; skipped only with `--max-jingle-length 0` and no
-   `--mark-before-jingle`):** a bundled voice-activity model
+1b. **VAD pre-pass (always):** a bundled voice-activity model
    ([Silero VAD](https://github.com/snakers4/silero-vad)) scans the whole file
    for speech vs. non-speech. A jingle is music, which reads as non-speech to
    a speech detector just like silence does — so this catches jingles the
@@ -497,11 +495,11 @@ keeps its exact position.
   your audiobook's pauses vary too much for that to help, an explicit
   threshold like `-n 2.5` still works — far fewer Whisper probes, much faster
   run, but chapters go missing if it's set too high.
-- **Jingles:** Pass 2 costs one probe per jingle whatever its length, so `-X`
-  is no longer a speed knob for it; by default (`-X auto`) it self-tightens the
-  window the *recovery* passes use, the same way `-n auto` does for silences.
-  If there's no jingle at all, `-X 0` drops the jingle candidates and skips the
-  VAD pre-pass too.
+- **Jingles:** Pass 2 costs one probe per jingle whatever its length, and every
+  window is cut to its own candidate, so a book of long jingles is no slower
+  than a book of short ones. On a book whose every chapter opens with music,
+  `-n 0` is the real saving: it drops the ordinary pauses as candidates and
+  leaves only the jingles.
 - **Accuracy vs. speed:** the default pairing is `-m small -M turbo`, and it is
   not the compromise it looks like. The model named by `--model` listens to
   short windows a few seconds long, and the large models are *worse* at those

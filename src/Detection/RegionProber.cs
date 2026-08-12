@@ -607,6 +607,15 @@ internal sealed class RegionProber
             // its lead-in hush, a dip in the middle of the music, the hush after it - is part of
             // that transition rather than one of its own. Everything a window from here would hear
             // is the jingle's, and the jingle candidate hears it from a better place.
+            //
+            // Measured from the music and not from the jingle candidate's own window, deliberately.
+            // Scoping it to that window was tried (2026-08-12) as a leash on the unbounded length a
+            // VAD region may now have, and it costs more than it saves: the candidate opens only a
+            // JingleLeadInSeconds run-up before the announcement, so every jingle's lead-in hush
+            // becomes a candidate again - a probe per jingle, corpus-wide, that can only ever hear
+            // music. The unbounded case it was guarding is benign anyway: a stretch long enough to
+            // worry about is one silencedetect found dips in and VAD heard no speech in, i.e. music,
+            // and no chapter is announced inside music that nothing is announcing.
             if (!Recovering && jingles.Any(j =>
                     silence.EndSeconds >= j.StartSeconds - JinglePhraseMatchToleranceSeconds &&
                     silence.EndSeconds < j.AnnouncementSeconds))

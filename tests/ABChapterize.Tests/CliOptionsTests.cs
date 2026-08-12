@@ -62,11 +62,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.True(o.TrailingScan);
         Assert.Equal(1.5, o.MinSilenceSeconds);
         Assert.True(o.AutoMinSilence);
-        Assert.Equal(45, o.MaxJingleSeconds);
         Assert.Equal(60, o.EarlyAbortMinutes);
-        // Jingle-aware probing (the VAD pre-pass) runs by default now, even without
-        // --mark-before-jingle - only --max-jingle-length 0 turns it off.
-        Assert.True(o.RunVadPrePass);
         Assert.Equal([new CliOptions.Target(_file, IsDirectory: false)], o.Targets);
         // Mark refinement is on by default; --quick-marks is the opt-out, so it starts false
         // while PreciseMark itself starts true (asserted separately).
@@ -566,7 +562,6 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--mark-before-jingle")]
     [InlineData("--quick-marks")]
     [InlineData("--no-trailing-scan")]
-    [InlineData("--max-jingle-length", "30")]
     [InlineData("--min-silence-length", "2")]
     [InlineData("--mark-lead", "0.5")]
     [InlineData("--early-abort", "30")]
@@ -915,7 +910,7 @@ public sealed class CliOptionsTests : IDisposable
     [Fact]
     public void ImportWithMaxJingleLength_IsStillAnError_EvenWithoutMarkBeforeJingle()
     {
-        Assert.Throws<CliError>(() => ParseFile("--import", "--max-jingle-length", "30"));
+        Assert.Throws<CliError>(() => ParseFile("--import", "--min-silence-length", "3"));
     }
 
     [Fact]
@@ -1265,7 +1260,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--chapter-title", "Teil"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--intro-title", "Vorwort"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--min-silence-length", "2"));
-        Assert.Throws<CliError>(() => ParseDir("--revert", "--max-jingle-length", "20"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--min-silence-length", "2"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--chapter-phrase", "Teil"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--model", "large"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--export"));
@@ -1362,57 +1357,6 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal(0, ParseFile("--early-abort", "0")!.EarlyAbortMinutes);
     }
 
-    [Fact]
-    public void MaxJingleLength_NoLongerRequiresMarkBeforeJingle()
-    {
-        var o = ParseFile("--max-jingle-length", "30")!;
-        Assert.Equal(30, o.MaxJingleSeconds);
-        Assert.False(o.MarkBeforeJingle);
-    }
-
-    [Fact]
-    public void JingleParameters_AreParsed()
-    {
-        var o = ParseFile("--mark-before-jingle", "--max-jingle-length", "30.5")!;
-        Assert.True(o.MarkBeforeJingle);
-        Assert.Equal(30.5, o.MaxJingleSeconds);
-    }
-
-    [Fact]
-    public void MaxJingleLength_ZeroIsAccepted()
-    {
-        var o = ParseFile("--max-jingle-length", "0")!;
-        Assert.Equal(0, o.MaxJingleSeconds);
-    }
-
-    [Theory]
-    // Without --mark-before-jingle, RunVadPrePass tracks whether MaxJingleSeconds > 0: only
-    // the (default-off) --mark-before-jingle plus --max-jingle-length 0 combination keeps it
-    // running for the jingle-anchor placement despite no jingle being expected.
-    [InlineData(0, false, false)]
-    [InlineData(45, false, true)]
-    [InlineData(0, true, true)]
-    [InlineData(45, true, true)]
-    public void RunVadPrePass_ReflectsMarkBeforeJingleAndMaxJingleLength(
-        double maxJingleSeconds, bool markBeforeJingle, bool expectedVad)
-    {
-        var args = new List<string> { "--max-jingle-length", maxJingleSeconds.ToString() };
-        if (markBeforeJingle)
-            args.Add("--mark-before-jingle");
-        var o = ParseFile([.. args])!;
-        Assert.Equal(expectedVad, o.RunVadPrePass);
-    }
-
-    [Theory]
-    [InlineData("0.5")]
-    [InlineData("-3")]
-    [InlineData("601")]
-    [InlineData("abc")]
-    public void InvalidJingleLengths_AreRejected(string value)
-    {
-        Assert.Throws<CliError>(() => ParseFile("--mark-before-jingle", "--max-jingle-length", value));
-    }
-
     [Theory]
     [InlineData("0.05")]
     [InlineData("61")]
@@ -1504,8 +1448,6 @@ public sealed class CliOptionsTests : IDisposable
         // same thing here - see NumberCulture. (Output, by contrast, is always "." regardless.)
         Assert.Equal(2.5, ParseFile("--min-silence-length", "2,5")!.MinSilenceSeconds);
         Assert.Equal(2.5, ParseFile("--min-silence-length", "2.5")!.MinSilenceSeconds);
-        Assert.Equal(12.5, ParseFile("--max-jingle-length", "12,5")!.MaxJingleSeconds);
-        Assert.Equal(12.5, ParseFile("--max-jingle-length", "12.5")!.MaxJingleSeconds);
         Assert.Equal(1.5, ParseFile("--early-abort", "1,5")!.EarlyAbortMinutes);
         Assert.Equal(1.5, ParseFile("--early-abort", "1.5")!.EarlyAbortMinutes);
         Assert.Equal(0.4, ParseFile("--mark-lead", "0,4")!.MarkLeadSeconds);
@@ -1598,14 +1540,16 @@ public sealed class CliOptionsTests : IDisposable
         Assert.True(ParseFile("--min-silence-length", "2")!.ProbeSilences);
     }
 
-    /// <summary>The two options that decide what pass 2 probes at all; switching both off would
-    /// leave the search with nothing to look at.</summary>
+    /// <summary>Removed in 0.12.0, and told so rather than reported as an unknown option: a script
+    /// carrying it asked for something the tool now measures for itself.</summary>
     [Fact]
-    public void MinSilenceLengthZero_WithMaxJingleLengthZero_IsRejected()
+    public void MaxJingleLength_IsRejectedWithAMigrationMessage()
     {
-        Assert.Throws<CliError>(() =>
-            ParseFile("--min-silence-length", "0", "--max-jingle-length", "0"));
-        Assert.NotNull(ParseFile("--min-silence-length", "0", "--max-jingle-length", "30"));
+        var error = Assert.Throws<CliError>(() => ParseFile("--max-jingle-length", "30"));
+        Assert.Contains("was removed", error.Message);
+        Assert.Contains("always runs", error.Message);
+        // Silence-only probing no longer has anything to be incompatible with.
+        Assert.NotNull(ParseFile("--min-silence-length", "0"));
     }
 
     [Fact]
