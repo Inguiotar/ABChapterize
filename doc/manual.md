@@ -348,7 +348,9 @@ misheard while probing the right spot. So when — and only when —
 `--pass3-model` names a *better* model than pass 2's, the gap's regions are
 first re-probed exactly as pass 2 probes, but with that better model. When it
 finds the missing chapters, pass 3 never has to run for them at all; anything it
-does not find falls through to pass 3 immediately afterward.
+does not find falls through to pass 3 immediately afterward. The re-probe stops
+the moment the last of the gap's missing chapters turns up: whatever is left of
+the gap behind it is a chapter's worth of audio with no announcement in it.
 
 A gap that survives the re-probe gets one more, differently aimed attempt first.
 The other reason an announcement goes unfound is that nothing ever looked at it:

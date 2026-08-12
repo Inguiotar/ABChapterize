@@ -1275,7 +1275,7 @@ public sealed class ChapterDetector
             var prober = new RegionProber(
                 env, ctx, region, found, namedFound,
                 new LanguageState(profile, null, 0),
-                gapSecondsDone - gap.FromSeconds, recovery: true);
+                gapSecondsDone - gap.FromSeconds, recovery: true, hunting: missing);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
@@ -1396,7 +1396,7 @@ public sealed class ChapterDetector
             var prober = new RegionProber(
                 env, ctx with { Silences = band }, region, found, namedFound,
                 new LanguageState(profile, null, 0), progressOffsetSeconds,
-                sweepingSubFloorSilences: true);
+                sweepingSubFloorSilences: true, hunting: stillMissing);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
@@ -1521,7 +1521,7 @@ public sealed class ChapterDetector
                 gap.FromSeconds, gap.ToSeconds, stillMissing[0] - 1, stillMissing[^1] + 1);
             var prober = new RegionProber(
                 env, ctx with { Silences = band }, region, found, namedFound, language,
-                sweepingSubFloorSilences: true);
+                sweepingSubFloorSilences: true, hunting: stillMissing);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;

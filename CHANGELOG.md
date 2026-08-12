@@ -28,6 +28,12 @@ earn a round number.
 
 ### Changed
 
+- **The cheap gap re-probe stops as soon as the gap is closed.** It used to walk the rest of
+  the gap after finding the last chapter that was missing from it, re-detecting that same
+  chapter from every window that overlapped it and discarding the duplicates. On a gap that
+  closes early this saves a chapter's worth of re-transcription; a gap that never closes is
+  unaffected.
+
 - **A gap in the chapter numbers now reaches under the pause length the run demanded.** With
   `--min-silence-length auto`, a book whose chapter breaks measure shorter than the 1.5 seconds
   probing opens at can now act on that straight away: the stretch between the two chapters

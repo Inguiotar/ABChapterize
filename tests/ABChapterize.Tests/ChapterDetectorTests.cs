@@ -2186,6 +2186,36 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Pass25_StopsProbingAGapTheMomentItCloses()
+    {
+        // Pass 2's own re-probe has always stopped at the chapter that closes its gap; pass 2.5
+        // drove a whole region and could not, for want of knowing which numbers it was sent to find
+        // - it knew only the region's bounds. Everything past the last missing chapter is then a
+        // chapter's worth of audio with no announcement left in it, each candidate paying for a full
+        // mark placement to produce a duplicate that is thrown away.
+        var log = new List<string>();
+        var (result, _, _) = await DetectWithPass3TranscriberAsync(
+            Options("--model", "base", "--pass3-model", "large", "--quick-marks"),
+            [new(295, 300), new(595, 600), new(895, 900), new(1195, 1200)],
+            pass2 =>
+            {
+                pass2.Add(0, Seg(0.5, " Chapter one."));
+                pass2.Add(1200, Seg(0.2, " Chapter three."));
+            },
+            pass3 => pass3.Add(300, Seg(0.5, " Chapter two.")),
+            log);
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        // Two of four: the region-start candidate, then the silence that yields chapter 2. The two
+        // behind it are a chapter's worth of audio with nothing left to find in it.
+        Assert.Contains(log, l => l.Contains("every chapter this stretch was missing is found") &&
+                                  l.Contains("stopping after 2 of 4 candidate(s)"));
+        // The gap closed inside pass 2.5, so pass 3 never transcribed the region either.
+        Assert.DoesNotContain(log, l => l.Contains("transcribing suspicious region"));
+    }
+
+    [Fact]
     public async Task Pass25_IsSkipped_WhenThePass3ModelIsNotAnUpgrade()
     {
         // A lighter (or equal) --pass3-model means a re-probe would only reach the same conclusion

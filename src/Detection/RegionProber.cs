@@ -426,6 +426,26 @@ internal sealed class RegionProber
     /// Both want the same union set and the same trimmed framing, for the same reason.</summary>
     private bool Recovering => _recovery || _reprobing;
 
+    /// <summary>
+    /// The chapter numbers this run was sent to find, emptied as they are found, or null where the
+    /// run has no such list - the primary scan, which is looking for whatever the book holds.
+    /// Emptying it ends the walk (see <see cref="RunAsync"/>).
+    /// <para>
+    /// A recovery pass over a gap knows both its ends, so everything past the last chapter it was
+    /// missing is a chapter's worth of audio with no announcement left in it - probed, refined and
+    /// discarded as a duplicate. Pass 2's own sequence-gap re-probe has always stopped there; this
+    /// is the same stop for the passes that drive a whole region, which knew the region's number
+    /// <em>bounds</em> but not which numbers they were sent for.
+    /// </para>
+    /// <para>
+    /// Accepted cost (2026-08-08): a named mark - prologue, epilogue, --custom - sitting in the tail
+    /// is given up on. Pass 2.5 probes on the upgrade model and can hear one the primary scan
+    /// missed, but finding named marks that way is incidental, and Pass 2's re-probe has always
+    /// accepted the same exposure.
+    /// </para>
+    /// </summary>
+    private readonly HashSet<int>? _hunting;
+
     /// <summary>Creates a prober for one region.</summary>
     /// <param name="env">The detector-owned tools and callbacks to probe with.</param>
     /// <param name="ctx">Region-loop-invariant Pass 2 inputs.</param>
@@ -439,10 +459,12 @@ internal sealed class RegionProber
     /// <see cref="_sweeping"/>.</param>
     /// <param name="recovery">Whether this is a recovery pass rather than the primary scan; see
     /// <see cref="_recovery"/>.</param>
+    /// <param name="hunting">The chapter numbers this run was sent to find, or null for a scan with
+    /// no such list; see <see cref="_hunting"/>.</param>
     internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
         double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false,
-        bool recovery = false)
+        bool recovery = false, IEnumerable<int>? hunting = null)
     {
         _env = env;
         _ctx = ctx;
@@ -454,6 +476,7 @@ internal sealed class RegionProber
         _progressOffsetSeconds = progressOffsetSeconds;
         _sweeping = sweepingSubFloorSilences;
         _recovery = recovery || sweepingSubFloorSilences;
+        _hunting = hunting is null ? null : [.. hunting];
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
         _threshold = env.Options.MinSilenceSeconds;
@@ -491,6 +514,13 @@ internal sealed class RegionProber
             // before this window rather than by this window's own.
             if (probeMarks.Count > 0)
                 _lastMarkExpectAt = candidate.ExpectAt;
+            if (_hunting is { Count: 0 })
+            {
+                if (ci + 1 < candidates.Count)
+                    _env.Log?.Invoke($"every chapter this stretch was missing is found - stopping " +
+                                     $"after {ci + 1} of {candidates.Count} candidate(s)");
+                break;
+            }
             ci = SkipSettledWindows(candidates, ci, plan.End, probeMarks);
         }
     }
@@ -1983,6 +2013,7 @@ internal sealed class RegionProber
                          $"){LowConfidenceNote(match.Confidence)}" +
                          MissingNote(missingNumbers));
 
+        _hunting?.Remove(number);
         return new ProbeMark(number, ThresholdSilenceFor(candidate, markSilence), match.Confidence);
     }
 
