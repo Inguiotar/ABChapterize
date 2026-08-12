@@ -349,18 +349,20 @@ use `.`, whatever the machine's locale says.
    the probing threshold sits at 75% of the *shortest* chapter-break
    silence observed so far — set once, then only ever lowered — so
    shorter in-chapter pauses stop being probed once real inter-chapter
-   breaks are established; everything skipped since the last mark is
-   re-probed the moment a sequence gap turns up. Only chapters found at a
+   breaks are established. Only chapters found at a
    pause teach it: the hush in front of a jingle measures the run-up to the
    music rather than the break between two chapters. Where that measurement comes
    out *below* the 1.5 s probing started at — a narrator whose chapter breaks
-   are simply shorter than the default assumes — the gaps left in the
-   numbering are swept for pauses in between, down to 0.8 s. An explicit
-   `--min-silence-length` value disables
-   this and probes every silence at or above it instead.
-   A sequence gap sends the whole stretch since the last chapter back for a
+   are simply shorter than the default assumes — a gap in the numbering reaches
+   down to it, and once pass 2 is done the gaps still open are swept for those
+   short pauses as well, down to 0.8 s. That sweep runs off the gap rather than
+   off the measurement, so a book of jingles — which measures nothing — gets it
+   too. An explicit `--min-silence-length` value disables all of this and probes
+   every silence at or above it instead, and nothing below it.
+   A sequence gap sends the whole stretch between the two chapters back for a
    second look: every pause and every jingle in it, including the ones the first
-   look ruled out, each read in a slightly different framing rather than a wider
+   look ruled out and the ones too short to have been probed at all, each read in
+   a slightly different framing rather than a wider
    one — and since that retry knows both ends of the
    hole it's filling, only the numbers actually missing from it can be right
    there. A number that can't be right — one leaving

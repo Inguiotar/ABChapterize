@@ -253,6 +253,22 @@ internal sealed class RegionProber
     private double? _lastMarkExpectAt;
 
     /// <summary>
+    /// While a sequence-gap re-probe runs and can afford it, the shortest silence its candidates are
+    /// built from - reaching under <see cref="Pass2Context.Silences"/>, which was filtered at
+    /// --min-silence-length before Pass 2 ever saw it. Null at every other time, and null for a
+    /// re-probe that cannot afford the extra candidates.
+    /// <para>
+    /// The adaptive threshold can only ever restrict that pre-filtered list and can never reach
+    /// under the demand the run opened at, however far it adapts, so a book whose breaks are shorter
+    /// than the default assumes had no way to act on its own measurement until the sweeps ran.
+    /// "Paula Monti" is the worked example: its threshold came down to 0.8 s, its chapter breaks
+    /// measure 1.39-1.49 s, and not one of them was ever a candidate - its five gaps each re-probed
+    /// one or two candidates to no effect and were all closed later by a sub-floor sweep.
+    /// </para>
+    /// </summary>
+    private double? _subFloorSeconds;
+
+    /// <summary>
     /// While the sequence-gap recovery re-probes, the chapter number that closes the gap - the mark
     /// that revealed it. Null at every other time.
     /// <para>
@@ -326,27 +342,6 @@ internal sealed class RegionProber
     /// moving it, up or down. Without --min-silence-length auto every candidate is probed
     /// unconditionally and this never changes, exactly as before that feature existed.</summary>
     private double _threshold;
-
-    /// <summary>
-    /// Candidates passed over since the last accepted mark. A sequence gap re-probes all of them
-    /// unconditionally (see <see cref="ReprobeGapCandidatesAsync"/>) and folds the recovered marks'
-    /// own anchor silences into <see cref="_adaptedThresholdSeconds"/>, so gap-filling stays inside
-    /// Pass 2 where possible and the threshold can never again sit above a silence that has proven
-    /// to precede a chapter. Collects the windows the overlap-sequence skip passes over too - in
-    /// every mode, not just auto - so the same re-probe covers the unlikely case of a skipped
-    /// sequence window having hidden a second transition.
-    /// </summary>
-    private readonly List<ProbeCandidate> _skippedSinceLastMark = [];
-
-    /// <summary>
-    /// Candidates actually probed since the last accepted mark, each with the window end it was
-    /// probed with. Together with <see cref="_skippedSinceLastMark"/> this bounds the stretch a
-    /// sequence gap sends back for a second look: whether a candidate there was probed or passed
-    /// over makes no difference to a pass that rebuilds and re-frames the whole stretch anyway (see
-    /// <see cref="ReprobeGapCandidatesAsync"/>), so what is wanted from both lists is only how far
-    /// back "since the last mark" reaches.
-    /// </summary>
-    private readonly List<ProbeCandidate> _probedSinceLastMark = [];
 
     /// <summary>The file's language resolution, settled before Pass 2 started and read-only from
     /// here - see <see cref="LanguageResolver"/>.</summary>
@@ -491,11 +486,9 @@ internal sealed class RegionProber
             if (foundNoneYet && IsBelowExpectedStart())
                 break;
 
-            // Recorded after the marks are applied, so it lands in the list that survives them: this
-            // window is history for whatever gap a *later* mark reveals, never for its own - and
-            // the same reasoning bounds that later re-probe below, at this mark's own announcement.
-            await ApplyProbeMarksAsync(probeMarks, ct);
-            _probedSinceLastMark.Add(candidate);
+            await ApplyProbeMarksAsync(probeMarks, candidate.ExpectAt, ct);
+            // After the marks are applied, so a gap among them is still bounded below by the mark
+            // before this window rather than by this window's own.
             if (probeMarks.Count > 0)
                 _lastMarkExpectAt = candidate.ExpectAt;
             ci = SkipSettledWindows(candidates, ci, plan.End, probeMarks);
@@ -576,7 +569,7 @@ internal sealed class RegionProber
         foreach (var jingle in jingles)
             candidates.Add(JingleCandidate(jingle));
         var leadIn = Recovering ? SilenceLeadInSeconds - RecoveryLeadInTrimSeconds : SilenceLeadInSeconds;
-        foreach (var silence in _ctx.Silences)
+        foreach (var silence in SilenceSource)
         {
             if (silence.EndSeconds < fromSeconds || silence.EndSeconds >= toSeconds - 1)
                 continue;
@@ -597,6 +590,17 @@ internal sealed class RegionProber
         }
         return candidates;
     }
+
+    /// <summary>
+    /// Which silences <see cref="CandidatesIn"/> draws on: the context's own list - Pass 1's, cut at
+    /// --min-silence-length, or a sweep's band - unless a gap re-probe has opened the floor
+    /// (<see cref="_subFloorSeconds"/>), in which case every silence Pass 1 kept that is at least
+    /// that long.
+    /// </summary>
+    private IEnumerable<Silence> SilenceSource
+        => _subFloorSeconds is { } floor
+            ? _ctx.AllSilences.Where(s => s.EndSeconds - s.StartSeconds >= floor)
+            : _ctx.Silences;
 
     /// <summary>How far past its expected announcement a window of this pass reaches; see
     /// <see cref="RecoveryReachTrimSeconds"/> for why a recovery pass reaches less far.</summary>
@@ -812,11 +816,8 @@ internal sealed class RegionProber
     {
         if (_sweeping)
             return false;
-        if (!_env.Options.AutoMinSilence || candidate.Silence is not { } silence ||
-            silence.EndSeconds - silence.StartSeconds >= _threshold)
-            return false;
-        _skippedSinceLastMark.Add(candidate);
-        return true;
+        return _env.Options.AutoMinSilence && candidate.Silence is { } silence &&
+               silence.EndSeconds - silence.StartSeconds < _threshold;
     }
 
     /// <summary>
@@ -1494,8 +1495,8 @@ internal sealed class RegionProber
     private bool WideBareNumberReading => (_gapAbove ?? _region.UpperNumber) != null;
 
     /// <summary>
-    /// Reports the announcements this window heard but could not number, queues the window for the
-    /// sequence-gap re-probe, and asks <see cref="SuspectNumberMender.ReadUnnumberedAsync"/> to read
+    /// Reports the announcements this window heard but could not number, and asks
+    /// <see cref="SuspectNumberMender.ReadUnnumberedAsync"/> to read
     /// the number out of differently framed audio - turning the announcement into an ordinary mark
     /// when it succeeds. Only ever called for a window that produced no mark of its own - counting
     /// <see cref="RereadJingleSpeechAsync"/>'s second look as this window's own, since a window it
@@ -1506,21 +1507,20 @@ internal sealed class RegionProber
     /// normal case and has already been marked as a named one.
     /// </para>
     /// <para>
-    /// Every unreadable announcement is logged whether or not its re-read succeeds, and the window
-    /// is queued regardless: the queue costs nothing until a gap actually appears, and the cases the
+    /// Every unreadable announcement is logged whether or not its re-read succeeds: the cases the
     /// re-read cannot fix - a word ordinal past a language's parser, a number above 999 - are
     /// exactly the ones where knowing the phrase was heard and discarded saves the next
-    /// investigation. The re-probe that queue feeds re-decodes at the full ceiling window (see
-    /// <see cref="ReprobeGapCandidatesAsync"/>), which is a different framing again, so the two
-    /// recoveries overlap without duplicating: chapter 13 of "I Shall Wear Midnight" was read as
+    /// investigation. A sequence gap re-frames this window again later (see
+    /// <see cref="ReprobeGapCandidatesAsync"/>), so the two recoveries overlap without duplicating:
+    /// chapter 13 of "I Shall Wear Midnight" was read as
     /// "CHAPTER XIII" from the 16.1 s window it was probed with and as "Chapter 13" from a 48.8 s one
-    /// over the same announcement (2026-07-30), and either route now reaches that.
+    /// over the same announcement (2026-07-30), and either route reaches that.
     /// </para>
     /// <para>
     /// A mark the re-read produces goes through <see cref="AcceptMatchAsync"/> like any other, at the
     /// position and confidence of the reading that first heard it - the re-read contributes the
-    /// number and nothing else. Bounded by <see cref="MaxUnnumberedMendsPerRegion"/>; the logging and
-    /// queuing continue past that cap, only the decodes stop.
+    /// number and nothing else. Bounded by <see cref="MaxUnnumberedMendsPerRegion"/>; the logging
+    /// continues past that cap, only the decodes stop.
     /// </para>
     /// </summary>
     /// <param name="candidate">The candidate whose window this is.</param>
@@ -1539,7 +1539,6 @@ internal sealed class RegionProber
         if (_env.Options.IgnoreChapterNumbers)
             return marks;
 
-        var queued = false;
         var windowLast = _lastNumber ?? 0;
         foreach (var heard in FindUnnumberedAnnouncements(segments, _language.Profile))
         {
@@ -1547,12 +1546,6 @@ internal sealed class RegionProber
             _env.Log?.Invoke(
                 $"heard the chapter phrase at {FormatTimestamp(phraseAbs)} " +
                 $"but could not read a number from it: \"{heard.Text}\"");
-            if (!queued)
-            {
-                _skippedSinceLastMark.Add(candidate);
-                queued = true;
-            }
-
             if (_unnumberedMends >= MaxUnnumberedMendsPerRegion)
                 continue;
             _unnumberedMends++;
@@ -2138,8 +2131,10 @@ internal sealed class RegionProber
     /// </para>
     /// </summary>
     /// <param name="probeMarks">The marks the probe produced, in window order.</param>
+    /// <param name="expectAt">Where the candidate that produced them expected its announcement, i.e.
+    /// the far end of any stretch a gap among them opens.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task ApplyProbeMarksAsync(List<ProbeMark> probeMarks, CancellationToken ct)
+    private async Task ApplyProbeMarksAsync(List<ProbeMark> probeMarks, double expectAt, CancellationToken ct)
     {
         foreach (var mark in probeMarks)
         {
@@ -2147,47 +2142,42 @@ internal sealed class RegionProber
             // overlap-sequence skip, candidates can be skipped even with an explicit threshold, and
             // a sequence gap is the signal that one of them hid a chapter.
             if (_lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
-                await HandleSequenceGapAsync(previousNumber, mark.Number, ct);
+                await HandleSequenceGapAsync(previousNumber, mark.Number, expectAt, ct);
 
             if (_env.Options.AutoMinSilence && !_sweeping)
                 TightenThreshold(mark);
-            _skippedSinceLastMark.Clear();
-            _probedSinceLastMark.Clear();
             _lastNumber = mark.Number;
         }
     }
 
     /// <summary>
-    /// Reacts to the chapter numbers just found leaving a gap: everything Pass 2 has looked at since
-    /// the last mark gets a second, unconditional chance before the region moves on. Nothing to
-    /// re-probe is a routine outcome (all candidates were probed at the full window and simply held
-    /// no readable announcement) and is logged as such rather than passed over in silence - the log
-    /// then distinguishes "Pass 2 declined a candidate" from "Pass 2 never had one", which is the
-    /// first thing worth knowing when a chapter goes missing.
+    /// Reacts to the chapter numbers just found leaving a gap: the stretch between the two marks
+    /// bracketing it gets a second, unconditional look before the region moves on. Nothing to
+    /// re-probe is a routine outcome and is logged as such rather than passed over in silence - the
+    /// log then distinguishes "Pass 2 declined a candidate" from "Pass 2 never had one", which is
+    /// the first thing worth knowing when a chapter goes missing.
+    /// <para>
+    /// The stretch is named by the two announcements, not by what the walk happened to look at
+    /// between them. It used to be the latter - the candidates skipped and probed since the last
+    /// mark, replayed - which cannot express the case this pass most needs: a chapter behind a pause
+    /// the candidate list never held at all, which is exactly what a list cut at --min-silence-length
+    /// leaves out (see <see cref="_subFloorSeconds"/>). Bounds by announcement rather than by window
+    /// start because that is what <see cref="CandidatesIn"/> selects on, open at the lower end so the
+    /// window that produced the last mark is not read again for a chapter already accepted, and two
+    /// seconds past the upper one to clear that method's own "not in the last second" guard.
+    /// </para>
     /// </summary>
     /// <param name="previousNumber">The chapter number below the gap.</param>
     /// <param name="number">The chapter number above it, i.e. the mark that revealed the gap.</param>
+    /// <param name="expectAt">Where the mark that revealed it expected its announcement.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task HandleSequenceGapAsync(int previousNumber, int number, CancellationToken ct)
+    private async Task HandleSequenceGapAsync(
+        int previousNumber, int number, double expectAt, CancellationToken ct)
     {
-        // The stretch to look at again runs from the last mark's own announcement to the last
-        // expectation looked at since - whether a candidate there was probed or passed over makes no
-        // difference to a pass that rebuilds and re-frames the whole stretch anyway. Bounded by
-        // expectations rather than by window starts because that is what CandidatesIn selects on,
-        // and open at the lower end so the window that produced the last mark is not read again for
-        // a chapter already accepted. The two extra seconds clear CandidatesIn's own "not in the
-        // last second" guard.
-        var after = _lastMarkExpectAt ?? _region.FromSeconds;
-        var since = _skippedSinceLastMark.Concat(_probedSinceLastMark)
-            .Where(c => c.ExpectAt > after).ToList();
-        var note = $"sequence gap between chapter {previousNumber} and {number}, ";
-        if (since.Count == 0)
-        {
-            _env.Log?.Invoke(note + "nothing to re-probe since the last mark - deferred to the gap scan");
-            return;
-        }
         await ReprobeGapCandidatesAsync(
-            after, since.Max(c => c.ExpectAt) + 2, note, previousNumber, number, ct);
+            _lastMarkExpectAt ?? _region.FromSeconds, expectAt,
+            $"sequence gap between chapter {previousNumber} and {number}, ",
+            previousNumber, number, ct);
     }
 
     /// <summary>
@@ -2232,12 +2222,20 @@ internal sealed class RegionProber
         // same flag, and both belong to this list.
         _reprobing = true;
         _gapAbove = number;
-        var candidates = CandidatesIn(fromSeconds, toSeconds)
-            // The lower bound is the last mark's own announcement, and that mark is accepted: a
-            // candidate expecting one there has nothing left to find.
-            .Where(c => c.ExpectAt > fromSeconds)
-            .OrderBy(c => c.Start)
-            .ToList();
+        _subFloorSeconds = SubFloorForReprobe();
+        var candidates = ReprobeCandidates(fromSeconds, toSeconds);
+        if (_subFloorSeconds is { } floor && !CanAfford(candidates.Count, toSeconds - fromSeconds))
+        {
+            // Cheaper to find out here than to decode it: the enriched list is built, priced and
+            // thrown away, since building candidates costs nothing and probing them is the whole
+            // expense. What is left is the list this re-probe would have had anyway.
+            _env.Log?.Invoke(
+                note + $"not reaching below {floor:0.0#} s here - {candidates.Count} candidate(s) " +
+                $"would cost more than the {GapProbeBudget(toSeconds - fromSeconds):0.#} decode " +
+                "window(s) this gap may spend");
+            _subFloorSeconds = null;
+            candidates = ReprobeCandidates(fromSeconds, toSeconds);
+        }
         if (candidates.Count == 0)
         {
             _env.Log?.Invoke(note + "nothing to re-probe since the last mark - deferred to the gap scan");
@@ -2277,7 +2275,55 @@ internal sealed class RegionProber
         }
         _reprobing = false;
         _gapAbove = null;
+        _subFloorSeconds = null;
     }
+
+    /// <summary>
+    /// One sequence-gap re-probe's candidate list, in window order.
+    /// </summary>
+    /// <param name="fromSeconds">Start of the stretch, and the last mark's own announcement: a
+    /// candidate expecting one there has nothing left to find, that chapter being accepted.</param>
+    /// <param name="toSeconds">End of the stretch.</param>
+    private List<ProbeCandidate> ReprobeCandidates(double fromSeconds, double toSeconds)
+        => CandidatesIn(fromSeconds, toSeconds)
+            .Where(c => c.ExpectAt > fromSeconds)
+            .OrderBy(c => c.Start)
+            .ToList();
+
+    /// <summary>
+    /// How short a pause a sequence-gap re-probe may build a candidate from, or null where that is
+    /// no deeper than the list it already has.
+    /// <para>
+    /// The demand the run opened at bounds it, not the adapted threshold alone: with an explicit
+    /// --min-silence-length the user has said what a chapter break is on this book, and nothing in
+    /// Pass 2 goes under that. Where the threshold has adapted <em>below</em> the demand - only
+    /// possible under auto, and only after a mark measured a break that short - the book itself has
+    /// said so, and this is the first thing in Pass 2 able to act on it. The sub-floor sweeps still
+    /// go lower afterwards, on their own budget and their own log lines.
+    /// </para>
+    /// <para>
+    /// Sweeps are excluded: a sweep's candidates are a band handed to it from outside, deliberately
+    /// narrow, and drawing this list instead would re-probe the long silences the primary scan
+    /// already covered.
+    /// </para>
+    /// </summary>
+    private double? SubFloorForReprobe()
+    {
+        if (_sweeping)
+            return null;
+        var floor = Math.Min(_threshold, _env.Options.MinSilenceSeconds);
+        return floor < _env.Options.MinSilenceSeconds ? floor : null;
+    }
+
+    /// <summary>
+    /// Whether this many probes fit the budget one gap may spend (see
+    /// <see cref="GapPlanning.GapProbeBudget"/>), counted in the decode windows a probe and a
+    /// transcription can be compared in.
+    /// </summary>
+    /// <param name="candidates">How many candidates the re-probe would run.</param>
+    /// <param name="gapSeconds">Length of the stretch being re-probed.</param>
+    private static bool CanAfford(int candidates, double gapSeconds)
+        => candidates * ChunkWindows(RecoveryProbeSeconds) <= GapProbeBudget(gapSeconds);
 
     /// <summary>
     /// Folds one accepted mark's <see cref="ProbeMark.ThresholdSilence"/> into the
@@ -2314,10 +2360,11 @@ internal sealed class RegionProber
     /// running minimum. Bounded below by <see cref="CliOptions.AdaptiveFloorSeconds"/>, not by the
     /// --min-silence-length the run opened at, so this can settle under the starting demand and
     /// thereby say something Pass 2 could not otherwise know: that this book's chapter breaks are
-    /// shorter than the default assumes. Nothing in Pass 2 acts on the part below the demand - the
-    /// candidate grid does not reach there and must not (see
-    /// <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/>) - it is read afterwards, as the
-    /// measurement that sizes the sweep. Does nothing when the mark brought no silence to teach from
+    /// shorter than the default assumes. What acts on the part below the demand never does so
+    /// through the candidate grid, which does not reach there and must not (see
+    /// <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/> for the measurement behind that):
+    /// a sequence-gap re-probe builds its own list (<see cref="_subFloorSeconds"/>), and the sweeps
+    /// build theirs. Does nothing when the mark brought no silence to teach from
     /// - it sat on a VAD region, or <see cref="ThresholdSilenceFor"/> withheld one.
     /// </summary>
     /// <param name="thresholdSilence">The silence to learn from, or null to learn nothing.</param>
@@ -2388,9 +2435,9 @@ internal sealed class RegionProber
     /// A confident mark settles its whole overlapping window sequence (consecutive candidates whose
     /// windows each overlap the next): the remaining windows of the sequence cover the same
     /// continuous stretch of audio around the found transition, and a single sequence spanning two
-    /// chapter transitions is highly unlikely - so they are skipped outright instead of probed. They
-    /// still go into <see cref="_skippedSinceLastMark"/>, so the gap re-probe recovers the unlikely
-    /// case after all (and Pass 3 remains the final net). A low-confidence mark settles nothing: the
+    /// chapter transitions is highly unlikely - so they are skipped outright instead of probed. A
+    /// sequence gap rebuilds the whole stretch between its two marks, so the unlikely case is
+    /// recovered after all (and Pass 3 remains the final net). A low-confidence mark settles nothing: the
     /// remaining windows keep their chance to re-detect the transition it may have gotten wrong.
     /// <para>
     /// Bounded at <see cref="DetectionTuning.MaxSettledWindowSkip"/> windows, because the premise
@@ -2432,8 +2479,6 @@ internal sealed class RegionProber
 
         _env.Log?.Invoke($"{skipTo - ci} overlapping window(s) skipped" +
                          (capped ? " - chain capped, the rest are probed" : ""));
-        for (var si = ci + 1; si <= skipTo; si++)
-            _skippedSinceLastMark.Add(candidates[si]);
         return skipTo;
     }
 }

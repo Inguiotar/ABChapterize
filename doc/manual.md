@@ -294,19 +294,35 @@ found at the jingles, not at the pauses.
 That measurement also runs the other way. When a book's own chapter breaks
 turn out *shorter* than the 1.5 seconds probing started at — a narrator whose
 pauses simply sit under the default — the figure settles below the starting
-point, as low as 0.8 seconds, and pass 2 finishes by sweeping the gaps left in
-the numbering for the pauses in between. Only the gaps, and only within a
-budget, so a chapter that would otherwise have cost a full pass 3 is usually
-recovered for a handful of probes instead. Nothing else about pass 2 changes:
-the pauses it was willing to probe in the first place are the same either way.
-See the [`-n` reference](#detection-behaviour) for the knob itself.
+point, as low as 0.8 seconds.
+
+Where a chapter is missing, that shorter figure is acted on twice. A gap in the
+numbering re-reads its own stretch with the pauses down to it, so a chapter
+behind a pause the run was never willing to probe is often recovered on the spot
+and on the cheap model. And when pass 2 is done, the gaps still open are swept
+for those pauses once more, with whatever the book taught by the end — usually a
+lower figure than any single gap had to work with, since every recovered chapter
+teaches it again.
+
+**The sweep runs off the gap, not off the measurement.** A book whose chapters
+all open with music measures nothing at all (see above), and it is exactly such a
+book — jingles on most chapters, a bare pause in front of the one that went
+missing — that the sweep exists for. So a gap is reason enough on its own; where
+nothing was measured, the pauses are swept down to the shortest length this run
+would ever have believed in. Only gaps, and only within a budget, so a chapter
+that would otherwise have cost a full pass 3 is usually recovered for a handful
+of probes instead. Nothing else about pass 2 changes: the pauses it was willing
+to probe in the first place are the same either way, and an explicit
+`--min-silence-length` value is honoured to the second — nothing below it is ever
+looked at. See the [`-n` reference](#detection-behaviour) for the knob itself.
 
 A chapter turning up out of sequence puts the whole stretch since the previous
 chapter back in question, not just the candidates that were passed over — and
 that second look is a **re-reading rather than a wider search**. Every pause and
-every jingle in the stretch becomes a candidate again, including the ones the
-first look ruled out because a jingle was thought to cover them, and each is
-framed a little differently from the first time: the window opens later and stops
+every jingle between the two chapters becomes a candidate again — including the
+ones the first look ruled out because a jingle was thought to cover them, and the
+ones that were never candidates at all for being shorter than the run demanded —
+and each is framed a little differently from the first time: the window opens later and stops
 sooner, which is what makes the recognizer read the same audio afresh instead of
 returning the answer it already gave. The retry stops as soon as the gap is
 closed. When there is nothing to retry — no candidate at all sits between the two

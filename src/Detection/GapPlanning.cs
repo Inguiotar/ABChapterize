@@ -157,6 +157,28 @@ internal static class GapPlanning
     }
 
     /// <summary>
+    /// How many <see cref="DetectionTuning.WhisperChunkSeconds"/> decode windows a stretch of audio
+    /// of this length costs to recognize. Rounded up because a partial window is a whole one to the
+    /// recognizer, which is exactly why this is the unit a short probe and a long transcription can
+    /// be compared in at all.
+    /// </summary>
+    /// <param name="seconds">Length of the stretch.</param>
+    internal static int ChunkWindows(double seconds)
+        => (int)Math.Ceiling(seconds / WhisperChunkSeconds);
+
+    /// <summary>
+    /// What any recovery pass may spend probing one gap, in decode windows:
+    /// <see cref="DetectionTuning.SubFloorSweepBudgetFraction"/> of what transcribing that gap
+    /// outright would cost. Every pass that probes a gap on spec shares this one bound, so that
+    /// probing stays the cheaper bet even when it finds nothing and the transcription runs anyway -
+    /// the shape it exists to prevent being on record from a 56-minute gap that re-probed for 40
+    /// minutes and recovered nothing.
+    /// </summary>
+    /// <param name="gapSeconds">Length of the gap being probed.</param>
+    internal static double GapProbeBudget(double gapSeconds)
+        => SubFloorSweepBudgetFraction * ChunkWindows(gapSeconds);
+
+    /// <summary>
     /// The silence-length bands Pass 2.5 sweeps a still-open gap with, longest first: one band per
     /// <see cref="DetectionTuning.SubFloorSweepBandCount"/>, each
     /// <see cref="DetectionTuning.SubFloorSweepBandSeconds"/> wide, the first ending exactly at

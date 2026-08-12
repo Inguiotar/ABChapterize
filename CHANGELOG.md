@@ -28,6 +28,18 @@ earn a round number.
 
 ### Changed
 
+- **A gap in the chapter numbers now reaches under the pause length the run demanded.** With
+  `--min-silence-length auto`, a book whose chapter breaks measure shorter than the 1.5 seconds
+  probing opens at can now act on that straight away: the stretch between the two chapters
+  around a missing one is re-read with the shorter pauses included, so the chapter is often
+  recovered on the spot and on the faster model instead of waiting for the later passes. An
+  explicit `--min-silence-length` is unaffected and still probes nothing below itself.
+
+- **The sweep for short pauses now runs off a missing chapter rather than off a measurement.**
+  It used to need some chapter to have measured a short break first, which a book whose
+  chapters all open with music never does — leaving the sweep switched off on exactly the kind
+  of book it was written for. A gap in the numbering is now reason enough.
+
 - **A missing chapter is now hunted by re-reading its stretch, not by widening the search.**
   When the chapter numbers leave a hole, everything between the two chapters around it goes
   back on the list — every pause and every jingle, including the ones the first look ruled

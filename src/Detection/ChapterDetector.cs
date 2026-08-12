@@ -400,9 +400,9 @@ public sealed class ChapterDetector
                 break;
         }
 
-        if (!earlyAborted && belowExpectedStartNumber == null && !_options.IgnoreChapterNumbers &&
-            measuredBreakSeconds is { } breakSeconds && breakSeconds < _options.MinSilenceSeconds)
-            await SweepAdaptiveSubFloorAsync(pass2Ctx, found, namedFound, language, breakSeconds, ct);
+        if (!earlyAborted && belowExpectedStartNumber == null && !_options.IgnoreChapterNumbers)
+            await SweepAdaptiveSubFloorAsync(
+                pass2Ctx, found, namedFound, language, measuredBreakSeconds, ct);
 
         var chapters = await ReconcileSequenceAsync(found, namedFound, pass2Ctx, language.Profile, ct);
         _log?.Invoke("Pass 2 finished");
@@ -1368,7 +1368,7 @@ public sealed class ChapterDetector
         // honestly: recognition cost is per window, and a 12 s probe costs a whole one just as a
         // 30 s stretch of a Pass 3 chunk does.
         var windowsPerProbe = ChunkWindows(RegionProber.RecoveryProbeSeconds);
-        var budget = SubFloorSweepBudgetFraction * ChunkWindows(gap.ToSeconds - gap.FromSeconds);
+        var budget = GapProbeBudget(gap.ToSeconds - gap.FromSeconds);
         var spent = 0;
 
         foreach (var (min, max) in SubFloorSweepBands(
@@ -1411,10 +1411,22 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Pass 2's own sub-floor sweep: for a book whose marks measured its chapter breaks shorter than
-    /// --min-silence-length, re-visits the gaps in the numbering with the pauses between
-    /// <paramref name="bandFloorSeconds"/> and that demand - the ones the run was never willing to
-    /// probe, on a narrator whose breaks say it should have been.
+    /// Pass 2's own sub-floor sweep: re-visits the gaps left in the numbering with the pauses
+    /// between the floor below and --min-silence-length - the ones the run was never willing to
+    /// probe at all.
+    /// <para>
+    /// <strong>The gap is the trigger, not the measurement.</strong> This used to run only where a
+    /// mark had measured a chapter break shorter than the demand, which sounds like evidence and is
+    /// really an availability accident: a mark found at a jingle measures nothing (see
+    /// <see cref="RegionProber.ThresholdSilenceFor"/>, which withholds a jingle's hush on purpose),
+    /// so a book whose chapters all open with music never triggered the sweep however many chapters
+    /// went missing - and a mixed book, jingles on most chapters and a bare pause on the one that
+    /// vanished, is exactly the shape the sweep exists for. A gap says a chapter is missing here,
+    /// which is the stronger claim; the measurement now only lowers the floor where one exists,
+    /// down from <see cref="CliOptions.AdaptiveFloorSeconds"/> - the shortest break this run would
+    /// ever believe in, and equal to the demand itself when --min-silence-length was given
+    /// explicitly, which is what keeps an explicit demand honoured to the second.
+    /// </para>
     /// <para>
     /// <strong>Why this is a separate sweep and not simply a wider candidate list.</strong> The
     /// obvious implementation - have Pass 1 keep everything down to
@@ -1452,13 +1464,17 @@ public sealed class ChapterDetector
     /// <param name="found">The chapter accumulator, added to in place.</param>
     /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
     /// <param name="language">The file's settled language resolution.</param>
-    /// <param name="bandFloorSeconds">The shortest chapter break Pass 2's marks measured, i.e. the
-    /// bottom of the band to sweep.</param>
+    /// <param name="measuredBreakSeconds">The shortest chapter break Pass 2's marks measured, or
+    /// null where none of them measured one at all.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task SweepAdaptiveSubFloorAsync(
         Pass2Context ctx, List<DetectedChapter> found, List<DetectedMark> namedFound,
-        LanguageState language, double bandFloorSeconds, CancellationToken ct)
+        LanguageState language, double? measuredBreakSeconds, CancellationToken ct)
     {
+        var bandFloorSeconds = measuredBreakSeconds ?? _options.AdaptiveFloorSeconds;
+        if (bandFloorSeconds >= _options.MinSilenceSeconds)
+            return;
+
         var known = Normalize(found);
         var work = FindGaps(known, ctx.Info.DurationSeconds, ExpectedStartChapter)
             .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(known, gap, ExpectedStartChapter)))
@@ -1469,9 +1485,13 @@ public sealed class ChapterDetector
 
         var windowsPerProbe = ChunkWindows(RegionProber.RecoveryProbeSeconds);
         var env = BuildProbeEnvironment();
-        _log?.Invoke(
-            $"pass 2: this book's chapter breaks measure down to {bandFloorSeconds:0.0#} s, below the " +
-            $"{_options.MinSilenceSeconds:0.0#} s probing started at - sweeping the gaps for pauses in between");
+        _log?.Invoke("pass 2: " + (measuredBreakSeconds is { } measured
+                ? $"this book's chapter breaks measure down to {measured:0.0#} s, below the " +
+                  $"{_options.MinSilenceSeconds:0.0#} s probing started at"
+                : "no mark measured a chapter break on this book, so nothing says the " +
+                  $"{_options.MinSilenceSeconds:0.0#} s probing started at was right") +
+            $" - sweeping the gaps for pauses of {bandFloorSeconds:0.0#}-" +
+            $"{_options.MinSilenceSeconds:0.0#} s");
 
         foreach (var (gap, missing) in work)
         {
@@ -1483,7 +1503,7 @@ public sealed class ChapterDetector
                 continue;
 
             var wouldSpend = band.Count * windowsPerProbe;
-            var budget = SubFloorSweepBudgetFraction * ChunkWindows(gap.ToSeconds - gap.FromSeconds);
+            var budget = GapProbeBudget(gap.ToSeconds - gap.FromSeconds);
             if (wouldSpend > budget)
             {
                 _log?.Invoke(
@@ -1507,16 +1527,6 @@ public sealed class ChapterDetector
             _sequenceRestartSkips += prober.SequenceRestartSkips;
         }
     }
-
-    /// <summary>
-    /// How many <see cref="DetectionTuning.WhisperChunkSeconds"/> decode windows a stretch of audio
-    /// of this length costs to recognize. Rounded up because a partial window is a whole one to the
-    /// recognizer, which is exactly why this is the unit a short probe and a long transcription can
-    /// be compared in at all.
-    /// </summary>
-    /// <param name="seconds">Length of the stretch.</param>
-    private static int ChunkWindows(double seconds)
-        => (int)Math.Ceiling(seconds / WhisperChunkSeconds);
 
     /// <summary>Which of <paramref name="expected"/> the accumulator still has no chapter for.</summary>
     /// <param name="expected">The chapter numbers a gap was expected to yield.</param>

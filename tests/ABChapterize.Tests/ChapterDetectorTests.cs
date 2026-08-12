@@ -2874,31 +2874,72 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task AdaptiveSubFloorSweep_RecoversAChapterBehindASubDemandPause()
+    public async Task AdaptiveSubFloorSweep_RecoversAChapterThePassItselfCouldNotReach()
     {
-        // Chapter 2's anchor silence is 1.6 s - only just over the 1.5 s the run starts at - so the
-        // threshold measures this book's breaks at 1.2 s (0.75x), below the starting demand. That
-        // measurement is the only evidence in the run that 1.5 s was too strict for this narrator,
-        // and chapter 3's 1.4 s break is exactly what it predicts: never a pass 2 candidate, but
-        // swept once chapter 4 reveals the gap. The real shape is "Paula Monti" (2026-07-31), whose
-        // five missed chapters all sat behind pauses of 1.39-1.49 s.
-        var (result, log, _) = await DetectWithLogAsync(
+        // Why the sweep still exists now that a gap re-probe reaches under the threshold too: the
+        // re-probe reaches only as far as the threshold has adapted *by the time it runs*, and the
+        // threshold keeps falling as the book goes on. The whole descent is here:
+        //   * chapter 2's 1.6 s anchor measures the book at 1.2 s;
+        //   * chapter 4 reveals the gap over chapter 3, but its 1.0 s pause is under that 1.2 s
+        //     reach, so the re-probe finds nothing - and chapter 4's own 1.5 s anchor then brings
+        //     the measurement to 1.125 s;
+        //   * chapter 6 reveals the gap over chapter 5, whose 1.2 s pause *is* within reach now, so
+        //     the re-probe recovers it - and that pause, being a proven chapter break, takes the
+        //     measurement down to 0.9 s;
+        //   * the sweep runs after the region loop with that final figure, and only there does
+        //     chapter 3 come within reach.
+        // The real shape is "Paula Monti" (2026-07-31), whose threshold was 1.23 s at the chapter
+        // 2-5 gap and 0.8 s by the end of the book.
+        var (result, log, audio) = await DetectWithLogAsync(
             Options("--max-jingle-length", "0"),
-            [new(598.4, 600), new(898.6, 900), new(1198.5, 1200)],
+            [new(598.4, 600), new(899, 900), new(1198.5, 1200), new(1498.8, 1500),
+             new(1798.5, 1800)],
             s =>
             {
                 s.Add(0, Seg(0.5, " Chapter one."));
                 s.Add(600, Seg(0.3, " Chapter two."));
                 s.Add(900, Seg(0.3, " Chapter three."));
                 s.Add(1200, Seg(0.3, " Chapter four."));
+                s.Add(1500, Seg(0.3, " Chapter five."));
+                s.Add(1800, Seg(0.3, " Chapter six."));
             });
 
         Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4, 5, 6], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
+                                  l.Contains("nothing to re-probe"));
+        // Chapter 5 by the re-probe reaching under the demand, chapter 3 only by the sweep.
+        Assert.Contains(1499.0, audio.DecodeStarts);
+        Assert.Contains(log, l => l.Contains("measure down to 0.9 s, below the 1.5 s"));
+        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 0.9-1.5 s for chapter 3"));
+    }
+
+    [Fact]
+    public async Task AdaptiveSubFloorSweep_FiresForAGap_EvenWhereNoMarkMeasuredABreak()
+    {
+        // The book the old trigger could not see: every chapter opens with music, so every mark is
+        // found at a jingle, and a jingle's hush is deliberately not allowed to teach the threshold
+        // (it measures the transition's lead-in, not the break between two chapters). Nothing
+        // measures anything, and the sweep used to wait for a measurement - on the one shape it
+        // exists for, a book of jingles with a bare 1.0 s pause in front of the chapter that went
+        // missing. The gap is what says a chapter is missing, so the gap is what fires it.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks"),
+            [new(899, 900)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(610, Seg(0.3, " Chapter two."));
+                s.Add(900, Seg(0.3, " Chapter three."));
+                s.Add(1210, Seg(0.3, " Chapter four."));
+            },
+            new FakeVad { Speech = [new(0, 600), new(610, 1200), new(1210, 3600)] });
+
+        Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
-        // 1.13 s, not the 1.2 s chapter 2 alone would give: chapter 4's own 1.5 s anchor lowers the
-        // running minimum again (0.75 x 1.5) before the sweep reads it.
-        Assert.Contains(log, l => l.Contains("measure down to 1.13 s, below the 1.5 s"));
-        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.13-1.5 s for chapter 3"));
+        Assert.Contains(log, l => l.Contains("no mark measured a chapter break on this book") &&
+                                  l.Contains("sweeping the gaps for pauses of 0.8-1.5 s"));
+        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 0.8-1.5 s for chapter 3"));
     }
 
     [Fact]
@@ -3042,6 +3083,60 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Contains((899.0, (double?)18.0), audio.DecodeWindows);
         Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
                                   l.Contains("re-probing 1 candidate(s) unconditionally"));
+    }
+
+    [Fact]
+    public async Task AGapReprobe_ReachesUnderTheThresholdItStartedAt()
+    {
+        // "Paula Monti"'s shape: a narrator whose chapter breaks run shorter than the 1.5 s the run
+        // opened at. Chapter 2's 1.8 s break brings the threshold down to 1.35 s, but Pass 1's
+        // candidate list was cut at 1.5 s before Pass 2 ever saw it, so chapter 3's 1.4 s break is
+        // not on it and no amount of adapting can put it there. The gap re-probe builds its own
+        // list and reaches down to what the book has just taught.
+        var (result, _, audio) = await DetectFullAsync(
+            Options("--quick-marks"),
+            [new(598.2, 600), new(898.6, 900), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(900, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        // 899: a recovery pass opens one trimmed lead-in inside the silence it never saw before.
+        Assert.Contains(899.0, audio.DecodeStarts);
+    }
+
+    [Fact]
+    public async Task AGapReprobe_DoesNotReachUnderTheThreshold_WhenTheGapCannotAffordIt()
+    {
+        // Same shape in a gap a tenth the length and dense with short pauses: four candidates cost
+        // more decode windows than a minute-long gap may spend on being probed at all, which is the
+        // bound that stops a book of short pauses from probing its way past what transcribing the
+        // gap outright would have cost. The re-probe falls back to the list it would have had.
+        //
+        // AddWithin(20) keeps the chapter reachable only from a recovery window, so nothing later
+        // in the run quietly covers for the refusal: pass 2.5's sweep is refused on the same
+        // budget, and pass 3's chunks are too wide to hear it.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--verbose", "--quick-marks"),
+            [new(598.2, 600), new(608.6, 610), new(618.6, 620), new(628.6, 630),
+             new(638.6, 640), new(655, 660)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.AddWithin(20, 630, Seg(0.2, " Chapter three."));
+                s.Add(660, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.True(result.GapRemains);
+        Assert.Equal([1, 2, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
+                                  l.Contains("not reaching below 1.35 s here"));
     }
 
     [Fact]
