@@ -69,13 +69,6 @@ earn a round number.
   a window long enough to span a book's longest jingle is exactly the width that loses a
   one-word announcement. The same goes for pass 2.5 and the gap sweeps.
 
-- **`--max-jingle-length` no longer sizes probe windows.** Since 0.11.0 every window is cut
-  to its own candidate, and this option's remaining job is to say how far back the tool
-  believes a book's music can reach when it places a mark. `0` still means "no jingle
-  expected at all" and switches the music detection off with it; `auto` is still accepted
-  and now simply means the 45-second default, the self-adjusting window it used to switch
-  on having nothing left to adjust.
-
 ### Fixed
 
 - **An announcement spoken over a chapter's jingle is looked for properly.** Where the

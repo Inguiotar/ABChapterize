@@ -8,8 +8,7 @@ the executable in every published build).
 
 `assets/silero_vad.onnx` is the Silero VAD speech/non-speech detection model,
 embedded into the executable and used to find jingle transitions that have no
-detectable amplitude gap. The pre-pass runs by default, and is skipped only
-with `--max-jingle-length 0` and no `--mark-before-jingle`.
+detectable amplitude gap. The pre-pass runs over every file processed.
 
 - Project: https://github.com/snakers4/silero-vad
 - License: MIT — see [`licenses/silero-vad-LICENSE`](licenses/silero-vad-LICENSE)
