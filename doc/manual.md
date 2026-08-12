@@ -299,9 +299,10 @@ Where a chapter is missing, that shorter figure is acted on twice. A gap in the
 numbering re-reads its own stretch with the pauses down to it, so a chapter
 behind a pause the run was never willing to probe is often recovered on the spot
 and on the cheap model. And when pass 2 is done, the gaps still open are swept
-for those pauses once more, with whatever the book taught by the end — usually a
-lower figure than any single gap had to work with, since every recovered chapter
-teaches it again.
+for those pauses once more — a tenth of a second at a time, longest first, each
+slice costing only what it costs, so a gap dense with short pauses still gets the
+slice most likely to hold the chapter rather than being given up as too expensive
+in one piece. The sweep stops as soon as the gap closes.
 
 **The sweep runs off the gap, not off the measurement.** A book whose chapters
 all open with music measures nothing at all (see above), and it is exactly such a

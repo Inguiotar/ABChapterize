@@ -2338,7 +2338,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 900.25), new(3, 1199.95)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.4-1.5 s for chapter 2"));
+        Assert.Contains(log, l => l.Contains("pass 2.5: sweeping 1 silence(s) of 1.4-1.5 s for chapter 2"));
         // Every decode stayed probe-sized, so pass 3 proper never transcribed the gap - the same
         // saving pass 2.5's ordinary re-probe exists for, on a candidate it cannot see.
         Assert.All(pass3.Audio.DecodeWindows, w => Assert.True(w.Duration is null or <= 60));
@@ -2368,8 +2368,10 @@ public sealed class ChapterDetectorTests : IDisposable
             log);
 
         AssertChapters([new(1, 0.25), new(2, 900.25), new(3, 1199.95)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("sub-floor sweep closed the gap at 1.4-1.5 s"));
-        Assert.DoesNotContain(log, l => l.Contains("1.0-1.1 s"));
+        Assert.Contains(log, l => l.Contains("pass 2.5: sub-floor sweep closed the gap at 1.4-1.5 s"));
+        // Pass 2 walks the same bands first on its own recognizer, which hears nothing here, so
+        // the bottom band is only proof of anything for the pass under test.
+        Assert.DoesNotContain(log, l => l.Contains("pass 2.5") && l.Contains("1.0-1.1 s"));
         Assert.DoesNotContain(pass3.Audio.DecodeStarts, d => Math.Abs(d - 1000) < 1e-6);
     }
 
@@ -2393,7 +2395,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 1100.25), new(3, 1199.95)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.0-1.1 s for chapter 2"));
+        Assert.Contains(log, l => l.Contains("pass 2.5: sweeping 1 silence(s) of 1.0-1.1 s for chapter 2"));
     }
 
     [Fact]
@@ -2414,7 +2416,7 @@ public sealed class ChapterDetectorTests : IDisposable
             log);
 
         AssertChapters([new(1, 0.25), new(2, 600.25), new(3, 1199.95)], result.Chapters);
-        Assert.DoesNotContain(log, l => l.Contains("sweeping"));
+        Assert.DoesNotContain(log, l => l.Contains("pass 2.5: sweeping"));
         Assert.DoesNotContain(pass3.Audio.DecodeStarts, d => Math.Abs(d - 900) < 1e-6);
     }
 
@@ -2439,7 +2441,7 @@ public sealed class ChapterDetectorTests : IDisposable
             log);
 
         Assert.True(result.GapRemains);
-        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 1.4-1.5 s"));
+        Assert.Contains(log, l => l.Contains("pass 2.5: sweeping 1 silence(s) of 1.4-1.5 s"));
         Assert.Contains(log, l => l.Contains("stopping the sub-floor sweep before the 1.3-1.4 s band") &&
                                   l.Contains("2 decode window(s)") && l.Contains("1.5"));
     }
@@ -2940,7 +2942,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Chapter 5 by the re-probe reaching under the demand, chapter 3 only by the sweep.
         Assert.Contains(1499.0, audio.DecodeStarts);
         Assert.Contains(log, l => l.Contains("measure down to 0.9 s, below the 1.5 s"));
-        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 0.9-1.5 s for chapter 3"));
+        Assert.Contains(log, l => l.Contains("pass 2: sweeping 1 silence(s) of 1.0-1.1 s for chapter 3"));
     }
 
     [Fact]
@@ -2967,8 +2969,42 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
         Assert.Contains(log, l => l.Contains("no mark measured a chapter break on this book") &&
-                                  l.Contains("sweeping the gaps for pauses of 0.8-1.5 s"));
-        Assert.Contains(log, l => l.Contains("sweeping 1 silence(s) of 0.8-1.5 s for chapter 3"));
+                                  l.Contains("sweeping the gaps for the pauses just under it"));
+        Assert.Contains(log, l => l.Contains("pass 2: sweeping 1 silence(s) of 1.0-1.1 s for chapter 3"));
+    }
+
+    [Fact]
+    public async Task AdaptiveSubFloorSweep_SpendsItsBudgetOnTheLikeliestBand_RatherThanRefusingTheLot()
+    {
+        // Why Pass 2 sweeps in bands rather than one wide pass over everything under the demand.
+        // The gap holds eleven sub-floor pauses: chapter 3's at 1.45 s and ten fillers at 1.05 s.
+        // One band covering the whole range costs eleven probes against a budget of 7.5, so the
+        // sweep would be refused outright and the chapter left to the later passes - which is
+        // exactly what the build-300 corpus run did on every gap of "Paula Monti" and
+        // "I Shall Wear Midnight". Longest-first, the top band costs one probe, finds the chapter
+        // and closes the gap, and the ten fillers are never looked at.
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--quick-marks"),
+            [
+                new(595, 600), new(698.55, 700),
+                new(748.95, 750), new(758.95, 760), new(768.95, 770), new(778.95, 780),
+                new(788.95, 790), new(798.95, 800), new(808.95, 810), new(818.95, 820),
+                new(828.95, 830), new(838.95, 840),
+                new(895, 900)
+            ],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(700, Seg(0.3, " Chapter three."));
+                s.Add(900, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("pass 2: sweeping 1 silence(s) of 1.4-1.5 s for chapter 3"));
+        Assert.Contains(log, l => l.Contains("pass 2: sub-floor sweep closed the gap at 1.4-1.5 s"));
+        Assert.DoesNotContain(audio.DecodeStarts, d => d >= 745 && d <= 845);
     }
 
     [Fact]

@@ -56,10 +56,15 @@ earn a round number.
   recovered on the spot and on the faster model instead of waiting for the later passes. An
   explicit `--min-silence-length` is unaffected and still probes nothing below itself.
 
-- **The sweep for short pauses now runs off a missing chapter rather than off a measurement.**
-  It used to need some chapter to have measured a short break first, which a book whose
-  chapters all open with music never does — leaving the sweep switched off on exactly the kind
-  of book it was written for. A gap in the numbering is now reason enough.
+- **The sweep for short pauses now runs off a missing chapter rather than off a measurement,
+  and spends its budget where the chapter is likeliest to be.** It used to need some chapter to
+  have measured a short break first, which a book whose chapters all open with music never does
+  — leaving the sweep switched off on exactly the kind of book it was written for. A gap in the
+  numbering is now reason enough. It also sweeps a tenth of a second at a time, longest pauses
+  first, the way the later pass already did, instead of taking the whole range in one go: on a
+  gap dense with short pauses the wide version cost more than transcribing the gap outright and
+  so was abandoned without probing anything at all, even though the missing chapter was sitting
+  in the very first slice it would have looked at.
 
 - **A missing chapter is now hunted by re-reading its stretch, not by widening the search.**
   When the chapter numbers leave a hole, everything between the two chapters around it goes
