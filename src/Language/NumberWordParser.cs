@@ -291,8 +291,8 @@ public static class NumberWordParser
 
     /// <summary>
     /// Finds an unambiguous Roman numeral anywhere in <paramref name="text"/>, rather than only at
-    /// the end nearest a chapter phrase. Written for a pre-existing marking's <em>title</em>
-    /// (<see cref="ABChapterize.Detection.MarkingTitleNumber"/>), where the number can sit behind a
+    /// the end nearest a chapter phrase. Written for a pre-existing mark's <em>title</em>
+    /// (<see cref="ABChapterize.Detection.ExistingMarkTitle"/>), where the number can sit behind a
     /// heading the phrase-anchored rules do not reach - and only ever reached there once those have
     /// found nothing, since scanning a whole string for something that is also a word is a last
     /// resort by nature. The one-letter guard applies exactly as everywhere else, so a stray "I" or

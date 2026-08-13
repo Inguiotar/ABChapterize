@@ -141,7 +141,7 @@ internal sealed class MarkPlacer
     /// <summary>
     /// The refinement itself, for the one caller that wants it without the rest of a placement:
     /// <c>--verify --fix</c>, which is correcting a mark whose chapter number is already settled by
-    /// the marking's own title (so no <see cref="RefinedNumberVote"/>) and which is not part of a
+    /// the mark's own title (so no <see cref="RefinedNumberVote"/>) and which is not part of a
     /// detection run (so no per-chapter statistics to record).
     /// </summary>
     internal PreciseMarkRefiner Refiner => _refiner;
@@ -161,7 +161,7 @@ internal sealed class MarkPlacer
     /// recorded either way - the auto mechanisms and statistics stay meaningful even when marks are
     /// placed at the plain default offset.
     /// <para>
-    /// Precise marking also settles the chapter <em>number</em> here, from the transcripts its own
+    /// Precise mark also settles the chapter <em>number</em> here, from the transcripts its own
     /// probes produced (<see cref="RefinedNumberVote"/>), which is why the number goes out as well
     /// as in. It has to happen at this point and not at the call site: the measurements below are
     /// keyed by chapter number, and recording them under a number the very next step overturns
@@ -314,7 +314,7 @@ internal sealed class MarkPlacer
 
     /// <summary>
     /// Applies --mark-before-jingle on top of an already-computed (and normally already
-    /// precise-marking-corrected) default-mode mark: <see
+    /// precise-mark-corrected) default-mode mark: <see
     /// cref="JingleGeometry.ComputeMarkBeforeJingle"/> walks it backward to the jingle's true
     /// leading edge - into the hush before it by up to <c>--mark-lead</c>, where there is one - or
     /// leaves it unchanged when VAD finds no jingle there at all, in which case the lead the
@@ -333,9 +333,9 @@ internal sealed class MarkPlacer
     /// </para>
     /// </summary>
     /// <param name="mark">The mark to walk backward from.</param>
-    /// <param name="markConfirmed">Whether <paramref name="mark"/> is a precise-marking-confirmed
+    /// <param name="markConfirmed">Whether <paramref name="mark"/> is a precise-mark-confirmed
     /// announcement onset (<see cref="PreciseMarkResult.PhraseHeard"/>); false both when precise
-    /// marking could not confirm the phrase and when --quick-marks skipped it altogether.</param>
+    /// mark could not confirm the phrase and when --quick-marks skipped it altogether.</param>
     /// <param name="ctx">The file's mark-placement constants.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<double> ApplyMarkBeforeJingleAsync(

@@ -94,7 +94,7 @@ internal sealed class LanguageResolver
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">The file's probed media info, for its duration and input decoder.</param>
     /// <param name="positions">Where to sample, best guess first - see <see cref="SpeechPositions"/>,
-    /// <see cref="MarkingPositions"/> and <see cref="DurationPositions"/>. Only the first
+    /// <see cref="ExistingMarkPositions"/> and <see cref="DurationPositions"/>. Only the first
     /// <see cref="DetectionTuning.AutoLanguageProbeAttempts"/> are ever used, and a position whose
     /// window decodes to nothing usable does not consume an attempt.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -269,27 +269,27 @@ internal sealed class LanguageResolver
 
     /// <summary>
     /// Sample positions for the <c>--verify</c> and resume paths, which have no VAD pass but do
-    /// have the file's committed chapter markings. A marking is a better anchor than any fraction
+    /// have the file's committed chapter marks. A mark is a better anchor than any fraction
     /// of the duration - it is a known chapter start, so narration is guaranteed to follow -
     /// provided the window skips past the announcement and whatever jingle wraps it, which is what
-    /// <see cref="DetectionTuning.AutoLanguageMarkingOffsetSeconds"/> is for.
+    /// <see cref="DetectionTuning.AutoLanguageExistingMarkOffsetSeconds"/> is for.
     /// </summary>
-    /// <param name="markings">The file's existing chapter markings, in chronological order.</param>
+    /// <param name="marks">The file's existing chapter marks, in chronological order.</param>
     /// <param name="durationSeconds">The file's duration.</param>
-    internal static IEnumerable<double> MarkingPositions(
-        IReadOnlyList<Chapter> markings, double durationSeconds)
+    internal static IEnumerable<double> ExistingMarkPositions(
+        IReadOnlyList<Chapter> marks, double durationSeconds)
     {
-        if (markings.Count == 0)
+        if (marks.Count == 0)
             return DurationPositions(durationSeconds);
 
         return Distinct(Anchors(durationSeconds)
-            .Select(anchor => markings.MinBy(m => Math.Abs(m.StartSeconds - anchor)).StartSeconds
-                              + AutoLanguageMarkingOffsetSeconds)
+            .Select(anchor => marks.MinBy(m => Math.Abs(m.StartSeconds - anchor)).StartSeconds
+                              + AutoLanguageExistingMarkOffsetSeconds)
             .Where(position => position < durationSeconds));
     }
 
     /// <summary>
-    /// Sample positions with nothing but the duration to go on - no VAD pass and no markings.
+    /// Sample positions with nothing but the duration to go on - no VAD pass and no marks.
     /// Blind, but blind at <see cref="Anchors"/> rather than at zero, which is the whole point:
     /// any of these is a better bet than the file's opening seconds.
     /// </summary>
@@ -314,7 +314,7 @@ internal sealed class LanguageResolver
         => new[] { 0.20, 0.45, 0.70, 0.10, 0.85 }.Select(f => f * durationSeconds);
 
     /// <summary>Drops positions that repeat one already yielded, to the second - two anchors
-    /// resolving to the same speech run or the same marking must not spend two attempts on
+    /// resolving to the same speech run or the same mark must not spend two attempts on
     /// identical audio.</summary>
     /// <param name="positions">The candidate positions, in the order they should be tried.</param>
     private static IEnumerable<double> Distinct(IEnumerable<double> positions)

@@ -9,9 +9,9 @@ using System.Text.RegularExpressions;
 namespace ABChapterize.Detection;
 
 /// <summary>
-/// Reads the chapter number out of a <em>pre-existing</em> chapter marking's title - what
-/// <c>--verify</c> checks a marking against, what a resumed run reads its own committed state from,
-/// and (as a negative test) what tells a chapter marking apart from a named one.
+/// Reads the chapter number out of a <em>pre-existing</em> chapter mark's title - what
+/// <c>--verify</c> checks a mark against, what a resumed run reads its own committed state from,
+/// and (as a negative test) what tells a chapter mark apart from a named one.
 /// <para>
 /// A title is not a transcript, and that distinction is the whole reason this class exists. The
 /// transcript helpers read a number from text that <em>follows</em> a phrase already matched
@@ -19,7 +19,7 @@ namespace ABChapterize.Detection;
 /// still inside it ("Capitolo uno", "Kapitel Fünf"), where the number is almost never token 0.
 /// Handing a whole title to the transcript-tail helper - which is what happened until 2026-08-02 -
 /// therefore failed on the ordinary form in every language, and the effect looked like "--verify
-/// does nothing": a marking whose number will not parse is not counted as checked, and a file where
+/// does nothing": a mark whose number will not parse is not counted as checked, and a file where
 /// none of them parse is skipped with "none had a checkable number".
 /// </para>
 /// <para>
@@ -34,12 +34,12 @@ namespace ABChapterize.Detection;
 /// <para>
 /// The rules below are ordered so that the reliable evidence is consulted first and the guesswork
 /// last. That ordering is not cosmetic: the loose digit scan at the bottom used to run <em>first</em>,
-/// which made "Capitolo uno - Anno 1984" yield 1984 - a marking then verified against a chapter
+/// which made "Capitolo uno - Anno 1984" yield 1984 - a mark then verified against a chapter
 /// 1984 that does not exist, booked as failed, and (before the wholesale-failure rule) enough to get
-/// a whole file's markings discarded and redetected. A heading with a year in it was that expensive.
+/// a whole file's marks discarded and redetected. A heading with a year in it was that expensive.
 /// </para>
 /// </summary>
-internal static class MarkingTitleNumber
+internal static class ExistingMarkTitle
 {
     /// <summary>
     /// Every registered language's own chapter wording, compiled once - the cross-language fallback
@@ -60,7 +60,7 @@ internal static class MarkingTitleNumber
     /// <summary>
     /// A digit run that could be a chapter number, i.e. one to three digits with no further digit
     /// on either side. The width limit is the last line of defence against a title's own prose: every
-    /// language's number grammar covers 0-999, so a four-digit run in a marking title is a year, not
+    /// language's number grammar covers 0-999, so a four-digit run in a mark title is a year, not
     /// a chapter. It only applies here, at the bottom of the ladder - a number sitting next to the
     /// chapter word is parsed by the anchored rules above with no width limit at all.
     /// </summary>
@@ -79,9 +79,9 @@ internal static class MarkingTitleNumber
         new(@"[:|–—·]|(?<=\s)-(?=\s)", RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// The chapter number a marking's title announces, if any.
+    /// The chapter number a mark's title announces, if any.
     /// </summary>
-    /// <param name="title">The marking's title, as whatever tool wrote it left it.</param>
+    /// <param name="title">The mark's title, as whatever tool wrote it left it.</param>
     /// <param name="profile">The file's resolved language profile - its phrase and title word are
     /// tried first, and its language steers the number grammar of the unanchored rules.</param>
     /// <param name="number">Receives the chapter number on success.</param>
@@ -117,7 +117,7 @@ internal static class MarkingTitleNumber
     }
 
     /// <summary>
-    /// The part a marking's title puts it in, 1-based, for a file whose chapter numbering restarts
+    /// The part a mark's title puts it in, 1-based, for a file whose chapter numbering restarts
     /// partway through (see <see cref="LanguageProfile.ChapterTitleFor"/>). Read back so a
     /// <c>--verify</c> or auto-resume run over a file this tool marked sees three parts rather than
     /// a numbering that jumps backwards twice - without it, <see cref="GapPlanning.Normalize"/>
@@ -130,7 +130,7 @@ internal static class MarkingTitleNumber
     /// chapter's identity is made of.
     /// </para>
     /// </summary>
-    /// <param name="title">The marking's title, as whatever tool wrote it left it.</param>
+    /// <param name="title">The mark's title, as whatever tool wrote it left it.</param>
     /// <param name="profile">The file's resolved language profile, supplying the part word.</param>
     /// <param name="part">Receives the 1-based part number on success.</param>
     /// <returns>True when the title opens with a part prefix.</returns>
@@ -156,7 +156,7 @@ internal static class MarkingTitleNumber
     /// tool writes into a file without changing what it listens for, so a file this tool marked as
     /// "Section 5" is unreadable by a phrase of "chapter" alone.
     /// </summary>
-    /// <param name="title">The marking's title.</param>
+    /// <param name="title">The mark's title.</param>
     /// <param name="profile">The language profile supplying the anchors and the number grammar.</param>
     /// <param name="number">Receives the chapter number on success.</param>
     private static bool TryAnchored(string title, LanguageProfile profile, out int number)
@@ -180,7 +180,7 @@ internal static class MarkingTitleNumber
     /// difference is <see cref="HeadingSeparator"/>: a transcript has no headings to cut off, while a
     /// title is mostly heading.
     /// </summary>
-    /// <param name="title">The marking's title.</param>
+    /// <param name="title">The mark's title.</param>
     /// <param name="anchor">Where the chapter word sits in it.</param>
     /// <param name="profile">The language profile supplying the number grammar.</param>
     /// <param name="number">Receives the chapter number on success.</param>
@@ -222,7 +222,7 @@ internal static class MarkingTitleNumber
     /// German, Danish and Swedish; "capítulo" across Spanish and Portuguese) also have distinct
     /// number words, so genuine disagreement means the title is not what it looks like.
     /// </summary>
-    /// <param name="title">The marking's title.</param>
+    /// <param name="title">The mark's title.</param>
     /// <param name="own">The file's own language code, which rule 1 has already tried.</param>
     /// <param name="number">Receives the agreed chapter number on success.</param>
     private static bool TryOtherLanguages(string title, string own, out int number)

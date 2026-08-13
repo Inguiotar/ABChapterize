@@ -12,7 +12,7 @@ using ABChapterize.Errors;
 
 namespace ABChapterize.Audio;
 
-/// <summary>A chapter marking with start time and title.</summary>
+/// <summary>A chapter mark with start time and title.</summary>
 /// <param name="StartSeconds">Chapter start in seconds from the beginning of the file.</param>
 /// <param name="Title">Chapter title as written into the file metadata.</param>
 public readonly record struct Chapter(double StartSeconds, string Title);
@@ -20,7 +20,7 @@ public readonly record struct Chapter(double StartSeconds, string Title);
 /// <summary>Result of probing a media file with ffprobe.</summary>
 /// <param name="DurationSeconds">Total play time in seconds.</param>
 /// <param name="SizeBytes">File size in bytes.</param>
-/// <param name="ChapterCount">Number of pre-existing chapter markings.</param>
+/// <param name="ChapterCount">Number of pre-existing chapter marks.</param>
 /// <param name="AudioCodec">Codec name of the first audio stream (e.g. "aac"), or "" if unknown.</param>
 /// <param name="AudioProfile">Codec profile of the first audio stream (e.g. "LC", "xHE-AAC"), or "" if unknown.</param>
 /// <param name="InputDecoder">Explicit ffmpeg input decoder to use for this file (e.g. "libfdk_aac"), or null for ffmpeg's default.</param>
@@ -37,7 +37,7 @@ public readonly record struct MediaInfo(
     public bool IsXheAac => AudioProfile.Contains("xHE", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The file's pre-existing chapter markings (start time and title), in the order ffprobe
+    /// The file's pre-existing chapter marks (start time and title), in the order ffprobe
     /// reported them. Used by --verify to probe near each one instead of trusting it blindly.
     /// </summary>
     public IReadOnlyList<Chapter> ExistingChapters => ExistingChapterList ?? [];
@@ -445,7 +445,7 @@ public sealed partial class FfmpegClient : IAudioSource
     }
 
     /// <summary>
-    /// Writes chapter markings into the file by remuxing (stream copy) into a temporary file
+    /// Writes chapter marks into the file by remuxing (stream copy) into a temporary file
     /// and atomically swapping it in. The original data is never deleted before the new file
     /// has been written and verified, so audiobooks cannot be lost even without --backup.
     /// Stream-copy remuxing does no decode/encode work, but still has to shuffle the entire
@@ -453,7 +453,7 @@ public sealed partial class FfmpegClient : IAudioSource
     /// takes long enough to warrant its own progress reporting.
     /// </summary>
     /// <param name="file">Path of the audio file to modify.</param>
-    /// <param name="chapters">Chapter markings sorted by start time.</param>
+    /// <param name="chapters">Chapter marks sorted by start time.</param>
     /// <param name="durationSeconds">Total duration; used as the end of the last chapter.</param>
     /// <param name="backup">True to keep the original file as "*.bak".</param>
     /// <param name="progress">Called with ffmpeg's processed play time in seconds, parsed from
@@ -477,7 +477,7 @@ public sealed partial class FfmpegClient : IAudioSource
                     "-hide_banner", "-v", "error", "-nostdin", "-y",
                     "-i", file, "-f", "ffmetadata", "-i", metaFile,
                     // Map only audio and cover art; a pre-existing chapter text track must
-                    // not be copied (it would clash with the new chapter markings).
+                    // not be copied (it would clash with the new chapter marks).
                     "-map", "0:a", "-map", "0:v?", "-map_metadata", "0", "-map_chapters", "1",
                     "-c", "copy", "-progress", "pipe:1", tmpFile
                 ],
@@ -566,7 +566,7 @@ public sealed partial class FfmpegClient : IAudioSource
 
     /// <summary>Builds an FFMETADATA1 document containing only the chapter list.
     /// Internal for unit testing.</summary>
-    /// <param name="chapters">Chapter markings sorted by start time.</param>
+    /// <param name="chapters">Chapter marks sorted by start time.</param>
     /// <param name="durationSeconds">End time of the last chapter.</param>
     internal static string BuildFfMetadata(IReadOnlyList<Chapter> chapters, double durationSeconds)
     {

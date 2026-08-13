@@ -32,7 +32,7 @@ public static partial class ChapterSidecar
         => audioFile + (simple ? ".chapters.txt" : ".chapters.ffmeta");
 
     /// <summary>Builds the plain-text sidecar: one "H:MM:SS.fff  Title" line per chapter.</summary>
-    /// <param name="chapters">Chapter markings sorted by start time.</param>
+    /// <param name="chapters">Chapter marks sorted by start time.</param>
     public static string BuildSimple(IReadOnlyList<Chapter> chapters)
     {
         var sb = new StringBuilder();

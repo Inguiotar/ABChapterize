@@ -947,7 +947,7 @@ internal sealed class PreciseMarkRefiner
         => Math.Round(Math.Max(0, lastConfirmed - PreciseMarkLeadInSeconds), 6);
 
     /// <summary>
-    /// Precise marking's search (see <see cref="RefinePreciseMarkAsync"/>): finds a position where
+    /// Precise mark's search (see <see cref="RefinePreciseMarkAsync"/>): finds a position where
     /// the announcement is the first thing heard, without any help from VAD, by asking a question
     /// that has a single answer rather than hunting for one that has many.
     /// <para>

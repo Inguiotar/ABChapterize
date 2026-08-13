@@ -1180,10 +1180,10 @@ internal static class DetectionTuning
     /// </summary>
     internal const double AutoLanguageMinSpeechInWindowSeconds = AutoLanguageProbeSeconds / 2;
 
-    /// <summary>How far past a pre-existing chapter marking a language-detection sample starts, on
+    /// <summary>How far past an existing chapter mark a language-detection sample starts, on
     /// the --verify and resume paths. Clears the announcement and the jingle around it, landing the
     /// window in the chapter's own narration.</summary>
-    internal const double AutoLanguageMarkingOffsetSeconds = 20;
+    internal const double AutoLanguageExistingMarkOffsetSeconds = 20;
 
     /// <summary>
     /// Minimum length of the leading region (file start to the first detected chapter) for pass 3
@@ -1194,16 +1194,16 @@ internal static class DetectionTuning
     /// </summary>
     internal const double MinLeadingGapSeconds = 10;
 
-    /// <summary>How far before a pre-existing chapter marking's own timestamp --verify starts
-    /// probing - the marking may sit slightly after the phrase actually started.</summary>
+    /// <summary>How far before a pre-existing chapter mark's own timestamp --verify starts
+    /// probing - the mark may sit slightly after the phrase actually started.</summary>
     internal const double VerifyMarginBeforeSeconds = 10;
 
     /// <summary>Total length of the --verify probe window, starting
-    /// <see cref="VerifyMarginBeforeSeconds"/> before the marking.</summary>
+    /// <see cref="VerifyMarginBeforeSeconds"/> before the mark.</summary>
     internal const double VerifyWindowSeconds = 60;
 
     /// <summary>
-    /// How far off a confirmed marking has to be before <c>--verify --fix</c> bothers moving it.
+    /// How far off a confirmed mark has to be before <c>--verify --fix</c> bothers moving it.
     /// Rewriting an audiobook remuxes the whole file, so a correction has to be worth that: a tenth
     /// of a second is inside the accuracy the refinement itself claims, and moving a mark by it
     /// would be shuffling noise. Set at a quarter of a second, comfortably under the
@@ -1212,12 +1212,12 @@ internal static class DetectionTuning
     internal const double VerifyFixMinShiftSeconds = 0.25;
 
     /// <summary>
-    /// The largest correction <c>--verify --fix</c> will apply. Beyond this the marking is left
+    /// The largest correction <c>--verify --fix</c> will apply. Beyond this the mark is left
     /// alone and reported: a mark tens of seconds from its announcement is not a mark that drifted,
     /// it is a mark that means something else - a retailer's grouping, a different edition's
     /// numbering - and quietly dragging it onto the nearest matching phrase would destroy
     /// information rather than correct it. Half the <see cref="VerifyWindowSeconds"/> window, which
-    /// is also the furthest a confirmation can be found from the marking in either direction.
+    /// is also the furthest a confirmation can be found from the mark in either direction.
     /// </summary>
     internal const double VerifyFixMaxShiftSeconds = 30;
 

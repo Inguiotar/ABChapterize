@@ -233,12 +233,12 @@ public sealed class CliOptions
     /// </remarks>
     public string? UseGpu { get; private set; }
 
-    /// <summary>Discard pre-existing chapter markings instead of skipping the file (--force / -f).</summary>
+    /// <summary>Discard pre-existing chapter marks instead of skipping the file (--force / -f).</summary>
     public bool Force { get; private set; }
 
     /// <summary>
-    /// Maximum plausible number of pre-existing chapter markings (--max-chapters / -x).
-    /// Files exceeding it get their markings discarded as bogus. Null when not specified.
+    /// Maximum plausible number of pre-existing chapter marks (--max-chapters / -x).
+    /// Files exceeding it get their marks discarded as bogus. Null when not specified.
     /// </summary>
     public int? MaxChapters { get; private set; }
 
@@ -249,7 +249,7 @@ public sealed class CliOptions
     /// chapter sequence - a Whisper mishearing turning "chapter ten" into "chapter 510" otherwise
     /// leaves a 500-chapter "gap" for Pass 3 to hunt through and a file tagged with a
     /// ".missing-marks" suffix listing all of them. Unrelated to <see cref="MaxChapters"/>, which
-    /// counts a file's <i>pre-existing markings</i> rather than the numbers detection itself reads
+    /// counts a file's <i>pre-existing marks</i> rather than the numbers detection itself reads
     /// out of the audio.
     /// </summary>
     public int? MaxChapterNumber { get; private set; }
@@ -368,17 +368,17 @@ public sealed class CliOptions
     public int? EffectiveMaxChapterNumber => MaxChapterNumber ?? LastExpectedChapter;
 
     /// <summary>
-    /// Check pre-existing chapter markings against the audio instead of trusting them
-    /// blindly (--verify / -V): a short window around each marking's own timestamp is probed
+    /// Check pre-existing chapter marks against the audio instead of trusting them
+    /// blindly (--verify / -V): a short window around each mark's own timestamp is probed
     /// with Whisper for the chapter phrase and the expected number
     /// (<see cref="ChapterDetector.VerifyExistingChaptersAsync"/>). Three outcomes, decided by
-    /// <see cref="ABChapterize.Processing.FileProcessor.IsWholesaleFailure"/>: markings that all
+    /// <see cref="ABChapterize.Processing.FileProcessor.IsWholesaleFailure"/>: marks that all
     /// check out leave the file untouched, as a skip without --force would; some of them
     /// unconfirmed keeps the confirmed ones and gap-recovers only around the failures
     /// (<see cref="ChapterDetector.DetectGapsAsync"/>); and failures outnumbering confirmations -
     /// or nothing confirmed at all - leave the file completely alone with a warning, rather than
-    /// discarding a marking set that was probably never one-per-numbered-chapter to begin with.
-    /// A file with no checkable number in any marking is skipped as having nothing to verify.
+    /// discarding a mark set that was probably never one-per-numbered-chapter to begin with.
+    /// A file with no checkable number in any mark is skipped as having nothing to verify.
     /// With --max-chapters, a file already over the threshold is still assumed bogus outright
     /// and skips verification entirely - --verify only decides borderline cases, it never
     /// makes a --max-chapters rejection stricter.
@@ -386,13 +386,13 @@ public sealed class CliOptions
     public bool Verify { get; private set; }
 
     /// <summary>
-    /// Lets --verify correct a marking instead of only reporting on it (--fix): where a marking's
-    /// announcement is confirmed but sits a little away from where the marking is, the marking is
+    /// Lets --verify correct a mark instead of only reporting on it (--fix): where a mark's
+    /// announcement is confirmed but sits a little away from where the mark is, the mark is
     /// moved onto it and the file rewritten. Requires --verify, and does nothing on its own.
     /// <para>
     /// Only ever a nudge, and deliberately so - see
     /// <see cref="DetectionTuning.VerifyFixMinShiftSeconds"/> and
-    /// <see cref="DetectionTuning.VerifyFixMaxShiftSeconds"/> for the two bounds. A marking that
+    /// <see cref="DetectionTuning.VerifyFixMaxShiftSeconds"/> for the two bounds. A mark that
     /// could not be confirmed at all is not "fixed" by this; it goes to the gap recovery --verify
     /// already runs, exactly as before.
     /// </para>
@@ -400,11 +400,11 @@ public sealed class CliOptions
     public bool Fix { get; private set; }
 
     /// <summary>
-    /// Maximum number of unconfirmed --verify markings a file may have and still get the
+    /// Maximum number of unconfirmed --verify marks a file may have and still get the
     /// gap-scoped recovery <see cref="ChapterDetector.DetectGapsAsync"/> normally runs around
     /// them (--verify-threshold / -h). Above it the file is left completely alone with a warning
     /// instead, on the reasoning
-    /// <see cref="ABChapterize.Processing.FileProcessor.IsWholesaleFailure"/> spells out: markings
+    /// <see cref="ABChapterize.Processing.FileProcessor.IsWholesaleFailure"/> spells out: marks
     /// that fail in bulk are more likely to mean something other than one numbered chapter each
     /// than to be a book whose every mark drifted. Null (the default) leaves that judgement to the
     /// ratio rule there; requires --verify.
@@ -1528,7 +1528,7 @@ public sealed class CliOptions
 
     /// <summary>Parses the --named-mark-distance parameter into a number of seconds, or 0 for "let
     /// every mark stand where it is". Capped at 600 because a value past that is a typo, and one
-    /// large enough to swallow whole chapters would quietly turn a book's marking into a single
+    /// large enough to swallow whole chapters would quietly turn a book's marks into a single
     /// entry.</summary>
     /// <param name="value">The raw parameter.</param>
     private static double ParseNamedMarkDistance(string value)

@@ -45,7 +45,7 @@ public sealed class CleanupRunner
 
     /// <summary>
     /// How far a ".bak" file's play time may differ from that of the audio file next to it and
-    /// still be taken for a backup <em>of</em> it. Two seconds because writing chapter markings
+    /// still be taken for a backup <em>of</em> it. Two seconds because writing chapter marks
     /// remuxes the file, and a remux can shift the reported duration by a frame or two - see the
     /// identical tolerance <see cref="FfmpegClient.WriteChaptersAsync"/> verifies its own output
     /// against. Anything beyond that is a different recording (an abridged edition, a re-download,
@@ -313,7 +313,7 @@ public sealed class CleanupRunner
 
     /// <summary>
     /// Plans taking the ".missing-marks" tags back off. A name already taken is left alone with a
-    /// note: the chapter markings written into the tagged file are real work, and overwriting an
+    /// note: the chapter marks written into the tagged file are real work, and overwriting an
     /// unrelated file with them is a far worse outcome than leaving a tag on.
     /// </summary>
     /// <param name="plan">The plan being built.</param>

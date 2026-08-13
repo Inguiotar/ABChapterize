@@ -104,7 +104,7 @@ internal static class JingleGeometry
     /// stops seeing speech right as the hush starts), so their starts line up to within detector
     /// jitter however long the hush runs. Without the check, a long region whose music never dips
     /// below the noise floor - except for a breath pause right before the announcement, deep
-    /// inside it - would have that unrelated pause mistaken for the lead-in, marking just before
+    /// inside it - would have that unrelated pause mistaken for the lead-in, mark just before
     /// the phrase instead of at the jingle start (seen on real audio: regions running 5-15 s
     /// before the only silence in them).
     /// </para>
@@ -335,7 +335,7 @@ internal static class JingleGeometry
     /// else VAD region start, else flat lead) as the placement this replaces did. That
     /// independence from whichever silence/region a probe resolved is also what makes this
     /// compatible with precise marking, which the older rule was not: it corrects the mark precise
-    /// marking settled on instead of replacing default-mode placement outright.
+    /// mark settled on instead of replacing default-mode placement outright.
     /// <para>
     /// <b>Step 1:</b> back out of any silence <paramref name="originalMark"/> itself sits in - a
     /// leading hush before the phrase, jingle or not.

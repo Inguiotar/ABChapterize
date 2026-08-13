@@ -10,8 +10,8 @@ using Xunit;
 namespace ABChapterize.Tests;
 
 /// <summary>
-/// Tests for <see cref="MarkingTitleNumber"/>, which reads the chapter number out of a pre-existing
-/// marking's title - what <c>--verify</c> and both resume paths run on.
+/// Tests for <see cref="ExistingMarkTitle"/>, which reads the chapter number out of a pre-existing
+/// mark's title - what <c>--verify</c> and both resume paths run on.
 /// <para>
 /// The exhaustive half is deliberately built the same way <see cref="ExhaustiveNumberWordTests"/> is,
 /// out of the independent reference spellers, and for a reason the bug it covers makes plain: the
@@ -21,13 +21,13 @@ namespace ABChapterize.Tests;
 /// exercise the caller, at the same coverage.
 /// </para>
 /// </summary>
-public sealed class MarkingTitleNumberTests : IDisposable
+public sealed class ExistingMarkTitleTests : IDisposable
 {
     private readonly string _dir;
     private readonly string _file;
 
     /// <summary>Creates a temp directory with one audio file, so options can be parsed against it.</summary>
-    public MarkingTitleNumberTests()
+    public ExistingMarkTitleTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), $"abchapterize-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_dir);
@@ -45,22 +45,22 @@ public sealed class MarkingTitleNumberTests : IDisposable
         => CliOptions.Parse([.. options, _file])!.ResolveProfile(language);
 
     /// <summary>Asserts that a title yields the expected number under one language profile.</summary>
-    /// <param name="title">The marking title to read.</param>
+    /// <param name="title">The mark title to read.</param>
     /// <param name="profile">The profile to read it with.</param>
     /// <param name="expected">The number the title announces.</param>
     private static void AssertReads(string title, LanguageProfile profile, int expected)
     {
-        var ok = MarkingTitleNumber.TryParse(title, profile, out var number);
+        var ok = ExistingMarkTitle.TryParse(title, profile, out var number);
         Assert.True(ok && number == expected,
             $"[{profile.Language}] \"{title}\" -> expected {expected}, got {(ok ? number.ToString() : "no number")}");
     }
 
     /// <summary>Asserts that a title yields no number at all.</summary>
-    /// <param name="title">The marking title to read.</param>
+    /// <param name="title">The mark title to read.</param>
     /// <param name="profile">The profile to read it with.</param>
     private static void AssertReadsNothing(string title, LanguageProfile profile)
     {
-        var ok = MarkingTitleNumber.TryParse(title, profile, out var number);
+        var ok = ExistingMarkTitle.TryParse(title, profile, out var number);
         Assert.False(ok, $"[{profile.Language}] \"{title}\" -> expected no number, got {number}");
     }
 
@@ -143,7 +143,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// Digit forms, which worked before this class existed and must keep working: whatever tool
     /// tagged the file may write the number in front, behind, padded, or with an ordinal suffix.
     /// </summary>
-    /// <param name="title">The marking title.</param>
+    /// <param name="title">The mark title.</param>
     /// <param name="expected">The number it announces.</param>
     [Theory]
     [InlineData("Chapter 12", 12)]
@@ -161,7 +161,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// book-heading style, and which 0.9.1's Roman support never reached here because only the
     /// title's first token was ever tried.
     /// </summary>
-    /// <param name="title">The marking title.</param>
+    /// <param name="title">The mark title.</param>
     /// <param name="expected">The number it announces.</param>
     [Theory]
     [InlineData("Chapter XIII", 13)]
@@ -175,7 +175,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// The one-letter guard survives the move to titles: a pronoun or an initial is not a chapter
     /// number, and neither is a bare letter without the period a heading gives it.
     /// </summary>
-    /// <param name="title">The marking title.</param>
+    /// <param name="title">The mark title.</param>
     [Theory]
     [InlineData("What I Did Next")]
     [InlineData("C for Cookie")]
@@ -186,7 +186,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// The number is read from what directly follows the chapter word, so a heading behind it is
     /// simply never reached - the property that makes anchoring better than a free scan.
     /// </summary>
-    /// <param name="title">The marking title.</param>
+    /// <param name="title">The mark title.</param>
     /// <param name="code">Language under test.</param>
     /// <param name="expected">The number it announces.</param>
     [Theory]
@@ -200,7 +200,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// The year hazard, and the reason the loose digit scan sits at the very bottom of the ladder
     /// and refuses four-digit runs: "Capitolo uno - Anno 1984" used to yield 1984, which --verify
     /// then hunted for, failed to find, and booked against the file - enough of those and a whole
-    /// marking set was discarded and redetected.
+    /// mark set was discarded and redetected.
     /// </summary>
     [Fact]
     public void AYearInAHeading_IsNotReadAsTheChapterNumber()
@@ -215,7 +215,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// original defect are here: an inconclusive auto-detection falls back to English and then meets
     /// a German title, and a tagger writes English titles onto a book in any language at all.
     /// </summary>
-    /// <param name="title">The marking title.</param>
+    /// <param name="title">The mark title.</param>
     /// <param name="code">The language the <em>audio</em> resolved to.</param>
     /// <param name="expected">The number the title announces.</param>
     [Theory]
@@ -251,7 +251,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// chapters. The prologue case is the important one: it goes through this same test as a
     /// <em>negative</em>, and a false number there would reclassify a real chapter.
     /// </summary>
-    /// <param name="title">The marking title.</param>
+    /// <param name="title">The mark title.</param>
     [Theory]
     [InlineData("Prologue")]
     [InlineData("Prolog")]
@@ -289,7 +289,7 @@ public sealed class MarkingTitleNumberTests : IDisposable
         {
             var title = profile.ChapterTitleFor(chapter, part);
             AssertReads(title, profile, chapter);
-            Assert.True(MarkingTitleNumber.TryParsePart(title, profile, out var read),
+            Assert.True(ExistingMarkTitle.TryParsePart(title, profile, out var read),
                 $"[{language}] \"{title}\" -> no part read");
             Assert.Equal(part, read);
         }
@@ -299,14 +299,14 @@ public sealed class MarkingTitleNumberTests : IDisposable
     /// An ordinary title carries no part, which is what makes the sequence default to 0 for every
     /// book that has one sequence and for every file some other tool marked.
     /// </summary>
-    /// <param name="title">The marking title.</param>
+    /// <param name="title">The mark title.</param>
     [Theory]
     [InlineData("Chapter 7")]
     [InlineData("Prologue")]
     [InlineData("Participation - Chapter 7")]
     [InlineData("Parting Words")]
     public void ATitleWithoutAPartPrefix_YieldsNoPart(string title)
-        => Assert.False(MarkingTitleNumber.TryParsePart(title, Profile("en"), out _));
+        => Assert.False(ExistingMarkTitle.TryParsePart(title, Profile("en"), out _));
 
     /// <summary>
     /// The Scandinavian trap the strict rule exists for: "Del" is Swedish and Danish for "part" and
@@ -318,5 +318,5 @@ public sealed class MarkingTitleNumberTests : IDisposable
     [InlineData("sv")]
     [InlineData("da")]
     public void APartWordThatOpensALongerWord_IsNotAPrefix(string language)
-        => Assert.False(MarkingTitleNumber.TryParsePart("Delen 3 - Kapitel 1", Profile(language), out _));
+        => Assert.False(ExistingMarkTitle.TryParsePart("Delen 3 - Kapitel 1", Profile(language), out _));
 }

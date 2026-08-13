@@ -294,7 +294,7 @@ public sealed class FileProcessor
             // placement are measured from, so there is no longer a way to ask for a run without
             // them. A load failure is therefore fatal - it propagates out of here rather than
             // falling back to the blinder path that used to exist, which would silently produce a
-            // different marking than the one the run asked for.
+            // different mark than the one the run asked for.
             using var vad = new SileroVadDetector(_options.EffectiveVadThreads);
             LogThreadBudget(vad);
 
@@ -707,7 +707,7 @@ public sealed class FileProcessor
         FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
     {
         // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
-        // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed markings
+        // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed marks
         // are trusted as-is. --force means "redo the whole file from scratch" and takes priority,
         // falling through to the normal policy below.
         // The resume path is entirely about chapter numbers the tag names, so a run that forms no
@@ -853,7 +853,7 @@ public sealed class FileProcessor
         var restored = MissingMarksTag.StripFrom(ctx.File);
         RecordLowConfidence(ctx, resumed, restored);
         // Through FormatWrittenCount rather than indexing the chapter list directly: a tagged file
-        // whose markings have since been stripped by hand resumes with nothing to seed from and
+        // whose marks have since been stripped by hand resumes with nothing to seed from and
         // nothing to find, and reaches here with an empty list rather than a completed sequence.
         var written = FormatWrittenCount(resumed, chapters, "mark(s) written");
         if (_options.DryRun)
@@ -872,18 +872,18 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Applies the pre-existing-marking policy and runs the detection it calls for: a plain
+    /// Applies the pre-existing-mark policy and runs the detection it calls for: a plain
     /// whole-file detection when nothing stands in the way, the --verify decision tree when
-    /// markings exist and are to be checked, or no detection at all when the file is simply
+    /// marks exist and are to be checked, or no detection at all when the file is simply
     /// skipped.
     /// </summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="detector">The detector borrowed for this file.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detection result and the note describing what happened to any existing
-    /// markings, or null when the file was skipped - in which case it has already been counted
+    /// marks, or null when the file was skipped - in which case it has already been counted
     /// and reported.</returns>
-    private async Task<(DetectionResult Result, DroppedMarkings Dropped, string Note)?> DetectChaptersAsync(
+    private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> DetectChaptersAsync(
         FileContext ctx, ChapterDetector detector, CancellationToken ct)
     {
         var (skip, dropped) = EvaluateExistingChapters(ctx.Info);
@@ -916,7 +916,7 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// The --verify decision tree for a file that would otherwise be skipped: markings that all
+    /// The --verify decision tree for a file that would otherwise be skipped: marks that all
     /// check out leave the file alone; some of them wrong keeps the trusted ones and gap-recovers
     /// only around the unconfirmed ones; nearly all of them wrong warns and leaves the file
     /// completely alone (see <see cref="IsWholesaleFailure"/>).
@@ -926,7 +926,7 @@ public sealed class FileProcessor
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detection result and its discard note, or null when the file was left
     /// unchanged - in which case it has already been counted and reported.</returns>
-    private async Task<(DetectionResult Result, DroppedMarkings Dropped, string Note)?> VerifyThenDetectAsync(
+    private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> VerifyThenDetectAsync(
         FileContext ctx, ChapterDetector detector, CancellationToken ct)
     {
         var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
@@ -934,8 +934,8 @@ public sealed class FileProcessor
         {
             // --fix may have found marks worth moving even where every one of them checked out;
             // that is the point of it, and the file then gets rewritten rather than skipped.
-            if (verify.Markings.Any(m => m.CorrectedStartSeconds != null))
-                return await ApplyMarkingFixesAsync(ctx, verify, ct);
+            if (verify.Outcomes.Any(m => m.CorrectedStartSeconds != null))
+                return await ApplyMarkFixesAsync(ctx, verify, ct);
             var verifyNote = verify.Checked > 0
                 ? $"{verify.Checked} pre-existing chapter mark(s) verified correct"
                 : $"has {ctx.Info.ChapterCount} chapter mark(s) (none had a checkable number)";
@@ -956,7 +956,7 @@ public sealed class FileProcessor
             return null;
         }
 
-        // At least one marking is trusted, and they still outnumber the failures - only the gap(s)
+        // At least one mark is trusted, and they still outnumber the failures - only the gap(s)
         // around the unconfirmed one(s) get their own Pass 2 (and, for a still-missing trailing
         // chapter, Pass 3); everything else in the file is left exactly as --verify found it.
         var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
@@ -966,27 +966,27 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// The <c>--verify --fix</c> outcome for a file whose markings all check out but some of which
-    /// sit away from their announcements: the file's existing marking list is written back with the
+    /// The <c>--verify --fix</c> outcome for a file whose marks all check out but some of which
+    /// sit away from their announcements: the file's existing mark list is written back with the
     /// corrected timestamps and nothing else touched.
     /// </summary>
     /// <remarks>
-    /// Built from the markings themselves rather than through <see cref="BuildChapters"/>, which is
+    /// Built from the marks themselves rather than through <see cref="BuildChapters"/>, which is
     /// what every detection path uses. That is deliberate: this mode's whole promise is that it
     /// moves marks and changes nothing else, so it must not be able to rename one, drop one it did
     /// not recognize, or invent an intro entry the file never had. Matching the corrections back by
-    /// timestamp is exact - <see cref="VerifyMarkingOutcome.StartSeconds"/> is a verbatim copy of
-    /// the marking's own, not a recomputed figure.
+    /// timestamp is exact - <see cref="ExistingMarkOutcome.StartSeconds"/> is a verbatim copy of
+    /// the mark's own, not a recomputed figure.
     /// </remarks>
     /// <param name="ctx">The file's context.</param>
     /// <param name="verify">The verification result carrying the corrections.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Always null: the file is finished here, and the caller's detection path must not
     /// run for it.</returns>
-    private async Task<(DetectionResult Result, DroppedMarkings Dropped, string Note)?> ApplyMarkingFixesAsync(
+    private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> ApplyMarkFixesAsync(
         FileContext ctx, VerifyResult verify, CancellationToken ct)
     {
-        var corrections = verify.Markings
+        var corrections = verify.Outcomes
             .Where(m => m.CorrectedStartSeconds != null)
             .ToDictionary(m => m.StartSeconds, m => m.CorrectedStartSeconds!.Value);
         var chapters = ctx.Info.ExistingChapters
@@ -1013,7 +1013,7 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Whether a file's markings failed verification <em>wholesale</em> rather than individually -
+    /// Whether a file's marks failed verification <em>wholesale</em> rather than individually -
     /// the difference between a book with a few bad marks and a book whose marks were never what
     /// --verify assumes they are.
     /// <para>
@@ -1150,17 +1150,17 @@ public sealed class FileProcessor
     /// file name, and prints the file's summary line.</summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="result">The file's detection result.</param>
-    /// <param name="dropped">The markings the file arrived with that this run threw away, stated
+    /// <param name="dropped">The marks the file arrived with that this run threw away, stated
     /// before anything else on the line: what a file <em>had</em> and what it now has are different
     /// questions, and the second is unreadable while the first is buried among the notes.</param>
     /// <param name="note">Anything the path that produced this result wants said about the
-    /// markings the file arrived with but did <em>not</em> lose - --verify's trusted ones. Empty
+    /// marks the file arrived with but did <em>not</em> lose - --verify's trusted ones. Empty
     /// for an ordinary run.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The original name the file was restored to when this run completed a previously
     /// tagged one, or null when it kept the name it came in under.</returns>
     private async Task<string?> WriteDetectedChaptersAsync(
-        FileContext ctx, DetectionResult result, DroppedMarkings dropped, string note,
+        FileContext ctx, DetectionResult result, DroppedMarks dropped, string note,
         CancellationToken ct)
     {
         _runStats.AccumulateConfidence(result.Chapters);
@@ -1383,30 +1383,30 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Applies the policy for pre-existing chapter markings, shared between normal
-    /// detection and --import: without --force, a file with any markings is skipped;
-    /// with --max-chapters, a marking count above the threshold is treated as bogus and
+    /// Applies the policy for pre-existing chapter marks, shared between normal
+    /// detection and --import: without --force, a file with any marks is skipped;
+    /// with --max-chapters, a mark count above the threshold is treated as bogus and
     /// discarded even without --force.
     /// </summary>
     /// <param name="info">Probed media info of the file being processed.</param>
     /// <returns>Whether the file should be skipped, and what it arrived carrying.</returns>
-    private (bool Skip, DroppedMarkings Dropped) EvaluateExistingChapters(MediaInfo info)
+    private (bool Skip, DroppedMarks Dropped) EvaluateExistingChapters(MediaInfo info)
     {
         if (info.ChapterCount == 0)
             return (false, default);
         var bogus = _options.MaxChapters is { } max && info.ChapterCount > max;
         if (!_options.Force && !bogus)
             return (true, default);
-        return (false, new DroppedMarkings(info.ChapterCount, bogus && !_options.Force));
+        return (false, new DroppedMarks(info.ChapterCount, bogus && !_options.Force));
     }
 
-    /// <summary>The markings a file arrived with that this run threw away, carried as numbers
+    /// <summary>The marks a file arrived with that this run threw away, carried as numbers
     /// rather than as finished text so the same fact can be stated in either mood - a dry run has
     /// dropped nothing yet.</summary>
-    /// <param name="Count">How many markings the file had; 0 for the ordinary unmarked file.</param>
+    /// <param name="Count">How many marks the file had; 0 for the ordinary unmarked file.</param>
     /// <param name="Bogus">Whether they were discarded for exceeding --max-chapters rather than
     /// because --force said to replace them.</param>
-    private readonly record struct DroppedMarkings(int Count, bool Bogus);
+    private readonly record struct DroppedMarks(int Count, bool Bogus);
 
     /// <summary>
     /// How the summary line opens on a file that arrived already marked: the count first, before
@@ -1417,7 +1417,7 @@ public sealed class FileProcessor
     /// <param name="dropped">What the file arrived carrying.</param>
     /// <param name="prospective">True under --dry-run, where nothing has been dropped yet and the
     /// caller supplies the "would" this fragment then continues.</param>
-    private static string DescribeDropped(DroppedMarkings dropped, bool prospective)
+    private static string DescribeDropped(DroppedMarks dropped, bool prospective)
         => dropped.Count == 0
             ? ""
             : (prospective ? "drop " : "") +
@@ -1458,7 +1458,7 @@ public sealed class FileProcessor
     }
 
     /// <summary>The --import pipeline for one file: read its sidecar, apply the same
-    /// pre-existing-marking policy detection uses, and write what it contains.</summary>
+    /// pre-existing-mark policy detection uses, and write what it contains.</summary>
     /// <param name="file">Path of the file to import chapters for.</param>
     /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
     /// <param name="work">Its progress tracker, already started.</param>

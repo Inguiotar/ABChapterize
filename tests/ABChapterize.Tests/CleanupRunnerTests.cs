@@ -156,7 +156,7 @@ public sealed class CleanupRunnerTests : IDisposable
         Assert.Equal(["Book.m4b"], Remaining());
     }
 
-    /// <summary>Chapter markings are real work; an untagging that would land on somebody else's
+    /// <summary>Chapter marks are real work; an untagging that would land on somebody else's
     /// file leaves the tag on rather than overwrite it.</summary>
     [Fact]
     public async Task Cleanup_KeepsTheTagWhenTheOriginalNameIsTaken()

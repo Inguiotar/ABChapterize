@@ -53,7 +53,7 @@ public sealed record LanguageProfile(
 
     /// <summary>
     /// The title one numbered chapter is written under. The only place the part prefix is spelled
-    /// out, because it has to be readable again: <see cref="ABChapterize.Detection.MarkingTitleNumber"/>
+    /// out, because it has to be readable again: <see cref="ABChapterize.Detection.ExistingMarkTitle"/>
     /// takes both numbers back out of this string when a resumed or <c>--verify</c>ed run meets a
     /// file this tool marked, and a second spelling anywhere would break that round trip silently.
     /// </summary>

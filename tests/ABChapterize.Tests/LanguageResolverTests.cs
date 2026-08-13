@@ -11,7 +11,7 @@ namespace ABChapterize.Tests;
 
 /// <summary>
 /// Direct tests for <see cref="LanguageResolver"/>'s sampling half - where in a book it decides to
-/// listen, given VAD speech runs, existing chapter markings, or nothing but a duration. The probe
+/// listen, given VAD speech runs, existing chapter marks, or nothing but a duration. The probe
 /// loop and the vote that consume these positions are covered end to end by
 /// <see cref="ChapterDetectorTests"/>'s <c>AutoLanguage_*</c> scenarios, which need a scripted
 /// recognizer; the position rules need nothing but arithmetic, and are easier to pin down here.
@@ -105,35 +105,35 @@ public class LanguageResolverTests
     }
 
     [Fact]
-    public void MarkingPositions_LandInsideTheChapter_PastItsAnnouncement()
+    public void ExistingMarkPositions_LandInsideTheChapter_PastItsAnnouncement()
     {
-        // A marking is a known chapter start, so the announcement and whatever jingle wraps it sit
+        // A mark is a known chapter start, so the announcement and whatever jingle wraps it sit
         // right at it - which is exactly what a language sample must not be taken from.
-        var markings = Enumerable.Range(0, 20)
+        var marks = Enumerable.Range(0, 20)
             .Select(i => new Chapter(i * 1800, $"Chapter {i + 1}"))
             .ToList();
 
-        var positions = LanguageResolver.MarkingPositions(markings, Duration).ToList();
+        var positions = LanguageResolver.ExistingMarkPositions(marks, Duration).ToList();
 
         Assert.Equal(5, positions.Count);
         Assert.All(positions, p => Assert.Equal(20, p % 1800));
     }
 
     [Fact]
-    public void MarkingPositions_DropsAnythingPastTheEndOfTheFile()
+    public void ExistingMarkPositions_DropsAnythingPastTheEndOfTheFile()
     {
-        // A marking in the last few seconds offsets to a position with no audio behind it.
-        var positions = LanguageResolver.MarkingPositions([new Chapter(Duration - 5, "Last")], Duration);
+        // A mark in the last few seconds offsets to a position with no audio behind it.
+        var positions = LanguageResolver.ExistingMarkPositions([new Chapter(Duration - 5, "Last")], Duration);
 
         Assert.Empty(positions);
     }
 
     [Fact]
-    public void MarkingPositions_WithNoMarkings_FallsBackToTheBlindAnchors()
+    public void ExistingMarkPositions_WithNone_FallBackToTheBlindAnchors()
     {
         Assert.Equal(
             LanguageResolver.DurationPositions(Duration),
-            LanguageResolver.MarkingPositions([], Duration));
+            LanguageResolver.ExistingMarkPositions([], Duration));
     }
 
     [Fact]

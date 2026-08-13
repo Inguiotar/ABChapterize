@@ -89,16 +89,16 @@ internal static class GapPlanning
     internal readonly record struct DetectionRegion(
         double FromSeconds, double ToSeconds, int LowerNumber, int? UpperNumber, int Sequence = 0);
 
-    /// <summary>The regions and, when the last checkable marking in file order is unconfirmed, the
+    /// <summary>The regions and, when the last checkable mark in file order is unconfirmed, the
     /// trailing recovery target <see cref="ChapterDetector.DetectCoreAsync"/> needs - see <see
     /// cref="BuildGapRegions"/>.</summary>
-    /// <param name="Regions">One region per run of consecutive unconfirmed markings.</param>
+    /// <param name="Regions">One region per run of consecutive unconfirmed marks.</param>
     /// <param name="TrailingFrom">Start of the trailing region (the last confirmed/file-start
-    /// point before it), or null when the file's last checkable marking was confirmed.</param>
-    /// <param name="TrailingTargets">The expected numbers of the unconfirmed markings in the
+    /// point before it), or null when the file's last checkable mark was confirmed.</param>
+    /// <param name="TrailingTargets">The expected numbers of the unconfirmed marks in the
     /// trailing run, in file order; empty when <paramref name="TrailingFrom"/> is null. Unlike an
     /// interior region's <see cref="DetectionRegion.UpperNumber"/>-bounded range, these are taken
-    /// verbatim from the markings themselves since there is no following confirmed chapter to
+    /// verbatim from the marks themselves since there is no following confirmed chapter to
     /// derive a contiguous range from.</param>
     internal readonly record struct GapRecoveryPlan(
         List<DetectionRegion> Regions, double? TrailingFrom, List<int> TrailingTargets);
@@ -291,26 +291,26 @@ internal static class GapPlanning
     }
 
     /// <summary>
-    /// Groups a --verify run's marking outcomes into the regions <see cref="ChapterDetector.DetectGapsAsync"/>
-    /// re-probes: one <see cref="DetectionRegion"/> per run of consecutive unconfirmed markings
-    /// (a single unconfirmed marking is its own run of one), bounded below by the nearest
-    /// preceding marking and above by the nearest following one - confirmed or not, since an
-    /// unparseable-title marking (<see cref="VerifyMarkingOutcome.ExpectedNumber"/> null) carries
+    /// Groups a --verify run's mark outcomes into the regions <see cref="ChapterDetector.DetectGapsAsync"/>
+    /// re-probes: one <see cref="DetectionRegion"/> per run of consecutive unconfirmed marks
+    /// (a single unconfirmed mark is its own run of one), bounded below by the nearest
+    /// preceding mark and above by the nearest following one - confirmed or not, since an
+    /// unparseable-title mark (<see cref="ExistingMarkOutcome.ExpectedNumber"/> null) carries
     /// no boundary information and is skipped entirely rather than breaking a run. A run reaching
-    /// the last checkable marking has no following bound; it becomes the trailing target instead
+    /// the last checkable mark has no following bound; it becomes the trailing target instead
     /// of a region with a null <see cref="DetectionRegion.UpperNumber"/> precisely because there
     /// is no generic mechanism (unlike <see cref="FindGaps"/>'s interior gaps, safety-netted by
     /// the existing Pass 3 tail regardless of how <c>chapters</c> was seeded) that would otherwise
     /// notice a still-missing trailing chapter - nothing bounds it from above to compare against.
     /// Internal for unit testing.
     /// </summary>
-    /// <param name="markings">A --verify run's per-marking outcomes, in file order (see
-    /// <see cref="VerifyResult.Markings"/>).</param>
+    /// <param name="outcomes">A --verify run's per-mark outcomes, in file order (see
+    /// <see cref="VerifyResult.Outcomes"/>).</param>
     /// <param name="duration">Total play time; both a trailing region's and the trailing target's
     /// own upper bound.</param>
-    internal static GapRecoveryPlan BuildGapRegions(IReadOnlyList<VerifyMarkingOutcome> markings, double duration)
+    internal static GapRecoveryPlan BuildGapRegions(IReadOnlyList<ExistingMarkOutcome> outcomes, double duration)
     {
-        var checkable = markings.Where(m => m.ExpectedNumber is not null)
+        var checkable = outcomes.Where(m => m.ExpectedNumber is not null)
             .OrderBy(m => m.StartSeconds).ToList();
         var regions = new List<DetectionRegion>();
         double? trailingFrom = null;
@@ -319,9 +319,9 @@ internal static class GapPlanning
         {
             if (checkable[i].Confirmed)
                 continue;
-            // Not the start of a run when the previous checkable marking is itself unconfirmed and
+            // Not the start of a run when the previous checkable mark is itself unconfirmed and
             // belongs to the same part - this index was already folded into that earlier run below.
-            // A restart always breaks the run, however many unconfirmed markings meet across it:
+            // A restart always breaks the run, however many unconfirmed marks meet across it:
             // one region cannot hunt two numberings at once.
             if (i > 0 && !checkable[i - 1].Confirmed && checkable[i - 1].Sequence == checkable[i].Sequence)
                 continue;
@@ -335,8 +335,8 @@ internal static class GapPlanning
             var isTrailing = runEnd + 1 >= checkable.Count;
             var from = i > 0 ? checkable[i - 1].StartSeconds : 0.0;
             var to = isTrailing ? duration : checkable[runEnd + 1].StartSeconds;
-            // The audio bounds above take the nearest marking either way, so no stretch is left
-            // unprobed; the number bounds may only come from this part, since a marking on the far
+            // The audio bounds above take the nearest mark either way, so no stretch is left
+            // unprobed; the number bounds may only come from this part, since a mark on the far
             // side of a restart says nothing at all about how this part's numbering runs.
             var lower = i > 0 && checkable[i - 1].Sequence == sequence
                 ? checkable[i - 1].ExpectedNumber!.Value

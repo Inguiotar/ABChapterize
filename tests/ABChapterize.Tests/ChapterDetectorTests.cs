@@ -359,7 +359,7 @@ public sealed class ChapterDetectorTests : IDisposable
     /// position, but never after it.
     /// <para>
     /// The expected values are where the heuristic alone would put the mark - the phrase onset the
-    /// script states, less <see cref="PinnedMarkLeadSeconds"/>. Precise marking
+    /// script states, less <see cref="PinnedMarkLeadSeconds"/>. Precise mark
     /// does not trust that position; it brackets the true onset by bisection and reports the last
     /// probe that still confirmed the phrase, which lands within one step below the real edge
     /// rather than exactly on it, and then anchors that onset back onto the end of the silence in
@@ -370,7 +370,7 @@ public sealed class ChapterDetectorTests : IDisposable
     /// covers. Pinning these tests to the bisection's own arithmetic would make
     /// eighty-odd assertions - most of them about gap tracking or language handling, not placement -
     /// churn on every tuning change, and would assert an artifact instead of the contract precise
-    /// marking actually owes its callers. What the placement steps owe exactly is asserted exactly,
+    /// mark actually owes its callers. What the placement steps owe exactly is asserted exactly,
     /// by the tests named for them.
     /// </para>
     /// </summary>
@@ -7051,7 +7051,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal(["de"], transcriber.LanguageChanges); // still (re-)asserted defensively
     }
 
-    /// <summary>Runs --verify against the given pre-existing chapter markings and script.</summary>
+    /// <summary>Runs --verify against the given pre-existing chapter marks and script.</summary>
     private async Task<VerifyResult> VerifyAsync(
         CliOptions options, IReadOnlyList<Chapter> existingChapters, Action<ScriptedTranscriber> script)
         => (await VerifyWithTranscriberAsync(options, existingChapters, script)).Result;
@@ -7073,9 +7073,9 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Verify_ConfirmsMarkings_WhenThePhraseAndNumberAreFoundNearby()
+    public async Task Verify_ConfirmsExistingMarks_WhenThePhraseAndNumberAreFoundNearby()
     {
-        // Markings at 10 s and 610 s; --verify probes 10 s before each, so windows start at 0 and 600.
+        // Marks at 10 s and 610 s; --verify probes 10 s before each, so windows start at 0 and 600.
         var result = await VerifyAsync(
             Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
@@ -7090,21 +7090,21 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal(0, result.Failed);
     }
 
-    /// <summary>--fix's whole point: a marking whose announcement checks out but sits well away
+    /// <summary>--fix's whole point: a mark whose announcement checks out but sits well away
     /// from it is moved onto it, instead of the run only reporting that it checked out.</summary>
     [Fact]
-    public async Task VerifyFix_MovesAConfirmedMarkingOntoItsAnnouncement()
+    public async Task VerifyFix_MovesAConfirmedMarkOntoItsAnnouncement()
     {
-        // Marking at 10 s, window [0, 60), the announcement actually at 40 s.
+        // Mark at 10 s, window [0, 60), the announcement actually at 40 s.
         var result = await VerifyAsync(
             Options("--verify", "--fix"),
             [new Chapter(10, "Chapter 1")],
             s => s.Add(0, Seg(40, " Chapter 1.")));
 
         Assert.True(result.Passed);
-        var marking = Assert.Single(result.Markings);
-        Assert.NotNull(marking.CorrectedStartSeconds);
-        Assert.Equal(40 - PinnedMarkLeadSeconds, marking.CorrectedStartSeconds!.Value, 2);
+        var mark = Assert.Single(result.Outcomes);
+        Assert.NotNull(mark.CorrectedStartSeconds);
+        Assert.Equal(40 - PinnedMarkLeadSeconds, mark.CorrectedStartSeconds!.Value, 2);
         // The confirmed chapter is handed on at the corrected position, so a run that also
         // gap-recovers writes the fixed marks rather than the old ones.
         Assert.Equal(40 - PinnedMarkLeadSeconds, Assert.Single(result.ConfirmedChapters).TimeSeconds, 2);
@@ -7113,7 +7113,7 @@ public sealed class ChapterDetectorTests : IDisposable
     /// <summary>Rewriting a whole audiobook to move a mark by a tenth of a second is not worth
     /// it, and the figure being moved is inside the refinement's own accuracy anyway.</summary>
     [Fact]
-    public async Task VerifyFix_LeavesAMarkingAlreadyCloseEnoughAlone()
+    public async Task VerifyFix_LeavesAMarkAlreadyCloseEnoughAlone()
     {
         var result = await VerifyAsync(
             Options("--verify", "--fix"),
@@ -7121,13 +7121,13 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(0, Seg(10.1, " Chapter 1.")));
 
         Assert.True(result.Passed);
-        Assert.Null(Assert.Single(result.Markings).CorrectedStartSeconds);
+        Assert.Null(Assert.Single(result.Outcomes).CorrectedStartSeconds);
     }
 
     /// <summary>A mark tens of seconds from its announcement is not one that drifted - it means
     /// something else, and dragging it onto the nearest matching phrase would destroy that.</summary>
     [Fact]
-    public async Task VerifyFix_LeavesAMarkingTooFarFromItsAnnouncementAlone()
+    public async Task VerifyFix_LeavesAMarkTooFarFromItsAnnouncementAlone()
     {
         var (result, _, _) = await VerifyWithTranscriberAsync(
             Options("--verify", "--fix"),
@@ -7135,14 +7135,14 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(0, Seg(55, " Chapter 1.")));
 
         Assert.True(result.Passed);
-        Assert.Null(Assert.Single(result.Markings).CorrectedStartSeconds);
+        Assert.Null(Assert.Single(result.Outcomes).CorrectedStartSeconds);
         Assert.Equal(10, Assert.Single(result.ConfirmedChapters).TimeSeconds);
     }
 
     /// <summary>Without --fix, --verify reports and changes nothing - the behaviour every
     /// existing use of it relies on.</summary>
     [Fact]
-    public async Task Verify_WithoutFix_NeverCorrectsAMarking()
+    public async Task Verify_WithoutFix_NeverCorrectsAMark()
     {
         var result = await VerifyAsync(
             Options("--verify"),
@@ -7150,7 +7150,7 @@ public sealed class ChapterDetectorTests : IDisposable
             s => s.Add(0, Seg(40, " Chapter 1.")));
 
         Assert.True(result.Passed);
-        Assert.Null(Assert.Single(result.Markings).CorrectedStartSeconds);
+        Assert.Null(Assert.Single(result.Outcomes).CorrectedStartSeconds);
         Assert.Equal(10, Assert.Single(result.ConfirmedChapters).TimeSeconds);
     }
 
@@ -7160,7 +7160,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var result = await VerifyAsync(
             Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2")],
-            s => s.Add(0, Seg(10, " Chapter 1."))); // nothing scripted near the second marking
+            s => s.Add(0, Seg(10, " Chapter 1."))); // nothing scripted near the second mark
 
         Assert.False(result.Passed);
         Assert.Equal(2, result.Checked);
@@ -7173,7 +7173,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var result = await VerifyAsync(
             Options(),
             [new Chapter(10, "Chapter 1")],
-            s => s.Add(0, Seg(10, " Chapter 2."))); // wrong number for this marking
+            s => s.Add(0, Seg(10, " Chapter 2."))); // wrong number for this mark
 
         Assert.False(result.Passed);
         Assert.Equal(1, result.Checked);
@@ -7181,7 +7181,7 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Verify_SkipsMarkings_WithNoParseableExpectedNumber()
+    public async Task Verify_SkipsMarks_WithNoParseableExpectedNumber()
     {
         // "Intro" has no digit and no recognizable number word, so it cannot be checked;
         // with nothing else to disprove, verification passes trivially.
@@ -7209,8 +7209,8 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // The ordinary written form, and the one that used to make --verify report a file as
         // having nothing checkable at all: the number is the title's *second* word, which the
-        // transcript-tail parser this once borrowed never looks at (see MarkingTitleNumber).
-        // Everything here is about the count - one marking checked and confirmed rather than
+        // transcript-tail parser this once borrowed never looks at (see ExistingMarkTitle).
+        // Everything here is about the count - one mark checked and confirmed rather than
         // silently passed over.
         var result = await VerifyAsync(
             Options(),
@@ -7225,13 +7225,13 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public async Task Verify_WithAutoLanguage_ResolvesLanguageUpfront_BeforeParsingAnyTitle()
     {
-        // Both markings' titles are only parseable as German ordinals ("Erstes"/"Zweites") - not
-        // as English number words. Resolving the language lazily, only after some marking's
+        // Both marks' titles are only parseable as German ordinals ("Erstes"/"Zweites") - not
+        // as English number words. Resolving the language lazily, only after some mark's
         // title happened to parse under an "en" placeholder, would never get past the very first
-        // marking here: its title fails to parse as English, so it would be skipped without ever
+        // mark here: its title fails to parse as English, so it would be skipped without ever
         // being decoded - and since decoding is what triggers language detection, "de" would
-        // never be discovered, silently skipping every marking (Checked == 0, a false pass)
-        // instead of verifying the book. Resolving upfront, from the first marking with a
+        // never be discovered, silently skipping every mark (Checked == 0, a false pass)
+        // instead of verifying the book. Resolving upfront, from the first mark with a
         // decodable window regardless of its title, must check both.
         var (result, transcriber, _) = await VerifyWithTranscriberAsync(
             Options(),
@@ -7246,7 +7246,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.True(result.Passed);
         Assert.Equal(2, result.Checked);
         Assert.Equal(0, result.Failed);
-        // Detected once, upfront - not re-detected per marking.
+        // Detected once, upfront - not re-detected per mark.
         Assert.Equal(1, transcriber.DetectLanguageCalls);
     }
 
@@ -7255,14 +7255,14 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // Chapter 2 fails to confirm; 1 and 3 do. Same display convention as Pass 2/3: the
         // tracker should read the highest *confirmed* number, with the unconfirmed one below it
-        // counted as a "(-N)" gap - not the highest pre-existing marking regardless of outcome.
+        // counted as a "(-N)" gap - not the highest pre-existing mark regardless of outcome.
         var (_, _, tracker) = await VerifyWithTranscriberAsync(
             Options(),
             [new Chapter(10, "Chapter 1"), new Chapter(610, "Chapter 2"), new Chapter(1210, "Chapter 3")],
             s =>
             {
                 s.Add(0, Seg(10, " Chapter 1."));
-                // nothing scripted near the second marking - Chapter 2 will not confirm.
+                // nothing scripted near the second mark - Chapter 2 will not confirm.
                 s.Add(1200, Seg(10, " Chapter 3."));
             });
 
@@ -7342,11 +7342,11 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public void BuildGapRegions_BuildsOneRegion_ForAnInteriorUnconfirmedRun()
     {
-        var markings = new List<VerifyMarkingOutcome>
+        var marks = new List<ExistingMarkOutcome>
         {
             new(10, 1, true), new(30, 2, false), new(50, 3, true),
         };
-        var plan = GapPlanning.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(marks, Duration);
 
         Assert.Equal([new(10, 50, 1, 3)], plan.Regions);
         Assert.Null(plan.TrailingFrom);
@@ -7354,10 +7354,10 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public void BuildGapRegions_BuildsATrailingRegion_WhenTheLastCheckableMarkingIsUnconfirmed()
+    public void BuildGapRegions_BuildsATrailingRegion_WhenTheLastCheckableMarkIsUnconfirmed()
     {
-        var markings = new List<VerifyMarkingOutcome> { new(10, 1, true), new(610, 2, false) };
-        var plan = GapPlanning.BuildGapRegions(markings, Duration);
+        var marks = new List<ExistingMarkOutcome> { new(10, 1, true), new(610, 2, false) };
+        var plan = GapPlanning.BuildGapRegions(marks, Duration);
 
         Assert.Equal([new(10, Duration, 1, null)], plan.Regions);
         Assert.Equal(10, plan.TrailingFrom);
@@ -7365,13 +7365,13 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public void BuildGapRegions_GroupsConsecutiveUnconfirmedMarkings_IntoOneRun()
+    public void BuildGapRegions_GroupsConsecutiveUnconfirmedMarks_IntoOneRun()
     {
-        var markings = new List<VerifyMarkingOutcome>
+        var marks = new List<ExistingMarkOutcome>
         {
             new(10, 1, true), new(20, 2, false), new(30, 3, false), new(40, 4, true),
         };
-        var plan = GapPlanning.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(marks, Duration);
 
         Assert.Equal([new(10, 40, 1, 4)], plan.Regions);
     }
@@ -7379,34 +7379,34 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public void BuildGapRegions_KeepsSeparateRunsAsSeparateRegions()
     {
-        var markings = new List<VerifyMarkingOutcome>
+        var marks = new List<ExistingMarkOutcome>
         {
             new(10, 1, true), new(20, 2, false), new(30, 3, true), new(40, 4, false), new(50, 5, true),
         };
-        var plan = GapPlanning.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(marks, Duration);
 
         Assert.Equal([new(10, 30, 1, 3), new(30, 50, 3, 5)], plan.Regions);
     }
 
     [Fact]
-    public void BuildGapRegions_AbsorbsAnUnparseableMarking_WithoutBreakingTheRun()
+    public void BuildGapRegions_AbsorbsAnUnparseableMark_WithoutBreakingTheRun()
     {
-        // The middle marking has no parseable number (Confirmed is always false for those, but
+        // The middle mark has no parseable number (Confirmed is always false for those, but
         // that must not itself make the surrounding run look "broken" into two).
-        var markings = new List<VerifyMarkingOutcome>
+        var marks = new List<ExistingMarkOutcome>
         {
             new(10, 1, true), new(20, 2, false), new(25, null, false), new(30, 3, false), new(40, 4, true),
         };
-        var plan = GapPlanning.BuildGapRegions(markings, Duration);
+        var plan = GapPlanning.BuildGapRegions(marks, Duration);
 
         Assert.Equal([new(10, 40, 1, 4)], plan.Regions);
     }
 
     [Fact]
-    public void BuildGapRegions_ReturnsNoRegions_WhenEveryCheckableMarkingIsConfirmed()
+    public void BuildGapRegions_ReturnsNoRegions_WhenEveryCheckableMarkIsConfirmed()
     {
-        var markings = new List<VerifyMarkingOutcome> { new(10, 1, true), new(610, 2, true) };
-        var plan = GapPlanning.BuildGapRegions(markings, Duration);
+        var marks = new List<ExistingMarkOutcome> { new(10, 1, true), new(610, 2, true) };
+        var plan = GapPlanning.BuildGapRegions(marks, Duration);
 
         Assert.Empty(plan.Regions);
         Assert.Null(plan.TrailingFrom);
@@ -7425,10 +7425,10 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task DetectGapsAsync_RecoversAnInteriorGap_ViaGapScopedPass2_AndTrustsConfirmedMarkingsVerbatim()
+    public async Task DetectGapsAsync_RecoversAnInteriorGap_ViaGapScopedPass2_AndTrustsConfirmedMarksVerbatim()
     {
         // Chapter 1 (@10) and chapter 3 (@50) were already confirmed by --verify; chapter 2
-        // (marking @30) was not. Only the region between the two confirmed markings' own
+        // (mark @30) was not. Only the region between the two confirmed marks' own
         // timestamps [10, 50) is probed - a single synthetic candidate at its own start (10),
         // exactly like the whole-file case's own start-of-file candidate.
         var verify = new VerifyResult(false, 2, 1,
@@ -7443,16 +7443,16 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 10), new(2, 30.05), new(3, 50)], result.Chapters);
-        // Confirmed markings are trusted verbatim - the only decodes are the gap region's own
+        // Confirmed marks are trusted verbatim - the only decodes are the gap region's own
         // synthetic start and the fresh tail past the seam its window shares with the silence
-        // candidate behind it; nothing probes near the confirmed markings' own timestamps.
+        // candidate behind it; nothing probes near the confirmed marks' own timestamps.
         Assert.Equal([10.0, 29.0], audio.DecodeStarts);
     }
 
     [Fact]
     public async Task DetectGapsAsync_RecoversATrailingGap_ViaPass3Fallback_WhenGapScopedPass2MissesIt()
     {
-        // Chapter 3 (marking @1210, the last one in file order) was not confirmed. The phrase
+        // Chapter 3 (mark @1210, the last one in file order) was not confirmed. The phrase
         // sits 300 s into the decode starting at 610 - far past Pass 2's PhraseLatestStart rule
         // (and there is no anchor silence to rescue it, since none are scripted), so the
         // region-scoped Pass 2 window [610, 622) rejects it; Pass 3 has no such window-relative
@@ -7497,7 +7497,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Contains(2, result.MissingNumbers);
     }
 
-    /// <summary>Runs ResumeMissingMarksAsync against the given committed markings (as if probed
+    /// <summary>Runs ResumeMissingMarksAsync against the given committed marks (as if probed
     /// from a ".missing-marks-..." file) and script.</summary>
     private async Task<(DetectionResult Result, FakeAudioSource Audio, ScriptedTranscriber Transcriber)> ResumeMissingMarksAsync(
         CliOptions options, IReadOnlyList<Chapter> existingChapters, List<Silence> silences, Action<ScriptedTranscriber> script)
@@ -7513,13 +7513,13 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task ResumeMissingMarksAsync_RecoversAnInteriorGap_ViaGapScopedPass2_AndTrustsCommittedMarkingsVerbatim()
+    public async Task ResumeMissingMarksAsync_RecoversAnInteriorGap_ViaGapScopedPass2_AndTrustsCommittedMarksVerbatim()
     {
         // Chapters 1 (@10) and 3 (@50) are already committed on the tagged file; chapter 2 is
         // still missing between them. Only the gap [10, 50) is probed - a single synthetic
         // candidate at its own start (10), exactly like DetectGapsAsync's own gap-scoped region.
         // An explicit --lang sidesteps the upfront language-resolution decode near chapter 1's own
-        // marking (@10, so its own window would start at 0) that --lang auto would otherwise add,
+        // mark (@10, so its own window would start at 0) that --lang auto would otherwise add,
         // keeping the decode-start assertion below solely about the gap-scoped Pass 2 region.
         var (result, audio, _) = await ResumeMissingMarksAsync(
             Options("--quick-marks", "--lang", "en", "--min-silence-length", "1.5"),
@@ -7528,7 +7528,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 10), new(2, 30.05), new(3, 50)], result.Chapters);
-        // The committed markings are trusted verbatim - nothing probes near their own timestamps,
+        // The committed marks are trusted verbatim - nothing probes near their own timestamps,
         // only the gap region's own synthetic start and the fresh tail past the seam it shares
         // with the silence candidate behind it.
         Assert.Equal([10.0, 29.0], audio.DecodeStarts);
@@ -7548,12 +7548,12 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task ResumeMissingMarksAsync_SkipsAnUnparseableIntroMarking_WithoutTreatingItAsAGapBoundary()
+    public async Task ResumeMissingMarksAsync_SkipsAnUnparseableIntroMark_WithoutTreatingItAsAGapBoundary()
     {
         // The intro entry BuildChapters inserts on a partial commit has no parseable number - it
         // must be dropped from the trusted set entirely (not treated as chapter 0), so the gap is
         // still correctly bounded by chapter 1 (@10) and chapter 3 (@50), exactly as if the intro
-        // marking were not present at all.
+        // mark were not present at all.
         var (result, _, _) = await ResumeMissingMarksAsync(
             Options("--min-silence-length", "1.5"),
             [new Chapter(0, "Intro"), new Chapter(10, "Chapter 1"), new Chapter(50, "Chapter 3")],
@@ -7565,11 +7565,11 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task ResumeMissingMarksAsync_WithAutoLanguage_ResolvesLanguageFromTheCommittedMarkingsWindow()
+    public async Task ResumeMissingMarksAsync_WithAutoLanguage_ResolvesLanguageFromTheCommittedMarksWindow()
     {
         // Mirrors Verify_WithAutoLanguage_ResolvesLanguageUpfront_BeforeParsingAnyTitle: with
-        // --lang auto, the language must be resolved from a committed marking's own window (here,
-        // the same "de" ResolveProfileFromMarkingsAsync helper both methods now share), regardless
+        // --lang auto, the language must be resolved from a committed mark's own window (here,
+        // the same "de" ResolveProfileFromExistingMarksAsync helper both methods now share), regardless
         // of whether the gap itself ends up recovered.
         var (result, _, transcriber) = await ResumeMissingMarksAsync(
             Options(),

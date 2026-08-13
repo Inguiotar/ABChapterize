@@ -238,7 +238,7 @@ public sealed class FileProcessorTests : IDisposable
 
     /// <summary>Builds a <see cref="VerifyResult"/> with the given confirmed/failed counts, which is
     /// all <see cref="FileProcessor.IsWholesaleFailure"/> looks at.</summary>
-    /// <param name="confirmed">How many markings were confirmed.</param>
+    /// <param name="confirmed">How many marks were confirmed.</param>
     /// <param name="failed">How many were not.</param>
     private VerifyResult Verified(int confirmed, int failed)
         => new(failed == 0, confirmed + failed, failed,
@@ -246,12 +246,12 @@ public sealed class FileProcessorTests : IDisposable
                [], _profile, null, 0, []);
 
     /// <summary>
-    /// The default rule: a file keeps its gap-scoped recovery while the confirmed markings still
+    /// The default rule: a file keeps its gap-scoped recovery while the confirmed marks still
     /// outnumber the failures, and is left alone once they do not. The 0-confirmed row is the one
-    /// that used to discard a whole marking set and redetect the file.
+    /// that used to discard a whole mark set and redetect the file.
     /// </summary>
-    /// <param name="confirmed">Confirmed markings.</param>
-    /// <param name="failed">Unconfirmed markings.</param>
+    /// <param name="confirmed">Confirmed marks.</param>
+    /// <param name="failed">Unconfirmed marks.</param>
     /// <param name="wholesale">Whether this counts as a wholesale failure.</param>
     [Theory]
     [InlineData(0, 20, true)]

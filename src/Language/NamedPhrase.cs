@@ -124,7 +124,7 @@ public sealed record NamedPhrase(
 
     /// <summary>
     /// Recognizes titles this phrase has written before, for the resume/verify carry-over in
-    /// <see cref="ABChapterize.Detection.ChapterDetector"/>: a rewrite of a file's whole marking set
+    /// <see cref="ABChapterize.Detection.ChapterDetector"/>: a rewrite of a file's whole mark set
     /// must not silently drop a numberless mark, and its written text is all there is to match on.
     /// Every group reference becomes a wildcard, since what it expanded to is exactly what varies
     /// between one file's marks and the next's.

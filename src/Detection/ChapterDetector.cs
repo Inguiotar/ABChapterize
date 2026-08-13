@@ -26,7 +26,7 @@ namespace ABChapterize.Detection;
 /// <summary>
 /// Finds chapter starts in an audiobook. Fast path: detect longer-than-usual silences and
 /// probe the audio following each silence with Whisper. If the resulting chapter numbers
-/// contain sequence gaps, the audio between the mismatched markings is fully transcribed.
+/// contain sequence gaps, the audio between the mismatched marks is fully transcribed.
 /// </summary>
 public sealed class ChapterDetector
 {
@@ -38,7 +38,7 @@ public sealed class ChapterDetector
     /// <see cref="_transcriber"/> unless <c>--pass3-model</c> selected a different model, in which
     /// case it is a <see cref="Transcription.Pass3Transcriber"/>. Reference equality with
     /// <see cref="_transcriber"/> is what the code below tests to tell the two cases apart. Only
-    /// which model recognizes the gap chunks changes; detection/marking/statistics are
+    /// which model recognizes the gap chunks changes; detection/mark/statistics are
     /// identical.</summary>
     private readonly ITranscriber _pass3Transcriber;
 
@@ -171,7 +171,7 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Runs gap-scoped recovery after a --verify failure: <paramref name="verify"/>'s confirmed
-    /// markings are trusted and imported directly, and only the region(s) <see
+    /// marks are trusted and imported directly, and only the region(s) <see
     /// cref="BuildGapRegions"/> builds around the unconfirmed one(s) get their own Pass 2 - the
     /// rest of the file is not re-scanned or re-transcribed at all.
     /// </summary>
@@ -180,7 +180,7 @@ public sealed class ChapterDetector
     /// <param name="work">Progress tracker fed with processed bytes.</param>
     /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="verify">The --verify run's own result: <see cref="VerifyResult.ConfirmedChapters"/>
-    /// seeds the result directly, <see cref="VerifyResult.Markings"/> is grouped into regions, and
+    /// seeds the result directly, <see cref="VerifyResult.Outcomes"/> is grouped into regions, and
     /// <see cref="VerifyResult.Profile"/>/<see cref="VerifyResult.DetectedLanguage"/>/<see
     /// cref="VerifyResult.DetectedProbability"/> are reused as-is so gap recovery never re-resolves
     /// the language.</param>
@@ -188,7 +188,7 @@ public sealed class ChapterDetector
     internal Task<DetectionResult> DetectGapsAsync(
         string file, MediaInfo info, WorkTracker work, DetectionLog log, VerifyResult verify, CancellationToken ct)
     {
-        var plan = BuildGapRegions(verify.Markings, info.DurationSeconds);
+        var plan = BuildGapRegions(verify.Outcomes, info.DurationSeconds);
         return DetectCoreAsync(file, info, work, log, verify.ConfirmedChapters,
             verify.NamedMarks ?? [], plan.Regions,
             new LanguageState(verify.Profile, verify.DetectedLanguage, verify.DetectedProbability),
@@ -197,9 +197,9 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Auto-resumes a file <see cref="MissingMarksTag.PathFor"/> tagged after a previous run
-    /// left a chapter-sequence gap unresolved. The committed markings are trusted verbatim, with no
+    /// left a chapter-sequence gap unresolved. The committed marks are trusted verbatim, with no
     /// --verify-style re-check against the audio: unlike <see cref="DetectGapsAsync"/>'s confirmed
-    /// markings these were never in doubt in the first place - they are exactly what pass 3 settled
+    /// marks these were never in doubt in the first place - they are exactly what pass 3 settled
     /// on last time. Only the gap(s) <see cref="FindGaps"/> still finds between them get their own
     /// gap-scoped Pass 2 plus the existing Pass 3 tail, exactly as <see cref="DetectGapsAsync"/>
     /// does after a --verify failure - which is what lets this reuse <see cref="DetectCoreAsync"/>
@@ -209,7 +209,7 @@ public sealed class ChapterDetector
     /// flag - a still-missing trailing chapter - never produces a tag to resume in the first place.
     /// </summary>
     /// <param name="file">Path of the audio file (still carrying its ".missing-marks-..." tag).</param>
-    /// <param name="info">Probe result of the file, including its committed chapter markings.</param>
+    /// <param name="info">Probe result of the file, including its committed chapter marks.</param>
     /// <param name="work">Progress tracker fed with processed bytes.</param>
     /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -217,26 +217,26 @@ public sealed class ChapterDetector
         string file, MediaInfo info, WorkTracker work, DetectionLog log, CancellationToken ct)
     {
         SetLog(log);
-        var language = await ResolveProfileFromMarkingsAsync(file, info, ct);
+        var language = await ResolveProfileFromExistingMarksAsync(file, info, ct);
         var profile = language.Profile;
         _transcriber.ChangeLanguage(profile.Language);
 
-        // Committed markings are trusted directly, never re-probed; only their chapter number
-        // matters (parsed as --verify parses a marking's expected number). A marking with no
+        // Committed marks are trusted directly, never re-probed; only their chapter number
+        // matters (parsed as --verify parses a mark's expected number). A mark with no
         // parseable number - the intro/prelude entry BuildChapters inserts - carries no chapter
-        // identity and is dropped, exactly like an unparseable --verify marking.
+        // identity and is dropped, exactly like an unparseable --verify mark.
         var confirmed = new List<DetectedChapter>();
-        foreach (var marking in info.ExistingChapters)
-            if (TryParseExpectedNumber(marking.Title, profile, out var number))
+        foreach (var mark in info.ExistingChapters)
+            if (TryParseExpectedNumber(mark.Title, profile, out var number))
                 confirmed.Add(new DetectedChapter(
-                    number, marking.StartSeconds, Sequence: PartOf(marking.Title, profile)));
+                    number, mark.StartSeconds, Sequence: PartOf(mark.Title, profile)));
         confirmed = Normalize(confirmed);
-        var namedSeed = CarryOverNamedMarkings(info, profile);
+        var namedSeed = CarryOverNamedMarks(info, profile);
         // Before the gap search below, which asks where the sequence starts: a prologue the previous
         // run wrote into the file speaks for that just as one detected fresh does.
         _namedMarks = namedSeed;
 
-        // Gaps are re-derived from the committed markings rather than the tag's own number list, so
+        // Gaps are re-derived from the committed marks rather than the tag's own number list, so
         // this always agrees with what FindGaps/MissingNumbersInGap would say about the file's
         // actual content right now. ExpectedStartChapter is passed through so a leading
         // missing-marks tag resolves to the same gap as the run that produced it.
@@ -261,37 +261,37 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Recovers the non-numbered marks from a file's existing markings by matching their titles
+    /// Recovers the non-numbered marks a file already carries, by matching their titles
     /// against the ones this run would write. Both resume paths need it for the same reason: they
-    /// rewrite the file's whole marking set from what detection hands back, and a named mark carries
+    /// rewrite the file's whole mark set from what detection hands back, and a named mark carries
     /// no chapter number - so unlike a chapter it would leave no hole behind, and nothing would ever
-    /// notice it had been dropped. Matching on the title is what there is to match on: the marking's
+    /// notice it had been dropped. Matching on the title is what there is to match on: the mark's
     /// text is all a written chapter entry preserves, and this run's own titles are exactly what a
     /// previous run of the same command wrote there. A file marked by a different tool (or under
     /// different titles) simply yields nothing here, and its prologue is re-detected or lost exactly
     /// as before this existed.
     /// <para>
-    /// A numbered marking and the intro entry are ruled out before any title is matched at all,
+    /// A numbered mark and the intro entry are ruled out before any title is matched at all,
     /// because a --custom title made entirely of a capturing-group reference matches every string
     /// there is (see <see cref="NamedPhrase.TitleMatcher"/>) - without the exclusion, such a mapping
     /// would swallow the file's chapters into the named list and lose their numbers.
     /// </para>
     /// </summary>
-    /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
+    /// <param name="info">Probe result of the file, including its pre-existing chapter marks.</param>
     /// <param name="profile">The language profile resolved for this file, supplying the titles.</param>
-    private static List<DetectedMark> CarryOverNamedMarkings(MediaInfo info, LanguageProfile profile)
+    private static List<DetectedMark> CarryOverNamedMarks(MediaInfo info, LanguageProfile profile)
     {
         var carried = new List<DetectedMark>();
-        foreach (var marking in info.ExistingChapters)
+        foreach (var mark in info.ExistingChapters)
         {
-            var title = marking.Title.Trim();
+            var title = mark.Title.Trim();
             if (TryParseExpectedNumber(title, profile, out _) ||
                 string.Equals(title, profile.IntroTitle, StringComparison.OrdinalIgnoreCase))
                 continue;
             if (profile.NamedPhrases.FirstOrDefault(p => p.TitleMatcher.IsMatch(title)) is { } phrase)
                 carried.Add(new DetectedMark(
-                    phrase.Kind, title, marking.StartSeconds,
-                    PhraseTimeSeconds: marking.StartSeconds, Repeatable: phrase.Repeatable));
+                    phrase.Kind, title, mark.StartSeconds,
+                    PhraseTimeSeconds: mark.StartSeconds, Repeatable: phrase.Repeatable));
         }
         return carried;
     }
@@ -318,14 +318,14 @@ public sealed class ChapterDetector
     /// <param name="confirmedSeed">Chapters trusted verbatim, with no Whisper re-check of their
     /// own - empty for a fresh <see cref="DetectAsync"/> run.</param>
     /// <param name="namedSeed">Prologue/epilogue marks carried over from the file's existing
-    /// markings (see <see cref="CarryOverNamedMarkings"/>); empty for a fresh run.</param>
+    /// marks (see <see cref="CarryOverNamedMarks"/>); empty for a fresh run.</param>
     /// <param name="regions">The independent Pass 2 region(s) to probe; a single whole-file region
     /// for <see cref="DetectAsync"/>, or the gap-scoped regions <see cref="BuildGapRegions"/> built
     /// for <see cref="DetectGapsAsync"/>.</param>
     /// <param name="known">The language resolution --verify already paid for, carried into the
     /// result verbatim; null to resolve this file's own from Pass 1's speech segments.</param>
     /// <param name="trailingFallback">The trailing region's start and expected chapter numbers,
-    /// when <see cref="BuildGapRegions"/> found the last checkable --verify marking unconfirmed;
+    /// when <see cref="BuildGapRegions"/> found the last checkable --verify mark unconfirmed;
     /// null otherwise (including for a fresh <see cref="DetectAsync"/> run).</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<DetectionResult> DetectCoreAsync(
@@ -360,7 +360,7 @@ public sealed class ChapterDetector
             file, info, LanguageResolver.SpeechPositions(speechSegments, info.DurationSeconds), ct);
         _transcriber.ChangeLanguage(language.Profile.Language);
 
-        // Confirmed markings are trusted verbatim; new finds from every region below are added to
+        // Confirmed marks are trusted verbatim; new finds from every region below are added to
         // the same list, so Pass 3's existing gap tail (after the region loop) sees one seamless
         // sequence regardless of which numbers came from --verify and which from fresh probing.
         var found = new List<DetectedChapter>(confirmedSeed);
@@ -877,11 +877,11 @@ public sealed class ChapterDetector
 
     /// <summary>
     /// Pass 3 (only when needed): resolves sequence gaps by fully transcribing the regions between
-    /// mismatched markings (and before the first marking, if it is not chapter 1, or below
+    /// mismatched marks (and before the first mark, if it is not chapter 1, or below
     /// --expected-start-chapter). The same mechanism regardless of how <paramref name="chapters"/>
     /// was seeded - a gap-scoped <see cref="DetectGapsAsync"/> run's confirmed-plus-region-2
     /// chapters are covered exactly like a fresh <see cref="DetectAsync"/> run's own. Also runs the
-    /// trailing-fallback recovery for a gap-scoped run whose last checkable --verify marking was
+    /// trailing-fallback recovery for a gap-scoped run whose last checkable --verify mark was
     /// unconfirmed - the one case the gap search cannot notice, since nothing bounds a
     /// still-missing trailing chapter from above to compare against.
     /// </summary>
@@ -896,7 +896,7 @@ public sealed class ChapterDetector
     /// <param name="bytesPerSecond">The file's average byte rate, for progress reporting.</param>
     /// <param name="profile">The language profile resolved for this file.</param>
     /// <param name="trailingFallback">The trailing region's start and expected chapter numbers,
-    /// when <see cref="BuildGapRegions"/> found the last checkable --verify marking unconfirmed;
+    /// when <see cref="BuildGapRegions"/> found the last checkable --verify mark unconfirmed;
     /// null otherwise (including for a fresh <see cref="DetectAsync"/> run).</param>
     /// <param name="trailingScanAllowed">Whether the trailing scan may run; see <see
     /// cref="ResolveTrailingRegion"/>.</param>
@@ -1120,7 +1120,7 @@ public sealed class ChapterDetector
     /// independent things ask for one:
     /// <list type="bullet">
     /// <item><description>the --verify fallback, for a gap-scoped <see cref="DetectGapsAsync"/> run
-    /// whose last checkable marking was unconfirmed: it knows exactly which numbers it is after, so
+    /// whose last checkable mark was unconfirmed: it knows exactly which numbers it is after, so
     /// it is skipped entirely once they have all turned up elsewhere;</description></item>
     /// <item><description>--chapter-count, which states how many numbered chapters the book has and
     /// therefore names exactly which ones above the last find are still owed;</description></item>
@@ -1138,7 +1138,7 @@ public sealed class ChapterDetector
     /// of the file instead of the early-stopping search it exists to provide.
     /// </summary>
     /// <param name="verifyFallback">The --verify fallback's region start and expected numbers, or
-    /// null when this is not a gap-scoped run (or its last marking was confirmed).</param>
+    /// null when this is not a gap-scoped run (or its last mark was confirmed).</param>
     /// <param name="chapters">Everything detected so far, in chronological order.</param>
     /// <param name="trailingScanAllowed">Whether the trailing scan may run at all - false once Pass 2
     /// aborted, since a run that gave up on the file has no meaningful "last chapter" to sweep from.</param>
@@ -1846,7 +1846,7 @@ public sealed class ChapterDetector
     /// The <c>--custom</c> mark a rejected built-in announcement turns into, or null when no mapping
     /// claims it. Matched against the transcript segment the announcement was heard in
     /// (<see cref="DetectedMark.Text"/>), which is what the mappings were run against in the first
-    /// place - so a mark carried over from the file's existing markings, which was never heard at
+    /// place - so a mark carried over from the file's existing marks, which was never heard at
     /// all, can only ever be dropped.
     /// </summary>
     /// <param name="mark">The mark being rejected.</param>
@@ -2026,73 +2026,73 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Checks pre-existing chapter markings against the audio (--verify) - far quicker than the
-    /// full silence-scan/probe pipeline, since only the markings' own timestamps are visited. For
-    /// every marking whose title yields a parseable expected chapter number, a short window around
+    /// Checks pre-existing chapter marks against the audio (--verify) - far quicker than the
+    /// full silence-scan/probe pipeline, since only the marks' own timestamps are visited. For
+    /// every mark whose title yields a parseable expected chapter number, a short window around
     /// its timestamp is probed with Whisper and checked for a phrase match with that number. A
-    /// marking whose title has no parseable number (e.g. a prelude/intro entry) cannot be checked
-    /// and counts neither for nor against the result; when none of a file's markings have one,
+    /// mark whose title has no parseable number (e.g. a prelude/intro entry) cannot be checked
+    /// and counts neither for nor against the result; when none of a file's marks have one,
     /// verification trivially passes - there is nothing to disprove, so the file is left alone
     /// rather than needlessly re-detected.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
-    /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
-    /// <param name="work">Progress tracker, advanced once per marking (checked or skipped).</param>
+    /// <param name="info">Probe result of the file, including its pre-existing chapter marks.</param>
+    /// <param name="work">Progress tracker, advanced once per mark (checked or skipped).</param>
     /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="ct">Cancellation token.</param>
     public async Task<VerifyResult> VerifyExistingChaptersAsync(
         string file, MediaInfo info, WorkTracker work, DetectionLog log, CancellationToken ct)
     {
         SetLog(log);
-        var language = await ResolveProfileFromMarkingsAsync(file, info, ct);
+        var language = await ResolveProfileFromExistingMarksAsync(file, info, ct);
         var profile = language.Profile;
         _transcriber.ChangeLanguage(profile.Language);
 
         var checkedCount = 0;
         var failed = 0;
-        // Mirrors Pass 2/3's found-chapters list, but of confirmed markings rather than fresh
+        // Mirrors Pass 2/3's found-chapters list, but of confirmed marks rather than fresh
         // detections, so the same ChapterProgress/bar display applies: the highest confirmed
         // number, with any lower unconfirmed one shown as a "(-N)" gap beneath it.
         var confirmedChapters = new List<DetectedChapter>();
-        // Every marking's outcome in file order - the input BuildGapRegions groups into
-        // DetectGapsAsync's recovery regions. A skipped marking (empty window or no parseable
+        // Every mark's outcome in file order - the input BuildGapRegions groups into
+        // DetectGapsAsync's recovery regions. A skipped mark (empty window or no parseable
         // number) is still recorded, as null/false, so it cannot split a run of unconfirmed
-        // markings around it into two.
-        var markings = new List<VerifyMarkingOutcome>();
+        // marks around it into two.
+        var outcomes = new List<ExistingMarkOutcome>();
 
         work.BeginPhase("Verify", info.ExistingChapters.Count);
-        foreach (var marking in info.ExistingChapters)
+        foreach (var mark in info.ExistingChapters)
         {
             ct.ThrowIfCancellationRequested();
 
-            var windowStart = Math.Max(0, marking.StartSeconds - VerifyMarginBeforeSeconds);
+            var windowStart = Math.Max(0, mark.StartSeconds - VerifyMarginBeforeSeconds);
             var windowLen = Math.Min(VerifyWindowSeconds, info.DurationSeconds - windowStart);
             if (windowLen <= 0)
             {
-                markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
+                outcomes.Add(new ExistingMarkOutcome(mark.StartSeconds, null, false));
                 work.Advance(1);
                 continue;
             }
 
-            var part = PartOf(marking.Title, profile);
-            if (!TryParseExpectedNumber(marking.Title, profile, out var expected))
+            var part = PartOf(mark.Title, profile);
+            if (!TryParseExpectedNumber(mark.Title, profile, out var expected))
             {
                 // Named on purpose: "none had a checkable number" is otherwise a dead end for
                 // anyone asking why --verify did nothing, since the answer lives entirely in what
                 // the titles say and nothing else ever prints them.
-                _log?.Invoke($"mark at {FormatTimestamp(marking.StartSeconds)} (\"{marking.Title}\") " +
+                _log?.Invoke($"mark at {FormatTimestamp(mark.StartSeconds)} (\"{mark.Title}\") " +
                              "- no readable chapter number, not checked");
-                markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
+                outcomes.Add(new ExistingMarkOutcome(mark.StartSeconds, null, false));
                 work.Advance(1);
                 continue;
             }
 
             var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
             var segments = await _transcriber.TranscribeAsync(samples, ct);
-            LogTranscript($"verify @{FormatTimestamp(marking.StartSeconds)}", segments);
+            LogTranscript($"verify @{FormatTimestamp(mark.StartSeconds)}", segments);
 
             checkedCount++;
-            // The match itself rather than a yes/no, because --fix corrects the marking to where the
+            // The match itself rather than a yes/no, because --fix corrects the mark to where the
             // announcement was actually heard.
             PhraseMatch? match = FindCappedPhraseMatches(segments, profile)
                 .Cast<PhraseMatch?>().FirstOrDefault(m => m!.Value.Number == expected);
@@ -2100,32 +2100,32 @@ public sealed class ChapterDetector
                 file, info, windowStart, windowLen, segments, profile, expected, ct);
             var confirmed = match != null;
             _log?.Invoke(confirmed
-                ? $"chapter {expected} mark at {FormatTimestamp(marking.StartSeconds)} confirmed"
-                : $"chapter {expected} mark at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
+                ? $"chapter {expected} mark at {FormatTimestamp(mark.StartSeconds)} confirmed"
+                : $"chapter {expected} mark at {FormatTimestamp(mark.StartSeconds)} NOT confirmed - phrase not found nearby");
             var corrected = confirmed && _options.Fix
-                ? await ComputeMarkingFixAsync(
-                    file, info, marking, windowStart, windowLen, match!.Value, profile, language.Profile.Language, ct)
+                ? await ComputeMarkFixAsync(
+                    file, info, mark, windowStart, windowLen, match!.Value, profile, language.Profile.Language, ct)
                 : null;
-            markings.Add(
-                new VerifyMarkingOutcome(marking.StartSeconds, expected, confirmed, corrected, part));
+            outcomes.Add(
+                new ExistingMarkOutcome(mark.StartSeconds, expected, confirmed, corrected, part));
             if (!confirmed)
                 failed++;
             else
                 confirmedChapters.Add(new DetectedChapter(
-                    expected, corrected ?? marking.StartSeconds, Sequence: part));
+                    expected, corrected ?? mark.StartSeconds, Sequence: part));
             var (highest, missingNumbers) = ChapterProgress(confirmedChapters, ExpectedStartChapter);
             work.HighestChapter = highest;
             work.MissingChapters = missingNumbers.Count;
             work.Advance(1);
         }
 
-        return new VerifyResult(failed == 0, checkedCount, failed, confirmedChapters, markings,
+        return new VerifyResult(failed == 0, checkedCount, failed, confirmedChapters, outcomes,
             profile, language.DetectedLanguage, language.DetectedProbability,
-            CarryOverNamedMarkings(info, profile));
+            CarryOverNamedMarks(info, profile));
     }
 
     /// <summary>
-    /// Works out where a confirmed marking really belongs (<c>--verify --fix</c>): the announcement
+    /// Works out where a confirmed mark really belongs (<c>--verify --fix</c>): the announcement
     /// this window found, put through the same re-transcription refinement a detection run gives
     /// every mark, minus <c>--mark-lead</c>.
     /// </summary>
@@ -2150,23 +2150,23 @@ public sealed class ChapterDetector
     /// </remarks>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
-    /// <param name="marking">The pre-existing marking being corrected.</param>
+    /// <param name="mark">The pre-existing mark being corrected.</param>
     /// <param name="windowStart">Absolute start of the window the announcement was confirmed in.</param>
     /// <param name="windowLen">Length of that window in seconds.</param>
     /// <param name="match">The confirming match, in that window's own time base.</param>
     /// <param name="profile">The file's resolved language profile.</param>
     /// <param name="language">Its language code, for the refinement's upgrade-model retry.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The corrected position, or null to leave the marking where it is.</returns>
-    private async Task<double?> ComputeMarkingFixAsync(
-        string file, MediaInfo info, Chapter marking, double windowStart, double windowLen,
+    /// <returns>The corrected position, or null to leave the mark where it is.</returns>
+    private async Task<double?> ComputeMarkFixAsync(
+        string file, MediaInfo info, Chapter mark, double windowStart, double windowLen,
         PhraseMatch match, LanguageProfile profile, string language, CancellationToken ct)
     {
         var phraseAbs = windowStart + match.PhraseStartSeconds;
         var phraseEndAbs = windowStart + match.PhraseEndSeconds;
         var refined = await _marks!.Refiner.RefinePreciseMarkAsync(
             Math.Max(0, phraseAbs - _options.MarkLeadSeconds), file, info.InputDecoder,
-            // The marking being corrected already asserts which chapter this is, so a bare-number
+            // The mark being corrected already asserts which chapter this is, so a bare-number
             // refinement may take that number and no other - the tightest bound available anywhere,
             // and the one that keeps the onset walk off a year or quantity in the chapter's own
             // first sentence.
@@ -2177,39 +2177,39 @@ public sealed class ChapterDetector
             // region whose end would say where the music gives way to speech. Both are skipped, which
             // is the fraction of a second this mode trades away - see the remarks above.
             [], null, ct);
-        var shift = Math.Abs(refined.Mark - marking.StartSeconds);
+        var shift = Math.Abs(refined.Mark - mark.StartSeconds);
         if (shift < VerifyFixMinShiftSeconds)
             return null;
         if (shift > VerifyFixMaxShiftSeconds)
         {
             _log?.Invoke(
-                $"mark at {FormatTimestamp(marking.StartSeconds)} left alone - announcement " +
+                $"mark at {FormatTimestamp(mark.StartSeconds)} left alone - announcement " +
                 $"{shift:0.#} s away at {FormatTimestamp(refined.Mark)}, too far to be a mark " +
                 "that merely drifted");
             return null;
         }
-        _log?.Invoke($"mark at {FormatTimestamp(marking.StartSeconds)} corrected to " +
-                     $"{FormatTimestamp(refined.Mark)} ({refined.Mark - marking.StartSeconds:+0.##;-0.##} s)");
+        _log?.Invoke($"mark at {FormatTimestamp(mark.StartSeconds)} corrected to " +
+                     $"{FormatTimestamp(refined.Mark)} ({refined.Mark - mark.StartSeconds:+0.##;-0.##} s)");
         return refined.Mark;
     }
 
     /// <summary>
-    /// Resolves the language profile for a file from its pre-existing chapter markings, shared by
+    /// Resolves the language profile for a file from its pre-existing chapter marks, shared by
     /// <see cref="VerifyExistingChaptersAsync"/> and <see cref="ResumeMissingMarksAsync"/>. Neither
-    /// path has run a VAD pre-pass, so the markings stand in for it as
+    /// path has run a VAD pre-pass, so the marks stand in for it as
     /// <see cref="LanguageResolver"/>'s idea of where the narration is - see
-    /// <see cref="LanguageResolver.MarkingPositions"/>. Does not itself call
+    /// <see cref="LanguageResolver.ExistingMarkPositions"/>. Does not itself call
     /// <see cref="ITranscriber.ChangeLanguage"/> - every caller needs that applied at a slightly
     /// different point, so it is left to them.
     /// </summary>
     /// <param name="file">Path of the audio file.</param>
-    /// <param name="info">Probe result of the file, including its pre-existing chapter markings.</param>
+    /// <param name="info">Probe result of the file, including its pre-existing chapter marks.</param>
     /// <param name="ct">Cancellation token.</param>
-    private Task<LanguageState> ResolveProfileFromMarkingsAsync(
+    private Task<LanguageState> ResolveProfileFromExistingMarksAsync(
         string file, MediaInfo info, CancellationToken ct)
         => NewLanguageResolver().ResolveAsync(
             file, info,
-            LanguageResolver.MarkingPositions(info.ExistingChapters, info.DurationSeconds), ct);
+            LanguageResolver.ExistingMarkPositions(info.ExistingChapters, info.DurationSeconds), ct);
 
     /// <summary>
     /// Second-chance confirmation for a --verify window whose first-pass transcript missed the
@@ -2230,10 +2230,10 @@ public sealed class ChapterDetector
     /// <param name="windowLen">Length of that window in seconds.</param>
     /// <param name="segments">That window's first-pass transcript segments, window-relative.</param>
     /// <param name="profile">Language profile for phrase/number matching.</param>
-    /// <param name="expected">The chapter number this marking is expected to confirm.</param>
+    /// <param name="expected">The chapter number this mark is expected to confirm.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The confirming match in the outer window's own time base, or null when the phrase
-    /// was not found - the position being what <c>--verify --fix</c> corrects a marking to.</returns>
+    /// was not found - the position being what <c>--verify --fix</c> corrects a mark to.</returns>
     private async Task<PhraseMatch?> TryConfirmViaGapRetranscribeAsync(
         string file, MediaInfo info, double windowStart, double windowLen,
         List<TranscriptSegment> segments, LanguageProfile profile, int expected, CancellationToken ct)
@@ -2288,28 +2288,28 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
-    /// Extracts an expected chapter number from a pre-existing marking's title - see
-    /// <see cref="MarkingTitleNumber"/>, which owns the rules. Returns false when the title has no
-    /// readable number at all, which is a marking <c>--verify</c> can neither confirm nor fault and
+    /// Extracts an expected chapter number from a pre-existing mark's title - see
+    /// <see cref="ExistingMarkTitle"/>, which owns the rules. Returns false when the title has no
+    /// readable number at all, which is a mark <c>--verify</c> can neither confirm nor fault and
     /// a resume path has no chapter identity for.
     /// </summary>
-    /// <param name="title">The marking's title.</param>
+    /// <param name="title">The mark's title.</param>
     /// <param name="profile">The file's resolved language profile.</param>
     /// <param name="number">Receives the chapter number on success.</param>
     private static bool TryParseExpectedNumber(string title, LanguageProfile profile, out int number)
-        => MarkingTitleNumber.TryParse(title, profile, out number);
+        => ExistingMarkTitle.TryParse(title, profile, out number);
 
     /// <summary>
-    /// The 0-based chapter sequence a pre-existing marking's title puts it in - 0 unless a previous
+    /// The 0-based chapter sequence a pre-existing mark's title puts it in - 0 unless a previous
     /// run of this tool wrote a part prefix onto it (see
-    /// <see cref="MarkingTitleNumber.TryParsePart"/>). Both resume paths need it: without it a book
+    /// <see cref="ExistingMarkTitle.TryParsePart"/>). Both resume paths need it: without it a book
     /// in parts reads as a numbering that jumps backwards, and <see cref="Normalize"/> keeps one
     /// part and throws the rest of the file's committed marks away.
     /// </summary>
-    /// <param name="title">The marking's title.</param>
+    /// <param name="title">The mark's title.</param>
     /// <param name="profile">The file's resolved language profile.</param>
     private static int PartOf(string title, LanguageProfile profile)
-        => MarkingTitleNumber.TryParsePart(title, profile, out var part) ? part - 1 : 0;
+        => ExistingMarkTitle.TryParsePart(title, profile, out var part) ? part - 1 : 0;
 
     /// <summary>This file's language resolver, bound to the current <see cref="_log"/> so its probe
     /// lines land in the same sinks as the rest of the file's detection log.</summary>
@@ -2671,7 +2671,7 @@ public sealed class ChapterDetector
     /// <param name="match">The confirmed phrase match, in absolute file time.</param>
     /// <param name="transcript">The chunk the match was found in - its segments feed the VAD edge
     /// adjustment inside <see cref="ResolveJingleAnchor"/>, its span the jingle walk and precise
-    /// marking; see <see cref="MarkContext.Transcript"/>.</param>
+    /// mark; see <see cref="MarkContext.Transcript"/>.</param>
     /// <param name="found">Chapters found in this gap so far; appended to.</param>
     /// <param name="remaining">Still-missing chapter numbers for this gap; the match's number is
     /// removed from it. Null for an open-ended region, which keeps no such list.</param>

@@ -10,7 +10,7 @@ namespace ABChapterize.Detection;
 
 /// <summary>A detected chapter start: number plus position in the file.</summary>
 /// <param name="Number">Chapter number as spoken/parsed.</param>
-/// <param name="TimeSeconds">Position of the chapter marking in seconds.</param>
+/// <param name="TimeSeconds">Position of the chapter mark in seconds.</param>
 /// <param name="Confidence">Whisper's probability for the segment the chapter number was parsed
 /// from (0-1); 1.0 when unknown. Below <see cref="DetectionTuning.LowConfidenceThreshold"/> the
 /// number surfaces in <see cref="DetectionResult.LowConfidenceNumbers"/>.</param>
@@ -75,7 +75,7 @@ public readonly record struct DetectedChapter(
 /// with any capturing-group references already expanded against the match this mark came from.</param>
 /// <param name="TimeSeconds">Position of the mark in seconds.</param>
 /// <param name="Confidence">Whisper's probability for the segment the phrase was found in (0-1);
-/// 1.0 when unknown, e.g. for a mark carried over from a file's existing markings.</param>
+/// 1.0 when unknown, e.g. for a mark carried over from a file's existing ones.</param>
 /// <param name="PhraseTimeSeconds">Where the announcement itself was heard, as opposed to where the
 /// mark ended up after placement. Kept only so a repeatable phrase can tell one announcement heard
 /// twice by two overlapping probe windows from two genuine ones (see
@@ -85,7 +85,7 @@ public readonly record struct DetectedChapter(
 /// <c>--custom</c> cap can count what it caps without looking the phrase up again.</param>
 /// <param name="Text">The transcript segment the announcement was heard in (see
 /// <see cref="PhraseMatching.NamedMatch.Text"/>), or empty for a mark carried over from the file's
-/// existing markings, where nothing was heard at all. Kept for exactly one question, asked once per
+/// existing marks, where nothing was heard at all. Kept for exactly one question, asked once per
 /// file at the very end: whether a <c>--custom</c> mapping would have claimed the announcement of a
 /// built-in epilogue that is about to be dropped for sitting mid-book
 /// (<see cref="ChapterDetector.ResolveEpiloguePlacement"/>).</param>
@@ -185,53 +185,53 @@ public readonly record struct DetectionResult(
     int SequenceRestartSkips = 0, IReadOnlyList<int>? UnverifiedNumbers = null,
     int SequenceCount = 1);
 
-/// <summary>Outcome of checking one pre-existing chapter marking against the audio, in file order -
-/// the raw material <see cref="GapPlanning.BuildGapRegions"/> groups into gap-scoped recovery
-/// regions for <see cref="ChapterDetector.DetectGapsAsync"/>.</summary>
-/// <param name="StartSeconds">The marking's own pre-existing timestamp.</param>
-/// <param name="ExpectedNumber">The chapter number parsed from the marking's title, or null when
-/// its title had none (e.g. a prelude/intro entry) - such a marking counts neither as confirmed
+/// <summary>Outcome of checking one existing chapter mark against the audio, in file order - the
+/// raw material <see cref="GapPlanning.BuildGapRegions"/> groups into gap-scoped recovery regions
+/// for <see cref="ChapterDetector.DetectGapsAsync"/>.</summary>
+/// <param name="StartSeconds">The mark's own pre-existing timestamp.</param>
+/// <param name="ExpectedNumber">The chapter number parsed from the mark's title, or null when
+/// its title had none (e.g. a prelude/intro entry) - such a mark counts neither as confirmed
 /// nor as a gap boundary and is skipped when regions are built.</param>
-/// <param name="Confirmed">True when Whisper found the expected phrase near this marking.</param>
-/// <param name="CorrectedStartSeconds">Where <c>--fix</c> worked out this marking really belongs,
-/// or null when it was not asked to, could not confirm the marking, or found it already close
+/// <param name="Confirmed">True when Whisper found the expected phrase near this mark.</param>
+/// <param name="CorrectedStartSeconds">Where <c>--fix</c> worked out this mark really belongs,
+/// or null when it was not asked to, could not confirm the mark, or found it already close
 /// enough to be worth leaving alone (see
 /// <see cref="DetectionTuning.VerifyFixMinShiftSeconds"/>).</param>
-/// <param name="Sequence">Which chapter sequence the marking's title puts it in, 0-based - read
+/// <param name="Sequence">Which chapter sequence the mark's title puts it in, 0-based - read
 /// from the part prefix a previous run wrote (see <see cref="LanguageProfile.ChapterTitleFor"/>),
-/// and 0 for every marking of an ordinary book or of a file some other tool marked. Without it a
+/// and 0 for every mark of an ordinary book or of a file some other tool marked. Without it a
 /// book in parts would look like a numbering that jumps backwards twice, and
 /// <see cref="GapPlanning.BuildGapRegions"/> would bracket a recovery region between part 1's last
 /// chapter and part 2's first.</param>
-public readonly record struct VerifyMarkingOutcome(
+public readonly record struct ExistingMarkOutcome(
     double StartSeconds, int? ExpectedNumber, bool Confirmed, double? CorrectedStartSeconds = null,
     int Sequence = 0);
 
-/// <summary>Outcome of checking pre-existing chapter markings against the audio (--verify).</summary>
-/// <param name="Passed">True when every checkable marking was confirmed; also true when none of the
-/// file's markings had a parseable expected number (nothing to disprove).</param>
-/// <param name="Checked">Number of markings that had a parseable expected number and were actually
-/// probed. Markings without one (e.g. a prelude/intro entry) are not counted.</param>
+/// <summary>Outcome of checking a file's existing chapter marks against the audio (--verify).</summary>
+/// <param name="Passed">True when every checkable mark was confirmed; also true when none of the
+/// file's marks had a parseable expected number (nothing to disprove).</param>
+/// <param name="Checked">Number of existing marks that had a parseable expected number and were
+/// actually probed. Ones without it (e.g. a prelude/intro entry) are not counted.</param>
 /// <param name="Failed">Of <paramref name="Checked"/>, how many could not be confirmed.</param>
-/// <param name="ConfirmedChapters">The confirmed markings, trusted and importable directly as
+/// <param name="ConfirmedChapters">The confirmed marks, trusted and importable directly as
 /// detected chapters - the seed <see cref="ChapterDetector.DetectGapsAsync"/> builds on instead of
 /// redetecting them.</param>
-/// <param name="Markings">Every marking's own outcome, in file order - the input to
+/// <param name="Outcomes">Every existing mark's own outcome, in file order - the input to
 /// <see cref="GapPlanning.BuildGapRegions"/>.</param>
 /// <param name="Profile">The language profile resolved while verifying (or the run's fixed
 /// <see cref="CliOptions.DefaultProfile"/> when nothing needed resolving); reused as-is by
 /// <see cref="ChapterDetector.DetectGapsAsync"/> so gap recovery never re-resolves the language.</param>
 /// <param name="DetectedLanguage">Whisper's raw language guess with <c>--lang auto</c>; null when
-/// auto-detection was not active or every marking's window was empty.</param>
+/// auto-detection was not active or every existing mark's window was empty.</param>
 /// <param name="DetectedProbability">Whisper's probability for <paramref name="DetectedLanguage"/>;
 /// 0 when that is null.</param>
-/// <param name="NamedMarks">Pre-existing markings recognized as this file's prologue/epilogue by
-/// their title, carried over verbatim so a gap recovery that rewrites the whole marking set does
+/// <param name="NamedMarks">Existing marks recognized as this file's prologue/epilogue by
+/// their title, carried over verbatim so a gap recovery that rewrites the whole mark set does
 /// not silently drop them - they have no chapter number, so nothing else would ever notice they
 /// were gone. Null (rather than empty) when nothing was recognized, so the common case allocates
 /// nothing.</param>
 public readonly record struct VerifyResult(
     bool Passed, int Checked, int Failed,
-    IReadOnlyList<DetectedChapter> ConfirmedChapters, IReadOnlyList<VerifyMarkingOutcome> Markings,
+    IReadOnlyList<DetectedChapter> ConfirmedChapters, IReadOnlyList<ExistingMarkOutcome> Outcomes,
     LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability,
     IReadOnlyList<DetectedMark>? NamedMarks = null);
