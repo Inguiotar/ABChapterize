@@ -1159,8 +1159,8 @@ The outcome is shown in the per-file result line, `--dry-run` listing and
 
 ```
 Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070, auto language detection), 2 file(s) to process.
-buch.m4b: 12 chapter(s) written (1-12) + intro, language: de (p=1.00)
-book.m4b: 8 chapter(s) written (1-8) + intro, language: en (p=0.98)
+buch.m4b: 13 mark(s) written (12 chapter(s) 1-12, 1 named), language: de (p=1.00)
+book.m4b: 9 mark(s) written (8 chapter(s) 1-8, 1 named), language: en (p=0.98)
 ```
 
 `--verbose` additionally logs the detection as it happens:
@@ -1661,7 +1661,7 @@ The details worth knowing:
   written, with its exact timestamp and title:
 
   ```
-  My Audiobook.m4b: DRY RUN - would write 23 chapter(s) (1-23) + intro:
+  My Audiobook.m4b: DRY RUN - would write 24 mark(s) (23 chapter(s) 1-23, 1 named):
     0:00:00.00  Intro
     0:01:23.45  Chapter 1
     0:15:42.10  Chapter 2
@@ -2276,7 +2276,7 @@ chapter state) that is replaced by a one-line result when the file is
 done:
 
 ```
-My Audiobook.m4b: 23 chapter(s) written (1-23) + intro
+My Audiobook.m4b: 24 mark(s) written (23 chapter(s) 1-23, 1 named)
 ```
 
 The chapter state reads `----` until the first mark is confirmed (all

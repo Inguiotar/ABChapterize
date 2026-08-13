@@ -128,7 +128,7 @@ Then the audiobook is scanned and the chapter marks are written:
 
 ```
 Whisper model "small" loaded (Vulkan backend on NVIDIA GeForce GTX 1070, auto language detection), pass 3 model "turbo" (loaded on first use), 1 file(s) to process.
-My Audiobook.m4b: 23 chapter(s) written (1-23) + intro, language: en (p=1.00)
+My Audiobook.m4b: 24 mark(s) written (23 chapter(s) 1-23, 1 named), language: en (p=1.00)
 ```
 
 Want to be extra careful on the first try? Use `--backup` — the original file

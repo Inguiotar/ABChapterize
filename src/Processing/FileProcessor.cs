@@ -489,10 +489,9 @@ public sealed class FileProcessor
     /// <param name="namedMarkDistanceSeconds">How close a named mark may come to a chapter before
     /// the two are written as one entry (<see cref="CliOptions.NamedMarkDistanceSeconds"/>); 0
     /// leaves every mark where it is.</param>
-    /// <returns>The chapters to write, a note (" + intro" or "") for the summary line, and how many
-    /// named marks were merged away - which only the caller reporting named marks at all has any
-    /// use for.</returns>
-    internal static (List<Chapter> Chapters, string IntroNote, int MergedNamedMarks) BuildChapters(
+    /// <returns>The chapters to write, and how many named marks were merged away - which only the
+    /// caller reporting named marks at all has any use for.</returns>
+    internal static (List<Chapter> Chapters, int MergedNamedMarks) BuildChapters(
         DetectionResult result, double namedMarkDistanceSeconds)
     {
         // A named mark sharing a chapter's exact timestamp sorts after it, so a prologue heard in
@@ -506,11 +505,8 @@ public sealed class FileProcessor
         var merged = MergeCrowdedNamedMarks(entries, namedMarkDistanceSeconds);
         var chapters = entries.Select(e => new Chapter(e.TimeSeconds, e.Title)).ToList();
         if (chapters.Count > 0 && chapters[0].StartSeconds > 0 && result.LeadInHasSpeech)
-        {
             chapters.Insert(0, new Chapter(0, result.Profile.IntroTitle));
-            return (chapters, " + intro", merged);
-        }
-        return (chapters, "", merged);
+        return (chapters, merged);
     }
 
     /// <summary>One mark on its way into the written chapter list, while it is still known where it
@@ -715,7 +711,7 @@ public sealed class FileProcessor
 
         if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
             return null;
-        var (result, discardNote) = outcome;
+        var (result, dropped, note) = outcome;
 
         RecordProcessed(watch);
         _runStats.AccumulateStats(result.Stats, ctx.Info.DurationSeconds);
@@ -728,7 +724,7 @@ public sealed class FileProcessor
             ReportNoChaptersFound(ctx, result);
             return null;
         }
-        return await WriteDetectedChaptersAsync(ctx, result, discardNote, ct);
+        return await WriteDetectedChaptersAsync(ctx, result, dropped, note, ct);
     }
 
     /// <summary>Probes a file and emits the one-line --verbose note describing what came back.
@@ -797,11 +793,11 @@ public sealed class FileProcessor
         _runStats.AccumulateStats(resumed.Stats, ctx.Info.DurationSeconds);
         ctx.Logs.Write(FormatFileStats(resumed.Stats, ctx.Info.DurationSeconds));
         _runStats.AccumulateConfidence(resumed.Chapters);
-        var (chapters, introNote, _) = BuildChapters(resumed, _options.NamedMarkDistanceSeconds);
+        var (chapters, _) = BuildChapters(resumed, _options.NamedMarkDistanceSeconds);
 
         return resumed.GapRemains
-            ? await ReportIncompleteResumeAsync(ctx, resumed, chapters, introNote, ct)
-            : await ReportCompleteResumeAsync(ctx, resumed, chapters, introNote, ct);
+            ? await ReportIncompleteResumeAsync(ctx, resumed, chapters, ct)
+            : await ReportCompleteResumeAsync(ctx, resumed, chapters, ct);
     }
 
     /// <summary>Commits a resume that did not find everything: the marks so far are written and
@@ -810,11 +806,10 @@ public sealed class FileProcessor
     /// <param name="ctx">The file's context.</param>
     /// <param name="resumed">The resume's detection result.</param>
     /// <param name="chapters">The titled chapters to write.</param>
-    /// <param name="introNote">Note from <see cref="BuildChapters"/> about a prepended intro.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The name the file was re-tagged with, or null under --dry-run.</returns>
     private async Task<string?> ReportIncompleteResumeAsync(
-        FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
+        FileContext ctx, DetectionResult resumed, List<Chapter> chapters, CancellationToken ct)
     {
         _warnings++;
         var retarget = MissingMarksTag.PathFor(ctx.File, resumed.MissingNumbers);
@@ -825,7 +820,7 @@ public sealed class FileProcessor
         {
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - resume incomplete, still missing: {stillMissing}; would write " +
-                $"{resumed.Chapters.Count} partial mark(s){introNote} and re-tag as " +
+                $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")} and re-tag as " +
                 $"{Path.GetFileName(retarget)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
             return null;
@@ -833,7 +828,7 @@ public sealed class FileProcessor
         var backupNote = await CommitChaptersAsync(ctx, chapters, retarget, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
-            $"{resumed.Chapters.Count} partial mark(s){introNote}, re-tagged as " +
+            $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")}, re-tagged as " +
             $"{Path.GetFileName(retarget)}{backupNote}", important: true);
         return retarget;
     }
@@ -843,30 +838,29 @@ public sealed class FileProcessor
     /// <param name="ctx">The file's context.</param>
     /// <param name="resumed">The resume's detection result.</param>
     /// <param name="chapters">The titled chapters to write.</param>
-    /// <param name="introNote">Note from <see cref="BuildChapters"/> about a prepended intro.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The original name the file was restored to, or null under --dry-run.</returns>
     private async Task<string?> ReportCompleteResumeAsync(
-        FileContext ctx, DetectionResult resumed, List<Chapter> chapters, string introNote, CancellationToken ct)
+        FileContext ctx, DetectionResult resumed, List<Chapter> chapters, CancellationToken ct)
     {
         var restored = MissingMarksTag.StripFrom(ctx.File);
         RecordLowConfidence(ctx, resumed, restored);
         // Through FormatWrittenCount rather than indexing the chapter list directly: a tagged file
         // whose markings have since been stripped by hand resumes with nothing to seed from and
         // nothing to find, and reaches here with an empty list rather than a completed sequence.
-        var written = FormatWrittenCount(resumed);
+        var written = FormatWrittenCount(resumed, chapters, "mark(s) written");
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
-                $"{ctx.Name}: DRY RUN - resume complete, all chapters found; would write {written}" +
-                $"{introNote} and rename to {Path.GetFileName(restored)}:" +
+                $"{ctx.Name}: DRY RUN - resume complete, all chapters found; would write " +
+                $"{FormatWrittenCount(resumed, chapters)} and rename to {Path.GetFileName(restored)}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
         var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
-            $"{ctx.Name}: resume complete - {written} written" +
-            $"{introNote}, renamed to {Path.GetFileName(restored)}{backupNote}");
+            $"{ctx.Name}: resume complete - {written}" +
+            $", renamed to {Path.GetFileName(restored)}{backupNote}");
         return restored;
     }
 
@@ -882,12 +876,12 @@ public sealed class FileProcessor
     /// <returns>The detection result and the note describing what happened to any existing
     /// markings, or null when the file was skipped - in which case it has already been counted
     /// and reported.</returns>
-    private async Task<(DetectionResult Result, string DiscardNote)?> DetectChaptersAsync(
+    private async Task<(DetectionResult Result, DroppedMarkings Dropped, string Note)?> DetectChaptersAsync(
         FileContext ctx, ChapterDetector detector, CancellationToken ct)
     {
-        var (skip, discardNote) = EvaluateExistingChapters(ctx.Info);
+        var (skip, dropped) = EvaluateExistingChapters(ctx.Info);
         if (!skip)
-            return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), discardNote);
+            return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), dropped, "");
         if (_options.Verify)
             return await VerifyThenDetectAsync(ctx, detector, ct);
 
@@ -925,7 +919,7 @@ public sealed class FileProcessor
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detection result and its discard note, or null when the file was left
     /// unchanged - in which case it has already been counted and reported.</returns>
-    private async Task<(DetectionResult Result, string DiscardNote)?> VerifyThenDetectAsync(
+    private async Task<(DetectionResult Result, DroppedMarkings Dropped, string Note)?> VerifyThenDetectAsync(
         FileContext ctx, ChapterDetector detector, CancellationToken ct)
     {
         var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
@@ -960,7 +954,8 @@ public sealed class FileProcessor
         // chapter, Pass 3); everything else in the file is left exactly as --verify found it.
         var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
                           $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
-        return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct), trustedNote);
+        return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct),
+                default, trustedNote);
     }
 
     /// <summary>
@@ -981,7 +976,7 @@ public sealed class FileProcessor
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Always null: the file is finished here, and the caller's detection path must not
     /// run for it.</returns>
-    private async Task<(DetectionResult Result, string DiscardNote)?> ApplyMarkingFixesAsync(
+    private async Task<(DetectionResult Result, DroppedMarkings Dropped, string Note)?> ApplyMarkingFixesAsync(
         FileContext ctx, VerifyResult verify, CancellationToken ct)
     {
         var corrections = verify.Markings
@@ -1059,7 +1054,7 @@ public sealed class FileProcessor
     {
         _warnings++;
         _runStats.AccumulateConfidence(result.Chapters);
-        var (chapters, introNote, _) = BuildChapters(result, _options.NamedMarkDistanceSeconds);
+        var (chapters, _) = BuildChapters(result, _options.NamedMarkDistanceSeconds);
         var target = MissingMarksTag.PathFor(ctx.File, result.MissingNumbers);
         var missingList = MissingMarksTag.FormatList(result.MissingNumbers);
         RecordStillMissing(ctx, target, result.MissingNumbers);
@@ -1068,7 +1063,7 @@ public sealed class FileProcessor
         {
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - unresolved chapter sequence gap (missing: {missingList}); " +
-                $"would write {result.Chapters.Count} partial mark(s){introNote} and rename to " +
+                $"would write {FormatWrittenCount(result, chapters, "partial mark(s)")} and rename to " +
                 $"{Path.GetFileName(target)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
             return null;
@@ -1076,7 +1071,7 @@ public sealed class FileProcessor
         var backupNote = await CommitChaptersAsync(ctx, chapters, target, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
-            $"wrote {result.Chapters.Count} partial mark(s){introNote}, renamed to " +
+            $"wrote {FormatWrittenCount(result, chapters, "partial mark(s)")}, renamed to " +
             $"{Path.GetFileName(target)}{backupNote}", important: true);
         return target;
     }
@@ -1148,19 +1143,25 @@ public sealed class FileProcessor
     /// file name, and prints the file's summary line.</summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="result">The file's detection result.</param>
-    /// <param name="discardNote">Note about any pre-existing markings that were discarded.</param>
+    /// <param name="dropped">The markings the file arrived with that this run threw away, stated
+    /// before anything else on the line: what a file <em>had</em> and what it now has are different
+    /// questions, and the second is unreadable while the first is buried among the notes.</param>
+    /// <param name="note">Anything the path that produced this result wants said about the
+    /// markings the file arrived with but did <em>not</em> lose - --verify's trusted ones. Empty
+    /// for an ordinary run.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The original name the file was restored to when this run completed a previously
     /// tagged one, or null when it kept the name it came in under.</returns>
     private async Task<string?> WriteDetectedChaptersAsync(
-        FileContext ctx, DetectionResult result, string discardNote, CancellationToken ct)
+        FileContext ctx, DetectionResult result, DroppedMarkings dropped, string note,
+        CancellationToken ct)
     {
         _runStats.AccumulateConfidence(result.Chapters);
-        var (chapters, introNote, merged) = BuildChapters(result, _options.NamedMarkDistanceSeconds);
-        var notes = introNote + discardNote + FormatNamedMarksNote(result, merged) + FormatLowConfidenceNote(result) +
+        var (chapters, merged) = BuildChapters(result, _options.NamedMarkDistanceSeconds);
+        var notes = note + FormatNamedMarksNote(result, merged) + FormatLowConfidenceNote(result) +
                     FormatSequenceRestartNote(result) + FormatUnverifiedNumbersNote(result) +
                     FormatLanguageNote(result) + await ExportSidecarAsync(ctx, chapters, ct);
-        var what = FormatWrittenCount(result);
+        var what = FormatWrittenCount(result, chapters, "mark(s) written");
         // A low-confidence mark is worth surfacing above the progress bar; so is a book that gave up
         // most of its chapters to a restarting sequence, which is otherwise indistinguishable from
         // one that simply ends early, and so is a number nothing could corroborate, whose whole
@@ -1180,46 +1181,71 @@ public sealed class FileProcessor
         {
             var wouldRename = restored != null ? $" and rename to {Path.GetFileName(restored)}" : "";
             _progress.FinishWithSummary(ctx.Work,
-                $"{ctx.Name}: DRY RUN - would write {what}{notes}{wouldRename}:" +
+                $"{ctx.Name}: DRY RUN - would {DescribeDropped(dropped, prospective: true)}" +
+                $"write {FormatWrittenCount(result, chapters)}{notes}{wouldRename}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}", important);
             return null;
         }
         var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
-            $"{ctx.Name}: {what} written{notes}{renameNote}{backupNote}", important);
+            $"{ctx.Name}: {DescribeDropped(dropped, prospective: false)}{what}" +
+            $"{notes}{renameNote}{backupNote}", important);
         return restored;
     }
 
-    /// <summary>What the summary line calls the marks this file yielded: the numbered chapters with
-    /// their range, or - when the run produced no numbered chapter, either because the book had
-    /// none or because --ignore-chapter-numbers puts them all in the named list - the named marks
-    /// on their own.</summary>
-    /// <param name="result">The file's detection result.</param>
-    private static string FormatWrittenCount(DetectionResult result)
-        => result.Chapters.Count > 0
-            ? $"{result.Chapters.Count} chapter(s) " +
-              $"({result.Chapters[0].Number}-{result.Chapters[^1].Number})"
-            : $"{result.NamedMarks.Count} mark(s)";
+    /// <summary>
+    /// What the summary line calls the marks this file yielded: how many entries were written, and
+    /// in brackets how that splits into numbered chapters (with their range) and named ones.
+    /// <para>
+    /// Counted off the built list rather than off the detection result, so the total is what the
+    /// file actually receives: the intro counts as a named mark, and a named mark folded into a
+    /// chapter's title (see <see cref="MergeCrowdedNamedMarks"/>) counts as nothing, being no entry
+    /// of its own. A component that comes to zero is left out rather than printed - a book with no
+    /// named marks should not have to say so, and under --ignore-chapter-numbers there are no
+    /// numbered chapters to report at all.
+    /// </para>
+    /// </summary>
+    /// <param name="result">The file's detection result, for the numbered chapters and their range.</param>
+    /// <param name="written">The entries actually being written, intro and named marks included.</param>
+    /// <param name="noun">What to call the entries - "mark(s)", or "partial mark(s)" where the
+    /// sequence is known to be incomplete.</param>
+    private static string FormatWrittenCount(
+        DetectionResult result, List<Chapter> written, string noun = "mark(s)")
+    {
+        var numbered = result.Chapters.Count;
+        var parts = new List<string>();
+        if (numbered > 0)
+        {
+            var (first, last) = (result.Chapters[0].Number, result.Chapters[^1].Number);
+            parts.Add($"{numbered} chapter(s) {first}" + (last != first ? $"-{last}" : ""));
+        }
+        if (written.Count - numbered > 0)
+            parts.Add($"{written.Count - numbered} named");
+        return $"{written.Count} {noun}" + (parts.Count > 0 ? $" ({string.Join(", ", parts)})" : "");
+    }
 
-    /// <summary>Note counting the prologue/epilogue/--custom marks written alongside the numbered
-    /// chapters, and flagging a file that hit the per-file --custom cap: marks the user asked for
-    /// were dropped there, which would otherwise look exactly like a mapping that stopped matching
-    /// halfway through the book. Empty when neither applies.</summary>
+    /// <summary>Note about the named marks that are not entries of their own: the ones folded into
+    /// a neighbouring chapter's title, and a file that hit the per-file --custom cap - marks the
+    /// user asked for were dropped there, which would otherwise look exactly like a mapping that
+    /// stopped matching halfway through the book. Empty when neither applies.
+    /// <para>
+    /// The named marks that <em>were</em> written are counted by <see cref="FormatWrittenCount"/>
+    /// instead, which is the one place the file's marks are broken down.
+    /// </para>
+    /// </summary>
     /// <param name="result">The file's detection result.</param>
     /// <param name="merged">How many of the named marks were folded into a chapter's title rather
     /// than written as entries of their own (see <see cref="MergeCrowdedNamedMarks"/>). Reported
-    /// because the count above would otherwise promise entries the listing does not have.</param>
+    /// because they are in neither number the summary line prints.</param>
     private static string FormatNamedMarksNote(DetectionResult result, int merged)
     {
         var limitNote = result.CustomMarkLimitHit
             ? $", custom-mark limit of {DetectionTuning.MaxCustomMarksPerFile} reached - further matches dropped"
             : "";
         var mergedNote = merged > 0
-            ? $" ({merged} of them merged into a neighbouring chapter's title)"
+            ? $", {merged} named mark(s) merged into a neighbouring chapter's title"
             : "";
-        return result.Chapters.Count > 0 && result.NamedMarks.Count > 0
-            ? $", {result.NamedMarks.Count} named mark(s){mergedNote}{limitNote}"
-            : limitNote;
+        return mergedNote + limitNote;
     }
 
     /// <summary>Note naming the marks Whisper was unsure about, so they can be spot-checked;
@@ -1336,19 +1362,41 @@ public sealed class FileProcessor
     /// discarded even without --force.
     /// </summary>
     /// <param name="info">Probed media info of the file being processed.</param>
-    /// <returns>Whether the file should be skipped, and a note describing discarded markings.</returns>
-    private (bool Skip, string DiscardNote) EvaluateExistingChapters(MediaInfo info)
+    /// <returns>Whether the file should be skipped, and what it arrived carrying.</returns>
+    private (bool Skip, DroppedMarkings Dropped) EvaluateExistingChapters(MediaInfo info)
     {
         if (info.ChapterCount == 0)
-            return (false, "");
+            return (false, default);
         var bogus = _options.MaxChapters is { } max && info.ChapterCount > max;
         if (!_options.Force && !bogus)
-            return (true, "");
-        var discardNote = bogus && !_options.Force
-            ? $", {info.ChapterCount} bogus marking(s) discarded (> --max-chapters)"
-            : $", {info.ChapterCount} existing marking(s) discarded";
-        return (false, discardNote);
+            return (true, default);
+        return (false, new DroppedMarkings(info.ChapterCount, bogus && !_options.Force));
     }
+
+    /// <summary>The markings a file arrived with that this run threw away, carried as numbers
+    /// rather than as finished text so the same fact can be stated in either mood - a dry run has
+    /// dropped nothing yet.</summary>
+    /// <param name="Count">How many markings the file had; 0 for the ordinary unmarked file.</param>
+    /// <param name="Bogus">Whether they were discarded for exceeding --max-chapters rather than
+    /// because --force said to replace them.</param>
+    private readonly record struct DroppedMarkings(int Count, bool Bogus);
+
+    /// <summary>
+    /// How the summary line opens on a file that arrived already marked: the count first, before
+    /// anything this run produced, because "23 marks" reads very differently on a file that had
+    /// none and on one that had 40 thrown away to get there. Empty for a file that had none, which
+    /// is the ordinary case and needs no words.
+    /// </summary>
+    /// <param name="dropped">What the file arrived carrying.</param>
+    /// <param name="prospective">True under --dry-run, where nothing has been dropped yet and the
+    /// caller supplies the "would" this fragment then continues.</param>
+    private static string DescribeDropped(DroppedMarkings dropped, bool prospective)
+        => dropped.Count == 0
+            ? ""
+            : (prospective ? "drop " : "") +
+              $"{dropped.Count} {(dropped.Bogus ? "bogus" : "existing")} marking(s)" +
+              (dropped.Bogus ? " (> --max-chapters)" : "") +
+              (prospective ? " and " : " dropped, ");
 
     /// <summary>
     /// Processes a single audiobook file in --import mode: reads its sidecar file and
@@ -1404,7 +1452,7 @@ public sealed class FileProcessor
 
         var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
 
-        var (skip, discardNote) = EvaluateExistingChapters(info);
+        var (skip, dropped) = EvaluateExistingChapters(info);
         if (skip)
         {
             ReportSkipped(work, name, $"has {info.ChapterCount} chapter marking(s)");
@@ -1420,8 +1468,8 @@ public sealed class FileProcessor
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(work,
-                $"{name}: DRY RUN - would import {chapters.Count} chapter(s) from " +
-                $"{Path.GetFileName(sidecarPath)}{discardNote}:" +
+                $"{name}: DRY RUN - would {DescribeDropped(dropped, prospective: true)}" +
+                $"import {chapters.Count} chapter(s) from {Path.GetFileName(sidecarPath)}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return;
         }
@@ -1429,8 +1477,8 @@ public sealed class FileProcessor
         var backupNote = await CommitChaptersAsync(
             new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), chapters, null, ct);
         _progress.FinishWithSummary(work,
-            $"{name}: {chapters.Count} chapter(s) imported from {Path.GetFileName(sidecarPath)}" +
-            $"{discardNote}{backupNote}");
+            $"{name}: {DescribeDropped(dropped, prospective: false)}{chapters.Count} chapter(s) " +
+            $"imported from {Path.GetFileName(sidecarPath)}{backupNote}");
     }
 
     /// <summary>

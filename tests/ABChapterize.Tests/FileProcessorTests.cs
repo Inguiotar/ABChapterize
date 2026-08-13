@@ -46,26 +46,21 @@ public sealed class FileProcessorTests : IDisposable
     /// drops the merge count with it.</summary>
     /// <param name="result">The detection result to lay out.</param>
     /// <param name="namedMarkDistanceSeconds">--named-mark-distance, off by default here.</param>
-    private static (List<Chapter> Chapters, string Note) Build(
-        DetectionResult result, double namedMarkDistanceSeconds = 0)
-    {
-        var (chapters, note, _) = FileProcessor.BuildChapters(result, namedMarkDistanceSeconds);
-        return (chapters, note);
-    }
+    private static List<Chapter> Build(DetectionResult result, double namedMarkDistanceSeconds = 0)
+        => FileProcessor.BuildChapters(result, namedMarkDistanceSeconds).Chapters;
 
     [Fact]
     public void BuildChapters_InsertsIntro_WhenFirstChapterStartsPastZero()
     {
-        var (chapters, note) = Build(Result([new(1, 30)]));
+        var chapters = Build(Result([new(1, 30)]));
 
         Assert.Equal([new Chapter(0, "Intro"), new Chapter(30, "Chapter 1")], chapters);
-        Assert.Equal(" + intro", note);
     }
 
     [Fact]
     public void BuildChapters_InterleavesNamedMarksByTime()
     {
-        var (chapters, note) = Build(Result(
+        var chapters = Build(Result(
             [new(1, 300), new(2, 900)],
             named: [new("prologue", "Prologue", 30), new("epilogue", "Epilogue", 1500)]));
 
@@ -73,7 +68,6 @@ public sealed class FileProcessorTests : IDisposable
             [new Chapter(0, "Intro"), new Chapter(30, "Prologue"), new Chapter(300, "Chapter 1"),
              new Chapter(900, "Chapter 2"), new Chapter(1500, "Epilogue")],
             chapters);
-        Assert.Equal(" + intro", note);
     }
 
     [Fact]
@@ -81,7 +75,7 @@ public sealed class FileProcessorTests : IDisposable
     {
         // Both announced in one breath: the numbered entry is the one a player scrubs by, so it
         // must not be pushed behind the prologue that shares its timestamp.
-        var (chapters, _) = Build(Result(
+        var chapters = Build(Result(
             [new(1, 300)], named: [new("prologue", "Prologue", 300)]));
 
         Assert.Equal(
@@ -92,30 +86,27 @@ public sealed class FileProcessorTests : IDisposable
     [Fact]
     public void BuildChapters_OmitsIntro_WhenANamedMarkAlreadyStartsAtZero()
     {
-        var (chapters, note) = Build(Result(
+        var chapters = Build(Result(
             [new(1, 300)], named: [new("prologue", "Prologue", 0)]));
 
         Assert.Equal([new Chapter(0, "Prologue"), new Chapter(300, "Chapter 1")], chapters);
-        Assert.Equal("", note);
     }
 
     [Fact]
     public void BuildChapters_InsertsIntro_ForASubSecondGap()
     {
         // The old 1.0 s grace period is gone: any nonzero gap gets its own Intro entry now.
-        var (chapters, note) = Build(Result([new(1, 0.5)]));
+        var chapters = Build(Result([new(1, 0.5)]));
 
         Assert.Equal([new Chapter(0, "Intro"), new Chapter(0.5, "Chapter 1")], chapters);
-        Assert.Equal(" + intro", note);
     }
 
     [Fact]
     public void BuildChapters_OmitsIntro_WhenFirstChapterStartsExactlyAtZero()
     {
-        var (chapters, note) = Build(Result([new(1, 0)]));
+        var chapters = Build(Result([new(1, 0)]));
 
         Assert.Equal([new Chapter(0, "Chapter 1")], chapters);
-        Assert.Equal("", note);
     }
 
     [Fact]
@@ -124,20 +115,18 @@ public sealed class FileProcessorTests : IDisposable
         // A jingle, music or silence-only lead-in with no actual spoken prelude: even several
         // minutes in, there is nothing to give its own "Intro" entry - the mp4 muxer's own
         // start-snap absorbs the lead-in into chapter 1 instead.
-        var (chapters, note) = Build(Result([new(1, 180)], leadInHasSpeech: false));
+        var chapters = Build(Result([new(1, 180)], leadInHasSpeech: false));
 
         Assert.Equal([new Chapter(180, "Chapter 1")], chapters);
-        Assert.Equal("", note);
     }
 
     [Fact]
     public void BuildChapters_MergesACloseNamedMarkIntoTheChapterTitle()
     {
-        var (chapters, note, merged) = FileProcessor.BuildChapters(
+        var (chapters, merged) = FileProcessor.BuildChapters(
             Result([new(10, 900)], named: [new("custom 1", "Interlude", 895)]), 10);
 
         Assert.Equal([new Chapter(0, "Intro"), new Chapter(900, "Chapter 10 (Interlude)")], chapters);
-        Assert.Equal(" + intro", note);
         Assert.Equal(1, merged);
     }
 
@@ -146,7 +135,7 @@ public sealed class FileProcessorTests : IDisposable
     {
         // The option names the distance a mark may keep and stay its own entry, so the boundary
         // itself is far enough.
-        var (chapters, _, merged) = FileProcessor.BuildChapters(
+        var (chapters, merged) = FileProcessor.BuildChapters(
             Result([new(10, 900)], named: [new("custom 1", "Interlude", 890)]), 10);
 
         Assert.Equal(
@@ -158,7 +147,7 @@ public sealed class FileProcessorTests : IDisposable
     [Fact]
     public void BuildChapters_MergesNothing_WhenTheDistanceIsZero()
     {
-        var (chapters, _, merged) = FileProcessor.BuildChapters(
+        var (chapters, merged) = FileProcessor.BuildChapters(
             Result([new(10, 900)], named: [new("custom 1", "Interlude", 899.9)]), 0);
 
         Assert.Equal(
@@ -170,7 +159,7 @@ public sealed class FileProcessorTests : IDisposable
     [Fact]
     public void BuildChapters_MergesSeveralNamedMarksIntoOneTitle_InFileOrder()
     {
-        var (chapters, _, merged) = FileProcessor.BuildChapters(
+        var (chapters, merged) = FileProcessor.BuildChapters(
             Result([new(10, 900)],
                 named: [new("custom 2", "Zeittafel", 903), new("custom 1", "Interlude", 897)]), 10);
 
@@ -183,7 +172,7 @@ public sealed class FileProcessorTests : IDisposable
     [Fact]
     public void BuildChapters_MergesIntoTheNearerOfTwoChapters()
     {
-        var (chapters, _, _) = FileProcessor.BuildChapters(
+        var (chapters, _) = FileProcessor.BuildChapters(
             Result([new(10, 900), new(11, 906)], named: [new("custom 1", "Interlude", 904)]), 10);
 
         Assert.Equal(
@@ -197,7 +186,7 @@ public sealed class FileProcessorTests : IDisposable
     {
         // With --ignore-chapter-numbers the chapters are themselves named marks, and an interlude
         // beside one still belongs to it.
-        var (chapters, _, merged) = FileProcessor.BuildChapters(
+        var (chapters, merged) = FileProcessor.BuildChapters(
             Result([], named:
             [
                 new(_profile.ChapterAnnouncement.Kind, "Chapter 10", 900),
@@ -211,10 +200,9 @@ public sealed class FileProcessorTests : IDisposable
     [Fact]
     public void BuildChapters_ReturnsEmpty_WhenNoChaptersWereFound()
     {
-        var (chapters, note) = Build(Result([]));
+        var chapters = Build(Result([]));
 
         Assert.Empty(chapters);
-        Assert.Equal("", note);
     }
 
     /// <summary>Builds a <see cref="VerifyResult"/> with the given confirmed/failed counts, which is

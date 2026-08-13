@@ -43,6 +43,13 @@ earn a round number.
 
 ### Changed
 
+- **A file's result line groups its marks.** It now opens with what the file arrived carrying
+  and lost — `3 existing marking(s) dropped` — and then states the total written, with the
+  split in brackets: `24 mark(s) written (23 chapter(s) 1-23, 1 named)`. The named count
+  covers everything that is not a numbered chapter: intro, prologue, epilogue and `--custom`
+  marks alike, which used to be spread over a `+ intro` suffix and a separate note further
+  along the line.
+
 - **The cheap gap re-probe stops as soon as the gap is closed.** It used to walk the rest of
   the gap after finding the last chapter that was missing from it, re-detecting that same
   chapter from every window that overlapped it and discarding the duplicates. On a gap that
