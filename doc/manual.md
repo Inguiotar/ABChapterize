@@ -459,11 +459,11 @@ exactly as after a failed `--verify` (see
 sequence, the file is renamed back to its original name; if a gap is still
 unresolved, it is re-tagged with the (possibly shorter) remaining list.
 `--force` bypasses this and redoes the file from scratch instead, discarding
-every existing marking including the partial ones.
+every existing mark including the partial ones.
 
 An unnumbered tagged file is never picked up automatically, so redoing it means
 `--force` (or `--verify`, or a `--max-chapters` low enough to condemn its
-partial markings). Whichever way it happens, *any* run that ends with a
+partial marks). Whichever way it happens, *any* run that ends with a
 complete chapter sequence takes the tag off again and gives the file its own
 name back — the tag records work still to be done, and there is none left.
 With `--debug`, the log written beside the file follows it to that name,
@@ -1767,8 +1767,8 @@ The details worth knowing:
   Total time: 1:42:07, average per processed file: 34:02
   Confidence of written chapter marks: min 0.71, max 0.99, avg 0.94
   Skipped 2 file(s):
-    Stalker.m4b: has 30 chapter marking(s)
-    Wintersmith.m4b: 14 pre-existing chapter marking(s) verified correct
+    Stalker.m4b: has 30 chapter mark(s)
+    Wintersmith.m4b: 14 pre-existing chapter mark(s) verified correct
   No chapters found in 1 file(s):
     Interview.mp3: no chapter phrases found
   Still missing chapter marks in 1 file(s):
@@ -2428,7 +2428,7 @@ jumping once per finished chunk — so a long gap keeps showing that something
 is happening throughout.
 
 Once detection finishes, the bar switches to a final `Muxing...` phase while
-the chapter markings are written into the file — worth watching on a large
+the chapter marks are written into the file — worth watching on a large
 file or a slow disk, since this step still has to shuffle the whole file's
 data through ffmpeg even though it only copies streams rather than
 re-encoding them.

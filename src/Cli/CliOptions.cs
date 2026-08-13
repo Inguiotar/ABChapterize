@@ -1058,7 +1058,7 @@ public sealed class CliOptions
         if (o.Force && o.Verify)
             throw new CliError(
                 "--force and --verify cannot be combined: --force always discards pre-existing " +
-                "chapter markings, while --verify decides that based on whether they check out.");
+                "chapter marks, while --verify decides that based on whether they check out.");
 
         if (o.VerifyFailThreshold != null && !o.Verify)
             throw new CliError("--verify-threshold requires --verify.");
@@ -1761,9 +1761,9 @@ public sealed class CliOptions
                                     or a comma-separated list of permissible file extensions,
                                     e.g. "mp3,m4b". One filter of each kind may be given;
                                     they also select which backups --revert restores.
-          -f, --force               Discard pre-existing chapter markings. Without --force, files
-                                    that already have chapter markings are skipped.
-          -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter markings,
+          -f, --force               Discard pre-existing chapter marks. Without --force, files
+                                    that already have chapter marks are skipped.
+          -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter marks,
                                     they are considered bogus and are discarded.
 
         Detection tuning:
@@ -2041,7 +2041,7 @@ public sealed class CliOptions
                                     leaves a 500-chapter hole to hunt through, but the mark is
                                     written and only the summary line says anything is wrong. Not
                                     to be confused with --max-chapters, which counts a file's
-                                    pre-existing markings rather than the numbers heard in the
+                                    pre-existing marks rather than the numbers heard in the
                                     audio.
               --chapter-count <n>   How many numbered chapters this book has, exactly (default:
                                     none - whatever the last number heard turns out to be). Takes
@@ -2069,27 +2069,27 @@ public sealed class CliOptions
                                     all. Cannot be combined with --pass3-model,
                                     --expected-start-chapter, --max-chapter-number,
                                     --chapter-count or --verify.
-          -V, --verify              Check pre-existing chapter markings against the audio
+          -V, --verify              Check pre-existing chapter marks against the audio
                                     instead of trusting them blindly: a short window around
-                                    each marking is probed for the chapter phrase and the
-                                    expected number. Markings that all check out are left
+                                    each mark is probed for the chapter phrase and the
+                                    expected number. Marks that all check out are left
                                     alone; where some fail, the confirmed ones are kept and
                                     only the stretches around the failures are redetected;
                                     where nearly all fail, the file is left untouched with a
-                                    warning, since markings that fail in bulk usually mean
+                                    warning, since marks that fail in bulk usually mean
                                     something other than one numbered chapter each. A file
                                     already rejected by --max-chapters skips verification and
                                     stays bogus. Cannot be combined with --force or --import.
-              --fix                 Requires --verify. Where a marking's announcement is confirmed
-                                    but the marking sits a little away from it, move the marking
+              --fix                 Requires --verify. Where a mark's announcement is confirmed
+                                    but the mark sits a little away from it, move the mark
                                     onto it and rewrite the file, instead of only reporting that
-                                    it checked out. Only a nudge: a marking already within a
+                                    it checked out. Only a nudge: a mark already within a
                                     quarter of a second is left alone (rewriting a whole audiobook
                                     for that is not worth it), and one more than 30 seconds from
                                     its announcement is left alone too and reported - a mark that
                                     far out is not one that drifted but one that means something
                                     else, and dragging it onto the nearest matching phrase would
-                                    destroy information rather than correct it. Markings that
+                                    destroy information rather than correct it. Marks that
                                     could not be confirmed at all are not affected; those still go
                                     to --verify's usual gap recovery. Marks are placed by
                                     re-transcribing the audio at them, which is a shade less exact
@@ -2102,7 +2102,7 @@ public sealed class CliOptions
                                     untouched with a warning instead of recovering the
                                     stretches around them. Without this option the line is
                                     drawn where the failures start to outnumber the confirmed
-                                    markings.
+                                    ones.
 
         Output & review:
           -d, --dry-run             Run detection but write nothing; print the chapters that

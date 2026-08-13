@@ -81,8 +81,14 @@ earn a round number.
 
 ### Changed
 
+- **Everything the tool prints now calls a chapter entry a "mark".** Some messages used to
+  say "marking" for one a file arrived with and "mark" for one this run placed — a
+  distinction that is real inside the code and of no use to anyone reading the output. A
+  script matching on `chapter marking(s)` needs updating; the counts and their order are
+  unchanged.
+
 - **A file's result line groups its marks.** It now opens with what the file arrived carrying
-  and lost — `3 existing marking(s) dropped` — and then states the total written, with the
+  and lost — `3 existing mark(s) dropped` — and then states the total written, with the
   split in brackets: `24 mark(s) written (23 chapter(s) 1-23, 1 named)`. The named count
   covers everything that is not a numbered chapter: intro, prologue, epilogue and `--custom`
   marks alike, which used to be spread over a `+ intro` suffix and a separate note further

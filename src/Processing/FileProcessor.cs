@@ -747,7 +747,7 @@ public sealed class FileProcessor
         log?.Invoke($"probed: duration {FormatTime(TimeSpan.FromSeconds(info.DurationSeconds))}, " +
                     $"codec {info.AudioCodec}" +
                     (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
-                    $", {info.ChapterCount} existing chapter marking(s)");
+                    $", {info.ChapterCount} existing chapter mark(s)");
         return info;
     }
 
@@ -892,7 +892,7 @@ public sealed class FileProcessor
         if (_options.Verify)
             return await VerifyThenDetectAsync(ctx, detector, ct);
 
-        ReportSkipped(ctx.Work, ctx.Name, $"has {ctx.Info.ChapterCount} chapter marking(s)");
+        ReportSkipped(ctx.Work, ctx.Name, $"has {ctx.Info.ChapterCount} chapter mark(s)");
         return null;
     }
 
@@ -937,8 +937,8 @@ public sealed class FileProcessor
             if (verify.Markings.Any(m => m.CorrectedStartSeconds != null))
                 return await ApplyMarkingFixesAsync(ctx, verify, ct);
             var verifyNote = verify.Checked > 0
-                ? $"{verify.Checked} pre-existing chapter marking(s) verified correct"
-                : $"has {ctx.Info.ChapterCount} chapter marking(s) (none had a checkable number)";
+                ? $"{verify.Checked} pre-existing chapter mark(s) verified correct"
+                : $"has {ctx.Info.ChapterCount} chapter mark(s) (none had a checkable number)";
             ReportSkipped(ctx.Work, ctx.Name, verifyNote);
             return null;
         }
@@ -951,7 +951,7 @@ public sealed class FileProcessor
                 : "";
             ReportSkipped(ctx.Work, ctx.Name,
                 $"--verify could not confirm {verify.Failed} of {verify.Checked} checked chapter " +
-                $"marking(s){thresholdNote} - existing markings left untouched",
+                $"mark(s){thresholdNote} - the file's existing marks left untouched",
                 " (use --force without --verify to mark it from scratch)", important: true);
             return null;
         }
@@ -960,7 +960,7 @@ public sealed class FileProcessor
         // around the unconfirmed one(s) get their own Pass 2 (and, for a still-missing trailing
         // chapter, Pass 3); everything else in the file is left exactly as --verify found it.
         var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
-                          $"marking(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
+                          $"mark(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
         return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct),
                 default, trustedNote);
     }
@@ -996,7 +996,7 @@ public sealed class FileProcessor
             .OrderBy(c => c.StartSeconds)
             .ToList();
         var largest = corrections.Max(kv => Math.Abs(kv.Value - kv.Key));
-        var what = $"{corrections.Count} of {verify.Checked} verified marking(s) nudged onto their " +
+        var what = $"{corrections.Count} of {verify.Checked} verified mark(s) nudged onto their " +
                    $"announcements (largest correction {largest:0.##} s)";
 
         _processed++;
@@ -1421,7 +1421,7 @@ public sealed class FileProcessor
         => dropped.Count == 0
             ? ""
             : (prospective ? "drop " : "") +
-              $"{dropped.Count} {(dropped.Bogus ? "bogus" : "existing")} marking(s)" +
+              $"{dropped.Count} {(dropped.Bogus ? "bogus" : "existing")} mark(s)" +
               (dropped.Bogus ? " (> --max-chapters)" : "") +
               (prospective ? " and " : " dropped, ");
 
@@ -1482,7 +1482,7 @@ public sealed class FileProcessor
         var (skip, dropped) = EvaluateExistingChapters(info);
         if (skip)
         {
-            ReportSkipped(work, name, $"has {info.ChapterCount} chapter marking(s)");
+            ReportSkipped(work, name, $"has {info.ChapterCount} chapter mark(s)");
             return;
         }
 

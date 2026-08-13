@@ -104,7 +104,7 @@ public class SummaryHighlighterTests
         var spans = SummaryHighlighter.HighlightSegments([
             SummarySegment.Prose("  "),
             SummarySegment.Title("Der Fall (Teil 2).m4b"),
-            SummarySegment.Prose(": has 24 chapter marking(s)"),
+            SummarySegment.Prose(": has 24 chapter mark(s)"),
         ]);
 
         Assert.Contains(spans, s => s == new ColoredSpan("Der Fall (Teil 2).m4b", ConsoleColor.DarkCyan));

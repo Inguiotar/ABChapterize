@@ -27,13 +27,13 @@ public class RunOutcomesTests
     public void FormatListings_NamesEverySkippedFileAndItsReason()
     {
         var outcomes = new RunOutcomes();
-        outcomes.RecordSkipped("Stalker.m4b", "has 24 chapter marking(s)");
-        outcomes.RecordSkipped("Wintersmith.m4b", "12 pre-existing chapter marking(s) verified correct");
+        outcomes.RecordSkipped("Stalker.m4b", "has 24 chapter mark(s)");
+        outcomes.RecordSkipped("Wintersmith.m4b", "12 pre-existing chapter mark(s) verified correct");
 
         Assert.Equal(
             ["Skipped 2 file(s):",
-             "  Stalker.m4b: has 24 chapter marking(s)",
-             "  Wintersmith.m4b: 12 pre-existing chapter marking(s) verified correct"],
+             "  Stalker.m4b: has 24 chapter mark(s)",
+             "  Wintersmith.m4b: 12 pre-existing chapter mark(s) verified correct"],
             Lines(outcomes));
     }
 
@@ -44,7 +44,7 @@ public class RunOutcomesTests
         // report different numbers of skipped files.
         var outcomes = new RunOutcomes();
         Assert.Equal(0, outcomes.SkippedCount);
-        outcomes.RecordSkipped("Stalker.m4b", "has 24 chapter marking(s)");
+        outcomes.RecordSkipped("Stalker.m4b", "has 24 chapter mark(s)");
         Assert.Equal(1, outcomes.SkippedCount);
     }
 
@@ -106,11 +106,11 @@ public class RunOutcomesTests
         outcomes.RecordLowConfidence("Third.m4b", [9], bareNumbers: false);
         outcomes.RecordMissingMarks("Book.missing-marks-5.m4b", [5]);
         outcomes.RecordNoChapters("Interview.mp3", "no chapter phrases found");
-        outcomes.RecordSkipped("Other.m4b", "has 3 chapter marking(s)");
+        outcomes.RecordSkipped("Other.m4b", "has 3 chapter mark(s)");
 
         Assert.Equal(
             ["Skipped 1 file(s):",
-             "  Other.m4b: has 3 chapter marking(s)",
+             "  Other.m4b: has 3 chapter mark(s)",
              "No chapters found in 1 file(s):",
              "  Interview.mp3: no chapter phrases found",
              "Still missing chapter marks in 1 file(s):",
@@ -190,7 +190,7 @@ public class RunOutcomesTests
     public void FormatListings_MarksTheFileNameAsATitle()
     {
         var outcomes = new RunOutcomes();
-        outcomes.RecordSkipped("Der Fall (Teil 2).m4b", "has 3 chapter marking(s)");
+        outcomes.RecordSkipped("Der Fall (Teil 2).m4b", "has 3 chapter mark(s)");
 
         var entry = outcomes.FormatListings()[1];
         Assert.Contains(entry, s => s == SummarySegment.Title("Der Fall (Teil 2).m4b"));

@@ -115,7 +115,7 @@ public sealed class DebugLog : IDisposable
         log.Write($"file: {file}");
         log.Write($"media: duration {TimeFormat.Hms(info.DurationSeconds)}, {info.SizeBytes} bytes, " +
                   $"codec {info.AudioCodec}" + (info.AudioProfile.Length > 0 ? $" ({info.AudioProfile})" : "") +
-                  $", {info.ChapterCount} existing chapter marking(s)" +
+                  $", {info.ChapterCount} existing chapter mark(s)" +
                   (info.InputDecoder is { } decoder ? $", decoder {decoder}" : ""));
         foreach (var line in DescribeSettings(options))
             log.Write($"setting: {line}");

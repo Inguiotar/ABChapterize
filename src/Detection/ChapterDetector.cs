@@ -2080,7 +2080,7 @@ public sealed class ChapterDetector
                 // Named on purpose: "none had a checkable number" is otherwise a dead end for
                 // anyone asking why --verify did nothing, since the answer lives entirely in what
                 // the titles say and nothing else ever prints them.
-                _log?.Invoke($"marking at {FormatTimestamp(marking.StartSeconds)} (\"{marking.Title}\") " +
+                _log?.Invoke($"mark at {FormatTimestamp(marking.StartSeconds)} (\"{marking.Title}\") " +
                              "- no readable chapter number, not checked");
                 markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
                 work.Advance(1);
@@ -2100,8 +2100,8 @@ public sealed class ChapterDetector
                 file, info, windowStart, windowLen, segments, profile, expected, ct);
             var confirmed = match != null;
             _log?.Invoke(confirmed
-                ? $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} confirmed"
-                : $"chapter {expected} marking at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
+                ? $"chapter {expected} mark at {FormatTimestamp(marking.StartSeconds)} confirmed"
+                : $"chapter {expected} mark at {FormatTimestamp(marking.StartSeconds)} NOT confirmed - phrase not found nearby");
             var corrected = confirmed && _options.Fix
                 ? await ComputeMarkingFixAsync(
                     file, info, marking, windowStart, windowLen, match!.Value, profile, language.Profile.Language, ct)
@@ -2183,12 +2183,12 @@ public sealed class ChapterDetector
         if (shift > VerifyFixMaxShiftSeconds)
         {
             _log?.Invoke(
-                $"marking at {FormatTimestamp(marking.StartSeconds)} left alone - announcement " +
+                $"mark at {FormatTimestamp(marking.StartSeconds)} left alone - announcement " +
                 $"{shift:0.#} s away at {FormatTimestamp(refined.Mark)}, too far to be a mark " +
                 "that merely drifted");
             return null;
         }
-        _log?.Invoke($"marking at {FormatTimestamp(marking.StartSeconds)} corrected to " +
+        _log?.Invoke($"mark at {FormatTimestamp(marking.StartSeconds)} corrected to " +
                      $"{FormatTimestamp(refined.Mark)} ({refined.Mark - marking.StartSeconds:+0.##;-0.##} s)");
         return refined.Mark;
     }

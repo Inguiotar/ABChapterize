@@ -61,7 +61,7 @@ public sealed class DebugLogTests : IDisposable
         Assert.Contains(_file, text);
         Assert.Contains("1:02:03", text);          // the duration, via TimeFormat
         Assert.Contains("codec aac (LC)", text);
-        Assert.Contains("2 existing chapter marking(s)", text);
+        Assert.Contains("2 existing chapter mark(s)", text);
         Assert.Contains("decoder libfdk_aac", text);
     }
 
