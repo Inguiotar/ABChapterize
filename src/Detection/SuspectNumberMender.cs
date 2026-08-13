@@ -60,8 +60,8 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
     /// to without reconstructing it from the numbers.</summary>
     internal string Describe()
         => Above is { } above
-            ? $"between chapters {Below} and {above}"
-            : $"after chapter {Below}";
+            ? $"the gap between chapters {Below} and {above}"
+            : $"the sequence after chapter {Below}";
 
     /// <summary>The only number these bounds admit, or null when they admit none or several - the
     /// case that lets <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> renumber a mark from the
@@ -168,15 +168,15 @@ internal sealed class SuspectNumberMender
 
         var phraseAbs = start + match.PhraseStartSeconds;
         _env.Log?.Invoke(
-            $"chapter {match.Number} at {FormatTimestamp(phraseAbs)} does not fit the sequence " +
-            $"{bounds.Describe()} - {WhyItDoesNotFit(match.Number, bounds)}, re-reading its number");
+            $"chapter {match.Number} at {FormatTimestamp(phraseAbs)} outside " +
+            $"{bounds.Describe()} ({WhyItDoesNotFit(match.Number, bounds)}) - re-reading its number");
 
         var reread = await ReReadNumberAsync(
             profile, start, windowEnd, phraseAbs, match.PhraseEndSeconds - match.PhraseStartSeconds,
             bounds, match.Number, ct);
         if (reread == null)
             _env.Log?.Invoke(
-                $"no number continuing the sequence could be read there - leaving it at {match.Number}");
+                $"no sequence-continuing number read - keeping {match.Number}");
         return reread;
     }
 
@@ -217,14 +217,13 @@ internal sealed class SuspectNumberMender
         NumberBounds bounds, CancellationToken ct)
     {
         var phraseAbs = start + heard.PhraseStartSeconds;
-        _env.Log?.Invoke($"re-reading the unnumbered announcement at {FormatTimestamp(phraseAbs)}");
+        _env.Log?.Invoke($"re-reading unnumbered announcement at {FormatTimestamp(phraseAbs)}");
 
         var reread = await ReReadNumberAsync(
             profile, start, windowEnd, phraseAbs, heard.PhraseEndSeconds - heard.PhraseStartSeconds,
             bounds, null, ct);
         if (reread == null)
-            _env.Log?.Invoke("no number continuing the sequence could be read there either - " +
-                             "leaving the announcement unmarked");
+            _env.Log?.Invoke("no sequence-continuing number read - announcement left unmarked");
         return reread;
     }
 
@@ -237,9 +236,9 @@ internal sealed class SuspectNumberMender
     /// <param name="number">The number that did not fit.</param>
     /// <param name="bounds">The bounds it was measured against.</param>
     private static string WhyItDoesNotFit(int number, NumberBounds bounds)
-        => number <= bounds.Below ? "it is not above it"
-            : bounds.Above is { } above && number >= above ? $"chapter {above} already follows it"
-            : $"it would leave {number - bounds.Below - 1} missing";
+        => number <= bounds.Below ? "not above it"
+            : bounds.Above is { } above && number >= above ? $"{above} already follows"
+            : $"would leave {number - bounds.Below - 1} missing";
 
     /// <summary>
     /// Re-reads the number of an announcement that is only known by the mark placed on it - the
@@ -336,19 +335,19 @@ internal sealed class SuspectNumberMender
     {
         if (!bounds.Admits(reread))
         {
-            _env.Log?.Invoke($"{source} read it as {reread} - " + (suspect is { } no
-                ? $"no improvement on {no}"
-                : $"which does not fit the sequence {bounds.Describe()}"));
+            _env.Log?.Invoke($"{source}: {reread} - " + (suspect is { } no
+                ? "no improvement"
+                : $"also outside {bounds.Describe()}"));
             return null;
         }
         _env.Log?.Invoke(suspect switch
         {
             // Only a colliding-mark re-read can confirm the number it was given: every other caller
             // asks about a number the bounds already exclude, so agreement is impossible there.
-            { } previous when previous == reread => $"{source} read it as {reread} again - the number stands",
-            { } previous => $"{source} read it as {reread} instead of {previous} - " +
-                            "correcting the number, the mark stays where it is",
-            null => $"{source} read it as chapter {reread} - marking the announcement after all",
+            { } previous when previous == reread => $"{source}: {reread} again - number stands",
+            { } previous => $"{source}: {reread} instead of {previous} - number corrected, " +
+                            "mark unchanged",
+            null => $"{source}: chapter {reread} - marking the announcement after all",
         });
         return reread;
     }

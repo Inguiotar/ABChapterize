@@ -1030,7 +1030,7 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters([new(1, 0.25), new(2, 600.15)], result.Chapters);
         Assert.Contains(log, l =>
             l.Contains("skipped chapter 1 at 0:20:00.30") &&
-            l.Contains("not above the last accepted chapter 2") &&
+            l.Contains("not above last accepted 2") &&
             l.Contains("(in-text mention?)"));
     }
 
@@ -1052,7 +1052,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Contains(log, l =>
             l.Contains("skipped chapter 2 at 0:20:00.30") &&
-            l.Contains("not above the last accepted chapter 2"));
+            l.Contains("not above last accepted 2"));
         Assert.DoesNotContain(log, l => l.Contains("in-text mention?"));
     }
 
@@ -1633,7 +1633,7 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters([new(1, 0.25), new(3, 1199.95)], result.Chapters);
         Assert.True(result.GapRemains);
         Assert.Contains(log, l => l.Contains("skipped chapter 2") &&
-                                  l.Contains("not above every chapter already found"));
+                                  l.Contains("not above every chapter found"));
         Assert.DoesNotContain(log, l => l.Contains("chapter 2 found in gap"));
     }
 
@@ -1998,9 +1998,9 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 602.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("chapter 90 at 0:10:02.50 does not fit the sequence") &&
+        Assert.Contains(log, l => l.Contains("chapter 90 at 0:10:02.50 outside") &&
                                   l.Contains("would leave 88 missing"));
-        Assert.Contains(log, l => l.Contains("a 45 s window read it as 2 instead of 90"));
+        Assert.Contains(log, l => l.Contains("45 s window: 2 instead of 90"));
     }
 
     [Fact]
@@ -2024,9 +2024,9 @@ public sealed class ChapterDetectorTests : IDisposable
             null);
 
         AssertChapters([new(5, 0.25), new(6, 1202.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("chapter 2 at 0:20:02.50 does not fit the sequence") &&
-                                  l.Contains("it is not above it"));
-        Assert.Contains(log, l => l.Contains("a 45 s window read it as 6 instead of 2"));
+        Assert.Contains(log, l => l.Contains("chapter 2 at 0:20:02.50 outside") &&
+                                  l.Contains("not above it"));
+        Assert.Contains(log, l => l.Contains("45 s window: 6 instead of 2"));
     }
 
     [Fact]
@@ -2050,8 +2050,8 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 602.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("the mark refinement read chapter 3 at 0:10:02.50 as 2") &&
-                                  l.Contains("correcting the number, the mark stays where it is"));
+        Assert.Contains(log, l => l.Contains("refinement read chapter 3 at 0:10:02.50 as 2") &&
+                                  l.Contains("number corrected, mark unchanged"));
     }
 
     [Fact]
@@ -2074,8 +2074,8 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Contains(result.Chapters, c => c.Number == 3);
         Assert.DoesNotContain(result.Chapters, c => c.Number == 20);
-        Assert.Contains(log, l => l.Contains("the mark refinement read chapter 3 at 0:10:02.50 as 20") &&
-                                  l.Contains("does not fit the sequence after chapter 1 - leaving it at 3"));
+        Assert.Contains(log, l => l.Contains("refinement read chapter 3 at 0:10:02.50 as 20") &&
+                                  l.Contains("outside the sequence after chapter 1 - keeping 3"));
     }
 
     [Fact]
@@ -2104,10 +2104,10 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
-        Assert.Contains(log, l => l.Contains("chapter 40 at 0:11:40.30 does not fit the sequence " +
-                                             "between chapters 2 and 4") &&
-                                  l.Contains("chapter 4 already follows it"));
-        Assert.Contains(log, l => l.Contains("a 15 s window read it as 3 instead of 40"));
+        Assert.Contains(log, l => l.Contains("chapter 40 at 0:11:40.30 outside " +
+                                             "the gap between chapters 2 and 4") &&
+                                  l.Contains("4 already follows"));
+        Assert.Contains(log, l => l.Contains("15 s window: 3 instead of 40"));
     }
 
     [Fact]
@@ -2131,7 +2131,7 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters([new(1, 0.25), new(4, 600.25)], result.Chapters);
         Assert.DoesNotContain(log, l => l.Contains("does not fit the sequence"));
         Assert.Contains(log, l => l.Contains("skipped chapter 4") &&
-                                  l.Contains("not above the last accepted chapter 4"));
+                                  l.Contains("not above last accepted 4"));
     }
 
     [Fact]
@@ -2208,8 +2208,8 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
         // Two of four: the region-start candidate, then the silence that yields chapter 2. The two
         // behind it are a chapter's worth of audio with nothing left to find in it.
-        Assert.Contains(log, l => l.Contains("every chapter this stretch was missing is found") &&
-                                  l.Contains("stopping after 2 of 4 candidate(s)"));
+        Assert.Contains(log, l => l.Contains("stretch complete, nothing left missing") &&
+                                  l.Contains("stopped after 2 of 4 candidate(s)"));
         // The gap closed inside pass 2.5, so pass 3 never transcribed the region either.
         Assert.DoesNotContain(log, l => l.Contains("transcribing suspicious region"));
     }
@@ -2442,7 +2442,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.GapRemains);
         Assert.Contains(log, l => l.Contains("pass 2.5: sweeping 1 silence(s) of 1.4-1.5 s"));
-        Assert.Contains(log, l => l.Contains("stopping the sub-floor sweep before the 1.3-1.4 s band") &&
+        Assert.Contains(log, l => l.Contains("sweep stopped before the 1.3-1.4 s band") &&
                                   l.Contains("2 decode window(s)") && l.Contains("1.5"));
     }
 
@@ -2471,7 +2471,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 149.75), new(3, 349.95)], result.Chapters);
         Assert.Contains(log, l => l.Contains("pass 3.5: re-reading 0:00:00.25 - 0:05:49.75 from 0:00:15.25"));
-        Assert.Contains(log, l => l.Contains("the shifted re-read recovered 1 chapter(s)"));
+        Assert.Contains(log, l => l.Contains("shifted re-read recovered 1 chapter(s)"));
     }
 
     [Fact]
@@ -2591,9 +2591,8 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 602.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("heard the chapter phrase at 0:10:02.50 " +
-                                             "but could not read a number from it"));
-        Assert.Contains(log, l => l.Contains("the pass 3 model read it as chapter 2"));
+        Assert.Contains(log, l => l.Contains("chapter phrase at 0:10:02.50, no readable number"));
+        Assert.Contains(log, l => l.Contains("pass 3 model: chapter 2"));
     }
 
     [Fact]
@@ -2637,10 +2636,10 @@ public sealed class ChapterDetectorTests : IDisposable
             log);
 
         AssertChapters([new(1, 0.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("the pass 3 model read it as 1 - " +
-                                             "which does not fit the sequence after chapter 1"));
-        Assert.Contains(log, l => l.Contains("no number continuing the sequence could be read " +
-                                             "there either - leaving the announcement unmarked"));
+        Assert.Contains(log, l => l.Contains("pass 3 model: 1 - " +
+                                             "also outside the sequence after chapter 1"));
+        Assert.Contains(log, l => l.Contains("no sequence-continuing number read - " +
+                                             "announcement left unmarked"));
     }
 
     [Fact]
@@ -2937,8 +2936,8 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3, 4, 5, 6], result.Chapters.Select(c => c.Number));
-        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
-                                  l.Contains("nothing to re-probe"));
+        Assert.Contains(log, l => l.Contains("sequence gap 2-4") &&
+                                  l.Contains("no candidates between the two marks"));
         // Chapter 5 by the re-probe reaching under the demand, chapter 3 only by the sweep.
         Assert.Contains(1499.0, audio.DecodeStarts);
         Assert.Contains(log, l => l.Contains("measure down to 0.9 s, below the 1.5 s"));
@@ -2968,8 +2967,8 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
-        Assert.Contains(log, l => l.Contains("no mark measured a chapter break on this book") &&
-                                  l.Contains("sweeping the gaps for the pauses just under it"));
+        Assert.Contains(log, l => l.Contains("no chapter break measured") &&
+                                  l.Contains("sweeping the gaps for shorter pauses"));
         Assert.Contains(log, l => l.Contains("pass 2: sweeping 1 silence(s) of 1.0-1.1 s for chapter 3"));
     }
 
@@ -3112,8 +3111,8 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         Assert.True(result.GapRemains);
-        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
-                                  l.Contains("nothing to re-probe since the last mark"));
+        Assert.Contains(log, l => l.Contains("sequence gap 2-4") &&
+                                  l.Contains("no candidates between the two marks"));
         Assert.DoesNotContain(log, l => l.Contains("re-probing"));
     }
 
@@ -3146,8 +3145,8 @@ public sealed class ChapterDetectorTests : IDisposable
         // re-probe's 18 s from 899.
         Assert.Contains((897.0, (double?)25.0), audio.DecodeWindows);
         Assert.Contains((899.0, (double?)18.0), audio.DecodeWindows);
-        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
-                                  l.Contains("re-probing 1 candidate(s) unconditionally"));
+        Assert.Contains(log, l => l.Contains("sequence gap 2-4") &&
+                                  l.Contains("re-probing 1 candidate(s)"));
     }
 
     [Fact]
@@ -3200,8 +3199,8 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.True(result.GapRemains);
         Assert.Equal([1, 2, 4], result.Chapters.Select(c => c.Number));
-        Assert.Contains(log, l => l.Contains("sequence gap between chapter 2 and 4") &&
-                                  l.Contains("not reaching below 1.35 s here"));
+        Assert.Contains(log, l => l.Contains("sequence gap 2-4") &&
+                                  l.Contains("not reaching below 1.35 s"));
     }
 
     [Fact]
@@ -3591,7 +3590,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("re-reading it in a shorter window"));
+        Assert.Contains(log, l => l.Contains("re-reading shorter"));
     }
 
     [Fact]
@@ -3664,7 +3663,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
         AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
         Assert.Contains(log, l => l.Contains(
-            "re-reading it in a shorter window with the --pass3-model recognizer"));
+            "re-reading shorter, --pass3-model"));
         Assert.Contains("en", pass3.LanguageChanges);
     }
 
@@ -3684,7 +3683,7 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             new FakeVad { Speech = [new(0, 610), new(613, 640), new(660, 3600)] });
 
-        Assert.DoesNotContain(log, l => l.Contains("re-reading it in a shorter window"));
+        Assert.DoesNotContain(log, l => l.Contains("re-reading shorter"));
     }
 
     [Fact]
@@ -5075,7 +5074,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.AddWithin(20, 611, Seg(0, " Chapter one."));
             });
 
-        Assert.Contains(log, l => l.StartsWith("re-reading the window at 0:10:10.00"));
+        Assert.Contains(log, l => l.StartsWith("re-reading window at 0:10:10.00"));
         Assert.Contains(audio.DecodeWindows, w => Math.Abs(w.Start - 610) < 0.01);
         var chapter = Assert.Single(result.Chapters);
         Assert.Equal(1, chapter.Number);
@@ -5508,7 +5507,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         AssertChapters([new DetectedChapter(1, 606.25)], result.Chapters);
-        Assert.Contains(log, l => l.Contains("chapter 1 detection spans the reused/fresh transcript merge"));
+        Assert.Contains(log, l => l.Contains("chapter 1 spans the reused/fresh transcript merge"));
     }
 
     [Fact]
@@ -6295,7 +6294,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // Asked with the room the rest of the book leaves at that position, both candidates
         // excluded - which is what makes either answer acceptable and the question worth asking.
         Assert.Equal([(12, new NumberBounds(11, 14))], asked);
-        Assert.Contains(log, l => l.Contains("chapters 12 and 13 are marked 0.01 s apart") &&
+        Assert.Contains(log, l => l.Contains("chapters 12 and 13 0.01 s apart") &&
                                   l.Contains("one announcement read two ways"));
     }
 
@@ -6321,7 +6320,7 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(11, 100), new(12, 200, 0.4), new(13, 200.01, 0.9), new(14, 300)]);
 
         Assert.Equal([11, 13, 14], chapters.Select(c => c.Number));
-        Assert.Contains(log, l => l.Contains("could not be settled by re-reading it") &&
+        Assert.Contains(log, l => l.Contains("re-reading settled nothing") &&
                                   l.Contains("keeping chapter 13"));
     }
 
@@ -6380,9 +6379,9 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([13, 14, 15, 16], chapters.Select(c => c.Number));
         Assert.Equal(150, chapters.Single(c => c.Number == 14).TimeSeconds);
         Assert.Empty(asked);
-        Assert.Contains(log, l => l.Contains("chapter 40 at 0:02:30.00 contradicts the chapters around it") &&
-                                  l.Contains("between chapters 13 and 15"));
-        Assert.Contains(log, l => l.Contains("chapter 14 is the only number that fits there"));
+        Assert.Contains(log, l => l.Contains("chapter 40 at 0:02:30.00 contradicts its neighbours") &&
+                                  l.Contains("the gap between chapters 13 and 15"));
+        Assert.Contains(log, l => l.Contains("chapter 14 the only number that fits"));
     }
 
     [Fact]
@@ -6469,8 +6468,8 @@ public sealed class ChapterDetectorTests : IDisposable
             [new(64, 63524), new(65, 63780), new(2179, 65939.97)], [Epilogue(65937.11)]);
 
         Assert.Equal([64, 65], chapters.Select(c => c.Number));
-        Assert.Contains(log, l => l.Contains("chapter 2179 at 18:18:59.97 is 2.86 s from the epilogue mark") &&
-                                  l.Contains("dropping it as part of that announcement"));
+        Assert.Contains(log, l => l.Contains("chapter 2179 at 18:18:59.97, 2.86 s from the epilogue mark") &&
+                                  l.Contains("dropped as part of that announcement"));
     }
 
     [Fact]
@@ -6577,9 +6576,9 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters([new(1, 0.25), new(90, 602.25)], result.Chapters);
         Assert.False(result.GapRemains);
         Assert.Empty(result.MissingNumbers);
-        Assert.Contains(log, l => l.Contains("no number continuing the sequence could be read there"));
-        Assert.Contains(log, l => l.Contains("chapter 90 still does not fit the sequence after re-reading it") &&
-                                  l.Contains("not counting the chapters under it as missing"));
+        Assert.Contains(log, l => l.Contains("no sequence-continuing number read"));
+        Assert.Contains(log, l => l.Contains("chapter 90 still does not fit the sequence after re-reading") &&
+                                  l.Contains("chapters under it not counted as missing"));
     }
 
     [Fact]
@@ -6603,7 +6602,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Single(result.NamedMarks);
         Assert.False(result.GapRemains);
         Assert.Contains(log, l => l.Contains("from the epilogue mark") &&
-                                  l.Contains("dropping it as part of that announcement"));
+                                  l.Contains("dropped as part of that announcement"));
     }
 
     [Fact]

@@ -517,8 +517,8 @@ internal sealed class RegionProber
             if (_hunting is { Count: 0 })
             {
                 if (ci + 1 < candidates.Count)
-                    _env.Log?.Invoke($"every chapter this stretch was missing is found - stopping " +
-                                     $"after {ci + 1} of {candidates.Count} candidate(s)");
+                    _env.Log?.Invoke($"stretch complete, nothing left missing - stopped after " +
+                                     $"{ci + 1} of {candidates.Count} candidate(s)");
                 break;
             }
             ci = SkipSettledWindows(candidates, ci, plan.End, probeMarks);
@@ -1004,9 +1004,9 @@ internal sealed class RegionProber
         // already the heavier model, so it re-reads through that one without needing a branch here.
         var upgradeLanguage = _env.SecondOpinion != null ? _language.Profile.Language : null;
         _env.Log?.Invoke(
-            $"nothing heard in the window at {FormatTimestamp(start)}, but VAD hears speech at " +
-            $"{FormatTimestamp(blip.StartSeconds)} inside its jingle - re-reading it in a shorter " +
-            (upgradeLanguage == null ? "window" : "window with the --pass3-model recognizer"));
+            $"window at {FormatTimestamp(start)} empty, VAD speech at " +
+            $"{FormatTimestamp(blip.StartSeconds)} inside the jingle - re-reading shorter" +
+            (upgradeLanguage == null ? "" : ", --pass3-model"));
 
         var samples = await _env.Audio.DecodePcmAsync(
             _ctx.File, from, to - from, _ctx.Info.InputDecoder, ct);
@@ -1110,8 +1110,8 @@ internal sealed class RegionProber
             return [];
 
         _env.Log?.Invoke(
-            $"nothing heard in the {windowEnd - start:0.0} s window at {FormatTimestamp(start)}, " +
-            $"which is wider than one recognizer pass - re-reading it at {to - start:0.0} s");
+            $"{windowEnd - start:0.0} s window at {FormatTimestamp(start)} empty (wider than one " +
+            $"recognizer pass) - re-reading at {to - start:0.0} s");
 
         var samples = await _env.Audio.DecodePcmAsync(
             _ctx.File, start, to - start, _ctx.Info.InputDecoder, ct);
@@ -1162,8 +1162,8 @@ internal sealed class RegionProber
         var tileCandidate = candidate with { Class = CandidateClass.JingleEmbedded };
         var namedBefore = _namedFound.Count;
         _env.Log?.Invoke(
-            $"nothing heard behind the jingle at {FormatTimestamp(candidate.Start)} - reading its " +
-            $"music from {FormatTimestamp(musicFrom)} in {JingleRereadWindowSeconds:0.#} s steps");
+            $"nothing behind the jingle at {FormatTimestamp(candidate.Start)} - tiling its music " +
+            $"from {FormatTimestamp(musicFrom)} in {JingleRereadWindowSeconds:0.#} s steps");
 
         for (var from = musicFrom; from < candidate.Start; from += JingleMusicTileStepSeconds)
         {
@@ -1220,9 +1220,8 @@ internal sealed class RegionProber
         if (CacheHidesTheExpectation(start, expectAt))
         {
             _env.Log?.Invoke(
-                $"re-reading the window at {FormatTimestamp(start)} - the cached transcript covers " +
-                $"{FormatTimestamp(expectAt)}, where this candidate expects its announcement, only " +
-                "inside a segment that began before the window");
+                $"re-reading window at {FormatTimestamp(start)} - cache covers the expected " +
+                $"announcement at {FormatTimestamp(expectAt)} only inside an earlier segment");
             return (await DecodeFullWindowAsync(start, plan, ct), null);
         }
 
@@ -1583,8 +1582,8 @@ internal sealed class RegionProber
         {
             var phraseAbs = start + heard.PhraseStartSeconds;
             _env.Log?.Invoke(
-                $"heard the chapter phrase at {FormatTimestamp(phraseAbs)} " +
-                $"but could not read a number from it: \"{heard.Text}\"");
+                $"chapter phrase at {FormatTimestamp(phraseAbs)}, " +
+                $"no readable number: \"{heard.Text}\"");
             if (_unnumberedMends >= MaxUnnumberedMendsPerRegion)
                 continue;
             _unnumberedMends++;
@@ -1828,9 +1827,9 @@ internal sealed class RegionProber
         if (_namedFound.Count(m => m.Repeatable && m.Kind != ChapterKind) < MaxCustomMarksPerFile)
             return false;
         if (!CustomLimitHit)
-            _env.Log?.Invoke($"custom mark limit of {MaxCustomMarksPerFile} reached at " +
+            _env.Log?.Invoke($"WARNING - custom mark limit of {MaxCustomMarksPerFile} reached at " +
                              $"{FormatTimestamp(phraseAbs)} - further --custom matches are ignored " +
-                             "for this file (a mapping matching ordinary prose?)");
+                             "for this file. Does the mapping match ordinary prose?");
         CustomLimitHit = true;
         return true;
     }
@@ -1867,7 +1866,7 @@ internal sealed class RegionProber
         if (match.Number <= windowLast)
         {
             _env.Log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
-                             $"not above the last accepted chapter {windowLast}" +
+                             $"not above last accepted {windowLast}" +
                              (match.Number < windowLast ? " (in-text mention?)" : ""));
             if (match.Number < windowLast)
                 NoteOutOfSequence(match.Number);
@@ -1881,7 +1880,7 @@ internal sealed class RegionProber
         if ((_gapAbove ?? _region.UpperNumber) is { } upperBound && match.Number >= upperBound)
         {
             _env.Log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
-                             $"at or above chapter {upperBound}, which bounds this gap");
+                             $"at or above {upperBound}, this gap's upper bound");
             return true;
         }
         return false;
@@ -1917,10 +1916,10 @@ internal sealed class RegionProber
             return;
         _restartReported = true;
         _env.Log?.Invoke(
-            "the chapter numbering appears to restart partway through this file - announcements " +
-            "below the sequence are being heard in ascending runs, which is what a book divided " +
-            "into parts looks like; --ignore-chapter-numbers marks every announcement regardless " +
-            "of its number");
+            "WARNING - the chapter numbering appears to restart partway through this file: " +
+            "announcements below the sequence are being heard in ascending runs, which is what a " +
+            "book divided into parts looks like. --ignore-chapter-numbers marks every announcement " +
+            "regardless of its number.");
     }
 
     /// <summary>
@@ -1992,8 +1991,8 @@ internal sealed class RegionProber
         var number = placed.Number!.Value;
 
         if (match.SpansMerge)
-            _env.Log?.Invoke($"chapter {number} detection spans the reused/fresh transcript " +
-                             "merge from Pass 2's overlap reuse - worth a spot check");
+            _env.Log?.Invoke($"chapter {number} spans the reused/fresh transcript merge " +
+                             "- worth a spot check");
 
         // Everything reaching this point is already above the sequence and below whatever bounds it
         // from the far side, so the one way Admits can still say no is the implausible-hole case -
@@ -2004,8 +2003,8 @@ internal sealed class RegionProber
         var unverified = _ctx.SecondGuessNumbers && !SequenceBounds(windowLast).Admits(number);
         if (unverified)
             _env.Log?.Invoke(
-                $"chapter {number} still does not fit the sequence after re-reading it - keeping the " +
-                "mark, but not counting the chapters under it as missing");
+                $"chapter {number} still does not fit the sequence after re-reading - mark kept, " +
+                "chapters under it not counted as missing");
 
         _found.Add(new DetectedChapter(number, time, match.Confidence, unverified));
         // Through ExpectedStartFor rather than off the option, so the "still missing" note starts
@@ -2216,7 +2215,7 @@ internal sealed class RegionProber
     {
         await ReprobeGapCandidatesAsync(
             _lastMarkExpectAt ?? _region.FromSeconds, expectAt,
-            $"sequence gap between chapter {previousNumber} and {number}, ",
+            $"sequence gap {previousNumber}-{number}: ",
             previousNumber, number, ct);
     }
 
@@ -2270,22 +2269,21 @@ internal sealed class RegionProber
             // thrown away, since building candidates costs nothing and probing them is the whole
             // expense. What is left is the list this re-probe would have had anyway.
             _env.Log?.Invoke(
-                note + $"not reaching below {floor:0.0#} s here - {candidates.Count} candidate(s) " +
-                $"would cost more than the {GapProbeBudget(toSeconds - fromSeconds):0.#} decode " +
-                "window(s) this gap may spend");
+                note + $"not reaching below {floor:0.0#} s - {candidates.Count} candidate(s) " +
+                $"over the {GapProbeBudget(toSeconds - fromSeconds):0.#} decode window(s) budget");
             _subFloorSeconds = null;
             candidates = ReprobeCandidates(fromSeconds, toSeconds);
         }
         if (candidates.Count == 0)
         {
-            _env.Log?.Invoke(note + "nothing to re-probe since the last mark - deferred to the gap scan");
+            _env.Log?.Invoke(note + "no candidates between the two marks - deferred to the gap scan");
             _reprobing = false;
             _gapAbove = null;
             return;
         }
         _env.Log?.Invoke(
-            note + $"re-probing {candidates.Count} candidate(s) unconditionally, " +
-            $"{FormatTimestamp(fromSeconds)} - {FormatTimestamp(toSeconds)}");
+            note + $"re-probing {candidates.Count} candidate(s), " +
+            $"{FormatTimestamp(fromSeconds)}-{FormatTimestamp(toSeconds)}");
         var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
         for (var si = 0; si < candidates.Count; si++)
         {
@@ -2309,7 +2307,7 @@ internal sealed class RegionProber
             if (missing.Count > 0)
                 continue;
             if (si + 1 < candidates.Count)
-                _env.Log?.Invoke($"gap before chapter {number} closed - re-probing stopped after " +
+                _env.Log?.Invoke($"gap before chapter {number} closed - stopped after " +
                                  $"{si + 1} of {candidates.Count} candidate(s)");
             break;
         }

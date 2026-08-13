@@ -322,8 +322,8 @@ internal sealed class PreciseMarkRefiner
                 mark, phraseAbs, phraseEndAbs, transcriptEnd, file, inputDecoder, announcement, ct);
             if (onset == null && _transcribeUpgraded is { } upgraded)
             {
-                _log?.Invoke($"could not confirm the phrase near {FormatTimestamp(mark)} - " +
-                             "trying again with the --pass3-model recognizer");
+                _log?.Invoke($"phrase not confirmed near {FormatTimestamp(mark)} - " +
+                             "retrying with --pass3-model");
                 _transcribe = (samples, innerCt) => upgraded(samples, language, innerCt);
                 try
                 {
@@ -346,10 +346,8 @@ internal sealed class PreciseMarkRefiner
                 anchoredOnset = anchored;
                 if (anchored != found)
                     _log?.Invoke(
-                        $"onset {FormatTimestamp(found)} anchored back to {FormatTimestamp(anchored)}, " +
-                        (fromMusic
-                            ? "where the music in front of the announcement gives way to speech"
-                            : "where sound resumes after the pause in front of the announcement"));
+                        $"onset {FormatTimestamp(found)} -> {FormatTimestamp(anchored)} " +
+                        (fromMusic ? "(music gives way to speech)" : "(sound resumes after the pause)"));
                 result = Math.Max(0, anchored - _options.MarkLeadSeconds);
                 _log?.Invoke(result == mark
                     ? $"mark confirmed at {FormatTimestamp(mark)} - unchanged"
@@ -359,7 +357,7 @@ internal sealed class PreciseMarkRefiner
             else
             {
                 _log?.Invoke(
-                    $"could not confirm the phrase near {FormatTimestamp(mark)} - mark left unchanged");
+                    $"phrase not confirmed near {FormatTimestamp(mark)} - mark unchanged");
                 result = mark;
             }
 
@@ -630,8 +628,8 @@ internal sealed class PreciseMarkRefiner
         if (originalMark - walked < MarkBeforeJingleVerifyMinGapSeconds)
         {
             _log?.Invoke(
-                $"--mark-before-jingle: skipped verification at {FormatTimestamp(walked)} - " +
-                $"only {originalMark - walked:0.00}s behind the mark, inside the probe window");
+                $"--mark-before-jingle: verification skipped at {FormatTimestamp(walked)} - " +
+                $"{originalMark - walked:0.00}s behind the mark, inside the probe window");
             return walked;
         }
 
@@ -651,15 +649,15 @@ internal sealed class PreciseMarkRefiner
             if (!await PreciseMarkPhraseFoundAsync(candidate, file, inputDecoder, announcement, ct))
             {
                 _log?.Invoke(
-                    $"--mark-before-jingle: verification moved {FormatTimestamp(walked)} " +
-                    $"back to {FormatTimestamp(candidate)} (the announcement was still audible)");
+                    $"--mark-before-jingle: verification moved {FormatTimestamp(walked)} -> " +
+                    $"{FormatTimestamp(candidate)} (announcement still audible)");
                 return candidate;
             }
         }
 
         _log?.Invoke(
-            $"--mark-before-jingle: verification found the announcement audible " +
-            $"all the way back to {FormatTimestamp(walked - span)} - mark left unchanged");
+            $"--mark-before-jingle: announcement audible back to " +
+            $"{FormatTimestamp(walked - span)} - mark unchanged");
         return walked;
     }
 
@@ -842,7 +840,7 @@ internal sealed class PreciseMarkRefiner
             if (await FindResumedPlateauAsync(edge, limit, file, inputDecoder, announcement, ct)
                 is not { } resumed)
                 break;
-            _log?.Invoke($"phrase heard again at {FormatTimestamp(resumed)}, past the edge at " +
+            _log?.Invoke($"phrase again at {FormatTimestamp(resumed)}, past the edge " +
                          $"{FormatTimestamp(edge)} - resuming the onset walk there");
             edge = await WalkPlateauEdgeAsync(resumed, limit, file, inputDecoder, announcement, ct);
         }
@@ -1068,34 +1066,32 @@ internal sealed class PreciseMarkRefiner
         var floor = Math.Max(0, Math.Min(segmentFloor, ceiling - PreciseMarkMaxBracketSeconds));
         if (ceiling - floor <= PreciseMarkFixedStepSeconds)
         {
-            _log?.Invoke($"cannot refine the mark at {FormatTimestamp(mark)} - the phrase was " +
-                         $"matched in too short a stretch to search ({FormatTimestamp(floor)} to " +
-                         $"{FormatTimestamp(ceiling)})");
+            _log?.Invoke($"cannot refine mark at {FormatTimestamp(mark)} - matched stretch too " +
+                         $"short to search ({FormatTimestamp(floor)}-{FormatTimestamp(ceiling)})");
             return null;
         }
 
         // Announced before it starts rather than after: this step can keep a single mark busy for a
         // while, and an unexplained silent wait is indistinguishable from a hang - which is exactly
         // how its predecessor was first reported, on Stalker.m4b's "Zeittafel", 2026-07-29.
-        _log?.Invoke($"refining mark at {FormatTimestamp(mark)} - narrowing in on the phrase " +
-                     $"between {FormatTimestamp(floor)} and {FormatTimestamp(ceiling)}");
+        _log?.Invoke($"refining mark at {FormatTimestamp(mark)} - search " +
+                     $"{FormatTimestamp(floor)}-{FormatTimestamp(ceiling)}");
 
         var origin = Math.Clamp(mark, Math.Min(segmentFloor, ceiling), ceiling);
         if (await FindPhraseSurvivalEdgeAsync(
                 origin, floor, ceiling, file, inputDecoder, announcement, ct)
             is not { } survival)
         {
-            _log?.Invoke($"the phrase was not heard anywhere from {FormatTimestamp(floor)} on - " +
-                         "the search range may not reach the announcement at all");
+            _log?.Invoke($"phrase not heard from {FormatTimestamp(floor)} on - " +
+                         "search range may not reach the announcement");
             return null;
         }
 
         var (aim, isEdge) = survival;
         _log?.Invoke(isEdge
-            ? $"phrase survives up to {FormatTimestamp(aim)} - " +
-              "confirming the announcement just before it"
-            : $"the phrase still survives from {FormatTimestamp(aim)}, the far end of the search " +
-              "range - the announcement lies at or past it, so that is where confirmation starts");
+            ? $"phrase survives to {FormatTimestamp(aim)} - confirming the announcement before it"
+            : $"phrase still survives at {FormatTimestamp(aim)}, the search range's far end - " +
+              "confirming from there");
 
         foreach (var backoff in PreciseMarkFootholdBackoffsSeconds)
         {
@@ -1107,10 +1103,10 @@ internal sealed class PreciseMarkRefiner
                 break;
         }
         _log?.Invoke(isEdge
-            ? $"nothing just before {FormatTimestamp(aim)} opens with the announcement - " +
-              "the phrase survived that far for some other reason (an in-text mention?)"
-            : $"nothing at or just before {FormatTimestamp(aim)} opens with the announcement - " +
-              "it lies further past the search range than one check window reaches");
+            ? $"nothing before {FormatTimestamp(aim)} opens with the announcement - phrase " +
+              "survived for another reason (in-text mention?)"
+            : $"nothing at or before {FormatTimestamp(aim)} opens with the announcement - it lies " +
+              "further past the search range than one check window reaches");
         return null;
     }
 

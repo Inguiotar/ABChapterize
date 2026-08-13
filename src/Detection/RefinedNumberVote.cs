@@ -86,16 +86,15 @@ internal static class RefinedNumberVote
         if (!bounds.Admits(winner))
         {
             log?.Invoke(
-                $"the mark refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as " +
-                $"{winner} ({count} of {total} readings), but that does not fit the sequence " +
-                $"{bounds.Describe()} - leaving it at {heard}");
+                $"refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as {winner} " +
+                $"({count} of {total} readings), outside {bounds.Describe()} - keeping {heard}");
             return null;
         }
 
         log?.Invoke(
-            $"the mark refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as {winner} " +
-            $"({count} of {total} readings, from windows framed on the announcement) - " +
-            "correcting the number, the mark stays where it is");
+            $"refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as {winner} " +
+            $"({count} of {total} readings, framed on the announcement) - number corrected, " +
+            "mark unchanged");
         return winner;
     }
 }

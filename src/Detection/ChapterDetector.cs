@@ -593,7 +593,7 @@ public sealed class ChapterDetector
 
             ct.ThrowIfCancellationRequested();
             log?.Invoke(
-                $"chapters {first.Number} and {second.Number} are marked " +
+                $"chapters {first.Number} and {second.Number} " +
                 $"{second.TimeSeconds - first.TimeSeconds:0.00} s apart at " +
                 $"{FormatTimestamp(first.TimeSeconds)} - one announcement read two ways");
 
@@ -615,8 +615,8 @@ public sealed class ChapterDetector
             else
             {
                 winner = second.Confidence > first.Confidence ? second : first;
-                log?.Invoke($"the announcement could not be settled by re-reading it - keeping " +
-                            $"chapter {winner.Number}, the reading heard with more confidence");
+                log?.Invoke("re-reading settled nothing - keeping chapter " +
+                            $"{winner.Number}, heard with more confidence");
             }
             settled.RemoveAt(i);
             settled[i - 1] = winner;
@@ -688,9 +688,9 @@ public sealed class ChapterDetector
                 continue;
             }
             log?.Invoke(
-                $"chapter {chapter.Number} at {FormatTimestamp(chapter.TimeSeconds)} is " +
+                $"chapter {chapter.Number} at {FormatTimestamp(chapter.TimeSeconds)}, " +
                 $"{Math.Abs(chapter.TimeSeconds - mark.TimeSeconds):0.00} s from the {mark.Kind} mark " +
-                "and fits nowhere in the sequence - dropping it as part of that announcement");
+                "and fitting nowhere in the sequence - dropped as part of that announcement");
         }
         return kept;
     }
@@ -798,12 +798,12 @@ public sealed class ChapterDetector
             ct.ThrowIfCancellationRequested();
             var bounds = BracketingBounds(outlier.TimeSeconds, repaired, [], expectedStartChapter);
             log?.Invoke(
-                $"chapter {outlier.Number} at {FormatTimestamp(outlier.TimeSeconds)} contradicts the " +
-                $"chapters around it, which leave room only {bounds.Describe()}");
+                $"chapter {outlier.Number} at {FormatTimestamp(outlier.TimeSeconds)} contradicts " +
+                $"its neighbours - they leave room only in {bounds.Describe()}");
 
             var repairedNumber = bounds.SoleCandidate(taken);
             if (repairedNumber is { } sole)
-                log?.Invoke($"chapter {sole} is the only number that fits there - renumbering the mark");
+                log?.Invoke($"chapter {sole} the only number that fits - renumbering the mark");
             else if (rereads < MaxSequenceRepairsPerFile)
             {
                 rereads++;
@@ -1080,8 +1080,8 @@ public sealed class ChapterDetector
         work.HighestChapter = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke(fills.Count > 0
-            ? $"pass 3.5: the shifted re-read recovered {fills.Count} chapter(s)"
-            : "pass 3.5: the shifted re-read found nothing further");
+            ? $"pass 3.5: shifted re-read recovered {fills.Count} chapter(s)"
+            : "pass 3.5: shifted re-read found nothing further");
         return chapters;
     }
 
@@ -1434,9 +1434,9 @@ public sealed class ChapterDetector
             if (wouldSpend > budget)
             {
                 _log?.Invoke(
-                    $"{phase}: stopping the sub-floor sweep before the {min:0.0#}-{max:0.0#} s band - " +
-                    $"{band.Count} more probe(s) would take the sweep to {wouldSpend} decode window(s), " +
-                    $"past the {budget:0.#} it may spend on this gap");
+                    $"{phase}: sweep stopped before the {min:0.0#}-{max:0.0#} s band - " +
+                    $"{band.Count} more probe(s) -> {wouldSpend} decode window(s), over this gap's " +
+                    $"{budget:0.#}");
                 return;
             }
             spent += band.Count * windowsPerProbe;
@@ -1535,11 +1535,11 @@ public sealed class ChapterDetector
 
         var env = BuildProbeEnvironment();
         _log?.Invoke("pass 2: " + (measuredBreakSeconds is { } measured
-                ? $"this book's chapter breaks measure down to {measured:0.0#} s, below the " +
+                ? $"chapter breaks measure down to {measured:0.0#} s, below the " +
                   $"{_options.MinSilenceSeconds:0.0#} s probing started at"
-                : "no mark measured a chapter break on this book, so nothing says the " +
-                  $"{_options.MinSilenceSeconds:0.0#} s probing started at was right") +
-            " - sweeping the gaps for the pauses just under it");
+                : $"no chapter break measured, nothing confirms the {_options.MinSilenceSeconds:0.0#} s " +
+                  "probing started at") +
+            " - sweeping the gaps for shorter pauses");
 
         foreach (var (gap, missing) in work)
             await SweepGapBandsAsync(
@@ -1717,8 +1717,8 @@ public sealed class ChapterDetector
 
         var claimed = ClaimedByCustomMapping(epilogue, named, profile);
         log?.Invoke(
-            $"the epilogue mark at {FormatTimestamp(epilogue.TimeSeconds)} does not follow the " +
-            $"book's last chapter (at {FormatTimestamp(last)}), so it is no epilogue" +
+            $"epilogue mark at {FormatTimestamp(epilogue.TimeSeconds)} does not follow the last " +
+            $"chapter (at {FormatTimestamp(last)}), so it is no epilogue" +
             (claimed is { } custom
                 ? $" - keeping it as {custom.Kind} (\"{custom.Title}\")"
                 : $" - dropping it{(epilogue.Text.Length > 0 ? $" (heard as \"{epilogue.Text}\")" : "")}"));
@@ -1969,7 +1969,7 @@ public sealed class ChapterDetector
                 // anyone asking why --verify did nothing, since the answer lives entirely in what
                 // the titles say and nothing else ever prints them.
                 _log?.Invoke($"marking at {FormatTimestamp(marking.StartSeconds)} (\"{marking.Title}\") " +
-                             "carries no readable chapter number - not checked");
+                             "- no readable chapter number, not checked");
                 markings.Add(new VerifyMarkingOutcome(marking.StartSeconds, null, false));
                 work.Advance(1);
                 continue;
@@ -2069,8 +2069,8 @@ public sealed class ChapterDetector
         if (shift > VerifyFixMaxShiftSeconds)
         {
             _log?.Invoke(
-                $"marking at {FormatTimestamp(marking.StartSeconds)} left alone - its announcement " +
-                $"is {shift:0.#} s away at {FormatTimestamp(refined.Mark)}, too far to be a mark " +
+                $"marking at {FormatTimestamp(marking.StartSeconds)} left alone - announcement " +
+                $"{shift:0.#} s away at {FormatTimestamp(refined.Mark)}, too far to be a mark " +
                 "that merely drifted");
             return null;
         }
@@ -2357,7 +2357,7 @@ public sealed class ChapterDetector
                 if (remaining is null && !IsAboveEveryKnownChapter(match.Number, knownChapters, found))
                 {
                     _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
-                                 "not above every chapter already found (in-text mention?)");
+                                 "not above every chapter found (in-text mention?)");
                     continue;
                 }
                 // A bounded gap knows exactly which numbers can live in it, so anything else is a
@@ -2369,7 +2369,7 @@ public sealed class ChapterDetector
                 if (remaining is not null && !remaining.Contains(match.Number))
                 {
                     _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
-                                 "not one of the chapters missing from this gap");
+                                 "not missing from this gap");
                     continue;
                 }
                 if (match.SpansMerge)
