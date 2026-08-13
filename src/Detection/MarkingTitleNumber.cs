@@ -54,7 +54,7 @@ internal static class MarkingTitleNumber
     [
         .. LanguageRegistry.Languages.Select(l => new LanguageProfile(
             l.Code, l.ChapterPhrase, CompileAnchor(l.ChapterPhrase), PhraseHasNumberGroup: false,
-            l.ChapterTitle, l.IntroTitle, []))
+            l.ChapterTitle, l.PartTitle, l.IntroTitle, []))
     ];
 
     /// <summary>
@@ -114,6 +114,40 @@ internal static class MarkingTitleNumber
         var digits = LooseDigits.Match(title);
         return digits.Success &&
                int.TryParse(digits.Value, NumberStyles.None, CultureInfo.InvariantCulture, out number);
+    }
+
+    /// <summary>
+    /// The part a marking's title puts it in, 1-based, for a file whose chapter numbering restarts
+    /// partway through (see <see cref="LanguageProfile.ChapterTitleFor"/>). Read back so a
+    /// <c>--verify</c> or auto-resume run over a file this tool marked sees three parts rather than
+    /// a numbering that jumps backwards twice - without it, <see cref="GapPlanning.Normalize"/>
+    /// would keep the longest part and throw the others away.
+    /// <para>
+    /// Deliberately far stricter than <see cref="TryParse"/>: the prefix must open the title, and
+    /// only the file's own language is consulted. Nothing but this tool ever writes a part prefix,
+    /// so there is no foreign convention to be generous towards - while a free search would find
+    /// Danish and Swedish "Del" inside ordinary words, and this is one of the two numbers a
+    /// chapter's identity is made of.
+    /// </para>
+    /// </summary>
+    /// <param name="title">The marking's title, as whatever tool wrote it left it.</param>
+    /// <param name="profile">The file's resolved language profile, supplying the part word.</param>
+    /// <param name="part">Receives the 1-based part number on success.</param>
+    /// <returns>True when the title opens with a part prefix.</returns>
+    internal static bool TryParsePart(string title, LanguageProfile profile, out int part)
+    {
+        part = 0;
+        var trimmed = title.TrimStart();
+        if (profile.PartTitle.Length == 0 ||
+            !trimmed.StartsWith(profile.PartTitle, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var after = trimmed[profile.PartTitle.Length..];
+        // A letter directly behind it means the match is the head of a longer word - Danish "Delen",
+        // Dutch "Deelname" - and not the prefix at all.
+        if (after.Length == 0 || char.IsLetter(after[0]))
+            return false;
+        return NumberWordParser.TryExtractNumber(BeforeHeading(after), profile.Language, out part) &&
+               part > 0;
     }
 
     /// <summary>

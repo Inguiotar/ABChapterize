@@ -5,6 +5,7 @@
 using Xunit;
 using ABChapterize.Cli;
 using ABChapterize.Errors;
+using ABChapterize.Language;
 
 namespace ABChapterize.Tests;
 
@@ -81,6 +82,89 @@ public sealed class CustomMappingParserTests
     [InlineData("/regexp/ :Prelude")]
     public void ParseSpec_RejectsAMalformedMapping(string spec)
         => Assert.Throws<CliError>(() => CustomMappingParser.ParseSpec(spec));
+
+    [Fact]
+    public void ParseSpec_ReadsALanguageTagAsItAlwaysDid()
+    {
+        var mapping = Assert.Single(CustomMappingParser.ParseSpec("[de]vorwort:Vorwort"));
+
+        Assert.Equal("de", mapping.Language);
+        Assert.Equal("vorwort", mapping.Phrase);
+        Assert.False(mapping.Tag!.Value.HasHints);
+    }
+
+    [Fact]
+    public void ParseSpec_ReadsHintsBesideTheLanguage()
+    {
+        var mapping = Assert.Single(
+            CustomMappingParser.ParseSpec("[de,before-first-chapter,once,heading]/vorwort/:Vorwort"));
+        var tag = mapping.Tag!.Value;
+
+        Assert.Equal("de", tag.Language);
+        Assert.Equal(NamedPhraseScope.BeforeFirstChapter, tag.Scope);
+        Assert.True(tag.Once);
+        Assert.True(tag.Heading);
+        Assert.Equal("/vorwort/", mapping.Phrase);
+    }
+
+    /// <summary>The short aliases mean the same as the long forms, which are what the docs use.</summary>
+    /// <param name="keyword">The keyword to write in the tag.</param>
+    /// <param name="expected">The scope it must resolve to.</param>
+    [Theory]
+    [InlineData("before-first-chapter", NamedPhraseScope.BeforeFirstChapter)]
+    [InlineData("before-first", NamedPhraseScope.BeforeFirstChapter)]
+    [InlineData("after-first-chapter", NamedPhraseScope.AfterFirstChapter)]
+    [InlineData("after-first", NamedPhraseScope.AfterFirstChapter)]
+    [InlineData("after-last-chapter", NamedPhraseScope.AfterLastChapter)]
+    [InlineData("after-last", NamedPhraseScope.AfterLastChapter)]
+    public void ParseSpec_AcceptsBothSpellingsOfEveryPosition(string keyword, NamedPhraseScope expected)
+        => Assert.Equal(
+            expected,
+            Assert.Single(CustomMappingParser.ParseSpec($"[{keyword}]interlude:Interlude"))
+                .Tag!.Value.Scope);
+
+    /// <summary>
+    /// The rule that keeps Whisper's own bracketed non-speech tags usable as phrases: a bracket run
+    /// with nothing recognizable in it is phrase text, not a tag. Measured over one 16-book corpus,
+    /// [Musik] alone appears 259 times in the transcripts, so this is a mapping somebody will write.
+    /// </summary>
+    /// <param name="spec">The mapping to parse.</param>
+    /// <param name="phrase">The phrase it must come out with, brackets included.</param>
+    [Theory]
+    [InlineData("[Musik]:Zwischenmusik", "[Musik]")]
+    [InlineData("[BLANK_AUDIO]:Stille", "[BLANK_AUDIO]")]
+    [InlineData("[Aufregende Musik]:Musik", "[Aufregende Musik]")]
+    public void ParseSpec_LeavesAnUnrecognizedBracketRunInThePhrase(string spec, string phrase)
+    {
+        var mapping = Assert.Single(CustomMappingParser.ParseSpec(spec));
+
+        Assert.Equal(phrase, mapping.Phrase);
+        Assert.Null(mapping.Language);
+        Assert.Null(mapping.Tag);
+    }
+
+    /// <summary>
+    /// The other side of that line: one good token makes the run a tag, so a typo beside it is an
+    /// error rather than silently becoming part of the phrase.
+    /// </summary>
+    /// <param name="spec">The malformed mapping.</param>
+    [Theory]
+    [InlineData("[once,headnig]interlude:Interlude")]
+    [InlineData("[de,en]interlude:Interlude")]
+    [InlineData("[before-first,after-last]interlude:Interlude")]
+    [InlineData("[max=abc]interlude:Interlude")]
+    [InlineData("[max=0]interlude:Interlude")]
+    [InlineData("[max=1]interlude:Interlude")]
+    [InlineData("[max=2,max=3]interlude:Interlude")]
+    public void ParseSpec_RejectsAMalformedTag(string spec)
+        => Assert.Throws<CliError>(() => CustomMappingParser.ParseSpec(spec));
+
+    [Fact]
+    public void ParseSpec_ReadsAPerMappingMarkCap()
+        => Assert.Equal(
+            3,
+            Assert.Single(CustomMappingParser.ParseSpec("[max=3]interlude:Interlude"))
+                .Tag!.Value.MaxMarks);
 
     [Fact]
     public void ParseFile_ReadsOneMappingPerLine_SkippingBlanksAndComments()

@@ -37,9 +37,11 @@ public sealed class FileProcessorTests : IDisposable
     /// and <see cref="DetectionResult.LeadInHasSpeech"/>, everything else at its default/empty
     /// value.</summary>
     private DetectionResult Result(
-        List<DetectedChapter> chapters, bool leadInHasSpeech = true, List<DetectedMark>? named = null)
+        List<DetectedChapter> chapters, bool leadInHasSpeech = true, List<DetectedMark>? named = null,
+        int sequenceCount = 1)
         => new(chapters, named ?? [], false, [], [], _profile, null, 0,
-            new DetectionStats(null, null, null, null, 0, 0), LeadInHasSpeech: leadInHasSpeech);
+            new DetectionStats(null, null, null, null, 0, 0), LeadInHasSpeech: leadInHasSpeech,
+            SequenceCount: sequenceCount);
 
     /// <summary>Builds the chapter list with the named-mark merge switched off, which is what every
     /// test about intro insertion and ordering wants - the merge has tests of its own below - and
@@ -55,6 +57,35 @@ public sealed class FileProcessorTests : IDisposable
         var chapters = Build(Result([new(1, 30)]));
 
         Assert.Equal([new Chapter(0, "Intro"), new Chapter(30, "Chapter 1")], chapters);
+    }
+
+    [Fact]
+    public void BuildChapters_PrefixesEveryChapterWithItsPart_WhenTheFileHoldsSeveralSequences()
+    {
+        // Both parts are labelled, not just the second: an unlabelled first part reads as a book
+        // that acquired parts halfway through. The prefix is only ever written for a file that
+        // really holds more than one sequence - see the test below for the ordinary book.
+        var chapters = Build(Result(
+            [new(1, 30), new(2, 300), new(1, 900, Sequence: 1), new(2, 1500, Sequence: 1)],
+            sequenceCount: 2));
+
+        Assert.Equal(
+            [new Chapter(0, "Intro"), new Chapter(30, "Part 1 - Chapter 1"),
+             new Chapter(300, "Part 1 - Chapter 2"), new Chapter(900, "Part 2 - Chapter 1"),
+             new Chapter(1500, "Part 2 - Chapter 2")],
+            chapters);
+    }
+
+    [Fact]
+    public void BuildChapters_WritesNoPartPrefix_ForAFileHoldingOneSequence()
+    {
+        // The ordinary book, unchanged: a lone "Part 1" in front of every chapter of a book that
+        // has no part 2 is noise, and it would rewrite every title this tool has ever produced.
+        var chapters = Build(Result([new(1, 30), new(2, 300)]));
+
+        Assert.Equal(
+            [new Chapter(0, "Intro"), new Chapter(30, "Chapter 1"), new Chapter(300, "Chapter 2")],
+            chapters);
     }
 
     [Fact]

@@ -17,6 +17,44 @@ earn a round number.
 
 ### Added
 
+- **Books that count their chapters from one again in every part are now marked in full.**
+  Until now such a file yielded chapters up to the end of its first part and then stopped,
+  every later announcement being heard, understood, and dropped for not continuing the
+  numbering — which looks exactly like a detection failure. The restart is now recognized
+  once three consecutive chapters of the new part have been heard, and everything from
+  there is marked under the new count. Nothing is assumed on weaker evidence: a single
+  announcement below the sequence is still an in-text mention ("as I said in chapter
+  three") and is still passed over.
+
+  Chapters of such a file are titled with their part — "Part 2 - Chapter 1" — and every
+  part is labelled, including the first. A book with a single chapter sequence, which is
+  virtually all of them, is written exactly as before. The word is localized like the
+  others and can be set with the new **`--part-title <word>`**. The file's summary line
+  reports the parts it found and the range each one covers.
+
+- **`--custom` mappings can say what kind of thing they name.** The `[...]` tag that
+  restricted a mapping to one language now takes a comma-separated list, and hints may
+  sit in it beside the language code:
+
+  ```
+  --custom "[de,before-first-chapter,once]/vorwort/:Vorwort"
+  --custom "[after-last-chapter,heading]nachwort:Nachwort"
+  --custom "[max=3]/zwischenspiel/:Zwischenspiel"
+  ```
+
+  `before-first-chapter`, `after-first-chapter` and `after-last-chapter` restrict where
+  in the book a match counts (short forms `before-first`, `after-first`, `after-last`);
+  `once` keeps a single mark, the last match winning; `heading` requires a real pause in
+  front of the match, the check that tells a heading read aloud from the same word buried
+  in a sentence; `max=<n>` caps how many marks one mapping may produce. None of it is new
+  behaviour — the built-in prologue and epilogue have always been exactly this — and a
+  mapping without hints does what it always did.
+
+  A bracket run only counts as a tag when something in it is recognized, so
+  `--custom "[Musik]:Zwischenmusik"` still matches those words rather than being read as
+  a tag. A hint on `--chapter-phrase` or another localized option, where it would mean
+  nothing, is an error rather than silently ignored.
+
 - **`--named-mark-distance <seconds>` keeps a named mark from crowding a chapter.** A
   prologue, epilogue or `--custom` mark landing within 10 seconds of a chapter mark (the
   new default) is no longer written as an entry of its own: the chapter keeps its

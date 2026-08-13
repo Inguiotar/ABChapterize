@@ -19,6 +19,9 @@ public sealed class ItalianLanguage : ILanguage
     public string ChapterTitle => "Capitolo";
 
     /// <inheritdoc/>
+    public string PartTitle => "Parte";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Introduzione";
 
     /// <inheritdoc/>

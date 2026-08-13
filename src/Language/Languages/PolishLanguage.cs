@@ -24,6 +24,9 @@ public sealed class PolishLanguage : ILanguage
     public string ChapterTitle => "Rozdział";
 
     /// <inheritdoc/>
+    public string PartTitle => "Część";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Wstęp";
 
     /// <inheritdoc/>

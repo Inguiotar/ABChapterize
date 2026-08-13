@@ -18,7 +18,45 @@ internal static class GapPlanning
     /// <summary>A time region suspected to contain undetected chapter starts.</summary>
     /// <param name="FromSeconds">Region start.</param>
     /// <param name="ToSeconds">Region end.</param>
-    internal readonly record struct GapRegion(double FromSeconds, double ToSeconds);
+    /// <param name="Sequence">Which chapter sequence the missing numbers belong to (see
+    /// <see cref="DetectedChapter.Sequence"/>); 0 for every gap of an ordinary book. A gap never
+    /// straddles a restart - <see cref="FindGaps"/> raises one across a part boundary only for the
+    /// head of the <em>new</em> part - so a single sequence always answers for the whole of it.</param>
+    internal readonly record struct GapRegion(double FromSeconds, double ToSeconds, int Sequence = 0);
+
+    /// <summary>
+    /// The number a chapter sequence is expected to begin at, or null when nothing may be assumed.
+    /// <para>
+    /// The file's own first sequence keeps the rule <see cref="FindGaps"/> has always applied: only
+    /// <c>--expected-start-chapter</c> (or, through <see cref="ExpectedStartFor"/>, a detected
+    /// prologue) may say a chapter is missing below the first one found, because a low first number
+    /// is ambiguous - a split-book part legitimately starts at chapter 12.
+    /// </para>
+    /// <para>
+    /// Every sequence after a restart is unambiguous, and answers 1. Counting from 1 again is what
+    /// a restart <em>is</em> - it is the evidence <see cref="RegionProber"/> requires before opening
+    /// a new sequence at all - so a part whose lowest detected number is 3 is a part missing its
+    /// first two chapters, not a part that begins at 3.
+    /// </para>
+    /// </summary>
+    /// <param name="sequence">The 0-based sequence in question.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null for no expectation.</param>
+    internal static int? StartOfSequence(int sequence, int? expectedStartChapter)
+        => sequence == 0 ? expectedStartChapter : 1;
+
+    /// <summary>
+    /// Splits a chapter list into its sequences, ascending by sequence and, within each, by time -
+    /// one group holding everything for the ordinary book. The unit almost every rule below works
+    /// in: "does the numbering ascend", "which numbers are missing" and "what does this hole hold"
+    /// are all questions about one part of a book, and asking them of a list spanning a restart
+    /// answers about a numbering that jumps backwards.
+    /// </summary>
+    /// <param name="chapters">The chapters to split, in any order.</param>
+    internal static List<List<DetectedChapter>> BySequence(IEnumerable<DetectedChapter> chapters)
+        => [.. chapters
+            .GroupBy(c => c.Sequence)
+            .OrderBy(g => g.Key)
+            .Select(g => g.OrderBy(c => c.TimeSeconds).ToList())];
 
     /// <summary>One region <see cref="ChapterDetector.DetectCoreAsync"/> runs its own, independent Pass 2 pass
     /// over - the whole file for a fresh <see cref="ChapterDetector.DetectAsync"/> run, or a single gap-scoped
@@ -42,8 +80,14 @@ internal static class GapPlanning
     /// null when nothing does (this region reaches to the file end). A match at or above it is
     /// rejected outright - guarding against a snapped probe window spilling into the next known
     /// chapter's own announcement and displacing it.</param>
+    /// <param name="Sequence">Which of the file's chapter sequences this region lies in (see
+    /// <see cref="DetectedChapter.Sequence"/>); 0 for every region of an ordinary book. Both
+    /// numbers above are that sequence's own, so a recovery region inside part 2 hunts part 2's
+    /// numbering, and anything it finds is stamped with this rather than falling back into part 1.
+    /// A region never straddles a part boundary: every one of them is derived from a gap, and
+    /// <see cref="FindGaps"/> opens none across a restart.</param>
     internal readonly record struct DetectionRegion(
-        double FromSeconds, double ToSeconds, int LowerNumber, int? UpperNumber);
+        double FromSeconds, double ToSeconds, int LowerNumber, int? UpperNumber, int Sequence = 0);
 
     /// <summary>The regions and, when the last checkable marking in file order is unconfirmed, the
     /// trailing recovery target <see cref="ChapterDetector.DetectCoreAsync"/> needs - see <see
@@ -100,6 +144,14 @@ internal static class GapPlanning
     /// from-scratch run has no way to know whether a low first number is really the book's start
     /// or just Pass 2 missing an earlier chapter, and guessing "1" wrongly assumed the latter for
     /// every book, including legitimate split-book parts. Internal for unit testing.
+    /// <para>
+    /// A restart is the one place where consecutive chapters may legitimately run backwards, and it
+    /// is not a hole: part 2's chapter 1 follows part 1's chapter 15 with nothing missing between
+    /// them, and a gap raised there would send Pass 3 across the whole of part 1 hunting numbers
+    /// that were never spoken. What the boundary can still hide is the <em>head</em> of the new
+    /// part, so it raises a gap for exactly that - and only when the new part does not already
+    /// start at 1 (see <see cref="StartOfSequence"/>).
+    /// </para>
     /// </summary>
     /// <param name="chapters">The currently known chapters, in chronological order.</param>
     /// <param name="duration">Total play time (currently unused; kept for a symmetric,
@@ -114,7 +166,7 @@ internal static class GapPlanning
             return gaps;
         if (expectedStartChapter is { } expected && !chapters[0].NumberUnverified &&
             chapters[0].Number > expected && chapters[0].TimeSeconds > MinLeadingGapSeconds)
-            gaps.Add(new GapRegion(0, chapters[0].TimeSeconds));
+            gaps.Add(new GapRegion(0, chapters[0].TimeSeconds, chapters[0].Sequence));
         for (var i = 1; i < chapters.Count; i++)
         {
             // Skipping the entry rather than filtering it out of the list keeps its neighbours from
@@ -122,8 +174,12 @@ internal static class GapPlanning
             // just may not be the far end of a hole (see DetectedChapter.NumberUnverified).
             if (chapters[i].NumberUnverified)
                 continue;
-            if (chapters[i].Number > chapters[i - 1].Number + 1)
-                gaps.Add(new GapRegion(chapters[i - 1].TimeSeconds, chapters[i].TimeSeconds));
+            var expectedHere = chapters[i].Sequence != chapters[i - 1].Sequence
+                ? StartOfSequence(chapters[i].Sequence, expectedStartChapter) ?? chapters[i].Number
+                : chapters[i - 1].Number + 1;
+            if (chapters[i].Number > expectedHere)
+                gaps.Add(new GapRegion(
+                    chapters[i - 1].TimeSeconds, chapters[i].TimeSeconds, chapters[i].Sequence));
         }
         return gaps;
     }
@@ -135,6 +191,11 @@ internal static class GapPlanning
     /// bounding chapters are located by their exact timestamps, which <see cref="FindGaps"/>
     /// copied verbatim into the gap, so the float match is exact. Pass 3 uses this to stop
     /// transcribing a gap the moment all of them are found. Internal for unit testing.
+    /// <para>
+    /// A gap opened by a restart is bounded below by the previous part's last chapter, which says
+    /// nothing at all about how far into the new part its far end sits - so it is treated exactly
+    /// like a leading gap, and the range runs from where the new sequence is expected to begin.
+    /// </para>
     /// </summary>
     /// <param name="chapters">The currently known chapters, in chronological order.</param>
     /// <param name="gap">A gap produced by <see cref="FindGaps"/> over these chapters.</param>
@@ -146,10 +207,12 @@ internal static class GapPlanning
     {
         var upper = chapters.First(c => c.TimeSeconds == gap.ToSeconds).Number;
         // A leading gap starts at 0 with no chapter there; FirstOrDefault yields a default
-        // DetectedChapter (Number 0), the signal to fall back to expectedStartChapter - 1 (or 0,
-        // when null) so the expected set becomes expectedStartChapter..upper-1 as intended.
+        // DetectedChapter (Number 0), the signal to fall back to the sequence's expected start
+        // (or 1, when there is no expectation) so the set becomes expectedStart..upper-1.
         var boundChapter = chapters.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds);
-        var lower = boundChapter.Number != 0 ? boundChapter.Number : (expectedStartChapter ?? 1) - 1;
+        var lower = boundChapter.Number != 0 && boundChapter.Sequence == gap.Sequence
+            ? boundChapter.Number
+            : (StartOfSequence(gap.Sequence, expectedStartChapter) ?? 1) - 1;
         var missing = new List<int>();
         for (var n = lower + 1; n < upper; n++)
             missing.Add(n);
@@ -256,25 +319,36 @@ internal static class GapPlanning
         {
             if (checkable[i].Confirmed)
                 continue;
-            // Not the start of a run when the previous checkable marking is itself unconfirmed -
-            // this index was already folded into that earlier run below.
-            if (i > 0 && !checkable[i - 1].Confirmed)
+            // Not the start of a run when the previous checkable marking is itself unconfirmed and
+            // belongs to the same part - this index was already folded into that earlier run below.
+            // A restart always breaks the run, however many unconfirmed markings meet across it:
+            // one region cannot hunt two numberings at once.
+            if (i > 0 && !checkable[i - 1].Confirmed && checkable[i - 1].Sequence == checkable[i].Sequence)
                 continue;
 
+            var sequence = checkable[i].Sequence;
             var runEnd = i;
-            while (runEnd + 1 < checkable.Count && !checkable[runEnd + 1].Confirmed)
+            while (runEnd + 1 < checkable.Count && !checkable[runEnd + 1].Confirmed &&
+                   checkable[runEnd + 1].Sequence == sequence)
                 runEnd++;
 
             var isTrailing = runEnd + 1 >= checkable.Count;
             var from = i > 0 ? checkable[i - 1].StartSeconds : 0.0;
-            var lower = i > 0 ? checkable[i - 1].ExpectedNumber!.Value : 0;
             var to = isTrailing ? duration : checkable[runEnd + 1].StartSeconds;
-            var upper = isTrailing ? (int?)null : checkable[runEnd + 1].ExpectedNumber!.Value;
+            // The audio bounds above take the nearest marking either way, so no stretch is left
+            // unprobed; the number bounds may only come from this part, since a marking on the far
+            // side of a restart says nothing at all about how this part's numbering runs.
+            var lower = i > 0 && checkable[i - 1].Sequence == sequence
+                ? checkable[i - 1].ExpectedNumber!.Value
+                : 0;
+            var upper = isTrailing || checkable[runEnd + 1].Sequence != sequence
+                ? (int?)null
+                : checkable[runEnd + 1].ExpectedNumber!.Value;
             // The trailing run also gets an ordinary Pass 2 region (cheap silence/jingle probing
             // may well find it, exactly like an interior gap); trailingFrom/trailingTargets exist
             // purely so DetectCoreAsync can still add a Pass 3 fallback for whatever that probing
             // does not find, since - see the remarks above - nothing else would notice.
-            regions.Add(new DetectionRegion(from, to, lower, upper));
+            regions.Add(new DetectionRegion(from, to, lower, upper, sequence));
             if (isTrailing)
             {
                 trailingFrom = from;
@@ -328,6 +402,35 @@ internal static class GapPlanning
     /// <returns>The ascending subset in chronological order, and the discarded entries in the same
     /// order.</returns>
     internal static (List<DetectedChapter> Kept, List<DetectedChapter> Dropped) NormalizeWithOutliers(
+        List<DetectedChapter> found)
+    {
+        // One sequence at a time, because "ascending" only means anything inside a part: run the
+        // subsequence search across a restart and it would keep whichever part is longer and throw
+        // the other away wholesale, which is the exact failure this feature exists to end.
+        if (found.Any(c => c.Sequence != 0))
+        {
+            var keptAll = new List<DetectedChapter>();
+            var droppedAll = new List<DetectedChapter>();
+            foreach (var sequence in BySequence(found))
+            {
+                var (kept, dropped) = NormalizeOneSequence(sequence);
+                keptAll.AddRange(kept);
+                droppedAll.AddRange(dropped);
+            }
+            // Sequences are contiguous in time, so this only ever re-sorts within a part - but a
+            // caller reading position off the list order must not have to know that.
+            return ([.. keptAll.OrderBy(c => c.TimeSeconds)],
+                    [.. droppedAll.OrderBy(c => c.TimeSeconds)]);
+        }
+        return NormalizeOneSequence(found);
+    }
+
+    /// <summary>
+    /// <see cref="NormalizeWithOutliers"/> over the chapters of a single sequence - the whole job
+    /// for an ordinary book, and one part's share of it for a book divided into parts.
+    /// </summary>
+    /// <param name="found">The raw detections of one sequence, in any order.</param>
+    private static (List<DetectedChapter> Kept, List<DetectedChapter> Dropped) NormalizeOneSequence(
         List<DetectedChapter> found)
     {
         var ordered = found.OrderBy(c => c.TimeSeconds).ThenBy(c => c.Number).ToList();
@@ -572,28 +675,54 @@ internal static class GapPlanning
         IEnumerable<DetectedChapter> found, int? expectedStartChapter = null)
     {
         var kept = Normalize(found.ToList());
-        var numbers = kept.Select(c => c.Number).ToHashSet();
-        if (numbers.Count == 0)
+        if (kept.Count == 0)
             return (0, []);
+        var highest = 0;
+        var missing = new List<int>();
+        // Per part, and the reported "highest" is the last part's: the bar is saying how far into
+        // the book this run has got, and a book on part 3's chapter 2 has not gone backwards from
+        // part 1's chapter 15.
+        foreach (var sequence in BySequence(kept))
+            highest = MissingInSequence(sequence, expectedStartChapter, missing);
+        return (highest, missing);
+    }
+
+    /// <summary>
+    /// Adds one sequence's still-undetected chapter numbers to <paramref name="missing"/> and
+    /// returns the highest number it reaches - <see cref="ChapterProgress"/>'s per-part body,
+    /// split out so the loop over the parts reads as the one new thing it is.
+    /// </summary>
+    /// <param name="sequence">One sequence's chapters, ascending in time.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null for no expectation.</param>
+    /// <param name="missing">Collects the missing numbers; appended to.</param>
+    /// <returns>The highest number present in this sequence, corroborated or not.</returns>
+    private static int MissingInSequence(
+        List<DetectedChapter> sequence, int? expectedStartChapter, List<int> missing)
+    {
+        var numbers = sequence.Select(c => c.Number).ToHashSet();
+        if (numbers.Count == 0)
+            return 0;
         // Only a corroborated number gets to say how far the book runs. An unverified one still
         // counts as present - it is a mark like any other - but the stretch below it is not
         // reported missing, which is what keeps a spoken year from declaring two thousand chapters
         // lost (see DetectedChapter.NumberUnverified).
-        var vouched = kept.Where(c => !c.NumberUnverified).Select(c => c.Number).ToList();
+        var vouched = sequence.Where(c => !c.NumberUnverified).Select(c => c.Number).ToList();
         // Nothing corroborated at all leaves no span to be missing from, so nothing is: the highest
         // number is still reported, since it names a mark that really was written, but a lone
         // uncorroborated 2179 must not answer "how much of this book is still missing?" with 2114.
         // Reachable on a clip or a short file - Pass 2 finding exactly one chapter and that one in
         // doubt - rather than on a whole book.
         if (vouched.Count == 0)
-            return (numbers.Max(), []);
+            return numbers.Max();
         var highest = vouched.Max();
         // Clamped to highest: the first chapter found can transiently be numbered below
         // expectedStartChapter for one call, right before ChapterDetector's own "below
         // expectation" check aborts the run - without the clamp that would make the range
         // below negative-length and throw.
-        var lowest = Math.Min(highest, expectedStartChapter ?? numbers.Min());
-        var missing = Enumerable.Range(lowest, highest - lowest + 1).Where(n => !numbers.Contains(n)).ToList();
-        return (highest, missing);
+        var lowest = Math.Min(
+            highest, StartOfSequence(sequence[0].Sequence, expectedStartChapter) ?? numbers.Min());
+        missing.AddRange(
+            Enumerable.Range(lowest, highest - lowest + 1).Where(n => !numbers.Contains(n)));
+        return highest;
     }
 }

@@ -19,6 +19,9 @@ public sealed class DutchLanguage : ILanguage
     public string ChapterTitle => "Hoofdstuk";
 
     /// <inheritdoc/>
+    public string PartTitle => "Deel";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Intro";
 
     /// <inheritdoc/>

@@ -783,6 +783,126 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task CustomPhrase_TaggedOnce_KeepsOnlyTheLastMatch()
+    {
+        // "once" is NamedPhrase.Repeatable inverted, which is the prologue's and epilogue's own
+        // rule: the last announcement inside the scope wins, since front matter routinely mentions
+        // what is coming before the narrator actually announces it.
+        var result = await DetectAsync(
+            Options("--custom", "[once]zwischenspiel:Zwischenspiel"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Zwischenspiel."));
+                s.Add(1800, Seg(0.4, " Zwischenspiel."));
+            });
+
+        AssertNamed([("custom 1", "Zwischenspiel", 1800.15)], result);
+    }
+
+    [Fact]
+    public async Task CustomPhrase_TaggedWithAMarkCap_StopsAtIt()
+    {
+        // The per-mapping counterpart of the file-wide --custom cap, and counted the same way
+        // round: the first ones are kept and the rest dropped.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--custom", "[max=2]zwischenspiel:Zwischenspiel"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800), new(2395, 2400)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Zwischenspiel."));
+                s.Add(1800, Seg(0.4, " Zwischenspiel."));
+                s.Add(2400, Seg(0.4, " Zwischenspiel."));
+            });
+
+        AssertNamed(
+            [("custom 1", "Zwischenspiel", 1199.95), ("custom 1", "Zwischenspiel", 1800.15)],
+            result);
+        Assert.Contains(log, l => l.Contains("this mapping's own limit of 2 mark(s) is reached"));
+        // The file-wide cap is untouched by a mapping reaching its own.
+        Assert.False(result.CustomMarkLimitHit);
+    }
+
+    [Fact]
+    public async Task CustomPhrase_TaggedBeforeFirstChapter_IsDroppedAfterOne_AndSaysSoOnce()
+    {
+        // The prologue's scope, available to a mapping by name. The note is capped at one line per
+        // phrase: an out-of-scope drop is silent by design, and it took a hint the user wrote by
+        // hand to make the silence a support question.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--custom", "[before-first-chapter]/vorwort/:Vorwort"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Vorwort."));
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Vorwort."));
+                s.Add(1800, Seg(0.4, " Vorwort."));
+            });
+
+        AssertNamed([("custom 1", "Vorwort", 0.25)], result);
+        Assert.Single(log, l => l.Contains("outside the \"before-first-chapter\" position"));
+    }
+
+    [Fact]
+    public async Task CustomPhrase_TaggedAfterLastChapter_LosesItsMidBookMatches()
+    {
+        // The one hint that cannot be a pre-placement filter: which chapter is last is unknown
+        // until every pass has finished, so the mid-book marks are placed and then dropped at the
+        // end. Precision only - it saves no transcription, and the doc comment says so.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--custom", "[after-last-chapter]nachwort:Nachwort"),
+            [new(595, 600), new(1195, 1200), new(1795, 1800), new(2395, 2400)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Nachwort."));
+                s.Add(1800, Seg(0.4, " Chapter two."));
+                s.Add(2400, Seg(0.4, " Nachwort."));
+            });
+
+        AssertChapters([new(1, 600.05), new(2, 1800.15)], result.Chapters);
+        AssertNamed([("custom 1", "Nachwort", 2399.95)], result);
+        Assert.Contains(log, l => l.Contains("as its \"after-last-chapter\" hint asks"));
+    }
+
+    [Fact]
+    public void DropOutOfScopeNamedMarks_LeavesEveryOtherMappingAlone()
+    {
+        // Pure bookkeeping, so it is tested without a decoder: only a mapping that asked to sit
+        // after the last chapter is judged, and only against that chapter.
+        var profile = Options(
+            "--custom", "[after-last-chapter]nachwort:Nachwort;zwischenspiel:Zwischenspiel")
+            .DefaultProfile;
+        var resolved = ChapterDetector.DropOutOfScopeNamedMarks(
+            [
+                new("custom 1", "Nachwort", 1200, Repeatable: true),
+                new("custom 2", "Zwischenspiel", 1200, Repeatable: true),
+                new("custom 1", "Nachwort", 1900, Repeatable: true),
+            ],
+            [new DetectedChapter(1, 600), new DetectedChapter(2, 1800)], profile, null);
+
+        Assert.Equal(
+            [("custom 2", 1200d), ("custom 1", 1900d)],
+            resolved.Select(m => (m.Kind, m.TimeSeconds)));
+    }
+
+    [Fact]
+    public void DropOutOfScopeNamedMarks_KeepsEverything_WhenNoChapterWasFound()
+    {
+        // With no chapter there is no "last chapter" for anything to be after, and dropping every
+        // such mark would turn a book whose chapters were never heard into a book with nothing at
+        // all - the strictly worse of the two answers.
+        var profile = Options("--custom", "[after-last-chapter]nachwort:Nachwort").DefaultProfile;
+        var resolved = ChapterDetector.DropOutOfScopeNamedMarks(
+            [new("custom 1", "Nachwort", 1200, Repeatable: true)], [], profile, null);
+
+        Assert.Single(resolved);
+    }
+
+    [Fact]
     public async Task CustomPhrase_IsNotBoundByTheChapterSequence()
     {
         // Both before the first chapter and after the last: neither scope rule applies to it.
@@ -1057,19 +1177,19 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task ChapterNumbersRestartingMidFile_AreReportedAsARestartRatherThanSilentlyDropped()
+    public async Task ChapterNumbersRestartingMidFile_OpenASecondSequenceOnceThreeOfThemAgree()
     {
         // Real-world case ("The Forever War", 2026-08-03): the book is divided into parts and each
         // one starts its chapters over at one, so everything after part one's chapter 15 was heard,
         // numbered correctly, and then dropped for not topping the sequence. 27 announcements went
-        // that way and the run said nothing about it - the file simply stopped yielding chapters a
-        // quarter of the way in, which reads exactly like a detection failure.
+        // that way, and the file simply stopped yielding chapters a quarter of the way in.
         //
-        // Four chapters, then a restart at one: the ascending run of rejected numbers is what tells a
-        // book in parts from the in-text mention above, and three is where SequenceRestartRunLength
-        // draws the line. Note that the run has to be built from numbers strictly *below* the
-        // sequence - a repeat that merely equals the last accepted chapter is the ordinary
-        // re-detection of an announcement two windows overlapped, and says nothing about parts.
+        // Four chapters, then a restart at one: the ascending run of announcements below the
+        // sequence is what tells a book in parts from an in-text mention, and three is where
+        // SequenceRestartRunLength draws the line. Note that the run has to be built from numbers
+        // strictly *below* the sequence - a repeat that merely equals the last accepted chapter is
+        // the ordinary re-detection of an announcement two windows overlapped, and says nothing
+        // about parts.
         var (result, log, _) = await DetectWithLogAsync(
             Options(),
             [new(395, 400), new(795, 800), new(1195, 1200),
@@ -1085,13 +1205,93 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(2400, Seg(0.3, " Chapter three."));
             });
 
-        // The dropping itself is unchanged - continuing the numbering would mean accepting a number
-        // the sequence has already used, which every misheard-number defence exists to refuse.
-        Assert.Equal([1, 2, 3, 4], result.Chapters.Select(c => c.Number));
-        Assert.Equal(3, result.SequenceRestartSkips);
-        Assert.Contains(log, l => l.Contains("the chapter numbering appears to restart"));
-        // Once, however many further announcements go the same way.
-        Assert.Single(log, l => l.Contains("the chapter numbering appears to restart"));
+        // Every announcement becomes a mark, the second part counting from one again.
+        Assert.Equal([1, 2, 3, 4, 1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Equal([0, 0, 0, 0, 1, 1, 1], result.Chapters.Select(c => c.Sequence));
+        Assert.Equal(2, result.SequenceCount);
+        // Nothing was lost, so nothing is reported as lost - and the boundary is not a hole, so no
+        // chapter is declared missing between part one's chapter 4 and part two's chapter 1.
+        Assert.Equal(0, result.SequenceRestartSkips);
+        Assert.False(result.GapRemains);
+        Assert.Empty(result.MissingNumbers);
+        Assert.Contains(log, l => l.Contains("the chapter numbering restarts at 0:26:40"));
+        Assert.Single(log, l => l.Contains("the chapter numbering restarts"));
+    }
+
+    [Fact]
+    public async Task ARestartedSequence_KeepsCountingWhereTheOldOneWouldHaveSwallowedIt()
+    {
+        // The mixing-up hazard, and the reason a run being tracked outranks the ordinary sequence
+        // test: part one ends at chapter 3, so part two's chapters 1 and 2 sit below the sequence
+        // but its chapter 3 equals it and its chapter 4 *tops* it. Judged on the sequence alone,
+        // that 4 would be accepted as part one's chapter 4 and the two numberings would be spliced
+        // into one - which is exactly the failure the pending run exists to prevent.
+        var (result, _, _) = await DetectWithLogAsync(
+            Options(),
+            [new(395, 400), new(795, 800), new(1195, 1200), new(1595, 1600), new(1995, 2000),
+             new(2395, 2400)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(400, Seg(0.4, " Chapter two."));
+                s.Add(800, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter one."));
+                s.Add(1600, Seg(0.3, " Chapter two."));
+                s.Add(2000, Seg(0.3, " Chapter three."));
+                s.Add(2400, Seg(0.3, " Chapter four."));
+            });
+
+        Assert.Equal([1, 2, 3, 1, 2, 3, 4], result.Chapters.Select(c => c.Number));
+        Assert.Equal([0, 0, 0, 1, 1, 1, 1], result.Chapters.Select(c => c.Sequence));
+        Assert.Equal(2, result.SequenceCount);
+    }
+
+    [Fact]
+    public async Task ARestartHeardTwiceByOverlappingWindows_StillConfirmsOnThreeDistinctChapters()
+    {
+        // Overlapping probe windows routinely hear one announcement twice, and the second hearing
+        // must neither restart the run nor count towards it: "The Forever War"'s own log has part
+        // two's chapter 2 rejected four times over. A run that reset on a repeat would never reach
+        // three on a real book.
+        var (result, _, _) = await DetectWithLogAsync(
+            Options(),
+            [new(395, 400), new(795, 800), new(1195, 1200), new(1595, 1600), new(1995, 2000),
+             new(2395, 2400)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(400, Seg(0.4, " Chapter two."));
+                s.Add(800, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter one."));
+                s.Add(1600, Seg(0.3, " Chapter one."));
+                s.Add(2000, Seg(0.3, " Chapter two."));
+                s.Add(2400, Seg(0.3, " Chapter three."));
+            });
+
+        Assert.Equal(2, result.SequenceCount);
+        Assert.Equal([1, 2, 3, 1, 2, 3], result.Chapters.Select(c => c.Number));
+    }
+
+    [Fact]
+    public async Task TwoAnnouncementsBelowTheSequence_AreNotEnoughToOpenANewPart()
+    {
+        // One short of the run length: the announcements are held back, never confirmed, and end up
+        // booked as lost exactly as they were before parts existed. Deliberately the conservative
+        // side of the line - a part is a claim about the whole rest of the file.
+        var (result, _, _) = await DetectWithLogAsync(
+            Options(),
+            [new(395, 400), new(795, 800), new(1195, 1200), new(1595, 1600)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(400, Seg(0.4, " Chapter two."));
+                s.Add(800, Seg(0.3, " Chapter three."));
+                s.Add(1200, Seg(0.3, " Chapter one."));
+                s.Add(1600, Seg(0.3, " Chapter two."));
+            });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Equal(1, result.SequenceCount);
     }
 
     [Fact]
@@ -1502,6 +1702,78 @@ public sealed class ChapterDetectorTests : IDisposable
         var gaps = GapPlanning.FindGaps(chapters, Duration, expectedStartChapter: 12);
         Assert.Equal([new(0, 500)], gaps);
         Assert.Equal([12, 13, 14], GapPlanning.MissingNumbersInGap(chapters, gaps[0], expectedStartChapter: 12));
+    }
+
+    [Fact]
+    public void FindGaps_RaisesNoGapAcrossARestart()
+    {
+        // The boundary itself is not a hole: part two's chapter 1 follows part one's chapter 4 with
+        // nothing missing between them. A gap here would send Pass 3 across the whole of part one
+        // hunting numbers 5..15 that were never spoken.
+        var chapters = new List<DetectedChapter>
+        {
+            new(1, 100), new(2, 500), new(1, 900, Sequence: 1), new(2, 1300, Sequence: 1),
+        };
+        Assert.Empty(GapPlanning.FindGaps(chapters, Duration));
+    }
+
+    [Fact]
+    public void FindGaps_RaisesTheHeadOfARestartedPart_WhenItDoesNotStartAtOne()
+    {
+        // What the boundary *can* hide: the new part's own opening chapters. Unlike the file-level
+        // leading gap this needs no --expected-start-chapter - a part counting from 1 again is
+        // exactly the evidence a restart was confirmed on, so a part whose lowest number is 3 is a
+        // part missing its first two chapters.
+        var chapters = new List<DetectedChapter>
+        {
+            new(1, 100), new(2, 500), new(3, 900, Sequence: 1), new(4, 1300, Sequence: 1),
+        };
+        var gaps = GapPlanning.FindGaps(chapters, Duration);
+        Assert.Equal([new(500, 900, 1)], gaps);
+        Assert.Equal([1, 2], GapPlanning.MissingNumbersInGap(chapters, gaps[0]));
+    }
+
+    [Fact]
+    public void Normalize_KeepsBothPartsOfARestartingBook()
+    {
+        // Run across a restart, the longest-increasing-subsequence filter keeps whichever part is
+        // longer and throws the other away wholesale - the failure the sequence field exists to end.
+        var chapters = new List<DetectedChapter>
+        {
+            new(1, 100), new(2, 500), new(3, 900),
+            new(1, 1300, Sequence: 1), new(2, 1700, Sequence: 1),
+        };
+        Assert.Equal([1, 2, 3, 1, 2], GapPlanning.Normalize(chapters).Select(c => c.Number));
+    }
+
+    [Fact]
+    public void Normalize_StillDropsARegressionInsideOnePart()
+    {
+        // And it still does its own job within a part: an in-text mention numbered below the
+        // sequence is dropped exactly as before, the sequence field having narrowed the question
+        // rather than weakened it.
+        var chapters = new List<DetectedChapter>
+        {
+            new(1, 100), new(2, 500), new(3, 900),
+            new(1, 1300, Sequence: 1), new(1, 1500, Sequence: 1), new(2, 1700, Sequence: 1),
+        };
+        Assert.Equal([1, 2, 3, 1, 2], GapPlanning.Normalize(chapters).Select(c => c.Number));
+        Assert.Equal([100d, 500, 900, 1300, 1700],
+            GapPlanning.Normalize(chapters).Select(c => c.TimeSeconds));
+    }
+
+    [Fact]
+    public void ChapterProgress_CountsEachPartsMissingChaptersSeparately()
+    {
+        // The bar reports how far into the book the run has got, which on a book in parts is the
+        // last part's own position - not the highest number seen anywhere.
+        var chapters = new List<DetectedChapter>
+        {
+            new(1, 100), new(3, 500), new(1, 900, Sequence: 1), new(3, 1300, Sequence: 1),
+        };
+        var (highest, missing) = GapPlanning.ChapterProgress(chapters);
+        Assert.Equal(3, highest);
+        Assert.Equal([2, 2], missing);
     }
 
     [Fact]

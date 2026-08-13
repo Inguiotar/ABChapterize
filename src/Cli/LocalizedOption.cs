@@ -44,22 +44,26 @@ internal static class SpecSyntax
 
     /// <summary>
     /// Strips a leading <c>[xx]</c> language tag off an entry, returning the code and what follows
-    /// it - or null and the entry unchanged when there is none. Exactly two ASCII letters are
-    /// required, which is what keeps a phrase legitimately starting with a bracket ("[Kk]apitel")
-    /// from being read as a tag: the code is checked for shape only, not against the language
-    /// registry, matching <c>--lang</c>, which also accepts a code this tool has no defaults for.
+    /// it - or null and the entry unchanged when there is none. The phrase and title options'
+    /// share of <see cref="SpecTag.Take"/>, which is the whole rule; what is added here is that a
+    /// <c>--custom</c> hint has no meaning outside <c>--custom</c> and is refused rather than
+    /// silently ignored.
     /// </summary>
     /// <param name="entry">One entry of a spec, already trimmed.</param>
     /// <param name="rest">The entry with any tag removed, trimmed.</param>
+    /// <param name="option">Long option name, for error messages.</param>
     /// <returns>The lower-cased language code, or null when the entry carries no tag.</returns>
-    internal static string? TakeLanguageTag(string entry, out string rest)
+    /// <exception cref="CliError">Thrown when the tag carries a <c>--custom</c> hint, or is itself
+    /// malformed.</exception>
+    internal static string? TakeLanguageTag(string entry, out string rest, string option = "spec")
     {
-        rest = entry;
-        if (entry.Length < 4 || entry[0] != '[' || entry[3] != ']' ||
-            !char.IsAsciiLetter(entry[1]) || !char.IsAsciiLetter(entry[2]))
+        if (SpecTag.Take(entry, out rest, option) is not { } tag)
             return null;
-        rest = entry[4..].TrimStart();
-        return entry[1..3].ToLowerInvariant();
+        if (tag.HasHints)
+            throw new CliError(
+                $"{option}: the keywords in \"{entry}\" only mean something on a --custom mapping. " +
+                "A tag here names a language and nothing else.");
+        return tag.Language;
     }
 }
 
@@ -102,7 +106,7 @@ internal sealed class LocalizedOption
     {
         Raw = raw;
         var entries = SpecSyntax.SplitOnUnescapedSemicolons(raw).Select(e => e.Trim()).ToList();
-        if (!entries.Any(e => SpecSyntax.TakeLanguageTag(e, out _) != null))
+        if (!entries.Any(e => SpecSyntax.TakeLanguageTag(e, out _, option) != null))
         {
             _fallback = raw;
             return;
@@ -110,7 +114,7 @@ internal sealed class LocalizedOption
 
         foreach (var entry in entries.Where(e => e.Length > 0))
         {
-            if (SpecSyntax.TakeLanguageTag(entry, out var value) is not { } code)
+            if (SpecSyntax.TakeLanguageTag(entry, out var value, option) is not { } code)
             {
                 if (_fallback != null)
                     throw new CliError(

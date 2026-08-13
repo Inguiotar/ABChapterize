@@ -563,6 +563,70 @@ At most 100 custom marks are written per file. Beyond that the rest are
 dropped and the file's summary line says so: a phrase that matches ordinary
 prose (`--custom "the:the"`) would otherwise pepper a whole book with marks.
 
+#### Hints: telling a mapping what kind of thing it names
+
+By default a `--custom` mapping is as unrestricted as it can be: it applies to
+every file, matches anywhere in it, and produces a mark for every occurrence.
+That is the right default for the "Zwischenspiel" case it was built for, and
+the wrong one for a mapping naming something a book has exactly once, or only
+at one end of itself.
+
+The `[...]` tag that already carried a language code takes a comma-separated
+list, and any of these **hints** may sit in it alongside the code:
+
+| Hint | Short form | What it does |
+| --- | --- | --- |
+| `before-first-chapter` | `before-first` | Matches only before the first chapter is found. |
+| `after-first-chapter` | `after-first` | Matches only once a chapter has been found. |
+| `after-last-chapter` | `after-last` | Only a match after the book's *last* chapter is kept. |
+| `once` | | At most one mark for this mapping per file. |
+| `heading` | | The match must be preceded by a real pause. |
+| `max=<n>` | | At most `<n>` marks for this mapping per file. |
+
+```
+--custom "[de,before-first-chapter,once]/vorwort/:Vorwort"
+--custom "[after-last-chapter,once,heading]nachwort:Nachwort"
+--custom "[max=3]/zwischenspiel/:Zwischenspiel"
+```
+
+Nothing here is new machinery. The built-in prologue *is*
+`[before-first-chapter,once,heading]` and the built-in epilogue *is*
+`[after-last-chapter,once,heading]`; what the hints do is let a mapping ask for
+the same treatment. A mapping without a tag, or with a tag naming only a
+language, keeps exactly the behaviour it had before hints existed.
+
+Points worth knowing:
+
+- **`once` keeps the *last* match, not the first.** Front matter routinely
+  mentions what is coming ("…gelesen von…; Vorwort") before the narrator
+  actually announces it, so the later of two matches inside the scope is the
+  real one. It follows that `once` on its own can never end a search early —
+  only a scope that closes can. `max=<n>` works the other way round, keeping
+  the first `<n>` and dropping the rest, which is why `max=1` is rejected with
+  an error pointing at `once` rather than quietly meaning something else.
+- **`heading` is the check the prologue and epilogue always get**: the match
+  must sit behind a real pause, which is what tells a heading read aloud from
+  the same word buried in a sentence. `--custom` does not get it by default,
+  because a mapping names whatever recurring element the user says it does, at
+  whatever position.
+- **`after-last-chapter` is applied at the end of the run**, not while probing.
+  Which chapter is the last one is unknown until every pass has finished, so a
+  match mid-book is heard, marked and then dropped — it buys precision, not
+  time. The other two positions are free, being filters applied before a mark
+  is ever placed.
+- **A match dropped for being out of scope is noted once per mapping** under
+  `--verbose`, and not per occurrence: an "epilogue" in the middle of a book is
+  an ordinary word, and one line per match would drown the log.
+- **A bracket run only counts as a tag when something in it is recognized.**
+  Whisper writes bracketed non-speech tags into its transcripts — `[Musik]`,
+  `[Abspann]`, `[BLANK_AUDIO]` — so `--custom "[Musik]:Zwischenmusik"` is a
+  plausible mapping and goes on matching those words. A typo *beside* a good
+  keyword (`[once,headnig]`) is an error, since one token was recognized. The
+  only residual is a phrase that is itself exactly a bracketed keyword.
+- The same tag on `--chapter-phrase`, `--chapter-title` and the other localized
+  options names a language and nothing else; a hint there is an error rather
+  than silently ignored.
+
 ### Named marks that land beside a chapter
 
 A named mark — prologue, epilogue or `--custom` — sitting within
@@ -607,15 +671,15 @@ filled, so [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-m
 ever tagged `.missing-marks`. A run finishes after Pass 2, which usually makes
 it a good deal quicker than a normal one.
 
-Use it for books whose numbering the tool cannot make sense of: one that
-restarts its count in every part, one made of several novels bound together,
-or one that announces "Chapter" and then simply reads on.
+Use it for books whose numbering the tool cannot make sense of: one made of
+several novels bound together, one that announces "Chapter" and then simply
+reads on, or one whose parts restart their count in a way the automatic
+handling below cannot follow.
 
-An ordinary run will usually tell you when a book wants this. A restarting
-count looks, to a run that believes its numbers, like a book that stops having
-chapters partway through: the later announcements are heard and understood, and
-then dropped for repeating numbers already used. When enough of them go that
-way in ascending order, the file's summary line says how many were skipped and
+An ordinary run will usually tell you when a book wants this. Announcements
+numbered below the sequence are heard and understood, and then dropped for
+repeating numbers already used; when enough of them go that way without adding
+up to a new part, the file's summary line says how many were skipped and
 suggests this option.
 
 The prologue and epilogue keep their usual positional rules — the prologue
@@ -627,6 +691,52 @@ The options that reason in chapter numbers are rejected rather than silently
 ignored: `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
 `--chapter-count` and `--verify`. `--chapter-phrase` and `--chapter-title` remain
 perfectly useful and are accepted.
+
+### Books that count from one again in every part
+
+Some books are divided into parts, and each part starts its chapters over at
+one. ABChapterize follows that by itself: when it hears three consecutive
+chapters that sit below the numbering it has been building — "one", "two",
+"three" again after the last chapter of the part before — it accepts that a
+new part has begun and marks everything from there under the new count.
+Nothing is decided on less evidence than that, because a single announcement
+below the sequence is far more likely to be prose mentioning an earlier
+chapter ("as I said in chapter three") than the start of a part; those are
+still passed over, as they always were.
+
+What changes in the output is the titles. Every chapter of such a file carries
+its part, including the first part's:
+
+```
+Intro
+Part 1 - Chapter 1
+…
+Part 1 - Chapter 15
+Part 2 - Chapter 1
+…
+```
+
+The word is localized by `--lang` and can be set with `--part-title`. A file
+with a single chapter sequence — virtually every book — is titled exactly as
+before, with no part prefix anywhere.
+
+Everything else follows the parts too. Each part's numbering is checked, gap-
+hunted and reported on its own, so a chapter missing from part two is looked
+for between part two's own chapters and never confused with the part-one
+chapter of the same number; the boundary itself is not treated as a gap; and
+`--chapter-count`, if given, describes the last part. The file's summary line
+names the parts and the range each one covers. If a part is found to start
+above one, its missing opening chapters are searched for like any other gap —
+no `--expected-start-chapter` is needed for that, since counting from one is
+what identified the part in the first place.
+
+Two things are worth knowing. Marks written for such a file can be read back:
+`--verify` and an interrupted run's auto-resume both understand the part prefix,
+so a file this tool marked is picked up correctly. And if a book divides itself
+in a way this cannot follow — parts of one or two chapters, say, or a first
+part whose opening chapters were all missed — the fallback is
+[`--ignore-chapter-numbers`](#detecting-chapters-without-believing-their-numbers),
+which marks every announcement it hears and never consults a number.
 
 ### The intro chapter
 
@@ -789,8 +899,8 @@ so that logs and reports stay comparable regardless of regional settings.
   [section 7](#7-languages-and-number-recognition), the resolved language
   enables number-word parsing and localizes the defaults of
   `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--chapter-title`,
-  `--intro-title`, `--prologue-title` and `--epilogue-title` (per file with
-  `auto`).
+  `--part-title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per
+  file with `auto`).
   `abchapterize --lang de buch.m4b` finds "Kapitel eins" and writes
   "Kapitel 1" without further options; so does plain `abchapterize buch.m4b`,
   via auto-detection.
@@ -1013,8 +1123,9 @@ rather than localizing it, a custom phrase never being translated for you.
   been given. A value carrying no tag anywhere is taken whole, semicolons
   included, so a phrase written for an earlier version still means what it
   did; a semicolon inside a tagged entry is written `\;`. The same syntax
-  works for `--chapter-title`, `--intro-title`, `--prologue-phrase`,
-  `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`.
+  works for `--chapter-title`, `--part-title`, `--intro-title`,
+  `--prologue-phrase`, `--prologue-title`, `--epilogue-phrase`,
+  `--epilogue-title` and `--custom`.
 
 #### Bare numbers as announcements
 
@@ -1078,9 +1189,13 @@ Two things are worth knowing before reaching for it:
   the file becomes a mark titled after the colon, as often as the phrase
   occurs. Titles may reference the phrase's capturing groups as `$1`, `$2` or
   by name. Repeat the option to add further mappings. Never localized — but a
-  mapping may open with a `[xx]` language tag, which restricts it to files that
-  resolve to that language; untagged mappings apply to every file. See
-  [Custom marks](#custom-marks) for the full syntax and the per-file limit.
+  mapping may open with a `[...]` tag holding a `xx` language code, restricting
+  it to files that resolve to that language, and/or hints restricting where and
+  how often it matches (`before-first-chapter`, `after-first-chapter`,
+  `after-last-chapter`, `once`, `heading`, `max=<n>`); untagged mappings apply
+  to every file, anywhere in it, as often as the phrase occurs. See
+  [Custom marks](#custom-marks) for the full syntax, the hints and the per-file
+  limit.
 
 `-U`, `--custom-file <path>`
 : Read `--custom` mappings from a text file, one per line; blank lines and
@@ -1097,6 +1212,13 @@ Two things are worth knowing before reaching for it:
 : Word used to build chapter titles; the chapter number is appended
   (default: `Chapter`, localized by `--lang` — e.g. `Kapitel` with
   `--lang de`). "Chapter 1", "Chapter 2", …
+
+`--part-title <word>`
+: Word used to build the part prefix of a file whose chapter numbering restarts
+  partway through — "Part 2 - Chapter 1" (default: `Part`, localized by
+  `--lang` — e.g. `Teil` with `--lang de`). A file holding a single chapter
+  sequence never uses it. See
+  [Books that count from one again in every part](#books-that-count-from-one-again-in-every-part).
 
 `-i`, `--intro-title <word>`
 : Title of the synthetic intro chapter covering the audio before the first
@@ -1702,7 +1824,7 @@ touching Whisper at all.
   `--min-silence-length`, `--noise-floor`,
   `--early-abort`, `--expected-start-chapter`, `--max-chapter-number`,
   `--chapter-count`, `--no-trailing-scan`, `--verify` — nor with the title
-  options `--chapter-title`,
+  options `--chapter-title`, `--part-title`,
   `--intro-title`, `--prologue-title` and `--epilogue-title`, since an
   imported mark carries the title the sidecar gives it and no intro mark is
   prepended — nor with `--export`, `--revert` or
@@ -1887,21 +2009,21 @@ Where two of the three readings would fit the same word, the language's own
 number words win over the Roman reading: French "dix" is ten, not 509.
 
 For these languages, `--lang` also localizes the defaults of
-`--chapter-phrase`, `--chapter-title` and `--intro-title`:
+`--chapter-phrase`, `--chapter-title`, `--part-title` and `--intro-title`:
 
-| `--lang` | Default phrase | Default title word | Default intro title |
-| --- | --- | --- | --- |
-| `en` | `/chapter/` | Chapter | Intro |
-| `de` | `/kapitel/` | Kapitel | Intro |
-| `fr` | `/chapitre/` | Chapitre | Introduction |
-| `es` | `/cap[íi]tulo/` | Capítulo | Introducción |
-| `it` | `/capitolo/` | Capitolo | Introduzione |
-| `nl` | `/hoofdstuk/` | Hoofdstuk | Intro |
-| `tr` | `/b[öo]l[üu]m/` | Bölüm | Giriş |
-| `pt` | `/cap[íi]tulo/` | Capítulo | Introdução |
-| `pl` | `/rozdzia[łl]/` | Rozdział | Wstęp |
-| `sv` | `/kapit(?:el\|let)/` | Kapitel | Introduktion |
-| `da` | `/kapit(?:el\|let)/` | Kapitel | Introduktion |
+| `--lang` | Default phrase | Default title word | Default part word | Default intro title |
+| --- | --- | --- | --- | --- |
+| `en` | `/chapter/` | Chapter | Part | Intro |
+| `de` | `/kapitel/` | Kapitel | Teil | Intro |
+| `fr` | `/chapitre/` | Chapitre | Partie | Introduction |
+| `es` | `/cap[íi]tulo/` | Capítulo | Parte | Introducción |
+| `it` | `/capitolo/` | Capitolo | Parte | Introduzione |
+| `nl` | `/hoofdstuk/` | Hoofdstuk | Deel | Intro |
+| `tr` | `/b[öo]l[üu]m/` | Bölüm | Kısım | Giriş |
+| `pt` | `/cap[íi]tulo/` | Capítulo | Parte | Introdução |
+| `pl` | `/rozdzia[łl]/` | Rozdział | Część | Wstęp |
+| `sv` | `/kapit(?:el\|let)/` | Kapitel | Del | Introduktion |
+| `da` | `/kapit(?:el\|let)/` | Kapitel | Del | Introduktion |
 
 The default phrases are regular expressions so that one language's spellings
 are covered at once: an accent Whisper dropped (`capitulo` for `capítulo`), a

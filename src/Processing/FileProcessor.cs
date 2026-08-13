@@ -494,10 +494,17 @@ public sealed class FileProcessor
     internal static (List<Chapter> Chapters, int MergedNamedMarks) BuildChapters(
         DetectionResult result, double namedMarkDistanceSeconds)
     {
+        // Only a file that really turned out to hold more than one chapter sequence gets the part
+        // prefix - every ordinary book is written exactly as it was before parts existed, and a
+        // lone "Part 1" in front of every chapter of a book that has no part 2 would be noise.
+        var parts = result.SequenceCount > 1;
         // A named mark sharing a chapter's exact timestamp sorts after it, so a prologue heard in
         // the same breath as chapter 1 cannot displace the numbered entry a player scrubs by.
         var entries = result.Chapters
-            .Select(c => new MarkEntry(c.TimeSeconds, $"{result.Profile.Title} {c.Number}", false, true))
+            .Select(c => new MarkEntry(
+                c.TimeSeconds,
+                result.Profile.ChapterTitleFor(c.Number, parts ? c.Sequence + 1 : null),
+                false, true))
             .Concat(result.NamedMarks.Select(m => new MarkEntry(
                 m.TimeSeconds, m.Title, true, m.Kind == result.Profile.ChapterAnnouncement.Kind)))
             .OrderBy(c => c.TimeSeconds).ThenBy(c => c.Named ? 1 : 0)
@@ -1163,11 +1170,12 @@ public sealed class FileProcessor
                     FormatLanguageNote(result) + await ExportSidecarAsync(ctx, chapters, ct);
         var what = FormatWrittenCount(result, chapters, "mark(s) written");
         // A low-confidence mark is worth surfacing above the progress bar; so is a book that gave up
-        // most of its chapters to a restarting sequence, which is otherwise indistinguishable from
-        // one that simply ends early, and so is a number nothing could corroborate, whose whole
-        // point is that the output looks clean.
+        // chapters below its sequence, which is otherwise indistinguishable from one that simply
+        // ends early; so is a number nothing could corroborate, whose whole point is that the output
+        // looks clean; and so is a file that turned out to hold several parts, since that is what
+        // decides whether its marks are titled "Chapter 1" or "Part 2 - Chapter 1".
         var important = result.LowConfidenceNumbers.Count > 0 || result.SequenceRestartSkips > 0 ||
-                        result.UnverifiedNumbers is { Count: > 0 };
+                        result.UnverifiedNumbers is { Count: > 0 } || result.SequenceCount > 1;
         // The tag is a to-do note left on the file name, and a run that reached here left nothing
         // to do: every chapter of the sequence is present. So the file gets its own name back.
         // A *numbered* tag normally takes the resume path instead and is untagged there; what
@@ -1213,15 +1221,32 @@ public sealed class FileProcessor
         DetectionResult result, List<Chapter> written, string noun = "mark(s)")
     {
         var numbered = result.Chapters.Count;
-        var parts = new List<string>();
+        var components = new List<string>();
         if (numbered > 0)
-        {
-            var (first, last) = (result.Chapters[0].Number, result.Chapters[^1].Number);
-            parts.Add($"{numbered} chapter(s) {first}" + (last != first ? $"-{last}" : ""));
-        }
+            components.Add($"{numbered} chapter(s) {FormatChapterRanges(result)}");
         if (written.Count - numbered > 0)
-            parts.Add($"{written.Count - numbered} named");
-        return $"{written.Count} {noun}" + (parts.Count > 0 ? $" ({string.Join(", ", parts)})" : "");
+            components.Add($"{written.Count - numbered} named");
+        return $"{written.Count} {noun}" +
+               (components.Count > 0 ? $" ({string.Join(", ", components)})" : "");
+    }
+
+    /// <summary>
+    /// The numbered chapters' range, or - for a file whose numbering restarts partway through - one
+    /// range per part. Spelling it out here is the whole of what the summary line says about parts,
+    /// and it is where a reader would look: "35 chapter(s) 1-9" is what a book of 1-15, 1-11 and 1-9
+    /// would otherwise report, which is both wrong-looking and wrong.
+    /// </summary>
+    /// <param name="result">The file's detection result.</param>
+    private static string FormatChapterRanges(DetectionResult result)
+    {
+        var ranges = GapPlanning.BySequence(result.Chapters)
+            .Select(s => s[0].Number == s[^1].Number
+                ? $"{s[0].Number}"
+                : $"{s[0].Number}-{s[^1].Number}")
+            .ToList();
+        return result.SequenceCount > 1
+            ? $"in {result.SequenceCount} parts ({string.Join(", ", ranges)})"
+            : ranges[0];
     }
 
     /// <summary>Note about the named marks that are not entries of their own: the ones folded into
@@ -1270,16 +1295,18 @@ public sealed class FileProcessor
               "them not searched for; see --verbose"
             : "";
 
-    /// <summary>Note for a file whose chapter numbering restarts partway through (see
-    /// <see cref="RegionProber.SequenceRestartSkips"/>): the announcements after the restart were
+    /// <summary>Note for the announcements this file lost below its chapter sequence without them
+    /// ever adding up to a new part (see <see cref="RegionProber.SequenceRestartSkips"/>): they were
     /// heard and understood, and dropped only because their numbers had already been used. Without
-    /// this the file just stops yielding chapters halfway through, which reads as a detection
-    /// failure. Empty for the ordinary book.</summary>
+    /// this the file just stops yielding chapters partway through, which reads as a detection
+    /// failure. Empty for the ordinary book, and for one whose parts were all recognized - those are
+    /// reported as parts by <see cref="FormatChapterRanges"/> instead.</summary>
     /// <param name="result">The file's detection result.</param>
     private static string FormatSequenceRestartNote(DetectionResult result)
         => result.SequenceRestartSkips > 0
-            ? $", {result.SequenceRestartSkips} announcement(s) skipped - the chapter numbering " +
-              "appears to restart partway through (a book in parts?); try --ignore-chapter-numbers"
+            ? $", {result.SequenceRestartSkips} announcement(s) skipped for being below the chapter " +
+              "sequence without enough consecutive ones to confirm a new part; try " +
+              "--ignore-chapter-numbers"
             : "";
 
     /// <summary>With --lang auto, the note stating which language this file was actually

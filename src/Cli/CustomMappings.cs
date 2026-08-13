@@ -16,7 +16,13 @@ namespace ABChapterize.Cli;
 /// leading <c>[xx]</c> tag, or null for one that applies to every file in the run. A mixed-language
 /// batch is the whole reason for the tag: a phrase written for French narration matches nothing in
 /// a German book, but it costs a probe window's worth of matching in every one of them.</param>
-public readonly record struct CustomMapping(string Phrase, string Title, string? Language = null);
+/// <param name="Tag">The whole tag the mapping opened with, hints included, or null when it carried
+/// none - in which case the mapping keeps the defaults it has always had (anywhere in the file,
+/// every occurrence marked, no pause required in front of it). <paramref name="Language"/> is that
+/// tag's language, kept as a field of its own because file selection asks for it long before a
+/// phrase is compiled.</param>
+public readonly record struct CustomMapping(
+    string Phrase, string Title, string? Language = null, SpecTag? Tag = null);
 
 /// <summary>
 /// Parses the <c>--custom</c> mapping syntax: <c>phrase:title</c> pairs, several of them separated
@@ -31,9 +37,12 @@ public readonly record struct CustomMapping(string Phrase, string Title, string?
 /// separated by line breaks rather than semicolons.
 /// </para>
 /// <para>
-/// A mapping may open with a <c>[xx]</c> language tag, which restricts it to files that resolve to
-/// that language - see <see cref="CustomMapping.Language"/> and <see cref="LocalizedOption"/>, which
-/// reads the same tag for the phrase and title options.
+/// A mapping may open with a <c>[...]</c> tag naming the language it is restricted to and any
+/// number of hints changing how it behaves - <c>[de,before-first-chapter,once]</c>. See
+/// <see cref="SpecTag"/> for the vocabulary and for the rule that keeps a phrase which merely
+/// starts with a bracket (<c>[Musik]:Zwischenmusik</c>) from being read as one, and
+/// <see cref="LocalizedOption"/> for the phrase and title options, which read the language half of
+/// the same tag and refuse the hints.
 /// </para>
 /// </summary>
 internal static class CustomMappingParser
@@ -89,7 +98,7 @@ internal static class CustomMappingParser
     /// empty phrase or an empty title.</exception>
     private static CustomMapping ParseOne(string text, string where)
     {
-        var language = SpecSyntax.TakeLanguageTag(text.Trim(), out text);
+        var tag = SpecTag.Take(text.Trim(), out text, where);
         text = text.Trim();
         var delimiter = FindDelimiter(text, where);
         var phrase = text[..delimiter].TrimEnd();
@@ -99,7 +108,7 @@ internal static class CustomMappingParser
             throw new CliError($"{where}: the phrase before the \":\" must not be empty.");
         if (title.Length == 0)
             throw new CliError($"{where}: the title after the \":\" must not be empty.");
-        return new CustomMapping(phrase, title, language);
+        return new CustomMapping(phrase, title, tag?.Language, tag);
     }
 
     /// <summary>The index of the colon separating phrase from title - after the closing slash for a

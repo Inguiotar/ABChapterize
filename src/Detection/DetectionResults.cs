@@ -40,8 +40,23 @@ namespace ABChapterize.Detection;
 /// named announcement's own heading is removed; see
 /// <see cref="ChapterDetector.DropNamedMarkEchoes"/>.
 /// </para></param>
+/// <param name="Sequence">Which of the file's chapter sequences this chapter belongs to, 0-based -
+/// 0 for every chapter of an ordinary book, which holds exactly one. A book divided into parts
+/// counts its chapters from 1 again in each of them, so <paramref name="Number"/> alone stops
+/// identifying a chapter and the pair (sequence, number) takes over: this is the field that keeps
+/// part 2's chapter 3 from being read as a duplicate of part 1's, or as the far end of a hole
+/// running backwards from it.
+/// <para>
+/// Sequences are contiguous in time and always ascend, so the field is also derivable from a
+/// chapter's position - but it is carried rather than derived, because the one place that can
+/// decide it is <see cref="RegionProber"/>, which hears the announcements in order and watches a
+/// restart build up over three chapters before believing in it (see
+/// <see cref="DetectionTuning.SequenceRestartRunLength"/>). Everything downstream reads the answer
+/// off the chapter instead of re-deriving it from a list that may since have lost entries.
+/// </para></param>
 public readonly record struct DetectedChapter(
-    int Number, double TimeSeconds, double Confidence = 1.0, bool NumberUnverified = false);
+    int Number, double TimeSeconds, double Confidence = 1.0, bool NumberUnverified = false,
+    int Sequence = 0);
 
 /// <summary>
 /// A detected non-numbered mark - a prologue or epilogue announcement, or a <c>--custom</c> match
@@ -144,11 +159,17 @@ public readonly record struct DetectionStats(
 /// summary line rather than kept to the --verbose log: silently discarding marks the user asked for
 /// would look exactly like a mapping that stopped matching halfway through the book.</param>
 /// <param name="SequenceRestartSkips">How many announcements were heard, numbered and then dropped
-/// because this file's chapter numbering restarts partway through (see
+/// for sitting below the sequence without ever adding up to a restart (see
 /// <see cref="RegionProber.SequenceRestartSkips"/>); 0 for the ordinary book. Surfaced in the
 /// file's summary line for the same reason as <paramref name="CustomMarkLimitHit"/>: a book that
 /// stops yielding chapters halfway through looks like a detection failure until someone reads the
 /// --verbose log and finds every later announcement listed as heard and skipped.</param>
+/// <param name="SequenceCount">How many chapter sequences this file turned out to hold - 1 for
+/// every ordinary book, more for one divided into parts that each count from 1 (see
+/// <see cref="DetectedChapter.Sequence"/>). Reported in the file's summary line because it changes
+/// what the written titles look like: the chapters carry a part prefix from 2 upwards, and
+/// somebody comparing the output against the book has to know that was detected rather than
+/// assumed.</param>
 /// <param name="UnverifiedNumbers">The chapter numbers written with
 /// <see cref="DetectedChapter.NumberUnverified"/> set - heard, marked, and never corroborated. Null
 /// (rather than empty) for the ordinary file, so the common case allocates nothing. Surfaced in the
@@ -161,7 +182,8 @@ public readonly record struct DetectionResult(
     IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability, DetectionStats Stats, bool EarlyAborted = false,
     int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true, bool CustomMarkLimitHit = false,
-    int SequenceRestartSkips = 0, IReadOnlyList<int>? UnverifiedNumbers = null);
+    int SequenceRestartSkips = 0, IReadOnlyList<int>? UnverifiedNumbers = null,
+    int SequenceCount = 1);
 
 /// <summary>Outcome of checking one pre-existing chapter marking against the audio, in file order -
 /// the raw material <see cref="GapPlanning.BuildGapRegions"/> groups into gap-scoped recovery
@@ -175,8 +197,15 @@ public readonly record struct DetectionResult(
 /// or null when it was not asked to, could not confirm the marking, or found it already close
 /// enough to be worth leaving alone (see
 /// <see cref="DetectionTuning.VerifyFixMinShiftSeconds"/>).</param>
+/// <param name="Sequence">Which chapter sequence the marking's title puts it in, 0-based - read
+/// from the part prefix a previous run wrote (see <see cref="LanguageProfile.ChapterTitleFor"/>),
+/// and 0 for every marking of an ordinary book or of a file some other tool marked. Without it a
+/// book in parts would look like a numbering that jumps backwards twice, and
+/// <see cref="GapPlanning.BuildGapRegions"/> would bracket a recovery region between part 1's last
+/// chapter and part 2's first.</param>
 public readonly record struct VerifyMarkingOutcome(
-    double StartSeconds, int? ExpectedNumber, bool Confirmed, double? CorrectedStartSeconds = null);
+    double StartSeconds, int? ExpectedNumber, bool Confirmed, double? CorrectedStartSeconds = null,
+    int Sequence = 0);
 
 /// <summary>Outcome of checking pre-existing chapter markings against the audio (--verify).</summary>
 /// <param name="Passed">True when every checkable marking was confirmed; also true when none of the

@@ -20,6 +20,9 @@ public sealed class GermanLanguage : ILanguage
     public string ChapterTitle => "Kapitel";
 
     /// <inheritdoc/>
+    public string PartTitle => "Teil";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Intro";
 
     /// <inheritdoc/>

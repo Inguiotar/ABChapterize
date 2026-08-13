@@ -261,4 +261,62 @@ public sealed class MarkingTitleNumberTests : IDisposable
     [InlineData("The Shaking of the Sheets")]
     public void TitlesWithoutANumber_YieldNothing(string title)
         => AssertReadsNothing(title, Profile("en"));
+
+    /// <summary>
+    /// The round trip that makes parts survive a resume: every title this tool writes for a file in
+    /// parts has to give both numbers back. Built through
+    /// <see cref="LanguageProfile.ChapterTitleFor"/> rather than from literals, so a change to the
+    /// spelling fails here rather than silently costing a resumed run its committed marks.
+    /// </summary>
+    /// <param name="language">Two-letter code.</param>
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("fr")]
+    [InlineData("it")]
+    [InlineData("nl")]
+    [InlineData("sv")]
+    [InlineData("da")]
+    [InlineData("pl")]
+    [InlineData("tr")]
+    [InlineData("es")]
+    [InlineData("pt")]
+    public void APartPrefixedTitle_GivesBackBothItsNumbers(string language)
+    {
+        var profile = Profile(language);
+        for (var part = 1; part <= 3; part++)
+        for (var chapter = 1; chapter <= 12; chapter++)
+        {
+            var title = profile.ChapterTitleFor(chapter, part);
+            AssertReads(title, profile, chapter);
+            Assert.True(MarkingTitleNumber.TryParsePart(title, profile, out var read),
+                $"[{language}] \"{title}\" -> no part read");
+            Assert.Equal(part, read);
+        }
+    }
+
+    /// <summary>
+    /// An ordinary title carries no part, which is what makes the sequence default to 0 for every
+    /// book that has one sequence and for every file some other tool marked.
+    /// </summary>
+    /// <param name="title">The marking title.</param>
+    [Theory]
+    [InlineData("Chapter 7")]
+    [InlineData("Prologue")]
+    [InlineData("Participation - Chapter 7")]
+    [InlineData("Parting Words")]
+    public void ATitleWithoutAPartPrefix_YieldsNoPart(string title)
+        => Assert.False(MarkingTitleNumber.TryParsePart(title, Profile("en"), out _));
+
+    /// <summary>
+    /// The Scandinavian trap the strict rule exists for: "Del" is Swedish and Danish for "part" and
+    /// also the head of ordinary words, so the prefix is only recognized when a non-letter follows
+    /// it. Without that, "Delen 3" would read as part one - Danish "en" being the number.
+    /// </summary>
+    /// <param name="language">Two-letter code of a language whose part word is "Del".</param>
+    [Theory]
+    [InlineData("sv")]
+    [InlineData("da")]
+    public void APartWordThatOpensALongerWord_IsNotAPrefix(string language)
+        => Assert.False(MarkingTitleNumber.TryParsePart("Delen 3 - Kapitel 1", Profile(language), out _));
 }

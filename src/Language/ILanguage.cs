@@ -39,6 +39,18 @@ public interface ILanguage
     /// <summary>The word chapter titles are built from: "Chapter 1", "Kapitel 1", ...</summary>
     string ChapterTitle { get; }
 
+    /// <summary>
+    /// The word part titles are built from, for a book whose chapter numbering restarts partway
+    /// through: "Part 2 - Chapter 1", "Teil 2 - Kapitel 1". Only ever written when a file really
+    /// holds more than one chapter sequence, so the ordinary book never sees it.
+    /// <para>
+    /// A structural division of the book, not a synonym for the chapter word - Turkish uses
+    /// "Kısım" here and "Bölüm" for a chapter, and picking the same word for both would produce
+    /// "Bölüm 2 - Bölüm 1".
+    /// </para>
+    /// </summary>
+    string PartTitle { get; }
+
     /// <summary>Title of the synthetic mark covering whatever precedes the first chapter.</summary>
     string IntroTitle { get; }
 

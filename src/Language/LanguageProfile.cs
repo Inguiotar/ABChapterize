@@ -19,6 +19,9 @@ namespace ABChapterize.Language;
 /// <param name="PhraseRegex">Compiled, case-insensitive regular expression built from <paramref name="ChapterPhrase"/>.</param>
 /// <param name="PhraseHasNumberGroup">True when <paramref name="PhraseRegex"/> has an explicit capturing group for the chapter number.</param>
 /// <param name="Title">Word used to build chapter titles ("Chapter 1", "Kapitel 1", ...).</param>
+/// <param name="PartTitle">Word used to build the part prefix of a book whose chapter numbering
+/// restarts partway through ("Part 2 - Chapter 1"); see <see cref="ILanguage.PartTitle"/>. Never
+/// written for a file holding a single chapter sequence, which is every ordinary book.</param>
 /// <param name="IntroTitle">Title of the synthetic intro chapter.</param>
 /// <param name="NamedPhrases">The non-numbered announcements to look for alongside the chapter
 /// phrase - the prologue, the epilogue and every <c>--custom</c> mapping - each with the title its
@@ -32,7 +35,7 @@ namespace ABChapterize.Language;
 /// series that announces "Kapitel 17" and another that just says "Seventeen".</param>
 public sealed record LanguageProfile(
     string Language, string ChapterPhrase, Regex PhraseRegex, bool PhraseHasNumberGroup,
-    string Title, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases,
+    string Title, string PartTitle, string IntroTitle, IReadOnlyList<NamedPhrase> NamedPhrases,
     bool BareNumberAnnouncements = false)
 {
     /// <summary>
@@ -47,6 +50,18 @@ public sealed record LanguageProfile(
     /// </summary>
     public NamedPhrase ChapterAnnouncement { get; } =
         new("chapter", PhraseRegex, Title, NamedPhraseScope.Anywhere, Repeatable: true);
+
+    /// <summary>
+    /// The title one numbered chapter is written under. The only place the part prefix is spelled
+    /// out, because it has to be readable again: <see cref="ABChapterize.Detection.MarkingTitleNumber"/>
+    /// takes both numbers back out of this string when a resumed or <c>--verify</c>ed run meets a
+    /// file this tool marked, and a second spelling anywhere would break that round trip silently.
+    /// </summary>
+    /// <param name="number">The chapter number as announced, which restarts with every part.</param>
+    /// <param name="part">The 1-based part number, or null for a file holding a single chapter
+    /// sequence - every ordinary book, which is written exactly as it was before parts existed.</param>
+    public string ChapterTitleFor(int number, int? part)
+        => part is { } p ? $"{PartTitle} {p} - {Title} {number}" : $"{Title} {number}";
 
     /// <summary>
     /// What the mark refinement looks for at a numbered chapter's mark: the chapter phrase, or -

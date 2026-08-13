@@ -90,6 +90,9 @@ public sealed class CzechLanguage : ILanguage
     public string ChapterTitle => "Kapitola";
 
     /// <inheritdoc/>
+    public string PartTitle => "Část";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Úvod";
 
     /// <inheritdoc/>
@@ -163,11 +166,21 @@ For the prologue and the epilogue, prefer your language's Latin-derived form
 "Vorwort" or Turkish "Önsöz" mean *foreword* — front matter *about* the book —
 whereas a prologue is part of the story, and that is what gets announced.
 
-### The three titles
+### The four titles
 
 `ChapterTitle` is the word marks are named after: with `Kapitola`, chapters
 come out as "Kapitola 1", "Kapitola 2", …. Write it the way it should appear
 in a player — properly capitalized, with all its accents.
+
+`PartTitle` is only used for a book whose chapters count from one again in
+every part, where the marks come out as "Část 2 - Kapitola 1". Pick the word
+for a *structural division of a book*, not a synonym of the chapter word —
+Turkish uses "Bölüm" for a chapter and "Kısım" here, and reusing one for both
+would produce "Bölüm 2 - Bölüm 1". Two rules follow from how it is read back
+off a written title: it must be a word the language does not routinely use at
+the start of a chapter heading, and if it happens to be the beginning of a
+longer word (Swedish "Del" is also the start of "Delen"), that is fine — a
+prefix only counts when a non-letter follows it.
 
 `IntroTitle` names the mark covering whatever comes before the first chapter
 (a publisher's announcement, a title read aloud). "Intro" is fine if your

@@ -20,6 +20,9 @@ public sealed class DanishLanguage : ILanguage
     public string ChapterTitle => "Kapitel";
 
     /// <inheritdoc/>
+    public string PartTitle => "Del";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Introduktion";
 
     /// <inheritdoc/>

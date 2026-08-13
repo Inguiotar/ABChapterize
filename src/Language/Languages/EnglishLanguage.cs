@@ -23,6 +23,9 @@ public sealed class EnglishLanguage : ILanguage
     public string ChapterTitle => "Chapter";
 
     /// <inheritdoc/>
+    public string PartTitle => "Part";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Intro";
 
     /// <summary>Also covers the American "prolog", being a substring of "prologue".</summary>

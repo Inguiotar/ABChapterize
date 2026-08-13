@@ -23,9 +23,26 @@ public enum NamedPhraseScope
     /// book's chapters, so a mention before any of them is front matter, not the epilogue.</summary>
     AfterFirstChapter,
 
-    /// <summary>Anywhere in the file. What a <c>--custom</c> mapping gets: it names a recurring
-    /// structural element ("Zwischenspiel", "Zeittafel") whose place in the book is the user's
-    /// business, not something detection could second-guess from the chapter sequence.</summary>
+    /// <summary>
+    /// Only after the file's <em>last</em> numbered chapter - what the built-in epilogue is
+    /// actually held to, available to a <c>--custom</c> mapping through the
+    /// <c>after-last-chapter</c> hint.
+    /// <para>
+    /// Alone among these, this cannot be checked while detection runs: which chapter is the last
+    /// one is unknown until every pass has finished. So it is applied twice - as
+    /// <see cref="AfterFirstChapter"/> during detection, which is the strongest thing observable
+    /// then and never wrong (nothing before the first chapter can be after the last), and then
+    /// properly at result-build time, where a mark that turned out to sit mid-book is dropped.
+    /// Precision only: unlike the other two it saves no transcription, since the announcement has
+    /// already been heard and placed by the time it can be judged.
+    /// </para>
+    /// </summary>
+    AfterLastChapter,
+
+    /// <summary>Anywhere in the file. What a <c>--custom</c> mapping gets unless one of its hints
+    /// says otherwise: it names a recurring structural element ("Zwischenspiel", "Zeittafel") whose
+    /// place in the book is the user's business, not something detection could second-guess from
+    /// the chapter sequence.</summary>
     Anywhere,
 }
 
@@ -57,9 +74,17 @@ public enum NamedPhraseScope
 /// whatever position, and second-guessing that is not this code's business. Deliberately a flag of
 /// its own rather than an inference from <paramref name="Repeatable"/>, which happens to divide the
 /// same way today for an unrelated reason.</param>
+/// <param name="MaxMarks">How many marks this phrase may produce in one file (the
+/// <c>max=&lt;n&gt;</c> hint), or null for no cap of its own - which is every built-in phrase and
+/// every mapping that does not ask. Counted first-N-wins, matching
+/// <see cref="ABChapterize.Detection.DetectionTuning.MaxCustomMarksPerFile"/>, the file-wide cap
+/// this narrows: a mapping that knows how many of its element a book holds should not be able to
+/// spend the file's whole allowance on a phrase that turned out to match prose. Never 1 - see
+/// <c>SpecTag.TryTakeMax</c> for why that spelling is refused in favour of
+/// <paramref name="Repeatable"/>.</param>
 public sealed record NamedPhrase(
     string Kind, Regex Regex, string Title, NamedPhraseScope Scope, bool Repeatable = false,
-    bool RequiresLeadIn = false)
+    bool RequiresLeadIn = false, int? MaxMarks = null)
 {
     /// <summary><see cref="Kind"/> of the built-in prologue phrase. A constant because two rules
     /// outside the phrase itself key on it - the epilogue's end-of-book placement check and the

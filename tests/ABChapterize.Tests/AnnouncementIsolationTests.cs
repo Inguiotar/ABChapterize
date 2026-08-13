@@ -344,5 +344,5 @@ public class AnnouncementIsolationTests
     private static LanguageProfile Profile(bool bareNumbers)
         => new("it", bareNumbers ? "none" : "/capitolo/",
             new Regex(bareNumbers ? "(?!)" : "capitolo", RegexOptions.IgnoreCase),
-            PhraseHasNumberGroup: false, "Capitolo", "Introduzione", [], bareNumbers);
+            PhraseHasNumberGroup: false, "Capitolo", "Parte", "Introduzione", [], bareNumbers);
 }

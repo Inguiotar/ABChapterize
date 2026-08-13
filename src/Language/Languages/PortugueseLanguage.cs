@@ -22,6 +22,9 @@ public sealed class PortugueseLanguage : ILanguage
     public string ChapterTitle => "Capítulo";
 
     /// <inheritdoc/>
+    public string PartTitle => "Parte";
+
+    /// <inheritdoc/>
     public string IntroTitle => "Introdução";
 
     /// <inheritdoc/>

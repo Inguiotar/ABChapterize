@@ -23,6 +23,11 @@ public sealed class TurkishLanguage : ILanguage
     /// <inheritdoc/>
     public string ChapterTitle => "Bölüm";
 
+    /// <summary>"Kısım", not the chapter word - Turkish "Bölüm" serves as both "chapter" and
+    /// "section", and reusing it would write "Bölüm 2 - Bölüm 1".</summary>
+    /// <inheritdoc/>
+    public string PartTitle => "Kısım";
+
     /// <inheritdoc/>
     public string IntroTitle => "Giriş";
 

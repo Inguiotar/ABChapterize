@@ -185,6 +185,24 @@ internal readonly record struct ProbeMark(
     int Number, Silence? ThresholdSilence, double Confidence);
 
 /// <summary>
+/// One announcement heard below the running sequence and held back while it is still unclear
+/// whether it is an in-text mention or the first chapter of a new part. Everything
+/// <see cref="RegionProber.AcceptMatchAsync"/> would have been given had it been accepted straight
+/// away, so a run that turns out to be real can be placed later without re-probing the audio - the
+/// transcript is already in hand, and re-deciding a mark from a window that has since scrolled past
+/// would be a second, differently framed reading of the same announcement.
+/// </summary>
+/// <param name="Match">The phrase match, in window-relative time.</param>
+/// <param name="Candidate">The candidate whose window this probe decoded.</param>
+/// <param name="Start">Absolute start of that window.</param>
+/// <param name="WindowEnd">Absolute planned end of that window.</param>
+/// <param name="PhraseAbs">Absolute phrase start time.</param>
+/// <param name="TranscriptAbs">That window's transcript in absolute file time.</param>
+internal readonly record struct PendingRestart(
+    PhraseMatch Match, ProbeCandidate Candidate, double Start, double WindowEnd, double PhraseAbs,
+    List<TranscriptSegment> TranscriptAbs);
+
+/// <summary>
 /// Runs Pass 2 candidate probing for a single <see cref="DetectionRegion"/>, appending every
 /// accepted chapter mark to the caller's accumulator in place.
 /// <para>
@@ -360,22 +378,42 @@ internal sealed class RegionProber
     internal bool CustomLimitHit { get; private set; }
 
     /// <summary>
-    /// Every announcement this region rejected for sitting strictly below the sequence, in the
-    /// order they were heard - the raw material for <see cref="SequenceRestartSkips"/>. Numbers
-    /// only: what distinguishes a book divided into parts from an in-text mention is the shape of
-    /// the numbers over time, and nothing else about the rejected match is needed to see it.
+    /// Every announcement this region gave up on for sitting below the sequence, in the order they
+    /// were heard - the raw material for <see cref="SequenceRestartSkips"/>. Numbers only: what
+    /// distinguishes a book divided into parts from an in-text mention is the shape of the numbers
+    /// over time, and nothing else about the rejected match is needed to see it.
+    /// <para>
+    /// A number only lands here once it is certain it will not become a chapter: while a restart is
+    /// still being tracked its announcements sit in <see cref="_pendingRestart"/> instead, and
+    /// <see cref="AbandonPendingRestart"/> tips them in here if the run breaks down.
+    /// </para>
     /// </summary>
     private readonly List<int> _belowSequenceNumbers = [];
 
     /// <summary>Whether <see cref="NoteOutOfSequence"/> has already said in the log that this
-    /// region's numbering appears to restart, so the observation is reported once rather than on
-    /// every further rejection.</summary>
+    /// region is losing announcements below the sequence, so the observation is reported once
+    /// rather than on every further rejection.</summary>
     private bool _restartReported;
 
     /// <summary>
-    /// How many announcements this region heard, numbered, and then had to drop because the file's
-    /// chapter numbering restarts partway through - zero unless that pattern is present at all (see
-    /// <see cref="NoteOutOfSequence"/>). Nothing acts on it: it exists so the run can say what
+    /// The 0-based chapter sequence this region is currently reading (see
+    /// <see cref="DetectedChapter.Sequence"/>), seeded from <see cref="DetectionRegion.Sequence"/>
+    /// and advanced by <see cref="CommitRestartAsync"/> when a new part is confirmed. Every number
+    /// comparison this class makes is against this sequence and no other.
+    /// </summary>
+    private int _sequence;
+
+    /// <summary>
+    /// The announcements of a suspected new part, held back until there are enough of them to
+    /// believe in (see <see cref="TrackRestartAsync"/>). Strictly consecutive and ascending by
+    /// construction; empty for the whole of an ordinary book.
+    /// </summary>
+    private readonly List<PendingRestart> _pendingRestart = [];
+
+    /// <summary>
+    /// How many announcements this region heard, numbered, and then dropped for sitting below the
+    /// sequence without ever adding up to a new part - zero unless that pattern is present at all
+    /// (see <see cref="NoteOutOfSequence"/>). Nothing acts on it: it exists so the run can say what
     /// happened, since the alternative is a book that silently stops yielding chapters halfway
     /// through with every announcement after that point plainly logged as heard.
     /// </summary>
@@ -477,6 +515,7 @@ internal sealed class RegionProber
         _sweeping = sweepingSubFloorSilences;
         _recovery = recovery || sweepingSubFloorSilences;
         _hunting = hunting is null ? null : [.. hunting];
+        _sequence = region.Sequence;
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
         _threshold = env.Options.MinSilenceSeconds;
@@ -523,6 +562,9 @@ internal sealed class RegionProber
             }
             ci = SkipSettledWindows(candidates, ci, plan.End, probeMarks);
         }
+        // A restart still being tracked when the region runs out never earned its chapters, so its
+        // announcements are booked as lost here rather than quietly forgotten.
+        AbandonPendingRestart();
     }
 
     /// <summary>Reports how far probing has got as the byte-based progress the bar counts in,
@@ -1469,6 +1511,17 @@ internal sealed class RegionProber
         {
             var match = heard;
             var phraseAbs = start + match.PhraseStartSeconds;
+            // Before the mender, because a number continuing a suspected new part is not in doubt at
+            // all - it is corroborated by the announcements already held back - while the mender
+            // would judge it against the sequence it is in the process of leaving and "correct" it
+            // into that one's numbering.
+            if (RestartTrackingAllowed && ContinuesPendingRestart(match))
+            {
+                marks.AddRange(await TrackRestartAsync(
+                    match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct));
+                windowLast = _lastNumber ?? windowLast;
+                continue;
+            }
             // Ahead of the sequence check rather than after it, because a number that fails that check
             // is exactly one of the two shapes worth questioning: a mishearing downwards is
             // indistinguishable from an in-text mention until the audio is asked again. A mend that
@@ -1479,17 +1532,56 @@ internal sealed class RegionProber
                     match, _language.Profile, start, windowEnd, SequenceBounds(windowLast), ct) is { } mended)
                 match = match with { Number = mended };
             if (IsOutOfSequence(match, phraseAbs, windowLast))
+            {
+                // Strictly below, so not a re-detection of the chapter just accepted: this is either
+                // an in-text mention or the opening of a part that counts from 1 again, and only the
+                // announcements that follow can tell the two apart.
+                if (match.Number < windowLast && RestartTrackingAllowed && OpensPendingRestart(match))
+                    marks.AddRange(await TrackRestartAsync(
+                        match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct));
+                windowLast = _lastNumber ?? windowLast;
                 continue;
+            }
             if (await AcceptMatchAsync(
                     match, candidate, start, windowEnd, phraseAbs, trimmedAbs, windowLast, ct)
                 is not { } mark)
                 continue;
+            // A chapter of the sequence in force ends any restart being tracked: a part that had
+            // really started would have no more chapters of the old numbering left to announce.
+            AbandonPendingRestart();
             marks.Add(mark);
             windowLast = mark.Number;
         }
 
         return marks;
     }
+
+    /// <summary>
+    /// Whether this match carries the number a restart being tracked is waiting for. Asked before
+    /// anything else, because that answer overrides the ordinary sequence test in both directions:
+    /// a number continuing the new part may sit below the old sequence (part 2's chapter 2 behind
+    /// part 1's chapter 15) or above it (part 2's chapter 4 behind part 1's chapter 3), and in the
+    /// second shape the old sequence would happily have swallowed it - which is precisely how two
+    /// numberings get mixed together.
+    /// <para>
+    /// A number already in the run answers false and is then dropped as an ordinary duplicate: one
+    /// announcement is routinely heard by two overlapping windows, and taking the second hearing as
+    /// the start of a fresh run would reset the tracking on every book that has one.
+    /// </para>
+    /// </summary>
+    /// <param name="match">The phrase match to judge.</param>
+    private bool ContinuesPendingRestart(PhraseMatch match)
+        => _pendingRestart.Count > 0 && match.Number == _pendingRestart[^1].Match.Number + 1;
+
+    /// <summary>
+    /// Whether an announcement below the sequence may open a restart being tracked. Everything but
+    /// a re-hearing of one already held qualifies - the run's length is what settles a restart, not
+    /// its first number - so this only exists to keep an overlapping window's second reading of the
+    /// same announcement from throwing away the run it is part of.
+    /// </summary>
+    /// <param name="match">The phrase match to judge.</param>
+    private bool OpensPendingRestart(PhraseMatch match)
+        => !_pendingRestart.Any(p => p.Match.Number == match.Number);
 
     /// <summary>
     /// The stretch of the chapter sequence a fresh announcement is judged against
@@ -1629,7 +1721,7 @@ internal sealed class RegionProber
     {
         foreach (var match in FindNamedMatches(segments, _language.Profile))
         {
-            if (!IsInScope(match.Phrase))
+            if (!IsInScope(match.Phrase, start + match.PhraseStartSeconds))
                 continue;
             await AcceptNamedMatchAsync(match, candidate, start, windowEnd, trimmedAbs, ct);
         }
@@ -1646,17 +1738,48 @@ internal sealed class RegionProber
     /// <summary>
     /// Whether a named phrase may become a mark at this point of the file, judged purely by how
     /// many chapters are known so far - see <see cref="NamedPhraseScope"/> for why that is the only
-    /// usable landmark. Rejections are silent: unlike a numbered match, which was plainly heard and
-    /// whose disappearance is worth explaining, "epilogue" turning up in the middle of a book is an
-    /// ordinary word in ordinary prose and logging every occurrence would drown the log.
+    /// usable landmark, and why <see cref="NamedPhraseScope.AfterLastChapter"/> can only be
+    /// pre-filtered here and has to be applied properly at the end of the run
+    /// (<see cref="ChapterDetector.DropOutOfScopeNamedMarks"/>).
+    /// <para>
+    /// A rejection is noted once per phrase, not once per occurrence: "epilogue" turning up in the
+    /// middle of a book is an ordinary word in ordinary prose, and one line per match would drown
+    /// the log - but a mapping the user scoped by hand and then never sees a mark from is a support
+    /// question, so the fact that its matches are being dropped has to be visible somewhere.
+    /// </para>
     /// </summary>
     /// <param name="phrase">The phrase that matched.</param>
-    private bool IsInScope(NamedPhrase phrase) => phrase.Scope switch
+    /// <param name="phraseAbs">Absolute time the announcement was heard at, for the note.</param>
+    private bool IsInScope(NamedPhrase phrase, double phraseAbs)
     {
-        NamedPhraseScope.Anywhere => true,
-        NamedPhraseScope.BeforeFirstChapter => ChaptersSoFar == 0,
-        _ => ChaptersSoFar > 0,
+        var inScope = phrase.Scope switch
+        {
+            NamedPhraseScope.Anywhere => true,
+            NamedPhraseScope.BeforeFirstChapter => ChaptersSoFar == 0,
+            _ => ChaptersSoFar > 0,
+        };
+        if (!inScope && _env.Log != null && _scopeDropsNoted.Add(phrase.Kind))
+            _env.Log($"{phrase.Kind} heard at {FormatTimestamp(phraseAbs)}, outside the " +
+                     $"\"{ScopeName(phrase.Scope)}\" position it is restricted to - not marked " +
+                     "(reported once per phrase)");
+        return inScope;
+    }
+
+    /// <summary>The keyword a scope is written as, for the log line above - the same word the user
+    /// typed, so that a note about a dropped match names something they can look up.</summary>
+    /// <param name="scope">The scope to name.</param>
+    private static string ScopeName(NamedPhraseScope scope) => scope switch
+    {
+        NamedPhraseScope.BeforeFirstChapter => "before-first-chapter",
+        NamedPhraseScope.AfterFirstChapter => "after-first-chapter",
+        NamedPhraseScope.AfterLastChapter => "after-last-chapter",
+        _ => "anywhere",
     };
+
+    /// <summary>The phrase kinds <see cref="IsInScope"/> has already reported an out-of-scope match
+    /// for, so the note is made once rather than on every occurrence. Per region, which for an
+    /// ordinary run is per file - a recovery pass over a gap may repeat it once.</summary>
+    private readonly HashSet<string> _scopeDropsNoted = [];
 
     /// <summary>How many chapter announcements this region has accepted so far - the landmark both
     /// positional <see cref="NamedPhraseScope"/>s are measured against. Under
@@ -1803,6 +1926,10 @@ internal sealed class RegionProber
     /// <em>later</em> in the file - see <see cref="AcceptNamedMatchAsync"/> for why the last
     /// announcement wins and why "last" cannot be read as "most recently
     /// found";</description></item>
+    /// <item><description>this mapping has reached its own <c>max=&lt;n&gt;</c> cap (see
+    /// <see cref="NamedPhrase.MaxMarks"/>), which unlike the file-wide one below is something the
+    /// user stated about this phrase and so is reported as an ordinary log line rather than as a
+    /// file-level warning;</description></item>
     /// <item><description>the file has reached its --custom mark cap (see
     /// <see cref="DetectionTuning.MaxCustomMarksPerFile"/>), which is reported all the way out to
     /// the file's summary line rather than only logged. Chapter announcements are exempt: under
@@ -1823,6 +1950,14 @@ internal sealed class RegionProber
 
         if (phrase.Kind == ChapterKind)
             return false;
+
+        if (phrase.MaxMarks is { } cap && _namedFound.Count(m => m.Kind == phrase.Kind) >= cap)
+        {
+            _env.Log?.Invoke(
+                $"skipped {phrase.Kind} at {FormatTimestamp(phraseAbs)} - this mapping's own " +
+                $"limit of {cap} mark(s) is reached");
+            return true;
+        }
 
         if (_namedFound.Count(m => m.Repeatable && m.Kind != ChapterKind) < MaxCustomMarksPerFile)
             return false;
@@ -1861,14 +1996,19 @@ internal sealed class RegionProber
     /// <param name="windowLast">The highest number accepted so far, in this window or before it.</param>
     private bool IsOutOfSequence(PhraseMatch match, double phraseAbs, int windowLast)
     {
-        // A duplicate or regression: an in-text mention like "as seen in chapter three", or a
-        // re-detection of an already-marked chapter.
+        // A duplicate or regression: an in-text mention like "as seen in chapter three", the opening
+        // of a part that counts from 1 again, or a re-detection of an already-marked chapter. Which
+        // of the first two it is cannot be decided here - see TrackRestartAsync, which the caller
+        // hands the strictly-below case to.
         if (match.Number <= windowLast)
         {
             _env.Log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
                              $"not above last accepted {windowLast}" +
                              (match.Number < windowLast ? " (in-text mention?)" : ""));
-            if (match.Number < windowLast)
+            // Booked as lost only where nothing will watch it: a forward scan hands it to
+            // TrackRestartAsync, which either turns it into a chapter or books it itself when the
+            // run it was part of breaks down.
+            if (match.Number < windowLast && !RestartTrackingAllowed)
                 NoteOutOfSequence(match.Number);
             return true;
         }
@@ -1887,9 +2027,117 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Records one announcement dropped for sitting strictly below the sequence, and says so in the
-    /// log the first time enough of them have accumulated to look like a book whose chapter
-    /// numbering restarts rather than like prose mentioning an earlier chapter.
+    /// Whether this pass may conclude that the file's chapter numbering restarts. Only an open-ended
+    /// forward scan may: a pass hunting known numbers inside a hole the sequence closes from above
+    /// is not reading the book forward at all, and every number it hears below its floor is an
+    /// in-text mention by construction - the part boundary it would be looking for cannot be inside
+    /// a stretch bounded by two chapters of one numbering.
+    /// <para>
+    /// The same expression as <see cref="WideBareNumberReading"/>, inverted, and for the same
+    /// underlying reason: both ask whether this window knows in advance which numbers may appear.
+    /// </para>
+    /// </summary>
+    private bool RestartTrackingAllowed => (_gapAbove ?? _region.UpperNumber) is null;
+
+    /// <summary>
+    /// Holds one announcement back as a possible new part, and confirms the restart once enough of
+    /// them have accumulated (<see cref="SequenceRestartRunLength"/>).
+    /// <para>
+    /// A number that does not continue the run being tracked starts a fresh one, abandoning what was
+    /// held: the run has to be strictly consecutive, because "chapter one, chapter two, chapter
+    /// three" spoken in order after the sequence has passed them is the shape a book divided into
+    /// parts has and scattered in-text mentions do not. That strictness is also what bounds the cost
+    /// of being wrong - the calibration in <see cref="SequenceRestartRunLength"/> found thirteen of
+    /// fourteen corpus books producing no below-sequence announcement at all.
+    /// </para>
+    /// <para>
+    /// Nothing is placed while a run is pending, so an in-text mention costs a log line rather than
+    /// a mark refinement. The price is that a confirmed part's opening chapters are placed late,
+    /// out of the window they were heard in - which is why <see cref="PendingRestart"/> carries that
+    /// window's transcript along.
+    /// </para>
+    /// </summary>
+    /// <param name="match">The phrase match, in window-relative time.</param>
+    /// <param name="candidate">The candidate whose window this probe decoded.</param>
+    /// <param name="start">Absolute start of that window.</param>
+    /// <param name="windowEnd">Absolute planned end of that window.</param>
+    /// <param name="phraseAbs">Absolute phrase start time.</param>
+    /// <param name="trimmedAbs">That window's transcript in absolute file time.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The marks a confirmed restart placed, empty while the run is still pending.</returns>
+    private async Task<List<ProbeMark>> TrackRestartAsync(
+        PhraseMatch match, ProbeCandidate candidate, double start, double windowEnd, double phraseAbs,
+        List<TranscriptSegment> trimmedAbs, CancellationToken ct)
+    {
+        if (!ContinuesPendingRestart(match))
+            AbandonPendingRestart();
+        _pendingRestart.Add(
+            new PendingRestart(match, candidate, start, windowEnd, phraseAbs, trimmedAbs));
+        _env.Log?.Invoke(
+            $"chapter {match.Number} at {FormatTimestamp(phraseAbs)} held back as a possible new " +
+            $"part ({_pendingRestart.Count} of {SequenceRestartRunLength} consecutive)");
+        return _pendingRestart.Count >= SequenceRestartRunLength ? await CommitRestartAsync(ct) : [];
+    }
+
+    /// <summary>
+    /// Accepts a tracked restart: opens the next chapter sequence and places the announcements held
+    /// back for it, in the order they were heard.
+    /// <para>
+    /// <see cref="_lastNumber"/> is cleared first, so the held chapters are judged against the new
+    /// part's own numbering and not against the one they sit below - and so the caller's
+    /// <c>RecordMarks</c> cannot read the drop from part 1's chapter 15 to part 2's chapter 1 as a
+    /// sequence gap and send a re-probe over the whole of part 1 after it.
+    /// </para>
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The marks placed for the new part's opening chapters.</returns>
+    private async Task<List<ProbeMark>> CommitRestartAsync(CancellationToken ct)
+    {
+        var opening = _pendingRestart.ToList();
+        _pendingRestart.Clear();
+        _sequence++;
+        _lastNumber = null;
+        _env.Log?.Invoke(
+            $"the chapter numbering restarts at {FormatTimestamp(opening[0].PhraseAbs)} - chapters " +
+            $"{string.Join(", ", opening.Select(p => p.Match.Number))} were announced in order " +
+            $"below the sequence, so this file holds a further part. Every chapter is written with " +
+            "its part from here on.");
+
+        // The held chapters are placed out of order with the walk, so the "stretch worth a second
+        // look" this normally accumulates points back at the previous part. Moved onto the new
+        // part's opening candidate, so that a chapter missing between the held ones - a placement
+        // that failed, the only way a consecutive run can come out with a hole - re-probes the few
+        // minutes it can be in rather than the whole of the part before it.
+        _lastMarkExpectAt = opening[0].Candidate.ExpectAt;
+
+        var marks = new List<ProbeMark>();
+        foreach (var held in opening)
+        {
+            if (await AcceptMatchAsync(
+                    held.Match, held.Candidate, held.Start, held.WindowEnd, held.PhraseAbs,
+                    held.TranscriptAbs, _lastNumber ?? 0, ct) is not { } mark)
+                continue;
+            marks.Add(mark);
+            _lastNumber = mark.Number;
+        }
+        return marks;
+    }
+
+    /// <summary>Gives up on a restart being tracked, booking its announcements as lost. Called when
+    /// a chapter of the sequence in force is accepted (a part that had really started would have no
+    /// more chapters of the old numbering to announce), when a below-sequence number breaks the run,
+    /// and when the region ends with a run still open.</summary>
+    private void AbandonPendingRestart()
+    {
+        foreach (var held in _pendingRestart)
+            NoteOutOfSequence(held.Match.Number);
+        _pendingRestart.Clear();
+    }
+
+    /// <summary>
+    /// Records one announcement given up on for sitting strictly below the sequence, and says so in
+    /// the log the first time enough of them have accumulated to look like a numbering this run is
+    /// failing to follow rather than like prose mentioning an earlier chapter.
     /// <para>
     /// The two are told apart by shape, not by count. A book divided into parts announces "chapter
     /// one", "chapter two", "chapter three" again after its last accepted chapter, so the rejected
@@ -1898,14 +2146,13 @@ internal sealed class RegionProber
     /// <see cref="SequenceRestartRunLength"/> carries the corpus measurement behind.
     /// </para>
     /// <para>
-    /// Reported rather than acted on, deliberately. Continuing the numbering across a restart would
-    /// mean accepting a number the sequence has already used, which is exactly what every defence
-    /// against a misheard chapter number is built to refuse - see
-    /// <see cref="SuspectNumberMender"/> and <see cref="GapPlanning.Normalize"/>'s
-    /// longest-increasing-subsequence filter, both of which would have to be taught the difference.
-    /// Saying so plainly costs nothing and leaves the choice - normally
-    /// <c>--ignore-chapter-numbers</c>, which marks every announcement it hears and never consults
-    /// a number - with the reader.
+    /// What reaches here is now the residue rather than the whole story: an ascending run long
+    /// enough to be believed is taken as a restart and marked (see <see cref="TrackRestartAsync"/>),
+    /// so the announcements booked here are the ones a run <em>almost</em> formed - a part whose
+    /// opening chapters were not all heard, or a stretch where the old numbering kept producing
+    /// chapters in between. Worth reporting for exactly that reason: it names the one shape this
+    /// tool still cannot follow, and <c>--ignore-chapter-numbers</c> - which marks every
+    /// announcement it hears and never consults a number - remains the answer for it.
     /// </para>
     /// </summary>
     /// <param name="number">The rejected announcement's own chapter number.</param>
@@ -1916,10 +2163,9 @@ internal sealed class RegionProber
             return;
         _restartReported = true;
         _env.Log?.Invoke(
-            "WARNING - the chapter numbering appears to restart partway through this file: " +
-            "announcements below the sequence are being heard in ascending runs, which is what a " +
-            "book divided into parts looks like. --ignore-chapter-numbers marks every announcement " +
-            "regardless of its number.");
+            "WARNING - announcements below the sequence are being heard in ascending runs, which is " +
+            "what a book divided into parts looks like - but not enough consecutive ones to confirm " +
+            "a new part. --ignore-chapter-numbers marks every announcement regardless of its number.");
     }
 
     /// <summary>
@@ -2006,7 +2252,7 @@ internal sealed class RegionProber
                 $"chapter {number} still does not fit the sequence after re-reading - mark kept, " +
                 "chapters under it not counted as missing");
 
-        _found.Add(new DetectedChapter(number, time, match.Confidence, unverified));
+        _found.Add(new DetectedChapter(number, time, match.Confidence, unverified, _sequence));
         // Through ExpectedStartFor rather than off the option, so the "still missing" note starts
         // counting the chapters under the first one found the moment a prologue says this file
         // holds the book's beginning - which the progress display would otherwise only learn of

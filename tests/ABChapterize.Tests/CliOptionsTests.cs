@@ -392,6 +392,54 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void Custom_HintsResolveIntoThePhraseTheBuiltInPrologueIs()
+    {
+        // The point of the hints: the prologue and the epilogue were always this same machinery
+        // with different values, and a mapping can now ask for exactly those values.
+        var tagged = ParseFile("--custom", "[before-first-chapter,once,heading]/vorwort/:Vorwort")!
+            .ResolveProfile("en").NamedPhrases.Single(p => p.IsCustom);
+        var prologue = ParseFile("--custom", "x:X")!
+            .ResolveProfile("en").NamedPhrases.Single(p => p.Kind == NamedPhrase.PrologueKind);
+
+        Assert.Equal(prologue.Scope, tagged.Scope);
+        Assert.Equal(prologue.Repeatable, tagged.Repeatable);
+        Assert.Equal(prologue.RequiresLeadIn, tagged.RequiresLeadIn);
+        Assert.Null(tagged.MaxMarks);
+    }
+
+    [Fact]
+    public void Custom_AnUntaggedMappingKeepsItsOldDefaults()
+    {
+        var phrase = ParseFile("--custom", "zwischenspiel:Zwischenspiel")!
+            .ResolveProfile("en").NamedPhrases.Single(p => p.IsCustom);
+
+        Assert.Equal(NamedPhraseScope.Anywhere, phrase.Scope);
+        Assert.True(phrase.Repeatable);
+        Assert.False(phrase.RequiresLeadIn);
+        Assert.Null(phrase.MaxMarks);
+    }
+
+    [Fact]
+    public void Custom_HintsChangeTheRunFingerprint()
+    {
+        // A hint changes what the run does to a file, so a batch's recorded progress must not be
+        // resumed under a command line that added or dropped one.
+        Assert.NotEqual(
+            ParseFile("--custom", "zwischenspiel:Zwischenspiel")!.RunFingerprint,
+            ParseFile("--custom", "[once]zwischenspiel:Zwischenspiel")!.RunFingerprint);
+    }
+
+    /// <summary>Hints mean nothing outside <c>--custom</c>, so the options that read the same tag
+    /// for its language half refuse them rather than ignoring them.</summary>
+    /// <param name="option">The option to give the tagged value to.</param>
+    [Theory]
+    [InlineData("--chapter-phrase")]
+    [InlineData("--chapter-title")]
+    [InlineData("--prologue-phrase")]
+    public void ALocalizedOption_RejectsACustomHint(string option)
+        => Assert.Throws<CliError>(() => ParseFile(option, "[once]whatever"));
+
+    [Fact]
     public void Custom_TitleMayReferenceACapturingGroup()
     {
         var phrase = ParseFile("--custom", "/(interlude|intermezzo)/:The $1")!

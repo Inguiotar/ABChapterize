@@ -681,6 +681,13 @@ public sealed class CliOptions
     public string Title { get; private set; } = "Chapter";
 
     /// <summary>
+    /// Word used to build the part prefix of a file whose chapter numbering restarts partway
+    /// through (--part-title, default "Part", localized by --lang). Only ever written for such a
+    /// file; see <see cref="LanguageProfile.ChapterTitleFor"/>.
+    /// </summary>
+    public string PartTitle { get; private set; } = "Part";
+
+    /// <summary>
     /// Title of the synthetic chapter covering the audio before the first detected chapter
     /// (--intro-title / -i). Audiobooks usually start with a prelude, so the first detected
     /// chapter must not be moved to 0:00; instead this intro chapter is prepended at 0:00
@@ -780,7 +787,7 @@ public sealed class CliOptions
     // or nothing at all when the option was not given - in which case the language's own default
     // applies. Null therefore also stands in for the "was it set" flags above, there being nothing
     // left worth tracking separately.
-    private LocalizedOption? _phraseSpec, _titleSpec, _introSpec;
+    private LocalizedOption? _phraseSpec, _titleSpec, _partTitleSpec, _introSpec;
     private LocalizedOption? _prologuePhraseSpec, _prologueTitleSpec, _epiloguePhraseSpec, _epilogueTitleSpec;
 
     /// <summary>
@@ -809,7 +816,7 @@ public sealed class CliOptions
            || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
            || _minSilenceSet || _earlyAbortSet || _markLeadSet || _expectedStartSet
            || _chapterCountSet || _noiseFloorSet || _namedMarkDistanceSet
-           || _phraseSpec != null || _titleSpec != null || _introSpec != null
+           || _phraseSpec != null || _titleSpec != null || _partTitleSpec != null || _introSpec != null
            || _prologuePhraseSpec != null || _prologueTitleSpec != null
            || _epiloguePhraseSpec != null || _epilogueTitleSpec != null
            || _customMappings.Count > 0 || IgnoreChapterNumbers;
@@ -844,11 +851,12 @@ public sealed class CliOptions
         {
             var relevant = string.Join('\n', [
                 $"recurse={Recurse}", $"backup={Backup}", $"force={Force}",
-                $"lang={Language}", $"phrase={ChapterPhrase}", $"title={Title}", $"intro={IntroTitle}",
+                $"lang={Language}", $"phrase={ChapterPhrase}", $"title={Title}", $"parttitle={PartTitle}",
+                $"intro={IntroTitle}",
                 $"prologue={ProloguePhrase}/{PrologueTitle}", $"epilogue={EpiloguePhrase}/{EpilogueTitle}",
                 $"nameddistance={NamedMarkDistanceSeconds}",
                 $"ignorenumbers={IgnoreChapterNumbers}",
-                $"custom={string.Join('|', _customMappings.Select(m => $"{m.Language}:{m.Phrase}=>{m.Title}"))}",
+                $"custom={string.Join('|', _customMappings.Select(m => $"{m.Tag}:{m.Phrase}=>{m.Title}"))}",
                 $"model={Model}", $"pass3={Pass3Model}",
                 $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
                 $"earlyabort={EarlyAbortMinutes}", $"expectedstart={ExpectedStartChapter}",
@@ -994,7 +1002,7 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || o.Verify || o._titleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
@@ -1002,7 +1010,7 @@ public sealed class CliOptions
                 "--noise-floor, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, --verify, " +
                 "--named-mark-distance, " +
-                "--chapter-title, --intro-title, --prologue-title and --epilogue-title " +
+                "--chapter-title, --part-title, --intro-title, --prologue-title and --epilogue-title " +
                 "have no effect and cannot be combined with it.");
 
         // --ignore-chapter-numbers removes the chapter-number sequence detection is otherwise built
@@ -1112,6 +1120,7 @@ public sealed class CliOptions
         // localized default fills in.
         o.ChapterPhrase = o._phraseSpec?.Raw ?? o.DefaultProfile.ChapterPhrase;
         o.Title = o._titleSpec?.Raw ?? o.DefaultProfile.Title;
+        o.PartTitle = o._partTitleSpec?.Raw ?? o.DefaultProfile.PartTitle;
         o.IntroTitle = o._introSpec?.Raw ?? o.DefaultProfile.IntroTitle;
         o.PhraseRegex = o.DefaultProfile.PhraseRegex;
         o.PhraseHasNumberGroup = o.DefaultProfile.PhraseHasNumberGroup;
@@ -1257,6 +1266,7 @@ public sealed class CliOptions
             // whichever spelling was typed.
             case "--chapter-title":
             case "--title": Title = nextParam(); _titleSpec = new(Title, name); return true;
+            case "--part-title": PartTitle = nextParam(); _partTitleSpec = new(PartTitle, name); return true;
             case "--intro-title": IntroTitle = nextParam(); _introSpec = new(IntroTitle, name); return true;
             case "--prologue-phrase": ProloguePhrase = nextParam(); _prologuePhraseSpec = new(ProloguePhrase, name); return true;
             case "--prologue-title": PrologueTitle = nextParam(); _prologueTitleSpec = new(PrologueTitle, name); return true;
@@ -1549,7 +1559,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// Resolves the chapter phrase, title word and intro title for the given language: an
-    /// explicit --chapter-phrase/--chapter-title/--intro-title always wins; otherwise the localized
+    /// explicit --chapter-phrase/--chapter-title/--part-title/--intro-title always wins; otherwise the localized
     /// default for <paramref name="language"/> is used (English defaults for languages without
     /// an entry in <see cref="LanguageRegistry"/>). Called once at parse time for an explicit
     /// --lang (building <see cref="DefaultProfile"/>), and once per file by
@@ -1561,10 +1571,11 @@ public sealed class CliOptions
         var defaults = LanguageRegistry.For(language);
         var phrase = _phraseSpec?.For(language) ?? defaults.ChapterPhrase;
         var title = _titleSpec?.For(language) ?? defaults.ChapterTitle;
+        var partTitle = _partTitleSpec?.For(language) ?? defaults.PartTitle;
         var intro = _introSpec?.For(language) ?? defaults.IntroTitle;
         var (regex, hasGroup, bareNumbers) = CompilePhraseRegex(phrase);
         return new LanguageProfile(
-            language, phrase, regex, hasGroup, title, intro,
+            language, phrase, regex, hasGroup, title, partTitle, intro,
             ResolveNamedPhrases(language, defaults), bareNumbers);
     }
 
@@ -1575,6 +1586,13 @@ public sealed class CliOptions
     /// discarded - followed by the <c>--custom</c> mappings in the order they were given. The custom
     /// ones are never localized and never dropped: they were written out by hand, in whatever
     /// language the user meant them in.
+    /// <para>
+    /// The prologue and epilogue are the same machinery with different values, which is what the
+    /// <c>--custom</c> hints expose (see <see cref="SpecTag"/>): a mapping tagged
+    /// <c>[before-first-chapter,once,heading]</c> resolves to exactly the phrase the built-in
+    /// prologue is. Untagged mappings keep the defaults they have always had - anywhere in the
+    /// file, every occurrence marked, no pause required in front of it.
+    /// </para>
     /// </summary>
     /// <param name="language">The language being resolved for, which decides both which share of a
     /// per-language option applies and which <c>--custom</c> mappings are in play at all.</param>
@@ -1597,19 +1615,28 @@ public sealed class CliOptions
             if (_customMappings[i].Language is { } code &&
                 !string.Equals(code, language, StringComparison.OrdinalIgnoreCase))
                 continue;
-            Add($"{NamedPhrase.CustomKindPrefix}{i + 1}", _customMappings[i].Phrase, _customMappings[i].Title,
-                NamedPhraseScope.Anywhere, repeatable: true);
+            var mapping = _customMappings[i];
+            var kind = $"{NamedPhrase.CustomKindPrefix}{i + 1}";
+            // An untagged mapping is a tag that asks for nothing, so the two paths differ in what
+            // was written rather than in what is built.
+            var tag = mapping.Tag ?? new SpecTag(null);
+            AddPhrase(kind, mapping.Phrase, mapping.Title,
+                regex => tag.ToPhrase(kind, regex, mapping.Title));
         }
         return named;
 
         void Add(string kind, string phrase, string markTitle, NamedPhraseScope scope,
             bool repeatable = false, bool requiresLeadIn = false)
+            => AddPhrase(kind, phrase, markTitle,
+                regex => new NamedPhrase(kind, regex, markTitle, scope, repeatable, requiresLeadIn));
+
+        void AddPhrase(string kind, string phrase, string markTitle, Func<Regex, NamedPhrase> build)
         {
             if (phrase.Length == 0)
                 return;
             var regex = CompilePhraseRegex(phrase, kind).Regex;
             ValidateTitleGroupRefs(kind, phrase, markTitle, regex);
-            named.Add(new NamedPhrase(kind, regex, markTitle, scope, repeatable, requiresLeadIn));
+            named.Add(build(regex));
         }
     }
 
@@ -1752,8 +1779,8 @@ public sealed class CliOptions
                                     language. For these
                                     languages, --lang also localizes the defaults of
                                     --chapter-phrase, --prologue-phrase, --epilogue-phrase,
-                                    --chapter-title, --intro-title, --prologue-title and
-                                    --epilogue-title (per-file with "auto").
+                                    --chapter-title, --part-title, --intro-title, --prologue-title
+                                    and --epilogue-title (per-file with "auto").
           -m, --model <name>        Whisper model used to find the chapters: tiny, base, small,
                                     medium, turbo or large (default: small), or "custom:<path>" for
                                     a GGML model file of your own, e.g.
@@ -1876,8 +1903,8 @@ public sealed class CliOptions
                                     built-in default. A value carrying no tag at all is taken
                                     whole, semicolons included, so an existing phrase still means
                                     what it did. The same syntax works for --chapter-title,
-                                    --intro-title, --prologue-phrase, --prologue-title,
-                                    --epilogue-phrase,
+                                    --part-title, --intro-title, --prologue-phrase,
+                                    --prologue-title, --epilogue-phrase,
                                     --epilogue-title and --custom.
                                     [EXPERIMENTAL] The value "none" says this book announces a
                                     chapter by speaking its number and nothing else
@@ -1921,9 +1948,26 @@ public sealed class CliOptions
                                     ($1, $2) or by name, in .NET's own substitution syntax ("$$"
                                     writes a literal dollar sign). Repeat the option to add further
                                     mappings. Never localized - a phrase is taken exactly as
-                                    written - but a mapping may open with a "[xx]" language tag,
-                                    which restricts it to files that resolve to that language;
-                                    untagged mappings apply to every file.
+                                    written - but a mapping may open with a "[...]" tag holding a
+                                    comma-separated list of a "xx" language code, restricting it
+                                    to files that resolve to that language, and any of these
+                                    keywords, restricting how it behaves:
+                                      before-first-chapter  only before the first chapter found
+                                      after-first-chapter   only once a chapter has been found
+                                      after-last-chapter    only after the book's last chapter
+                                      once                  at most one mark, the last one wins
+                                      heading                must follow a real pause
+                                      max=<n>               at most <n> marks, the first ones win
+                                    e.g. --custom "[de,before-first-chapter,once]/vorwort/:Vorwort",
+                                    which is exactly what the built-in prologue is. The three
+                                    positions also have the short forms "before-first",
+                                    "after-first" and "after-last". Untagged mappings apply to
+                                    every file, anywhere in it, as often as the phrase occurs.
+                                    A bracket run counts as a tag only when at least one token in
+                                    it is recognized, so a phrase like "[Musik]" - Whisper writes
+                                    such tags into its transcripts - is still matched as written;
+                                    a typo beside a good keyword is an error rather than phrase
+                                    text. See doc/manual.md for the details.
           -U, --custom-file <path>  Read --custom mappings from a text file, one per line. Blank
                                     lines and lines starting with "#" are ignored, and semicolons
                                     need no escaping here since line breaks separate the mappings.
@@ -1937,6 +1981,10 @@ public sealed class CliOptions
           -t, --chapter-title <word>
                                     Word used for chapter titles; the chapter number is appended
                                     (default: Chapter, localized by --lang).
+              --part-title <word>   Word used for the part prefix of a file whose chapter numbering
+                                    restarts partway through, e.g. "Part 2 - Chapter 1"
+                                    (default: Part, localized by --lang). A file holding a single
+                                    chapter sequence - every ordinary book - never uses it.
           -i, --intro-title <word>  Title of the chapter mark covering the audio before the
                                     first detected mark, e.g. a prelude (default: Intro,
                                     localized by --lang, e.g. "Giriş" with --lang tr).
