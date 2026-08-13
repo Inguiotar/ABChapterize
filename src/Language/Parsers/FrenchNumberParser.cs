@@ -36,6 +36,30 @@ public sealed class FrenchNumberParser : INumberWordParser
         ["second"] = 2, ["seconde"] = 2,
     };
 
+    /// <summary>
+    /// Every token a French number may consist of. The regular "-ième" ordinals are not listed
+    /// anywhere - the parser derives them by reducing the suffix - so they are derived here the same
+    /// way, from each cardinal building block's stem plus the four spellings of the suffix.
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = NumberWordPatterns.TokenRun(
+        Values.Keys.Concat(Ordinals.Keys)
+            .Concat(["vingt", "vingts", "cent", "cents", "et"])
+            .Concat(OrdinalSpellings()));
+
+    /// <summary>The regular ordinal of every cardinal building block, in all four suffix spellings:
+    /// "quatre" -> "quatrième"/"quatrieme"/"quatrème"/"quatreme", plus the two irregular stems the
+    /// parser special-cases ("cinqu-", "neuv-").</summary>
+    private static IEnumerable<string> OrdinalSpellings()
+    {
+        var stems = Values.Keys.Concat(["vingt", "cent"])
+            .Select(w => w.EndsWith('e') ? w[..^1] : w)
+            .Concat(["cinqu", "neuv"]);
+        foreach (var stem in stems)
+            foreach (var suffix in new[] { "ième", "ieme", "ème", "eme" })
+                yield return stem + suffix;
+    }
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

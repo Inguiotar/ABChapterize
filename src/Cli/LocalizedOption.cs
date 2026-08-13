@@ -68,15 +68,17 @@ internal static class SpecSyntax
 }
 
 /// <summary>
-/// One phrase or title option's value, which may be written once for every language or once per
+/// One <em>title</em> option's value, which may be written once for every language or once per
 /// language: <c>--chapter-title "[fr]Chapitre;[en]Section"</c>. What it exists for is a batch run
 /// over a mixed-language library, where <c>--lang auto</c> resolves a different language per file
-/// and a single literal phrase can only ever be right for some of them.
+/// and a single word can only ever be right for some of them.
 /// <para>
-/// A value with no <c>[xx]</c> tag anywhere in it is taken whole, semicolons and all, rather than
-/// split - so every phrase that worked before this existed still means exactly what it did, however
-/// much punctuation it carries. Tagging any entry switches the whole value into per-language mode,
-/// after which one untagged entry may still be given as the fallback for the languages not named.
+/// A title holds one value per language, which is what separates this from
+/// <see cref="ABChapterize.Language.Phrases.PhraseSpec"/>: a phrase is a list of wordings and an
+/// untagged one adds to every language's list, whereas a mark can only be called one thing. So here
+/// an untagged entry is the <em>fallback</em> for the languages the value does not name, only one
+/// may be given, and a value with no tag anywhere is taken whole, semicolons and all - a title
+/// containing a semicolon is a title, not two titles.
 /// </para>
 /// <para>
 /// A language the value says nothing about falls back to this tool's own localized default for that

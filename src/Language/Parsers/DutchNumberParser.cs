@@ -38,6 +38,30 @@ public sealed class DutchNumberParser : INumberWordParser
         ("zes", 6), ("zeven", 7), ("acht", 8), ("negen", 9),
     ];
 
+    /// <summary>The trema and acute <see cref="Normalize"/> folds away ("tweeëntwintig").</summary>
+    private const string Accents = "eëé;";
+
+    /// <summary>
+    /// A Dutch number is one compound word, built like the German one: an optional hundreds head,
+    /// an optional "&lt;unit&gt;en" prefix, one word from the table, and an optional "-ste"/"-de"
+    /// ordinal ending. "eerste" and "derde" are the only forms the cardinal table cannot supply.
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = BuildPattern();
+
+    /// <summary>Assembles <see cref="NumberWordPattern"/> from the cardinal table above.</summary>
+    private static string BuildPattern()
+    {
+        var units = NumberWordPatterns.Alt(UnitsForCompound.Select(u => u.Word), Accents);
+        // The connector carries the trema in "tweeëntwintig", so it needs the same tolerance the
+        // words get - it is the second half of "twee" as far as the spelling is concerned.
+        var and = NumberWordPatterns.Alt(["en"], Accents);
+        var head = $"{units}?{NumberWordPatterns.Alt(["honderd"], Accents)}{and}?";
+        var atom = NumberWordPatterns.Alt(Simple.Keys.Concat(["eerste", "derde"]), Accents);
+        var rest = $"(?:{units}{and})?{atom}(?:ste|de)?";
+        return NumberWordPatterns.AnyOf($"{head}(?:{rest}|ste|de)?", rest);
+    }
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

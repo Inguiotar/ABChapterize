@@ -11,6 +11,7 @@ using ABChapterize.Concurrency;
 using ABChapterize.Detection;
 using ABChapterize.Errors;
 using ABChapterize.Language;
+using ABChapterize.Language.Phrases;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;
 
@@ -728,18 +729,6 @@ public sealed class CliOptions
     private readonly List<Target> _targets = [];
 
     /// <summary>
-    /// Compiled case-insensitive regular expression used to find the chapter phrase in transcribed text.
-    /// Built from <see cref="ChapterPhrase"/>.
-    /// </summary>
-    public Regex PhraseRegex { get; private set; } = null!;
-
-    /// <summary>
-    /// True when <see cref="PhraseRegex"/> contains an explicit capturing group for the chapter number;
-    /// false when the number is expected to immediately follow the matched phrase.
-    /// </summary>
-    public bool PhraseHasNumberGroup { get; private set; }
-
-    /// <summary>
     /// The profile resolved at parse time: for an explicit --lang, this is used for every file;
     /// with <see cref="AutoLanguage"/>, it is the English fallback profile used only when a
     /// file's own detection is inconclusive or skipped - see <see cref="ResolveProfile"/>, which
@@ -783,23 +772,28 @@ public sealed class CliOptions
     // for applying the --lang-dependent defaults only when the user did not choose.
     private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
 
-    // The phrase and title options, each holding what was given for every language, per language,
-    // or nothing at all when the option was not given - in which case the language's own default
-    // applies. Null therefore also stands in for the "was it set" flags above, there being nothing
-    // left worth tracking separately.
-    private LocalizedOption? _phraseSpec, _titleSpec, _partTitleSpec, _introSpec;
-    private LocalizedOption? _prologuePhraseSpec, _prologueTitleSpec, _epiloguePhraseSpec, _epilogueTitleSpec;
+    // The title options, each holding what was given for every language, per language, or nothing at
+    // all when the option was not given - in which case the language's own default applies. Null
+    // therefore also stands in for the "was it set" flags above, there being nothing left worth
+    // tracking separately.
+    private LocalizedOption? _titleSpec, _partTitleSpec, _introSpec;
+    private LocalizedOption? _prologueTitleSpec, _epilogueTitleSpec;
+
+    // The phrase options. A phrase is a list of alternatives rather than one value per language,
+    // which is why these are not LocalizedOptions: naming French does not replace what every other
+    // language listens for, it adds to it.
+    private PhraseSpec? _phraseSpec, _prologuePhraseSpec, _epiloguePhraseSpec;
 
     /// <summary>
-    /// True when <c>--chapter-phrase none</c> was given for any language - the bare-number mode of
-    /// <see cref="LanguageProfile.BareNumberAnnouncements"/>. Asked of the whole spec rather than of
-    /// the language this run happens to resolve to, because a mixed-language batch may only reach
+    /// True when <c>--chapter-phrase none</c> was given for any language - the bare-number wording
+    /// of <see cref="LanguageProfile.BareNumberAnnouncements"/>. Asked of the whole spec rather than
+    /// of the language this run happens to resolve to, because a mixed-language batch may only reach
     /// the language that named it on its two-hundredth file, and a rule that fires there and not on
     /// file one is worse than one that fires on the command line.
     /// </summary>
     private bool UsesBareNumberPhrase
         => _phraseSpec is { } spec &&
-           spec.Values.Any(p => p.Equals(BareNumberPhrase, StringComparison.OrdinalIgnoreCase));
+           spec.Bodies.Any(p => p.Equals(PhraseCompiler.BareNumberWord, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True when any option was given that only means something for a run that actually detects
@@ -1088,7 +1082,9 @@ public sealed class CliOptions
         // Every language's own entry is checked rather than only the one this run resolves to: a
         // spec with an empty entry for a language nobody feeds it today is a broken spec either
         // way, and finding that out mid-batch on file two hundred helps nobody.
-        if (o._phraseSpec is { } phrases ? phrases.Values.Any(p => p.Length == 0) : o.ChapterPhrase.Length == 0)
+        if (o._phraseSpec is { } phrases
+                ? phrases.Entries.Count == 0 || phrases.Bodies.Any(p => p.Length == 0)
+                : o.ChapterPhrase.Length == 0)
             throw new CliError("The chapter phrase must not be empty.");
 
         // An empty prologue/epilogue phrase is how those are switched off, so only their titles
@@ -1122,8 +1118,6 @@ public sealed class CliOptions
         o.Title = o._titleSpec?.Raw ?? o.DefaultProfile.Title;
         o.PartTitle = o._partTitleSpec?.Raw ?? o.DefaultProfile.PartTitle;
         o.IntroTitle = o._introSpec?.Raw ?? o.DefaultProfile.IntroTitle;
-        o.PhraseRegex = o.DefaultProfile.PhraseRegex;
-        o.PhraseHasNumberGroup = o.DefaultProfile.PhraseHasNumberGroup;
         // The named phrases keep only their compiled form in the profile, so the raw strings the
         // fingerprint and any user-facing echo read are localized here rather than copied back.
         var language = LanguageRegistry.For(fallbackLanguage);
@@ -1247,7 +1241,13 @@ public sealed class CliOptions
         switch (name)
         {
             case "--lang": Language = nextParam(); _langSet = true; return true;
-            case "--chapter-phrase": ChapterPhrase = nextParam(); _phraseSpec = new(ChapterPhrase, name); return true;
+            // The phrase options accumulate rather than overwrite: repeating one is defined as
+            // writing its values as a single semicolon-separated list, since a phrase is a list of
+            // alternatives and a second --chapter-phrase is another way to say "or this".
+            case "--chapter-phrase":
+                ChapterPhrase = PhraseSpec.Join(_phraseSpec?.Raw, nextParam());
+                _phraseSpec = PhraseSpec.Parse(ChapterPhrase, name);
+                return true;
             case "--use-gpu": UseGpu = ParseUseGpu(nextParam()); return true;
             case "--model": Model = ParseModelSelector("--model", nextParam()); _modelSet = true; return true;
             case "--pass3-model": Pass3Model = ParseModelSelector("--pass3-model", nextParam()); _pass3ModelSet = true; return true;
@@ -1268,9 +1268,15 @@ public sealed class CliOptions
             case "--title": Title = nextParam(); _titleSpec = new(Title, name); return true;
             case "--part-title": PartTitle = nextParam(); _partTitleSpec = new(PartTitle, name); return true;
             case "--intro-title": IntroTitle = nextParam(); _introSpec = new(IntroTitle, name); return true;
-            case "--prologue-phrase": ProloguePhrase = nextParam(); _prologuePhraseSpec = new(ProloguePhrase, name); return true;
+            case "--prologue-phrase":
+                ProloguePhrase = PhraseSpec.Join(_prologuePhraseSpec?.Raw, nextParam());
+                _prologuePhraseSpec = PhraseSpec.Parse(ProloguePhrase, name);
+                return true;
             case "--prologue-title": PrologueTitle = nextParam(); _prologueTitleSpec = new(PrologueTitle, name); return true;
-            case "--epilogue-phrase": EpiloguePhrase = nextParam(); _epiloguePhraseSpec = new(EpiloguePhrase, name); return true;
+            case "--epilogue-phrase":
+                EpiloguePhrase = PhraseSpec.Join(_epiloguePhraseSpec?.Raw, nextParam());
+                _epiloguePhraseSpec = PhraseSpec.Parse(EpiloguePhrase, name);
+                return true;
             case "--epilogue-title": EpilogueTitle = nextParam(); _epilogueTitleSpec = new(EpilogueTitle, name); return true;
             case "--named-mark-distance": NamedMarkDistanceSeconds = ParseNamedMarkDistance(nextParam()); _namedMarkDistanceSet = true; return true;
             case "--custom": _customMappings.AddRange(CustomMappingParser.ParseSpec(nextParam())); return true;
@@ -1569,14 +1575,39 @@ public sealed class CliOptions
     public LanguageProfile ResolveProfile(string language)
     {
         var defaults = LanguageRegistry.For(language);
-        var phrase = _phraseSpec?.For(language) ?? defaults.ChapterPhrase;
+        var alternatives = Alternatives(_phraseSpec, language, defaults.ChapterPhrase, "--chapter-phrase");
         var title = _titleSpec?.For(language) ?? defaults.ChapterTitle;
         var partTitle = _partTitleSpec?.For(language) ?? defaults.PartTitle;
         var intro = _introSpec?.For(language) ?? defaults.IntroTitle;
-        var (regex, hasGroup, bareNumbers) = CompilePhraseRegex(phrase);
+        var pattern = PhraseCompiler.Compile(
+            alternatives, language, PhraseKind.Chapter, "chapter phrase");
+        // This language's own share of the spec rather than the whole of it: the profile is what a
+        // per-file debug line reports, and a batch's other languages are not what that file heard.
+        // The fingerprint reads CliOptions.ChapterPhrase, which does keep the whole spec.
         return new LanguageProfile(
-            language, phrase, regex, hasGroup, title, partTitle, intro,
-            ResolveNamedPhrases(language, defaults), bareNumbers);
+            language, pattern.Source, pattern,
+            title, partTitle, intro, ResolveNamedPhrases(language, defaults));
+    }
+
+    /// <summary>
+    /// The wordings one phrase option resolves to for a language: what the user wrote, with
+    /// <c>default</c> expanded into this tool's own - which is also what an option that says
+    /// nothing about this language falls back to whole. The built-in default is itself parsed as a
+    /// spec, so a language may bring several wordings of its own without the two syntaxes differing.
+    /// </summary>
+    /// <param name="spec">The option's value, or null when it was not given.</param>
+    /// <param name="builtIn">This tool's own phrase for the language.</param>
+    /// <param name="language">Two-letter language code being resolved for.</param>
+    /// <param name="option">Long option name, for error messages.</param>
+    private static IReadOnlyList<string> Alternatives(
+        PhraseSpec? spec, string language, string builtIn, string option)
+    {
+        IReadOnlyList<string> Defaults() => PhraseSpec.Parse(builtIn, option).Entries
+            .Where(e => e.Language == null ||
+                        string.Equals(e.Language, language, StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.Body)
+            .ToList();
+        return spec?.For(language, Defaults) ?? Defaults();
     }
 
     /// <summary>
@@ -1600,10 +1631,12 @@ public sealed class CliOptions
     private IReadOnlyList<NamedPhrase> ResolveNamedPhrases(string language, ILanguage defaults)
     {
         var named = new List<NamedPhrase>();
-        Add(NamedPhrase.PrologueKind, _prologuePhraseSpec?.For(language) ?? defaults.ProloguePhrase,
+        Add(NamedPhrase.PrologueKind,
+            Alternatives(_prologuePhraseSpec, language, defaults.ProloguePhrase, "--prologue-phrase"),
             _prologueTitleSpec?.For(language) ?? defaults.PrologueTitle,
             NamedPhraseScope.BeforeFirstChapter, requiresLeadIn: true);
-        Add(NamedPhrase.EpilogueKind, _epiloguePhraseSpec?.For(language) ?? defaults.EpiloguePhrase,
+        Add(NamedPhrase.EpilogueKind,
+            Alternatives(_epiloguePhraseSpec, language, defaults.EpiloguePhrase, "--epilogue-phrase"),
             _epilogueTitleSpec?.For(language) ?? defaults.EpilogueTitle,
             NamedPhraseScope.AfterFirstChapter, requiresLeadIn: true);
         for (var i = 0; i < _customMappings.Count; i++)
@@ -1618,25 +1651,30 @@ public sealed class CliOptions
             var mapping = _customMappings[i];
             var kind = $"{NamedPhrase.CustomKindPrefix}{i + 1}";
             // An untagged mapping is a tag that asks for nothing, so the two paths differ in what
-            // was written rather than in what is built.
+            // was written rather than in what is built. A mapping's phrase is one alternative: the
+            // semicolon that separates alternatives elsewhere already separates mappings here.
             var tag = mapping.Tag ?? new SpecTag(null);
-            AddPhrase(kind, mapping.Phrase, mapping.Title,
-                regex => tag.ToPhrase(kind, regex, mapping.Title));
+            AddPhrase(kind, [mapping.Phrase], mapping.Title,
+                (pattern, title) => tag.ToPhrase(kind, pattern, title));
         }
         return named;
 
-        void Add(string kind, string phrase, string markTitle, NamedPhraseScope scope,
+        void Add(string kind, IReadOnlyList<string> phrase, string markTitle, NamedPhraseScope scope,
             bool repeatable = false, bool requiresLeadIn = false)
             => AddPhrase(kind, phrase, markTitle,
-                regex => new NamedPhrase(kind, regex, markTitle, scope, repeatable, requiresLeadIn));
+                (pattern, title) =>
+                    new NamedPhrase(kind, pattern, title, scope, repeatable, requiresLeadIn));
 
-        void AddPhrase(string kind, string phrase, string markTitle, Func<Regex, NamedPhrase> build)
+        void AddPhrase(
+            string kind, IReadOnlyList<string> phrase, string markTitle,
+            Func<PhrasePattern, TitleTemplate, NamedPhrase> build)
         {
-            if (phrase.Length == 0)
+            var pattern = PhraseCompiler.Compile(phrase, language, PhraseKind.Named, $"{kind} phrase");
+            if (pattern.Alternatives.Count == 0)
                 return;
-            var regex = CompilePhraseRegex(phrase, kind).Regex;
-            ValidateTitleGroupRefs(kind, phrase, markTitle, regex);
-            named.Add(build(regex));
+            var title = new TitleTemplate(markTitle, $"{kind} title");
+            ValidateTitleGroupRefs(kind, pattern, title);
+            named.Add(build(pattern, title));
         }
     }
 
@@ -1647,76 +1685,29 @@ public sealed class CliOptions
     /// mapping at fault.
     /// </summary>
     /// <param name="kind">The phrase kind, for the error message.</param>
-    /// <param name="phrase">The raw phrase, quoted in the error message so a long
-    /// <c>--custom</c> list points at the mapping that is wrong.</param>
-    /// <param name="title">The raw title template to check.</param>
-    /// <param name="regex">The phrase's compiled expression, supplying the groups that do exist.</param>
+    /// <param name="pattern">The phrase's compiled wordings, supplying the groups that do exist.</param>
+    /// <param name="title">The title template to check.</param>
     /// <exception cref="CliError">Thrown for a reference to a group that does not exist.</exception>
-    private static void ValidateTitleGroupRefs(string kind, string phrase, string title, Regex regex)
+    private static void ValidateTitleGroupRefs(string kind, PhrasePattern pattern, TitleTemplate title)
     {
-        // A phrase without capturing groups substitutes nothing at all, so "$5" in its title is a
-        // price rather than a reference - the same rule NamedPhrase.ResolveTitle applies.
-        if (regex.GetGroupNumbers().Length <= 1)
-            return;
-
-        foreach (var group in NamedPhrase.ReferencedGroups(title))
-        {
-            var exists = int.TryParse(group, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
-                ? regex.GetGroupNumbers().Contains(number)
-                : regex.GetGroupNames().Contains(group);
-            if (!exists)
-                throw new CliError(
-                    $"The {kind} title \"{title}\" references the capturing group \"{group}\", " +
-                    $"which the phrase \"{phrase}\" does not have. " +
-                    "Write \"$$\" for a literal dollar sign.");
-        }
+        var groups = pattern.GroupNames.ToList();
+        foreach (var group in title.ReferencedGroups.Where(g => !groups.Contains(g)))
+            throw new CliError(
+                $"The {kind} title \"{title.Raw}\" references the capturing group \"{group}\", " +
+                $"which the phrase \"{pattern.Source}\" does not have. " +
+                "Write \"$$\" for a literal dollar sign.");
     }
 
-    /// <summary>
-    /// Compiles a chapter phrase into its matching regular expression. A phrase enclosed in
-    /// slashes is compiled as-is (case-insensitive); anything else is escaped literally.
-    /// </summary>
-    /// <param name="chapterPhrase">The raw phrase or "/regexp/".</param>
-    /// <param name="kind">What the phrase names, for the error message: "chapter" (the default),
-    /// "prologue" or "epilogue". The named phrases share this compiler so all three accept the
-    /// same "/regexp/" spelling; only <see cref="LanguageProfile.PhraseHasNumberGroup"/> is
-    /// meaningless for them, since they parse no number.</param>
-    /// <exception cref="CliError">Thrown for an invalid regexp.</exception>
-    private static (Regex Regex, bool HasNumberGroup, bool BareNumbers) CompilePhraseRegex(
-        string chapterPhrase, string kind = "chapter")
-    {
-        // Only the chapter phrase: a prologue or a --custom mapping parses no number, so "none"
-        // would name nothing there and is taken as the literal word it is.
-        if (kind == "chapter" && chapterPhrase.Equals(BareNumberPhrase, StringComparison.OrdinalIgnoreCase))
-            return (NeverMatches, false, true);
+    /// <summary>The title-template syntax as <see cref="UsageText"/> prints it. Constants because
+    /// that text is an interpolated raw string literal, in which a brace of its own would have to be
+    /// escaped past legibility.</summary>
+    private const string GroupReference = "\"${name}\"";
 
-        if (chapterPhrase.Length > 2 && chapterPhrase.StartsWith('/') && chapterPhrase.EndsWith('/'))
-        {
-            Regex regex;
-            try
-            {
-                regex = new Regex(chapterPhrase[1..^1], RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            }
-            catch (ArgumentException ex)
-            {
-                throw new CliError($"Invalid {kind} phrase regexp: {ex.Message}");
-            }
-            return (regex, regex.GetGroupNumbers().Length > 1, false);
-        }
+    /// <inheritdoc cref="GroupReference"/>
+    private const string NumberReference = "\"${number}\"";
 
-        var pattern = Regex.Escape(chapterPhrase);
-        return (new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), false, false);
-    }
-
-    /// <summary>The --chapter-phrase value that says a chapter is announced by its number alone;
-    /// see <see cref="LanguageProfile.BareNumberAnnouncements"/>.</summary>
-    private const string BareNumberPhrase = "none";
-
-    /// <summary>Stands in for the chapter-phrase expression under <see cref="BareNumberPhrase"/>,
-    /// where nothing is matched by pattern at all. A regex that cannot succeed is better than a
-    /// null: every consumer keeps working, and one that forgot to check the flag finds nothing
-    /// rather than throwing halfway through a book.</summary>
-    private static readonly Regex NeverMatches = new(@"(?!)", RegexOptions.CultureInvariant);
+    /// <inheritdoc cref="GroupReference"/>
+    private const string Conversions = "$roman{}, $digits{}, $upper{}, $lower{} or $capital{}";
 
     /// <summary>OS-specific note about where ffmpeg/ffprobe are searched (part of the usage info).</summary>
     private static string FfmpegNote => OperatingSystem.IsWindows()
@@ -1889,37 +1880,33 @@ public sealed class CliOptions
 
         Phrases & titles:
           -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
-                                    /chapter/, localized by --lang).
-                                    Enclose in slashes to use a regexp, e.g. "/chapter (\d+)/".
-                                    The regexp may contain one capturing group "(\d+)" in place of
-                                    the chapter number; otherwise the number is expected to follow
-                                    the phrase. Matching is always case-insensitive.
-                                    For a batch over books in different languages the value may be
-                                    written per language: entries separated by semicolons, each
-                                    opened by a "[xx]" language tag, e.g.
-                                      --chapter-phrase "[fr]/chapitre/;[en]section"
-                                    One entry may be left untagged, as the fallback for languages
-                                    the spec does not name; without one, those keep their own
-                                    built-in default. A value carrying no tag at all is taken
-                                    whole, semicolons included, so an existing phrase still means
-                                    what it did. The same syntax works for --chapter-title,
-                                    --part-title, --intro-title, --prologue-phrase,
-                                    --prologue-title, --epilogue-phrase,
-                                    --epilogue-title and --custom.
-                                    [EXPERIMENTAL] The value "none" says this book announces a
-                                    chapter by speaking its number and nothing else
-                                    ("Seventeen."), with no phrase at all: a number heard standing
-                                    alone between two pauses is then the announcement. Since the
-                                    number is the only signal there is, such a mark is accepted
-                                    only where it continues the chapter sequence - which is why
-                                    "none" cannot be combined with --ignore-chapter-numbers. Per
-                                    language like any other value, e.g. "[en]none;chapitre".
-                                    Experimental because it has been calibrated against a single
-                                    book so far: expect to check its results, and expect the rules
-                                    behind them to keep moving.
+                                    "/(?:chapter ()|chapter)/", localized by --lang). Matching is
+                                    always case-insensitive. A value is a list of alternatives
+                                    separated by semicolons, each of them one of:
+                                      word        the word with the chapter number beside it
+                                      /regexp/    a regular expression
+                                      none        the number spoken alone, with no phrase at all
+                                      default     this tool's own phrase for the language
+                                    e.g. --chapter-phrase "/se[ck]tion ()/;partie;default"
+                                    Inside a regexp, "()" stands for a chapter number in any
+                                    notation the language has - digits, ordinals, Roman numerals,
+                                    spoken words - and captures it. A leading "^" asks for a pause
+                                    in front of the announcement and a trailing "$" for one behind
+                                    it; neither is an anchor.
+                                    An alternative may be restricted to one language by a leading
+                                    "[xx]" tag, e.g. --chapter-phrase "[fr]/chapitre ()/;section".
+                                    Untagged alternatives apply to every language; a language the
+                                    value says nothing about keeps its own built-in phrase.
+                                    Repeating the option adds alternatives. The same syntax works
+                                    for --prologue-phrase, --epilogue-phrase and --custom; the
+                                    title options take the "[xx]" tag but hold one value each.
+                                    "none" is [EXPERIMENTAL] and cannot be combined with
+                                    --ignore-chapter-numbers, the chapter sequence being the only
+                                    thing that tells such an announcement from a year or a price.
+                                    See doc/manual.md for the whole syntax, with examples.
           -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: /prolog/,
-                                    localized by --lang). Accepts a "/regexp/" like
-                                    --chapter-phrase, but parses no number: a match becomes one
+                                    localized by --lang). Takes the same alternatives, tags and
+                                    guards as --chapter-phrase, but parses no number: a match becomes one
                                     untitled-by-number mark carrying --prologue-title. Only
                                     accepted before the first chapter has been found, so a later
                                     mention in the prose cannot produce a second mark; if the
@@ -1939,14 +1926,16 @@ public sealed class CliOptions
                                     A phrase is a word or a "/regexp/" and parses no number; a
                                     match anywhere in the file becomes a mark titled after the
                                     colon, as often as the phrase occurs (up to
-                                    {DetectionTuning.MaxCustomMarksPerFile} marks per file, after
-                                    which the rest are dropped with a note). Only the first colon
+                                    {DetectionTuning.MaxCustomMarksPerFile} marks per file,
+                                    after which the rest are dropped with a note). Only the first colon
                                     delimits, so a title may contain more of them; a "/regexp/"
                                     phrase ends at its closing slash instead, so a colon inside it
                                     is just a colon. Write "\;" for a semicolon inside a regexp.
-                                    A title may reference the phrase's capturing groups by number
-                                    ($1, $2) or by name, in .NET's own substitution syntax ("$$"
-                                    writes a literal dollar sign). Repeat the option to add further
+                                    A title may write out what the phrase captured: {GroupReference}
+                                    for a named group, {NumberReference} for the chapter number in
+                                    digits, and {Conversions}
+                                    to convert one ("$$" writes a literal dollar sign).
+                                    Repeat the option to add further
                                     mappings. Never localized - a phrase is taken exactly as
                                     written - but a mapping may open with a "[...]" tag holding a
                                     comma-separated list of a "xx" language code, restricting it
@@ -1956,7 +1945,7 @@ public sealed class CliOptions
                                       after-first-chapter   only once a chapter has been found
                                       after-last-chapter    only after the book's last chapter
                                       once                  at most one mark, the last one wins
-                                      heading                must follow a real pause
+                                      heading               must follow a real pause
                                       max=<n>               at most <n> marks, the first ones win
                                     e.g. --custom "[de,before-first-chapter,once]/vorwort/:Vorwort",
                                     which is exactly what the built-in prologue is. The three

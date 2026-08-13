@@ -40,6 +40,29 @@ public sealed class GermanNumberParser : INumberWordParser
         ("sechs", 6), ("sieben", 7), ("acht", 8), ("neun", 9),
     ];
 
+    /// <summary>
+    /// A German number is one compound word, so this composes rather than lists: an optional
+    /// hundreds head, an optional "&lt;unit&gt;und" prefix, one word from the tables, and an
+    /// optional ordinal ending. The ending covers all three formations at once - "achte" (bare
+    /// "e"), "vierte" ("te") and "zwanzigste" ("ste") - which admits "zweiste" as well, and that is
+    /// the intended direction: the captured word is handed to <see cref="TryParse"/>, which knows
+    /// better. The irregular ordinal stems are the only forms the cardinal tables cannot supply.
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = BuildPattern();
+
+    /// <summary>Assembles <see cref="NumberWordPattern"/> from the cardinal tables above.</summary>
+    private static string BuildPattern()
+    {
+        var units = NumberWordPatterns.Alt(UnitsForCompound.Select(u => u.Word));
+        var head = $"{units}?hundert(?:und)?";
+        var ending = "(?:(?:s?t)?e[rsnm]?)?";
+        var atom = NumberWordPatterns.Alt(
+            Simple.Keys.Concat(["erst", "dritt", "siebt", "siebent"]));
+        var rest = $"(?:{units}und)?{atom}{ending}";
+        return NumberWordPatterns.AnyOf($"{head}(?:{rest}|(?:s?t)?e[rsnm]?)?", rest);
+    }
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

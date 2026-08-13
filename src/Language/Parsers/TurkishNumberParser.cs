@@ -47,6 +47,33 @@ public sealed class TurkishNumberParser : INumberWordParser
     /// </summary>
     private static readonly string[] OrdinalSuffixes = ["inci", "uncu", "nci", "ncu"];
 
+    /// <summary>The Turkish letters <see cref="Normalize"/> maps to ASCII, so the pattern admits
+    /// "üçüncü" as readily as the "ucuncu" the tables are keyed with.</summary>
+    private const string TurkishLetters = "iı;uü;oö;sş;cç;gğ;";
+
+    /// <summary>
+    /// Every token a Turkish number may consist of, in big-endian word order. The ordinals are not
+    /// listed anywhere - the parser reduces the suffix instead - so they are derived here the same
+    /// way, every cardinal building block times every vowel-harmony suffix, plus the d-softened
+    /// stem behind "dördüncü".
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = NumberWordPatterns.TokenRun(
+        Units.Keys.Concat(Tens.Keys).Append("yuz").Concat(OrdinalSpellings()), TurkishLetters);
+
+    /// <summary>Every regular ordinal: each cardinal word (and its d-softened variant) plus each of
+    /// the four suffix spellings.</summary>
+    private static IEnumerable<string> OrdinalSpellings()
+    {
+        foreach (var word in Units.Keys.Concat(Tens.Keys).Append("yuz"))
+            foreach (var suffix in OrdinalSuffixes)
+            {
+                yield return word + suffix;
+                if (word.EndsWith('t'))
+                    yield return word[..^1] + "d" + suffix;
+            }
+    }
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

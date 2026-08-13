@@ -63,6 +63,55 @@ public sealed class ItalianNumberParser : INumberWordParser
         ["nono"] = 9, ["nona"] = 9, ["decimo"] = 10, ["decima"] = 10,
     };
 
+    /// <summary>The accents <see cref="TryParse"/> folds away ("ventitré", "ventitrè").</summary>
+    private const string Accents = "eéè;";
+
+    /// <summary>
+    /// An Italian number is one compound word with two elisions to allow for: the mandatory one of
+    /// the tens ("ventuno", "ottantotto") and the optional one of the hundreds ("centotto"). The
+    /// regular "-esimo" ordinal drops the cardinal's final vowel, which
+    /// <see cref="NumberWordPatterns.Stem"/> makes optional rather than this having to spell out
+    /// every stem.
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = BuildPattern();
+
+    /// <summary>Assembles <see cref="NumberWordPattern"/> from the cardinal tables above.</summary>
+    private static string BuildPattern()
+    {
+        var sub100 = Sub100(stemmed: false);
+        var hundreds = NumberWordPatterns.Alt(
+            Hundreds.SelectMany(h => new[] { h.Word, h.Word[..^1] }), Accents);
+        var cardinal = NumberWordPatterns.AnyOf($"{hundreds}{sub100}?", sub100);
+        var stem = NumberWordPatterns.AnyOf(
+            $"{hundreds}(?:{Sub100(stemmed: true)})?", Sub100(stemmed: true));
+        return NumberWordPatterns.AnyOf(
+            NumberWordPatterns.Alt(Ordinals.Keys, Accents), $"{stem}esim[oa]", cardinal);
+    }
+
+    /// <summary>
+    /// The 0-99 part: a tens word with an optional unit fused onto it, its elided form plus
+    /// "uno"/"otto", or one of the simple words.
+    /// </summary>
+    /// <param name="stemmed">Whether the trailing word's final vowel is optional, which is what an
+    /// "-esimo" ordinal elides ("ventun" + "esimo").</param>
+    private static string Sub100(bool stemmed)
+    {
+        string Tail(IEnumerable<string> words) => stemmed
+            ? NumberWordPatterns.AnyOf(words
+                .OrderByDescending(w => w.Length).ThenBy(w => w, StringComparer.Ordinal)
+                .Select(w => NumberWordPatterns.Stem(w, Accents)).ToArray())
+            : NumberWordPatterns.Alt(words, Accents);
+
+        var tens = NumberWordPatterns.Alt(Tens.Select(t => t.Word), Accents);
+        var elided = NumberWordPatterns.Alt(Tens.Select(t => t.Word[..^1]), Accents);
+        return NumberWordPatterns.AnyOf(
+            $"{tens}{Tail(UnitsForCompound.Keys)}",
+            $"{elided}{Tail(["uno", "otto"])}",
+            Tail(Tens.Select(t => t.Word)),
+            Tail(Simple.Keys));
+    }
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

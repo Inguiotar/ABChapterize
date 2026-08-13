@@ -239,10 +239,10 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 
 | Option | What it does |
 | --- | --- |
-| `-c`, `--chapter-phrase <p>` | Word or `/regexp/` announcing a chapter (default: `/chapter/`, localized by `--lang`). May be written per language for a mixed batch: `"[fr]/chapitre/;[en]section"`, with one entry optionally left untagged as the fallback. The same syntax works for `--chapter-title`, `--part-title`, `--intro-title`, `--prologue-phrase`, `--prologue-title`, `--epilogue-phrase`, `--epilogue-title` and `--custom`. The value `none` (**experimental**) is for a book with no chapter phrase at all, which announces a chapter by speaking its number alone ("Seventeen.") — a number heard between two pauses is then the announcement, and a number inside a sentence is not. |
+| `-c`, `--chapter-phrase <p>` | What announces a chapter (default: `/(?:chapter ()\|chapter)/`, localized by `--lang`). A list of alternatives separated by `;`, each of them a word, a `/regexp/`, `none` (**experimental** — the number spoken alone, with no phrase at all) or `default` (this tool's own phrase). Inside a regexp, `()` stands for a chapter number in any notation the language has and captures it; a leading `^` or trailing `$` asks for a pause before or after the announcement. An alternative may be restricted to one language with a `[xx]` tag, for a mixed batch. The same syntax serves `--prologue-phrase`, `--epilogue-phrase` and `--custom`. See [the manual](doc/manual.md#the-phrase-syntax) for all of it. |
 | `-p`, `--prologue-phrase <p>` | Word or `/regexp/` announcing a prologue (default: `/prolog/`, localized by `--lang`). Only accepted before the first numbered chapter, at most once per file; an empty value switches prologue detection off. |
 | `-g`, `--epilogue-phrase <p>` | Word or `/regexp/` announcing an epilogue (default: `/epilog/`, localized by `--lang`). Only accepted after the book's last numbered chapter, at most once per file; a match anywhere else is dropped (use `--custom` for a section between chapters). An empty value switches epilogue detection off. |
-| `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched at any point in the file as often as it occurs (up to 100 marks per file), but must be announced just as a chapter phrase must. Titles may reference the phrase's capturing groups as `$1`, `$2` or by name. Repeatable; never localized, though a mapping may open with a `[...]` tag holding a `xx` language code and/or hints saying what kind of thing it names — `before-first-chapter`, `after-first-chapter`, `after-last-chapter`, `once`, `heading`, `max=<n>` — which is the same machinery the built-in prologue and epilogue are. See the manual. |
+| `-u`, `--custom <mappings>` | Extra `phrase:title` mappings separated by `;`, e.g. `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A phrase is a word or a `/regexp/`, parses no number, and is matched at any point in the file as often as it occurs (up to 100 marks per file), but must be announced just as a chapter phrase must. Titles may write out what the phrase captured — `${name}`, `${number}` for the chapter number in digits, `$roman{}`, `$upper{}` and so on. Repeatable; never localized, though a mapping may open with a `[...]` tag holding a `xx` language code and/or hints saying what kind of thing it names — `before-first-chapter`, `after-first-chapter`, `after-last-chapter`, `once`, `heading`, `max=<n>` — which is the same machinery the built-in prologue and epilogue are. See the manual. |
 | `-U`, `--custom-file <path>` | Read `--custom` mappings from a text file, one per line (blank and `#` lines ignored). |
 | `-D`, `--named-mark-distance <seconds>` | How close a named mark (prologue, epilogue, `--custom`) may come to a chapter mark before the two become one entry (default: 10). The chapter keeps its position, the named mark contributes its title in brackets — "Chapter 10 (Interlude)". `0` writes every mark separately. |
 | `-t`, `--chapter-title <word>` | Word for generated chapter titles (default: `Chapter`, localized by `--lang`). |
@@ -465,9 +465,9 @@ use `.`, whatever the machine's locale says.
    looking for. Skipped when no chapter was found at all, and after an
    `--early-abort` or `--expected-start-chapter` abort.
 `--custom "phrase:Title;..."` adds marks for anything else a book announces —
-an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` (with
-`$1`-style group references in the title), and is matched at any point in the
-file and as often as it occurs. It must be announced, though, exactly as a
+an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` whose
+capturing groups the title writes out (`${name}`, `${number}`), and is matched
+at any point in the file and as often as it occurs. It must be announced, though, exactly as a
 chapter phrase must: a passing mention in the narration gets no mark.
 
 `--ignore-chapter-numbers` keeps chapter detection running but stops it
@@ -536,8 +536,10 @@ keeps its exact position.
   Whisper misheard a number — smaller models do this now and then. Cap it with
   `--max-chapter-number` set to roughly the real chapter count.
 - **Unusual announcements:** `--chapter-phrase` accepts a regexp between
-  slashes, e.g. `-c "/part (\d+)/"` — a capturing group is used as the chapter
-  number directly.
+  slashes, e.g. `-c "/part ()/"`, where `()` stands for the chapter number in
+  any notation the language has. Several alternatives may be given at once, and
+  a `^` or `$` asks for a pause around the announcement — see
+  [the manual](doc/manual.md#the-phrase-syntax).
 - **Diagnosis:** run with `--verbose` to see processing details as log lines,
   or `--verbose-transcripts` (`-T`) to also see every Whisper transcription —
   what the recognizer actually heard, and the confidence it had in each.

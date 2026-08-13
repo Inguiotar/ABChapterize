@@ -50,6 +50,14 @@ public sealed class EnglishNumberParser : INumberWordParser
         ["sixtieth"] = 60, ["seventieth"] = 70, ["eightieth"] = 80, ["ninetieth"] = 90,
     };
 
+    /// <summary>Every token an English number may consist of, connector included, straight from the
+    /// tables above; "hundredth" and "and" are the only words the parser handles inline rather than
+    /// through a table.</summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = NumberWordPatterns.TokenRun(
+        Units.Keys.Concat(Tens.Keys).Concat(Ordinals.Keys)
+            .Concat(["hundred", "hundredth", "and"]));
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

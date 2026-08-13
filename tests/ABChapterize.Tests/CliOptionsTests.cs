@@ -7,6 +7,7 @@ using Xunit;
 using ABChapterize.Cli;
 using ABChapterize.Errors;
 using ABChapterize.Language;
+using ABChapterize.Language.Phrases;
 using ABChapterize.Detection;
 
 namespace ABChapterize.Tests;
@@ -50,7 +51,7 @@ public sealed class CliOptionsTests : IDisposable
         // The parse-time DefaultProfile/ChapterPhrase/Title/IntroTitle are the English
         // fallback used when a file's own auto-detection is inconclusive or skipped;
         // ChapterDetector resolves a fresh profile per file when actually detecting.
-        Assert.Equal("/chapter/", o.ChapterPhrase);
+        Assert.Equal("/(?:chapter ()|chapter)/", o.ChapterPhrase);
         Assert.Equal("Chapter", o.Title);
         Assert.Equal("Intro", o.IntroTitle);
         // The probing model and the pass-3 model are deliberately different by default: short probe
@@ -99,7 +100,7 @@ public sealed class CliOptionsTests : IDisposable
         var o = ParseFile()!; // auto, no overrides
         var profile = o.ResolveProfile("de");
         Assert.Equal("de", profile.Language);
-        Assert.Equal("/kapitel/", profile.ChapterPhrase);
+        Assert.Equal("/(?:kapitel ()|kapitel)/", profile.ChapterPhrase);
         Assert.Equal("Kapitel", profile.Title);
         Assert.Equal("Intro", profile.IntroTitle);
     }
@@ -119,11 +120,11 @@ public sealed class CliOptionsTests : IDisposable
     {
         var profile = ParseFile()!.DefaultProfile;
         Assert.Equal(["prologue", "epilogue"], profile.NamedPhrases.Select(p => p.Kind));
-        Assert.Equal(["Prologue", "Epilogue"], profile.NamedPhrases.Select(p => p.Title));
+        Assert.Equal(["Prologue", "Epilogue"], profile.NamedPhrases.Select(p => p.Title.Raw));
         Assert.Equal(
             [NamedPhraseScope.BeforeFirstChapter, NamedPhraseScope.AfterFirstChapter],
             profile.NamedPhrases.Select(p => p.Scope));
-        Assert.Matches(profile.NamedPhrases[0].Regex, "and now, the Prologue.");
+        PhraseAssert.Matches(profile.NamedPhrases[0].Pattern, "and now, the Prologue.");
     }
 
     [Theory]
@@ -135,7 +136,7 @@ public sealed class CliOptionsTests : IDisposable
     public void NamedPhrases_AreLocalized(string lang, string prologue, string epilogue)
     {
         var profile = ParseFile("--lang", lang)!.DefaultProfile;
-        Assert.Equal([prologue, epilogue], profile.NamedPhrases.Select(p => p.Title));
+        Assert.Equal([prologue, epilogue], profile.NamedPhrases.Select(p => p.Title.Raw));
     }
 
     [Fact]
@@ -143,10 +144,10 @@ public sealed class CliOptionsTests : IDisposable
     {
         var profile = ParseFile("-p", "Vorspiel", "-P", "Vorspiel", "-g", "/nach(spiel|wort)/", "-G", "Nachspiel")!
             .ResolveProfile("de");
-        Assert.Equal(["Vorspiel", "Nachspiel"], profile.NamedPhrases.Select(p => p.Title));
-        Assert.Matches(profile.NamedPhrases[0].Regex, "Vorspiel");
+        Assert.Equal(["Vorspiel", "Nachspiel"], profile.NamedPhrases.Select(p => p.Title.Raw));
+        PhraseAssert.Matches(profile.NamedPhrases[0].Pattern, "Vorspiel");
         // The "/regexp/" spelling --chapter-phrase accepts works for the named phrases too.
-        Assert.Matches(profile.NamedPhrases[1].Regex, "Nachwort");
+        PhraseAssert.Matches(profile.NamedPhrases[1].Pattern, "Nachwort");
     }
 
     [Theory]
@@ -185,8 +186,8 @@ public sealed class CliOptionsTests : IDisposable
             profile.NamedPhrases.Select(p => p.Kind));
         var custom = profile.NamedPhrases.Where(p => p.Repeatable).ToList();
         Assert.All(custom, p => Assert.Equal(NamedPhraseScope.Anywhere, p.Scope));
-        Assert.Equal(["Zwischenspiel", "Zeittafel"], custom.Select(p => p.Title));
-        Assert.Matches(custom[1].Regex, "die Zeit-Tafel");
+        Assert.Equal(["Zwischenspiel", "Zeittafel"], custom.Select(p => p.Title.Raw));
+        PhraseAssert.Matches(custom[1].Pattern, "die Zeit-Tafel");
     }
 
     [Fact]
@@ -195,7 +196,7 @@ public sealed class CliOptionsTests : IDisposable
         // A phrase the user wrote out means exactly what it says, whatever --lang is set to.
         var profile = ParseFile("--lang", "de", "-u", "interlude:Interlude")!.ResolveProfile("de");
 
-        Assert.Equal("Interlude", profile.NamedPhrases.Single(p => p.Repeatable).Title);
+        Assert.Equal("Interlude", profile.NamedPhrases.Single(p => p.Repeatable).Title.Raw);
     }
 
     [Fact]
@@ -294,7 +295,7 @@ public sealed class CliOptionsTests : IDisposable
         var profile = ParseFile("--chapter-phrase", "[fr]chapitre", "--chapter-title", "[fr]Chapitre")!
             .ResolveProfile("de");
 
-        Assert.Equal("/kapitel/", profile.ChapterPhrase);
+        Assert.Equal("/(?:kapitel ()|kapitel)/", profile.ChapterPhrase);
         Assert.Equal("Kapitel", profile.Title);
     }
 
@@ -308,15 +309,65 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void PerLanguage_TakesAValueWithoutTagsWhole_SemicolonsAndAll()
+    public void PerLanguage_SplitsAtEverySemicolon_TaggedOrNot()
     {
-        // Backwards compatibility, and the reason the syntax only engages once something is tagged:
-        // a semicolon is a character a regexp may legitimately contain, and every phrase that
-        // worked before this existed still has to mean what it did.
-        var options = ParseFile("--chapter-phrase", "/kapitel|abschnitt;teil/")!;
+        // A semicolon always separates alternatives, whether anything carries a tag or not: the
+        // phrase is a list, and "or this as well" is what a second entry says.
+        var options = ParseFile("--chapter-phrase", "/kapitel/;/abschnitt/")!;
 
-        Assert.Equal("/kapitel|abschnitt;teil/", options.ResolveProfile("de").ChapterPhrase);
-        Assert.Equal("/kapitel|abschnitt;teil/", options.ResolveProfile("en").ChapterPhrase);
+        Assert.Equal("/kapitel/;/abschnitt/", options.ResolveProfile("de").ChapterPhrase);
+        PhraseAssert.Matches(options.ResolveProfile("de").ChapterPattern, "kapitel 3");
+        PhraseAssert.Matches(options.ResolveProfile("de").ChapterPattern, "abschnitt 3");
+    }
+
+    /// <summary>
+    /// An untagged alternative applies to every language, tagged ones adding to it - so naming
+    /// French does not take the shared wording away from the German files in the same batch.
+    /// </summary>
+    [Fact]
+    public void PerLanguage_AddsTaggedAlternativesToTheUntaggedOnes()
+    {
+        var options = ParseFile("--chapter-phrase", "[fr]/chapitre/;/kapitel/;[fr]/partie/")!;
+
+        Assert.Equal("/chapitre/;/kapitel/;/partie/", options.ResolveProfile("fr").ChapterPhrase);
+        Assert.Equal("/kapitel/", options.ResolveProfile("de").ChapterPhrase);
+    }
+
+    /// <summary>Repeating a phrase option is defined as writing its values as one
+    /// semicolon-separated list.</summary>
+    [Fact]
+    public void PerLanguage_RepeatingThePhraseOption_AddsAlternatives()
+    {
+        var options = ParseFile("-c", "/kapitel/", "-c", "[en]/chapter/")!;
+
+        Assert.Equal("/kapitel/;/chapter/", options.ResolveProfile("en").ChapterPhrase);
+        Assert.Equal("/kapitel/", options.ResolveProfile("de").ChapterPhrase);
+    }
+
+    /// <summary>"default" pulls this tool's own wording for the language back into the list, so a
+    /// value can add to the built-in phrases instead of replacing them.</summary>
+    [Fact]
+    public void PerLanguage_DefaultPullsInTheBuiltInWording()
+    {
+        var options = ParseFile("-c", "/abschnitt/;[de]default;[fr]default")!;
+
+        Assert.Equal("/abschnitt/;/(?:kapitel ()|kapitel)/", options.ResolveProfile("de").ChapterPhrase);
+        Assert.Equal("/abschnitt/;/(?:chapitre ()|chapitre)/", options.ResolveProfile("fr").ChapterPhrase);
+        // A language the value says nothing extra about keeps only what it was given.
+        Assert.Equal("/abschnitt/", options.ResolveProfile("en").ChapterPhrase);
+    }
+
+    /// <summary>"default" and "none" combine: a book whose chapters are sometimes announced and
+    /// sometimes just numbered.</summary>
+    [Fact]
+    public void PerLanguage_DefaultCombinesWithNone()
+    {
+        var profile = ParseFile("-c", "default;none", "--lang", "de")!.DefaultProfile;
+
+        // "default" brings the language's own two wordings, "none" adds a third.
+        Assert.Equal(3, profile.ChapterPattern.Alternatives.Count);
+        Assert.True(profile.BareNumberAnnouncements);
+        PhraseAssert.Matches(profile.ChapterPattern, "kapitel 3");
     }
 
     [Fact]
@@ -346,14 +397,14 @@ public sealed class CliOptionsTests : IDisposable
 
         Assert.Equal(
             ["Scène", "Zeittafel"],
-            options.ResolveProfile("fr").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title));
+            options.ResolveProfile("fr").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title.Raw));
         Assert.Equal(
             ["Scene", "Zeittafel"],
-            options.ResolveProfile("en").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title));
+            options.ResolveProfile("en").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title.Raw));
         // A language neither mapping names keeps only the untagged one.
         Assert.Equal(
             ["Zeittafel"],
-            options.ResolveProfile("de").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title));
+            options.ResolveProfile("de").NamedPhrases.Where(p => p.Repeatable).Select(p => p.Title.Raw));
     }
 
     [Fact]
@@ -442,25 +493,73 @@ public sealed class CliOptionsTests : IDisposable
     [Fact]
     public void Custom_TitleMayReferenceACapturingGroup()
     {
-        var phrase = ParseFile("--custom", "/(interlude|intermezzo)/:The $1")!
+        var phrase = ParseFile("--custom", "/(?<kind>interlude|intermezzo)/:The ${kind}")!
             .ResolveProfile("en").NamedPhrases.Single(p => p.Repeatable);
 
-        Assert.Equal("The intermezzo", phrase.ResolveTitle(phrase.Regex.Match("an intermezzo now")));
+        Assert.Equal("The intermezzo", Resolve(phrase, "an intermezzo now"));
+    }
+
+    /// <summary>An unnamed group is the chapter number wherever it appears, so a title asks for it
+    /// by that name - and gets it in digits, whatever notation the narrator used.</summary>
+    [Theory]
+    [InlineData("/interlude ()/", "interlude thirteen", "Interlude 13")]
+    [InlineData("/interlude ()/", "interlude XIII.", "Interlude 13")]
+    [InlineData("/interlude ()/", "Interlude 13", "Interlude 13")]
+    public void Custom_TitleMayReferenceTheNumber(string phrase, string heard, string expected)
+        => Assert.Equal(expected, Resolve(
+            ParseFile("--custom", $"{phrase}:Interlude ${{number}}")!
+                .ResolveProfile("en").NamedPhrases.Single(p => p.Repeatable),
+            heard));
+
+    [Fact]
+    public void Custom_TitleMayAskForRomanNumeralsAndCase()
+    {
+        var options = ParseFile(
+            "--custom",
+            "/interlude ()/:Interlude $roman{number}",
+            "--custom",
+            "/(?<kind>interlude|intermezzo)/:$upper{kind}\\;$lower{kind}\\;$capital{kind}")!;
+        var phrases = options.ResolveProfile("en").NamedPhrases.Where(p => p.Repeatable).ToList();
+
+        Assert.Equal("Interlude XIII", Resolve(phrases[0], "interlude thirteen"));
+        Assert.Equal("INTERMEZZO;intermezzo;Intermezzo", Resolve(phrases[1], "an intermezzo now"));
     }
 
     [Fact]
     public void Custom_TitleReferencingAMissingGroup_IsRejected()
-        => Assert.Throws<CliError>(() => ParseFile("--custom", "/(interlude)/:Part $2"));
+        => Assert.Throws<CliError>(() => ParseFile("--custom", "/(?<a>interlude)/:Part ${b}"));
+
+    /// <summary>Index references were how a title named a group until 0.12.0. They are refused
+    /// rather than quietly read as literal text, which is the one outcome nobody would notice.</summary>
+    [Fact]
+    public void Custom_TitleReferencingAGroupByIndex_IsRejected()
+        => Assert.Throws<CliError>(() => ParseFile("--custom", "/(interlude)/:The $1"));
+
+    [Fact]
+    public void Custom_TitleWithAnUnknownConversion_IsRejected()
+        => Assert.Throws<CliError>(() => ParseFile("--custom", "/(?<a>x)/:The $romen{a}"));
 
     [Fact]
     public void Custom_TitleKeepsAnOrdinaryDollarSign()
     {
-        // No capturing group in the phrase, so "$5" is a price, not a substitution.
-        var phrase = ParseFile("--custom", "bargain:Only $5")!
+        // "$5" is a price: only "$name{...}" and "${name}" are references, and a bare digit after
+        // the dollar is refused outright rather than read either way.
+        var phrase = ParseFile("--custom", "bargain:Only $$5")!
             .ResolveProfile("en").NamedPhrases.Single(p => p.Repeatable);
 
-        Assert.Equal("Only $5", phrase.ResolveTitle(phrase.Regex.Match("a bargain")));
+        Assert.Equal("Only $5", Resolve(phrase, "a bargain"));
+        // A dollar before an ordinary word is not a reference either, and needs no escape.
+        Assert.Equal("Costs $lots", Resolve(
+            ParseFile("--custom", "bargain:Costs $lots")!
+                .ResolveProfile("en").NamedPhrases.Single(p => p.Repeatable),
+            "a bargain"));
     }
+
+    /// <summary>The title one phrase writes for the first place it matches in some text.</summary>
+    /// <param name="phrase">The resolved phrase.</param>
+    /// <param name="text">The transcript text it should match in.</param>
+    private static string Resolve(NamedPhrase phrase, string text)
+        => phrase.ResolveTitle(phrase.Pattern.Matches(text).First().Match, "en");
 
     [Fact]
     public void IgnoreChapterNumbers_IsOffByDefault()
@@ -999,19 +1098,19 @@ public sealed class CliOptionsTests : IDisposable
     public void Lang_LocalizesPhraseTitleAndIntro()
     {
         var o = ParseFile("--lang", "tr")!;
-        Assert.Equal("/b[öo]l[üu]m/", o.ChapterPhrase);
+        Assert.Equal("/(?:b[öo]l[üu]m ()|b[öo]l[üu]m)/", o.ChapterPhrase);
         Assert.Equal("Bölüm", o.Title);
         Assert.Equal("Giriş", o.IntroTitle);
         // The point of the regexp default: a transcript that lost the dotted vowels still matches.
-        Assert.Matches(o.PhraseRegex, "bolum 3");
-        Assert.Matches(o.PhraseRegex, "Bölüm 3");
+        PhraseAssert.Matches(o.DefaultProfile.ChapterPattern, "bolum 3");
+        PhraseAssert.Matches(o.DefaultProfile.ChapterPattern, "Bölüm 3");
     }
 
     /// <summary>
-    /// Guards the two rules <see cref="ABChapterize.Language.ILanguage"/> states about the
-    /// built-in phrases: no capturing group (which would be read as "the user is capturing the
-    /// chapter number here"), and no empty phrase (which is the prologue/epilogue opt-out
-    /// spelling and must never be a language's default).
+    /// Guards the shape <see cref="ABChapterize.Language.ILanguage.ChapterPhrase"/> states every
+    /// built-in chapter phrase has: two wordings, the first capturing the number that follows the
+    /// word and the second the bare word, with no pause guard on either - and no empty phrase,
+    /// which is the prologue/epilogue opt-out spelling and must never be a language's default.
     /// </summary>
     [Fact]
     public void EveryRegisteredLanguage_HasUsableDefaultPhrases()
@@ -1020,11 +1119,20 @@ public sealed class CliOptionsTests : IDisposable
         foreach (var language in LanguageRegistry.Languages)
         {
             var profile = o.ResolveProfile(language.Code);
-            Assert.False(profile.PhraseHasNumberGroup, language.Code);
+            Assert.Equal(2, profile.ChapterPattern.Alternatives.Count);
+            Assert.True(profile.ChapterPattern.Alternatives[0].HasNumberGroup, language.Code);
+            Assert.False(profile.ChapterPattern.Alternatives[1].HasNumberGroup, language.Code);
+            Assert.All(profile.ChapterPattern.Alternatives, a =>
+            {
+                Assert.False(a.RequiresLeadIn, language.Code);
+                Assert.False(a.RequiresLeadOut, language.Code);
+            });
+            Assert.All(profile.NamedPhrases, p => Assert.All(p.Pattern.Alternatives,
+                a => Assert.False(a.HasNumberGroup, language.Code)));
             Assert.NotEmpty(profile.Title);
             Assert.NotEmpty(profile.IntroTitle);
             Assert.Equal(2, profile.NamedPhrases.Count);
-            Assert.All(profile.NamedPhrases, p => Assert.NotEmpty(p.Title));
+            Assert.All(profile.NamedPhrases, p => Assert.NotEmpty(p.Title.Raw));
         }
     }
 
@@ -1048,9 +1156,9 @@ public sealed class CliOptionsTests : IDisposable
         string code, string chapter, string prologue, string epilogue)
     {
         var profile = ParseFile()!.ResolveProfile(code);
-        Assert.Matches(profile.PhraseRegex, chapter);
-        Assert.Matches(profile.NamedPhrases[0].Regex, prologue);
-        Assert.Matches(profile.NamedPhrases[1].Regex, epilogue);
+        PhraseAssert.Matches(profile.ChapterPattern, chapter);
+        PhraseAssert.Matches(profile.NamedPhrases[0].Pattern, prologue);
+        PhraseAssert.Matches(profile.NamedPhrases[1].Pattern, epilogue);
     }
 
     [Theory]
@@ -1605,10 +1713,15 @@ public sealed class CliOptionsTests : IDisposable
     {
         var o = ParseFile("--chapter-phrase", "none")!;
         Assert.True(o.DefaultProfile.BareNumberAnnouncements);
-        Assert.False(o.DefaultProfile.PhraseHasNumberGroup);
-        // The expression is inert rather than absent, so a consumer that forgot to check the flag
-        // finds nothing instead of throwing.
-        Assert.DoesNotMatch(o.DefaultProfile.PhraseRegex, "chapter seventeen none");
+        // "none" is shorthand for "/^()$/": one wording, no expression behind it, and both pause
+        // guards asked for by the anchors.
+        var wording = Assert.Single(o.DefaultProfile.ChapterPattern.Alternatives);
+        Assert.True(wording.IsBareNumber);
+        Assert.True(wording.RequiresLeadIn);
+        Assert.True(wording.RequiresLeadOut);
+        // Nothing is matched by pattern, so a caller that only asks the expressions finds nothing
+        // rather than throwing.
+        PhraseAssert.DoesNotMatch(o.DefaultProfile.ChapterPattern, "chapter seventeen none");
     }
 
     /// <summary>Per language like any other value: one series announces "Kapitel 17", another just
@@ -1628,7 +1741,7 @@ public sealed class CliOptionsTests : IDisposable
     {
         var profile = ParseFile("--prologue-phrase", "none")!.DefaultProfile;
         Assert.False(profile.BareNumberAnnouncements);
-        Assert.Matches(profile.NamedPhrases.First(p => p.Kind == "prologue").Regex, "and none of it");
+        PhraseAssert.Matches(profile.NamedPhrases.First(p => p.Kind == "prologue").Pattern, "and none of it");
     }
 
     [Fact]
@@ -1691,31 +1804,64 @@ public sealed class CliOptionsTests : IDisposable
     public void ChapterCount_WithIgnoreChapterNumbers_IsRejected()
         => Assert.Throws<CliError>(() => ParseFile("--chapter-count", "20", "--ignore-chapter-numbers"));
 
+    /// <summary>
+    /// A literal chapter phrase is the word with the number on either side of it - "Teil sieben"
+    /// and "Siebter Teil" are the same announcement - and the word itself is escaped, so its
+    /// punctuation is punctuation rather than syntax.
+    /// </summary>
     [Fact]
-    public void LiteralChapterPhrase_IsEscapedAndCaseInsensitive()
+    public void LiteralChapterPhrase_IsEscapedAndTakesTheNumberBehindTheWord()
     {
-        var o = ParseFile("-c", "part (a)")!;
-        Assert.False(o.PhraseHasNumberGroup);
-        Assert.Matches(o.PhraseRegex, "PART (A) two");
-        Assert.DoesNotMatch(o.PhraseRegex, "part a");
+        var pattern = ParseFile("-c", "part (a)")!.DefaultProfile.ChapterPattern;
+        Assert.Equal(2, pattern.Alternatives.Count);
+        PhraseAssert.Matches(pattern, "PART (A) two");
+        PhraseAssert.Matches(pattern, "the second part (a) of it");
+        // The parentheses are the word's own, not a capturing group.
+        PhraseAssert.DoesNotMatch(pattern, "part a two");
     }
 
+    /// <summary>
+    /// A literal phrase carries no <c>^</c>: requiring a pause in front of every chapter
+    /// announcement was measured over sixteen books and would have dropped a real chapter, so the
+    /// guard has to be asked for rather than implied. See <c>PhraseCompiler.BodyOf</c>.
+    /// </summary>
     [Fact]
-    public void RegexChapterPhrase_WithCaptureGroup_IsDetected()
+    public void LiteralChapterPhrase_AsksForNoPause()
+        => Assert.All(ParseFile("-c", "part")!.DefaultProfile.ChapterPattern.Alternatives,
+            a =>
+            {
+                Assert.False(a.RequiresLeadIn);
+                Assert.False(a.RequiresLeadOut);
+            });
+
+    /// <summary>An unnamed capturing group is the chapter number - the convention
+    /// <c>--chapter-phrase "/part (\d+)/"</c> has always used, now spelled <c>()</c> when the
+    /// language's own notation will do.</summary>
+    [Fact]
+    public void RegexChapterPhrase_WithCaptureGroup_IsTheNumber()
     {
-        var o = ParseFile("-c", @"/chapter (\d+)/")!;
-        Assert.True(o.PhraseHasNumberGroup);
-        var m = o.PhraseRegex.Match("Chapter 12 begins");
-        Assert.True(m.Success);
-        Assert.Equal("12", m.Groups[1].Value);
+        var pattern = ParseFile("-c", @"/chapter (\d+)/")!.DefaultProfile.ChapterPattern;
+        Assert.True(Assert.Single(pattern.Alternatives).HasNumberGroup);
+        Assert.Equal("12", PhraseAssert.Captured(pattern, "Chapter 12 begins"));
     }
+
+    /// <summary>The <c>()</c> token takes the language's own number notation, so the same phrase
+    /// covers digits, words and Roman numerals without any of them being written out.</summary>
+    [Theory]
+    [InlineData("Chapter 12 begins", "12")]
+    [InlineData("Chapter twelve begins", "twelve")]
+    [InlineData("Chapter XII. begins", "XII.")]
+    [InlineData("Chapter one hundred and five begins", "one hundred and five")]
+    public void RegexChapterPhrase_WithTheNumberToken_CapturesEveryNotation(
+        string heard, string expected)
+        => Assert.Equal(expected,
+            PhraseAssert.Captured(ParseFile("-c", "/chapter ()/")!.DefaultProfile.ChapterPattern, heard));
 
     [Fact]
     public void RegexChapterPhrase_WithoutGroup_HasNoNumberGroup()
-    {
-        var o = ParseFile("-c", @"/chapter/")!;
-        Assert.False(o.PhraseHasNumberGroup);
-    }
+        => Assert.False(
+            Assert.Single(ParseFile("-c", @"/chapter/")!.DefaultProfile.ChapterPattern.Alternatives)
+                .HasNumberGroup);
 
     [Fact]
     public void InvalidChapterPhraseRegex_IsAnError()

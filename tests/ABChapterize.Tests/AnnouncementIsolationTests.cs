@@ -5,6 +5,7 @@
 using System.Text.RegularExpressions;
 using ABChapterize.Detection;
 using ABChapterize.Language;
+using ABChapterize.Language.Phrases;
 using ABChapterize.Vad;
 using Xunit;
 
@@ -137,20 +138,30 @@ public class AnnouncementIsolationTests
         Assert.Equal(expected, AnnouncementIsolation.Satisfies(flanks!.Value, IsolationRule.LeadIn));
     }
 
-    /// <summary>The check a numbered chapter is placed under: nothing at all unless the book
-    /// announces by bare number <em>and</em> this pass took the wider reading.</summary>
+    /// <summary>
+    /// The check a numbered chapter is placed under: whatever its own wording asked for with
+    /// <c>^</c>/<c>$</c>, and both flanks regardless once a gap hunt's wider reading is in play.
+    /// A phrase-based announcement whose wording asks for nothing is checked not at all.
+    /// </summary>
     [Fact]
-    public void ForChapter_AsksOnlyWhereTheWiderReadingWasUsed()
+    public void ForChapter_TakesTheWordingsGuardsAndTheWiderReadingsOwn()
     {
-        var match = new PhraseMatching.PhraseMatch(3, 10, 11, 0.9);
-        IsolationRule Rule(bool bareNumbers, bool wideReading)
-            => AnnouncementIsolation.ForChapter(Profile(bareNumbers), match, 10, wideReading).Rule;
-
-        Assert.Equal(IsolationRule.None, Rule(bareNumbers: false, wideReading: false));
-        Assert.Equal(IsolationRule.None, Rule(bareNumbers: false, wideReading: true));
-        // Pass 2's forward scan: deliberately left cheap, the segment opening standing in for it.
-        Assert.Equal(IsolationRule.None, Rule(bareNumbers: true, wideReading: false));
-        Assert.Equal(IsolationRule.Both, Rule(bareNumbers: true, wideReading: true));
+        var phrase = new PhraseMatching.PhraseMatch(3, 10, 11, 0.9);
+        var heading = phrase with { Guards = IsolationRule.LeadIn };
+        var bare = phrase with { Guards = IsolationRule.Both, IsBareNumber = true };
+        // A wording that asks for nothing is never checked, whatever the pass is doing.
+        Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(phrase, 10, false).Rule);
+        Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(phrase, 10, true).Rule);
+        // A "^" carries into every pass, a gap hunt or not.
+        Assert.Equal(IsolationRule.LeadIn, AnnouncementIsolation.ForChapter(heading, 10, false).Rule);
+        Assert.Equal(IsolationRule.LeadIn, AnnouncementIsolation.ForChapter(heading, 10, true).Rule);
+        // A number spoken alone is written "/^()$/", so it asks for both flanks by itself.
+        Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, false).Rule);
+        Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, true).Rule);
+        // ... and a wide-reading pass adds them even to a bare wording that asked for neither.
+        var unguarded = phrase with { IsBareNumber = true };
+        Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(unguarded, 10, false).Rule);
+        Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(unguarded, 10, true).Rule);
     }
 
     /// <summary>
@@ -162,11 +173,10 @@ public class AnnouncementIsolationTests
     [Fact]
     public void ForChapter_OnlyOffersAFallbackForANumberSpokenAlone()
     {
-        var profile = Profile(bareNumbers: true);
-        var opening = new PhraseMatching.PhraseMatch(3, 10, 11, 0.9);
+        var opening = new PhraseMatching.PhraseMatch(3, 10, 11, 0.9, IsBareNumber: true);
         var buried = opening with { SpokenAlone = false };
-        Assert.Equal(10, AnnouncementIsolation.ForChapter(profile, opening, 10, true).FallbackPosition);
-        Assert.Null(AnnouncementIsolation.ForChapter(profile, buried, 10, true).FallbackPosition);
+        Assert.Equal(10, AnnouncementIsolation.ForChapter(opening, 10, true).FallbackPosition);
+        Assert.Null(AnnouncementIsolation.ForChapter(buried, 10, true).FallbackPosition);
     }
 
     [Fact]
@@ -179,12 +189,12 @@ public class AnnouncementIsolationTests
             AnnouncementIsolation.Describe(flanks, IsolationRule.LeadIn));
     }
 
-    /// <summary>A phrase matcher is the regex, unchanged - the implicit conversion exists so the
-    /// dozens of call sites that had one keep working.</summary>
+    /// <summary>A phrase matcher is the compiled phrase, unchanged - the implicit conversion exists
+    /// so the dozens of call sites that had one keep working.</summary>
     [Fact]
-    public void PhraseMatcher_IsTheRegex()
+    public void PhraseMatcher_IsThePhrase()
     {
-        AnnouncementMatcher matcher = new Regex("kapitel", RegexOptions.IgnoreCase);
+        AnnouncementMatcher matcher = Compile("/kapitel/", "de");
         Assert.True(matcher.Matches("Kapitel 17"));
         Assert.False(matcher.Matches("Es war vorbei."));
         Assert.False(matcher.Matches(null));
@@ -321,7 +331,8 @@ public class AnnouncementIsolationTests
     /// alone are worth testing against.</summary>
     /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
     private static AnnouncementMatcher Matcher(bool strict)
-        => AnnouncementMatcher.ForBareNumbers("it", Reading(strict), _ => true);
+        => AnnouncementMatcher.ForPattern(
+            Profile(bareNumbers: true).ChapterPattern, "it", Reading(strict), _ => true);
 
     /// <summary>The same matcher as the refinement actually builds it: held to what the chapter
     /// sequence can hold at this mark.</summary>
@@ -329,8 +340,8 @@ public class AnnouncementIsolationTests
     /// <param name="bounds">The sequence bounds the pass was holding.</param>
     /// <param name="detected">The number the detecting window read.</param>
     private static AnnouncementMatcher Matcher(bool strict, NumberBounds bounds, int detected)
-        => AnnouncementMatcher.ForBareNumbers(
-            "it", Reading(strict),
+        => AnnouncementMatcher.ForPattern(
+            Profile(bareNumbers: true).ChapterPattern, "it", Reading(strict),
             new NumberCheck(detected, Profile(bareNumbers: true), bounds).AdmitsAsAnnouncement);
 
     /// <summary>Which reading a Pass 2 match respectively a gap hunt's match is refined under.</summary>
@@ -342,7 +353,15 @@ public class AnnouncementIsolationTests
 
     /// <summary>A language profile for the two flavours, built the way CliOptions builds one.</summary>
     private static LanguageProfile Profile(bool bareNumbers)
-        => new("it", bareNumbers ? "none" : "/capitolo/",
-            new Regex(bareNumbers ? "(?!)" : "capitolo", RegexOptions.IgnoreCase),
-            PhraseHasNumberGroup: false, "Capitolo", "Parte", "Introduzione", [], bareNumbers);
+    {
+        var phrase = bareNumbers ? "none" : "/capitolo/";
+        return new LanguageProfile(
+            "it", phrase, Compile(phrase, "it"), "Capitolo", "Parte", "Introduzione", []);
+    }
+
+    /// <summary>Compiles one chapter phrase exactly as the command line layer does.</summary>
+    /// <param name="phrase">The phrase as it would be written after --chapter-phrase.</param>
+    /// <param name="language">Two-letter language code.</param>
+    private static PhrasePattern Compile(string phrase, string language)
+        => PhraseCompiler.Compile([phrase], language, PhraseKind.Chapter, "chapter phrase");
 }

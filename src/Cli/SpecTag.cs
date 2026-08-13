@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Text.RegularExpressions;
+using ABChapterize.Language.Phrases;
 using ABChapterize.Errors;
 using ABChapterize.Language;
 
@@ -76,10 +77,10 @@ public readonly record struct SpecTag(
     /// </para>
     /// </summary>
     /// <param name="kind">The phrase kind, e.g. "custom 1".</param>
-    /// <param name="regex">The compiled phrase.</param>
-    /// <param name="title">The raw title template.</param>
-    internal NamedPhrase ToPhrase(string kind, Regex regex, string title)
-        => new(kind, regex, title, Scope, Repeatable: !Once, RequiresLeadIn: Heading,
+    /// <param name="pattern">The compiled phrase.</param>
+    /// <param name="title">The parsed title template.</param>
+    internal NamedPhrase ToPhrase(string kind, PhrasePattern pattern, TitleTemplate title)
+        => new(kind, pattern, title, Scope, Repeatable: !Once, RequiresLeadIn: Heading,
             MaxMarks: MaxMarks);
 
     /// <summary>

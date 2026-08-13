@@ -111,6 +111,25 @@ public sealed class DanishNumberParser : INumberWordParser
         ("halvfemsindstyvende", 90), ("halvfemsende", 90),
     ];
 
+    /// <summary>The diacritics <see cref="Normalize"/> strips - only "første" needs it.</summary>
+    private const string Accents = "aæå;oø;";
+
+    /// <summary>
+    /// Danish keeps its hundreds as a separate word ("tre hundrede og enogtyve") but fuses unit and
+    /// tens into one ("enogtyve", "enogtyvende"), so this is a run of words one of which may be
+    /// that compound. The compound is a sub-pattern rather than a word list: ten units times
+    /// twenty-two tens spellings would be two hundred alternatives saying one thing.
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = NumberWordPatterns.Run(NumberWordPatterns.AnyOf(
+        NumberWordPatterns.Alt(UnitsForCompound.Keys, Accents) + "og" +
+            NumberWordPatterns.Alt(
+                ShortTens.Concat(OrdinalTens).Select(t => t.Word), Accents),
+        NumberWordPatterns.Alt(
+            Units.Keys.Concat(Teens.Keys).Concat(Tens.Keys).Concat(Ordinals.Keys)
+                .Concat(OrdinalTens.Select(t => t.Word)).Concat(["hundrede", "og"]),
+            Accents)));
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

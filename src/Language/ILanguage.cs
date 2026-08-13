@@ -23,9 +23,10 @@ namespace ABChapterize.Language;
 /// "kapitel"/"kapitlet").
 /// </para>
 /// <para>
-/// The chapter phrase must not contain a capturing group: <see cref="LanguageProfile.PhraseHasNumberGroup"/>
-/// reads one as "the user is capturing the chapter number here", which no built-in default does.
-/// Write <c>(?:...)</c> for grouping.
+/// An unnamed capturing group in a phrase is read as "the chapter number is here" - <c>()</c> taking
+/// the language's own number notation as its body - so a group written only to hold an alternation
+/// must be non-capturing, <c>(?:...)</c>. See <c>doc\manual.md</c> for the whole phrase syntax,
+/// including the <c>^</c> and <c>$</c> guards and the <c>${number}</c> a title may write.
 /// </para>
 /// </summary>
 public interface ILanguage
@@ -33,7 +34,28 @@ public interface ILanguage
     /// <summary>Two-letter ISO 639-1 code, matching what <c>--lang</c> and Whisper use.</summary>
     string Code { get; }
 
-    /// <summary>The word or <c>/regexp/</c> a chapter announcement is recognized by.</summary>
+    /// <summary>
+    /// The word or <c>/regexp/</c> a chapter announcement is recognized by. Every language spells
+    /// this the same way: <c>/(?:WORD ()|WORD)/</c>, two wordings of one phrase. The first captures
+    /// the number where it follows the word directly, which is the ordinary case and the only one a
+    /// title's <c>${number}</c> can be built from; the second is the bare word, and the number is
+    /// then read off the words around it - which is what covers the ordinal-first announcement order
+    /// ("Erstes Kapitel", and in Turkish "Birinci Bölüm", that language's only order).
+    /// <para>
+    /// Deliberately without a <c>^</c> guard, although one would read naturally here. Requiring a
+    /// pause in front of every chapter announcement was replayed over sixteen books (469 marks,
+    /// 2026-08-13) and would have dropped exactly one of them: "I Shall Wear Midnight" chapter 9,
+    /// where the previous chapter's last words end 0.64 s before the announcement against a
+    /// threshold of 0.85 s, and whose mark is otherwise perfect at -105.6 dBFS.
+    /// </para>
+    /// <para>
+    /// And deliberately without a <c>() WORD</c> wording for the number-first order, which the two
+    /// wordings above cover between them. Adding one is not merely redundant, it is wrong: matches
+    /// are taken leftmost-first, so on "Der erste Kapitel 5" the number-first wording claims "erste
+    /// Kapitel" before <c>kapitel ()</c> can claim "Kapitel 5", and the chapter becomes 1. Six
+    /// announcements across five books of that corpus have exactly that shape.
+    /// </para>
+    /// </summary>
     string ChapterPhrase { get; }
 
     /// <summary>The word chapter titles are built from: "Chapter 1", "Kapitel 1", ...</summary>

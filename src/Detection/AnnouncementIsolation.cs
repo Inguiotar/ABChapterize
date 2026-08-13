@@ -58,25 +58,35 @@ internal readonly record struct AnnouncementFlanks(
 internal static class AnnouncementIsolation
 {
     /// <summary>
-    /// The check a numbered chapter's mark is placed under. Nothing at all for a phrase-based book,
-    /// whose phrase is its own evidence, and nothing for the pass that is deliberately left cheap:
-    /// only where a bare number was read under the wider
-    /// <see cref="NumberWordParser.BareNumberReading.LeadingASentence"/> reading does the position have
-    /// to be earned, because that reading admits numbers Whisper did not set off by itself.
+    /// The check a numbered chapter's mark is placed under: whatever the wording that matched asked
+    /// for with its <c>^</c> and <c>$</c>, plus - for a number spoken alone found by a pass reading
+    /// under the wider <see cref="NumberWordParser.BareNumberReading.LeadingASentence"/> - both
+    /// flanks regardless, because that reading admits numbers Whisper did not set off by itself.
+    /// <para>
+    /// A phrase-based announcement asks for nothing by default, its phrase being its own evidence.
+    /// The built-in chapter phrases deliberately carry no <c>^</c>: turning the lead-in guard on for
+    /// every chapter was measured over sixteen books (469 marks, 2026-08-13) and would have dropped
+    /// exactly one of them, "I Shall Wear Midnight" chapter 9, whose announcement follows the
+    /// previous chapter's last words after 0.64 s against a threshold of 0.85 s.
+    /// </para>
     /// </summary>
-    /// <param name="profile">The file's language profile, for whether this is a bare-number book.</param>
     /// <param name="match">The match being placed; its
     /// <see cref="PhraseMatching.PhraseMatch.SpokenAlone"/> decides whether there is anything to
     /// fall back on when the refinement confirms nothing.</param>
-    /// <param name="phraseAbs">Absolute start of the segment the number was found in.</param>
+    /// <param name="phraseAbs">Absolute start of the segment the announcement was found in.</param>
     /// <param name="wideReading">Whether this pass read the transcript under
     /// <see cref="NumberWordParser.BareNumberReading.LeadingASentence"/> - the same flag that chose the
     /// reading, so the two can never drift apart.</param>
     internal static IsolationCheck ForChapter(
-        LanguageProfile profile, PhraseMatching.PhraseMatch match, double phraseAbs, bool wideReading)
-        => profile.BareNumberAnnouncements && wideReading
-            ? new IsolationCheck(IsolationRule.Both, match.SpokenAlone ? phraseAbs : null)
-            : IsolationCheck.None;
+        PhraseMatching.PhraseMatch match, double phraseAbs, bool wideReading)
+    {
+        var rule = match.Guards;
+        if (match.IsBareNumber && wideReading)
+            rule |= IsolationRule.Both;
+        return rule == IsolationRule.None
+            ? IsolationCheck.None
+            : new IsolationCheck(rule, match.SpokenAlone ? phraseAbs : null);
+    }
 
     /// <summary>
     /// Measures the non-speech either side of the announcement at <paramref name="onset"/>: finds
@@ -116,13 +126,8 @@ internal static class AnnouncementIsolation
     /// <param name="rule">Which flanks this kind of announcement must have; see
     /// <see cref="IsolationRule"/>.</param>
     internal static bool Satisfies(AnnouncementFlanks flanks, IsolationRule rule) =>
-        rule switch
-        {
-            IsolationRule.None => true,
-            IsolationRule.LeadIn => flanks.LeadInSeconds >= AnnouncementLeadInSeconds,
-            _ => flanks.LeadInSeconds >= AnnouncementLeadInSeconds
-                 && flanks.LeadOutSeconds >= AnnouncementLeadOutSeconds,
-        };
+        (!rule.HasFlag(IsolationRule.LeadIn) || flanks.LeadInSeconds >= AnnouncementLeadInSeconds) &&
+        (!rule.HasFlag(IsolationRule.LeadOut) || flanks.LeadOutSeconds >= AnnouncementLeadOutSeconds);
 
     /// <summary>The "0.70 s before, 3.23 s after; need 0.85/0.3" clause a rejection logs - the
     /// whole point being that the numbers behind a dropped mark are visible without a re-run. The
@@ -135,9 +140,12 @@ internal static class AnnouncementIsolation
         var after = double.IsPositiveInfinity(flanks.LeadOutSeconds)
             ? "nothing after"
             : $"{flanks.LeadOutSeconds:0.00} s after";
-        var need = rule == IsolationRule.LeadIn
-            ? $"need {AnnouncementLeadInSeconds:0.##} before"
-            : $"need {AnnouncementLeadInSeconds:0.##}/{AnnouncementLeadOutSeconds:0.##}";
+        var need = rule switch
+        {
+            IsolationRule.LeadIn => $"need {AnnouncementLeadInSeconds:0.##} before",
+            IsolationRule.LeadOut => $"need {AnnouncementLeadOutSeconds:0.##} after",
+            _ => $"need {AnnouncementLeadInSeconds:0.##}/{AnnouncementLeadOutSeconds:0.##}",
+        };
         return $"{flanks.LeadInSeconds:0.00} s before, {after}; {need}";
     }
 }
@@ -162,29 +170,39 @@ internal readonly record struct IsolationCheck(IsolationRule Rule, double? Fallb
 }
 
 /// <summary>
-/// How much of a pause an announcement must sit in before its mark is kept. Three levels rather
-/// than one, because the announcements differ in shape and in what a false positive costs.
+/// How much of a pause an announcement must sit in before its mark is kept. Flags rather than
+/// levels, because the two sides are asked for separately - a phrase's <c>^</c> wants the leading
+/// pause and its <c>$</c> the trailing one - and a mark's rule is the union of what the wording that
+/// matched asked for and what the pass it was found in demands.
 /// </summary>
+[Flags]
 internal enum IsolationRule
 {
     /// <summary>No check. A phrase-based chapter announcement, whose phrase is its own evidence; a
     /// <c>--custom</c> mapping, which names a recurring structural element whose place in the book
     /// is the user's business and not something this could second-guess; and Pass 2's first look at
     /// a window, which is deliberately left cheap - see <see cref="AnnouncementIsolation"/>.</summary>
-    None,
+    None = 0,
 
-    /// <summary>A leading pause only. What the prologue and epilogue get: a heading word sits at a
-    /// section boundary and so always has a pause in front of it, but the narrator may run straight
-    /// on into the text after it. Measured over the fourteen-book corpus (2026-08-05): the twelve
-    /// genuine prologue/epilogue/<c>--custom</c> marks all have at least 1.56 s in front, while two
-    /// of them - Gruelfin's "Zeittafel" at 0.16 s and "I Shall Wear Midnight"'s epilogue at 0.44 s -
-    /// have almost nothing behind, so requiring a trailing pause would throw away real marks for
-    /// nothing: no false positive on record survives the lead-in test.</summary>
-    LeadIn,
+    /// <summary>A leading pause. What the prologue and epilogue get, and what a phrase's <c>^</c>
+    /// asks for: a heading word sits at a section boundary and so always has a pause in front of it,
+    /// but the narrator may run straight on into the text after it. Measured over the fourteen-book
+    /// corpus (2026-08-05): the twelve genuine prologue/epilogue/<c>--custom</c> marks all have at
+    /// least 1.56 s in front, while two of them - Gruelfin's "Zeittafel" at 0.16 s and "I Shall Wear
+    /// Midnight"'s epilogue at 0.44 s - have almost nothing behind, so requiring a trailing pause
+    /// would throw away real marks for nothing: no false positive on record survives the lead-in
+    /// test.</summary>
+    LeadIn = 1,
 
-    /// <summary>Both flanks. What a bare number gets, and what the mode's whole premise rests on:
-    /// under <c>--chapter-phrase none</c> the number <em>is</em> the announcement, spoken alone
+    /// <summary>A trailing pause, what a phrase's <c>$</c> asks for. Only ever sensible for an
+    /// announcement that is spoken alone: over the sixteen-book corpus 17 of 469 marks have under
+    /// 0.30 s behind them (2026-08-13), a narrator running from the heading straight into the
+    /// text.</summary>
+    LeadOut = 2,
+
+    /// <summary>Both flanks. What a bare number gets, and what that wording's whole premise rests
+    /// on: under <c>--chapter-phrase none</c> the number <em>is</em> the announcement, spoken alone
     /// with a pause on either side, and that shape is the only thing separating it from every year,
     /// price and house number in the prose.</summary>
-    Both,
+    Both = LeadIn | LeadOut,
 }

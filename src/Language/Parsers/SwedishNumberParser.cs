@@ -61,6 +61,29 @@ public sealed class SwedishNumberParser : INumberWordParser
         ["nittionde"] = 90, ["hundrade"] = 100,
     };
 
+    /// <summary>The diacritics <see cref="Normalize"/> strips ("första", "åtta").</summary>
+    private const string Accents = "aåä;oö;";
+
+    /// <summary>
+    /// A Swedish number is one compound word with no connector: an optional multiplied "hundra"
+    /// head - which may itself carry the ordinal ending, "tvåhundrade" - then an optional tens word
+    /// and one word from the simple or ordinal tables. Only the last part of a compound is ever
+    /// ordinal-marked, which is why the ordinal forms sit at the tail and nowhere else.
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = BuildPattern();
+
+    /// <summary>Assembles <see cref="NumberWordPattern"/> from the tables above.</summary>
+    private static string BuildPattern()
+    {
+        var units = NumberWordPatterns.Alt(
+            Simple.Where(s => s.Value is >= 1 and <= 9).Select(s => s.Key), Accents);
+        var tens = NumberWordPatterns.Alt(Tens.Select(t => t.Word), Accents);
+        var atom = NumberWordPatterns.Alt(Simple.Keys.Concat(OrdinalBase.Keys), Accents);
+        var rest = $"{tens}?{atom}";
+        return NumberWordPatterns.AnyOf($"{units}?hundra(?:de)?(?:{rest})?", rest);
+    }
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

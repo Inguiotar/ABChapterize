@@ -29,6 +29,22 @@ public interface INumberWordParser
     string DigitOrdinalSuffixPattern { get; }
 
     /// <summary>
+    /// Regex fragment (no capturing groups) matching one spoken number of this language, cardinal
+    /// or ordinal, written out in words - what the <c>()</c> token of a phrase expands to, together
+    /// with the digit and Roman notations every language shares. Matched case-insensitively, and
+    /// against raw transcript text, so a spelling this parser only reaches through its own
+    /// <c>Normalize</c> has to be admitted here explicitly (<see cref="NumberWordPatterns.Alt"/>'s
+    /// diacritics map does that).
+    /// <para>
+    /// Deliberately a <em>superset</em> of what <see cref="TryParse"/> accepts: the pattern only
+    /// says where the number ends, and the captured text is then read by that method, which is the
+    /// authority on its value. Admitting one word too many costs nothing; missing a real spelling
+    /// costs a chapter.
+    /// </para>
+    /// </summary>
+    string NumberWordPattern { get; }
+
+    /// <summary>
     /// Tries to parse a spoken number from the given word tokens. The tokens are
     /// lowercase-insensitive raw words with surrounding punctuation already stripped;
     /// the number is expected to start at the first token, and trailing non-number

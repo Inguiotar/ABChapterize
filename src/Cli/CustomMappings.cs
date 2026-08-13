@@ -40,9 +40,17 @@ public readonly record struct CustomMapping(
 /// A mapping may open with a <c>[...]</c> tag naming the language it is restricted to and any
 /// number of hints changing how it behaves - <c>[de,before-first-chapter,once]</c>. See
 /// <see cref="SpecTag"/> for the vocabulary and for the rule that keeps a phrase which merely
-/// starts with a bracket (<c>[Musik]:Zwischenmusik</c>) from being read as one, and
-/// <see cref="LocalizedOption"/> for the phrase and title options, which read the language half of
-/// the same tag and refuse the hints.
+/// starts with a bracket (<c>[Musik]:Zwischenmusik</c>) from being read as one,
+/// <see cref="ABChapterize.Language.Phrases.PhraseSpec"/> for the phrase options and
+/// <see cref="LocalizedOption"/> for the title ones, both of which read the language half of the
+/// same tag and refuse the hints.
+/// </para>
+/// <para>
+/// A mapping's phrase is one alternative rather than a list of them: the semicolon that separates
+/// alternatives elsewhere already separates mappings here. Everything <em>inside</em> a phrase is
+/// the same as anywhere else, <c>()</c> and the <c>^</c>/<c>$</c> guards included, and a mapping's
+/// title may write out what its phrase captured (see
+/// <see cref="ABChapterize.Language.Phrases.TitleTemplate"/>).
 /// </para>
 /// </summary>
 internal static class CustomMappingParser

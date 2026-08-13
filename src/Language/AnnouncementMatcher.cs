@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
-using System.Text.RegularExpressions;
+using ABChapterize.Language.Phrases;
 
 namespace ABChapterize.Language;
 
@@ -11,9 +11,9 @@ namespace ABChapterize.Language;
 /// in this text?" - for a phrase-based book by matching the chapter phrase, and for a
 /// <c>--chapter-phrase none</c> book by reading a number spoken as a sentence of its own.
 /// <para>
-/// It exists because the refinement used to take a <see cref="Regex"/>, and bare-number mode has
-/// none: <see cref="LanguageProfile.PhraseRegex"/> is a deliberately never-matching expression
-/// there. Every numbered chapter of such a book therefore failed refinement by construction -
+/// It exists because the refinement used to take a compiled expression, and a chapter announced by
+/// its number alone has none: the phrase was a deliberately never-matching expression there. Every
+/// numbered chapter of such a book therefore failed refinement by construction -
 /// twice, since a failure is retried through the <c>--pass3-model</c> recognizer - and the failure
 /// was silent, indistinguishable in the log from a genuinely unconfirmable announcement. Measured
 /// on "Corsa nello spazio" (build 244, 2026-08-05): 1001 of 1012 survival probes answered "no",
@@ -51,25 +51,27 @@ public sealed class AnnouncementMatcher
     /// <param name="text">One transcript segment's text, as the recognizer wrote it.</param>
     public bool Matches(string? text) => !string.IsNullOrWhiteSpace(text) && _matches(text);
 
-    /// <summary>A matcher for an ordinary phrase - the chapter phrase of a phrase-based book, or a
-    /// prologue/epilogue/<c>--custom</c> phrase.</summary>
-    /// <param name="regex">The compiled announcement expression.</param>
-    public static AnnouncementMatcher ForPhrase(Regex regex) => new(regex.IsMatch);
+    /// <summary>A matcher for a phrase whose wordings are all expressions - every phrase-based
+    /// chapter phrase, and every prologue/epilogue/<c>--custom</c> one.</summary>
+    /// <param name="pattern">The compiled phrase.</param>
+    public static AnnouncementMatcher ForPattern(PhrasePattern pattern) => new(pattern.IsMatch);
 
     /// <summary>
-    /// Widens a bare <see cref="Regex"/> into a matcher, so the many call sites that pass a phrase
-    /// expression stay unchanged and only the two that have no expression to pass - bare-number
-    /// mode - have to say anything. A regex <em>is</em> an announcement recognizer here, with no
-    /// information added or lost, which is the case an implicit conversion is for.
+    /// Widens a compiled phrase into a matcher, so the many call sites that have one to pass stay
+    /// unchanged and only the ones that have to say something more - a number spoken alone, whose
+    /// bounds the caller supplies - use the fuller overload. A phrase <em>is</em> an announcement
+    /// recognizer here, with no information added or lost, which is the case an implicit conversion
+    /// is for.
     /// </summary>
-    /// <param name="regex">The compiled announcement expression.</param>
-    public static implicit operator AnnouncementMatcher(Regex regex) => ForPhrase(regex);
+    /// <param name="pattern">The compiled phrase.</param>
+    public static implicit operator AnnouncementMatcher(PhrasePattern pattern) => ForPattern(pattern);
 
     /// <summary>
-    /// A matcher for <c>--chapter-phrase none</c>: a number spoken as a sentence of its own,
-    /// anywhere in the probe's text rather than only at its start - a refinement probe decodes a few
-    /// seconds with a lead-in, so the transcript routinely opens with a fragment of whatever
-    /// preceded the announcement.
+    /// A matcher for a phrase one of whose wordings is a number spoken alone
+    /// (<c>--chapter-phrase none</c>): that wording is looked for as a sentence of its own, anywhere
+    /// in the probe's text rather than only at its start - a refinement probe decodes a few seconds
+    /// with a lead-in, so the transcript routinely opens with a fragment of whatever preceded the
+    /// announcement - while the phrase's other wordings are matched as usual.
     /// <para>
     /// <paramref name="reading"/> must be the one the match itself was found under, and the pairing
     /// matters more than it looks. The permissive reading is only safe where
@@ -81,15 +83,17 @@ public sealed class AnnouncementMatcher
     /// the permissive one.
     /// </para>
     /// </summary>
+    /// <param name="pattern">The compiled phrase, for the wordings that are expressions.</param>
     /// <param name="language">Two-letter language code steering number-word parsing.</param>
     /// <param name="reading">The reading this mark's own match was found under.</param>
     /// <param name="admits">Which numbers this stretch of the chapter sequence can hold - see
     /// <see cref="ABChapterize.Detection.NumberCheck"/>, which is where the rule lives. Required
     /// rather than optional because every caller has the bounds in hand and an unbounded matcher
     /// is the defect this parameter exists to prevent.</param>
-    public static AnnouncementMatcher ForBareNumbers(
-        string language, NumberWordParser.BareNumberReading reading, Func<int, bool> admits) =>
-        new(text => NumberWordParser.FindBareNumberAnnouncement(
+    public static AnnouncementMatcher ForPattern(
+        PhrasePattern pattern, string language,
+        NumberWordParser.BareNumberReading reading, Func<int, bool> admits) =>
+        new(text => pattern.IsMatch(text) || NumberWordParser.FindBareNumberAnnouncement(
             text,
             language,
             reading == NumberWordParser.BareNumberReading.LeadingASentence

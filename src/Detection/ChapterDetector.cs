@@ -1862,11 +1862,11 @@ public sealed class ChapterDetector
             return null;
 
         foreach (var phrase in profile.NamedPhrases.Where(p => p.IsCustom))
-            if (phrase.Regex.Match(mark.Text) is { Success: true } match)
+            if (phrase.Pattern.Matches(mark.Text).FirstOrDefault() is { Match: not null } hit)
                 return mark with
                 {
                     Kind = phrase.Kind,
-                    Title = phrase.ResolveTitle(match),
+                    Title = phrase.ResolveTitle(hit.Match, profile.Language),
                     Repeatable = true,
                 };
         return null;
@@ -2744,7 +2744,7 @@ public sealed class ChapterDetector
         if (await _marks!.PlaceAsync(
                 check,
                 time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx,
-                AnnouncementIsolation.ForChapter(profile, match, phraseAbs, remaining is not null),
+                AnnouncementIsolation.ForChapter(match, phraseAbs, remaining is not null),
                 ct) is not { } placed)
             return;
         // The refinement's own probes may have re-read the number (see RefinedNumberVote), so the

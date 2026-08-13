@@ -13,7 +13,7 @@ public sealed class ItalianLanguage : ILanguage
     public string Code => "it";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/capitolo/";
+    public string ChapterPhrase => "/(?:capitolo ()|capitolo)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Capitolo";

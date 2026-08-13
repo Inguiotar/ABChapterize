@@ -83,6 +83,17 @@ public sealed class PortugueseNumberParser : INumberWordParser
         ("quadragesim", 40), ("trigesim", 30), ("vigesim", 20), ("decim", 10),
     ];
 
+    /// <summary>The accents <see cref="Normalize"/> folds away; see <see cref="NumberWordPattern"/>.</summary>
+    private const string Accents = "aáâã;eéê;ií;oóôõ;uú;cç;";
+
+    /// <summary>Every token a Portuguese number may consist of. Unlike Spanish nothing fuses, so
+    /// the ordinal scales are simply their two gendered spellings.</summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = NumberWordPatterns.TokenRun(
+        Small.Keys.Concat(Hundreds.Keys).Concat(OrdinalUnits.Keys).Append("e")
+            .Concat(OrdinalScales.SelectMany(s => new[] { s.Stem + "o", s.Stem + "a" })),
+        Accents);
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

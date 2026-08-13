@@ -16,7 +16,7 @@ public sealed class SpanishLanguage : ILanguage
     public string Code => "es";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/cap[íi]tulo/";
+    public string ChapterPhrase => "/(?:cap[íi]tulo ()|cap[íi]tulo)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Capítulo";

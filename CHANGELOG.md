@@ -64,6 +64,34 @@ earn a round number.
   the new one depending on which you hit. Several crowding marks are appended in file
   order; `--named-mark-distance 0` writes everything separately, as before.
 
+- **Phrases are now a list of alternatives, and a phrase can say what it is looking for.**
+  `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase` and `--custom` all take
+  several alternatives separated by `;`, every one of which is searched:
+
+  ```
+  --chapter-phrase "/se[ck]tion ()/;partie;default"
+  ```
+
+  Inside a regexp, **`()` stands for a chapter number in whatever notation the file's
+  language has** — digits, digit ordinals, Roman numerals, spoken cardinals and ordinals —
+  and captures it, so `/chapter ()/` covers "Chapter 12", "Chapter XII." and "Chapter one
+  hundred and five" alike. A leading **`^`** asks for a real pause in front of the
+  announcement and a trailing **`$`** for one behind it; neither is an anchor, and each
+  belongs to the alternative that carries it. **`default`** pulls this tool's own phrase for
+  the language into the list, so a value can add to it rather than replace it, and
+  **`none`** — the bare-number wording — is now one alternative among others rather than a
+  mode the whole run is in. Repeating one of these options adds alternatives.
+
+  A title may write out what its phrase captured: `${name}` for a named group, `${number}`
+  for the chapter number in digits whatever notation was spoken, and `$roman{}`,
+  `$digits{}`, `$upper{}`, `$lower{}` and `$capital{}` to convert one.
+
+  The whole syntax, with examples, is in
+  [the manual](doc/manual.md#the-phrase-syntax). The built-in phrases are written in it too
+  — English is now `/(?:chapter ()|chapter)/` — and were checked against a sixteen-book
+  reference corpus first: every announcement of all of them is found at the same place, with
+  the same number, as before.
+
 ### Removed
 
 - **`--max-jingle-length` / `-X` is gone**, and the voice-activity pre-pass it could switch
@@ -80,6 +108,21 @@ earn a round number.
   long stretch of music.
 
 ### Changed
+
+- **Three things about phrase and title options changed meaning.** All of them are visible
+  the moment they matter, and each has a one-line fix:
+
+  - A `;` now always separates alternatives. It used to do so only once some entry carried a
+    `[xx]` tag, so a value with no tag anywhere was taken whole, semicolons included. Write
+    `\;` for a semicolon that belongs to a regexp.
+  - An untagged alternative now applies to **every** language rather than only to the ones
+    the value does not name: `"[fr]chapitre;kapitel"` has French listening for both, where it
+    used to listen for "chapitre" alone. Tag it as well to keep the old reading.
+  - A title referencing a capturing group **by number** (`$1`, `$2`) is refused with an error
+    naming the fix. Name the group — `(?<part>...)` in the phrase, `${part}` in the title.
+    Silently turning `$1` into literal text was the one outcome nobody would have noticed
+    until the file was written. `$$` still writes a dollar sign, and a dollar before an
+    ordinary word still needs no escape.
 
 - **Everything the tool prints now calls a chapter entry a "mark".** Some messages used to
   say "marking" for one a file arrived with and "mark" for one this run placed — a

@@ -542,8 +542,9 @@ whether it was — it has to turn up inside one of the windows probing actually
 looks at, and those are anchored on the file's own pauses and jingles. A
 narrator mentioning a timeline in the middle of a paragraph gets no mark; the
 narrator announcing "Zeittafel" at a section boundary does. Titles may pull text
-out of the phrase's own capturing groups with `$1`, `$2` or a group name; write
-`$$` for a literal dollar sign.
+out of the phrase's own capturing groups — `${name}`, `${number}`,
+`$roman{number}` and the rest of it are in
+[Titles](#titles-what-a-mark-is-called).
 
 Syntax notes:
 
@@ -1085,64 +1086,178 @@ so that logs and reports stay comparable regardless of regional settings.
 ### Phrases and titles
 
 What the run listens for, and what it calls the marks it makes. All of these
-accept the per-language `[xx]` syntax described under `--chapter-phrase`, though
-`--custom` reads the tag differently: it restricts a mapping to one language
-rather than localizing it, a custom phrase never being translated for you.
+accept the per-language `[xx]` tag described in
+[The phrase syntax](#the-phrase-syntax), though `--custom` reads it differently:
+it restricts a mapping to one language rather than localizing it, a custom
+phrase never being translated for you.
 
 `-c`, `--chapter-phrase <p>`
-: The word or phrase that announces a chapter (default: `/chapter/`,
-  localized by `--lang` — see [section 7](#7-languages-and-number-recognition)
-  for every language's default). Matching is always case-insensitive. Two
-  forms:
-
-  - A literal word/phrase: `--chapter-phrase Teil`. The chapter number is
-    expected directly after it ("Teil sieben") or, failing that, directly
-    before it ("Siebter Teil") — see section 7.
-  - A regular expression between slashes: `--chapter-phrase "/part (\d+)/"`.
-    If the regexp contains a capturing group, the group must capture the
-    chapter number as digits; without a group, the number is parsed from the
-    surrounding words as with a literal phrase.
-  - The word `none` (**experimental**), for a book that announces a chapter by
-    speaking its number and nothing else — see
-    [Bare numbers](#bare-numbers-as-announcements) below.
-
-  For a batch run over books in more than one language, the value may also be
-  written **per language**: entries separated by `;`, each opened by a `[xx]`
-  language tag.
+: The word or phrase that announces a chapter (default:
+  `/(?:chapter ()|chapter)/`, localized by `--lang` — see
+  [section 7](#7-languages-and-number-recognition) for every language's
+  default). Matching is always case-insensitive. The value is a list of
+  **alternatives** separated by `;`, and every one of them is searched for:
 
   ```
-  --chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/;[en]section"
-  --chapter-title  "[fr]Chapitre;[en]Section"
-  --custom         "[fr]/scène/:Scène;[en]/scene/:Scene"
+  --chapter-phrase "/se[ck]tion ()/;partie;default"
   ```
 
-  With `--lang auto` each file resolves its own language and takes that
-  language's entry. One entry may be left untagged, which makes it the
-  fallback for the languages the value does not name; without one, those
-  languages keep their own built-in default, exactly as if the option had not
-  been given. A value carrying no tag anywhere is taken whole, semicolons
-  included, so a phrase written for an earlier version still means what it
-  did; a semicolon inside a tagged entry is written `\;`. The same syntax
-  works for `--chapter-title`, `--part-title`, `--intro-title`,
-  `--prologue-phrase`, `--prologue-title`, `--epilogue-phrase`,
-  `--epilogue-title` and `--custom`.
+  See [The phrase syntax](#the-phrase-syntax) below for the whole of it — what
+  an alternative may look like, what `()` matches, how a `[xx]` tag restricts
+  one to a language, and what `^` and `$` ask for. The same syntax serves
+  `--prologue-phrase`, `--epilogue-phrase` and `--custom`; the title options
+  take the `[xx]` tag but hold one value per language rather than a list.
+
+#### The phrase syntax
+
+Everything this tool listens for is written the same way, whether it is the
+chapter phrase, the prologue, the epilogue or a `--custom` mapping. A value is
+a list of **alternatives** separated by `;`, each of which may be:
+
+| Alternative | Means |
+| --- | --- |
+| `chapitre` | a plain word, with the chapter number beside it |
+| `/regexp/` | a regular expression |
+| `none` | the number spoken alone, with no phrase at all (chapter phrase only) |
+| `default` | this tool's own phrase for the file's language |
+
+Every alternative is searched, not just the first that matches something: a
+book that says "Kapitel 5" in some places and "Fünftes Kapitel" in others is
+served by one value naming both. Where two alternatives match the same words,
+the one written first wins.
+
+Repeating the option is the same as writing the values as one list, so
+`--chapter-phrase a --chapter-phrase b` and `--chapter-phrase "a;b"` mean
+exactly the same thing. A `;` inside a regexp is written `\;`.
+
+##### `()` — the chapter number
+
+Inside a regexp, `()` stands for **a number in whatever notation the file's
+language has**: digits, digit ordinals, Roman numerals, and the language's own
+spelled-out cardinals and ordinals. `/chapter ()/` therefore matches all of
+
+```
+Chapter 12      Chapter 12.      Chapter XII.      Chapter twelve
+Chapter 12th    Chapter one hundred and five
+```
+
+and, being a capturing group, it also **captures** what it matched, so a title
+can write it out — see [Titles](#titles-what-a-mark-is-called) below.
+
+A plain-word alternative is shorthand for exactly the shape the built-in phrases
+have: `partie` is read as `/(?:partie ()|partie)/` — the word with the number
+behind it, or the bare word, whose number is then read off whatever stands
+around it. Both announcement orders come out of those two, "partie sept" from
+the first and "septième partie" from the second.
+
+Any other capturing group must be **named**, `(?<name>...)`; write `(?:...)`
+where you only need brackets for grouping. A non-empty *unnamed* group is read
+as a number group with a pattern of your own, which is how
+`--chapter-phrase "/part (\d+)/"` has always worked.
+
+##### `^` and `$` — asking for the pauses
+
+A `^` at the start of an alternative and a `$` at its end are **not** anchors.
+They say what the audio around a match has to look like before a mark is
+written:
+
+- `^` — the announcement must be preceded by real non-speech: at least
+  0.85 s of silence or jingle music. That is what a heading has and a sentence
+  in the middle of a paragraph does not, and it is the same request the
+  `heading` hint makes for a `--custom` mapping.
+- `$` — the announcement must be followed by at least 0.3 s of non-speech.
+  Only sensible for something spoken alone, such as a bare number: a narrator
+  routinely runs straight from a heading into the text behind it.
+
+Both belong to the alternative that carries them, so `/^(?:a|b)$/` asks for
+both pauses around either wording while `/(?:^a$|b$)/` asks for both around "a"
+and only the trailing one around "b". They mean this at the two edges of an
+alternative and nowhere else. A match that fails the check is dropped, and
+`--verbose` says so with both measurements and both thresholds.
+
+The built-in chapter phrases deliberately ask for **neither**. Requiring a
+pause in front of every chapter announcement was tried against a sixteen-book
+reference corpus and would have cost a real chapter, one whose announcement
+follows the previous chapter's last words by a little over half a second.
+
+##### `[xx]` — restricting an alternative to one language
+
+An alternative may open with a two-letter language tag, which is what makes a
+batch run over a mixed library workable:
+
+```
+--chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/;/chapter ()/"
+--chapter-title  "[fr]Chapitre;[en]Section"
+--custom         "[fr]/scène/:Scène;[en]/scene/:Scene"
+```
+
+With `--lang auto` each file resolves its own language and then takes **every
+untagged alternative plus every alternative tagged for that language**, in the
+order they were written. Above, a French file listens for the French wording
+*and* for "chapter", while every other file listens for "chapter" alone. A
+language the value says nothing about at all — no tag of its own, and no
+untagged alternative anywhere in the value — keeps its own built-in phrase,
+exactly as if the option had not been given.
+
+`default` pulls that built-in phrase into the list explicitly, so a value can
+add to it instead of replacing it:
+
+```
+--chapter-phrase "/abschnitt ()/;default"     add a wording, keep the usual one
+--chapter-phrase "default;none"               ... and accept a bare number too
+--chapter-phrase "a;[de]default;[fr]default"  per language
+```
+
+##### Titles: what a mark is called
+
+A `--custom` mapping's title, and the prologue and epilogue titles, may write
+out what the phrase captured:
+
+| In the title | Writes |
+| --- | --- |
+| `${name}` | what the named group `(?<name>...)` captured, as it was written |
+| `${number}` | the chapter number **in digits**, whatever notation was spoken |
+| `$digits{name}` | the same for any group that holds a number |
+| `$roman{name}` | that number as a Roman numeral |
+| `$upper{name}`, `$lower{name}`, `$capital{name}` | the captured text, recased |
+| `$$` | a literal dollar sign |
+
+```
+--custom "/(?<kind>interlude|intermezzo) ()/:$capital{kind} $roman{number}"
+```
+
+writes "Intermezzo XIV" for a spoken "intermezzo fourteen". A group that took
+no part in the match — because a different alternative matched — writes
+nothing, and a conversion asked of a group that holds no number leaves its text
+alone.
+
+A dollar sign followed by an ordinary word is ordinary text and needs no
+escape; one followed by a **digit** is refused. `$1` used to name a capturing
+group, and quietly turning it into text is the one outcome nobody would notice
+until the file was written — so name the group and write `${name}` instead.
 
 #### Bare numbers as announcements
 
-**Experimental.** This mode has been calibrated against a single book so far.
+**Experimental.** This wording has been calibrated against a single book so far.
 It works and it is meant to be used, but check what it produces rather than
 trusting it the way you would a phrase-based run, and expect the rules behind it
 to keep moving between releases.
 
-`--chapter-phrase none` says this book has no chapter phrase at all: the
-narrator simply says "Seventeen." and reads on. What counts as an announcement
-is then a **number spoken alone** — one with a pause on either side of it,
-rather than one occurring inside a sentence. "Seventeen." is an announcement;
-"Seventeen men stood at the gate" is not, and neither is a year, a price or a
-house number read out in the prose. A number that ends its sentence still
-counts even when the recognizer runs it together with what follows
+`--chapter-phrase none` says a chapter may be announced with no phrase at all:
+the narrator simply says "Seventeen." and reads on. What counts as an
+announcement is then a **number spoken alone** — one with a pause on either side
+of it, rather than one occurring inside a sentence. "Seventeen." is an
+announcement; "Seventeen men stood at the gate" is not, and neither is a year, a
+price or a house number read out in the prose. A number that ends its sentence
+still counts even when the recognizer runs it together with what follows
 ("Seventeen. He was late again."), which is common and no longer costs the
 chapter.
+
+`none` is one alternative among however many the value names, so a book that
+announces some chapters and merely numbers the rest is covered by
+`--chapter-phrase "default;none"`. Written out, `none` is exactly
+`/^()$/` — the number and nothing else, with a pause asked for on either side of
+it, which is what the `^` and the `$` are.
 
 Later passes look harder than the first one does, and then check their work
 against the pauses the file actually has: an announcement they turn up is only
@@ -1163,15 +1278,17 @@ Two things are worth knowing before reaching for it:
   not continue the sequence. `--ignore-chapter-numbers`, which switches that
   check off, is therefore refused in combination with it — the pair would mark
   every number spoken alone anywhere in the book.
-- **It is per language,** like every other value of this option, so a batch may
-  hold one series announcing "Kapitel 17" and another just saying "Seventeen":
-  `--chapter-phrase "[en]none;[de]/kapitel/"`.
+- **It is per language,** like every other alternative, so a batch may hold one
+  series announcing "Kapitel 17" and another just saying "Seventeen":
+  `--chapter-phrase "[en]none;[de]default"`.
 
 `-p`, `--prologue-phrase <p>`
 : The word or phrase that announces a prologue (default: `/prolog/`,
-  localized by `--lang`). Takes the same literal and `/regexp/` forms as
+  localized by `--lang`). Takes the same alternatives, tags and guards as
   `--chapter-phrase`, but no number is parsed or expected — including `none`,
   which is just the word here, there being no number for it to stand in for.
+  A prologue is always required to sit behind a real pause, whatever its phrase
+  says, so writing the `^` yourself changes nothing; it is what a prologue *is*.
   Only accepted before the first chapter has been found; see
   [Prologue and epilogue](#prologue-and-epilogue). An empty string switches
   prologue detection off.
@@ -2013,25 +2130,34 @@ For these languages, `--lang` also localizes the defaults of
 
 | `--lang` | Default phrase | Default title word | Default part word | Default intro title |
 | --- | --- | --- | --- | --- |
-| `en` | `/chapter/` | Chapter | Part | Intro |
-| `de` | `/kapitel/` | Kapitel | Teil | Intro |
-| `fr` | `/chapitre/` | Chapitre | Partie | Introduction |
-| `es` | `/cap[íi]tulo/` | Capítulo | Parte | Introducción |
-| `it` | `/capitolo/` | Capitolo | Parte | Introduzione |
-| `nl` | `/hoofdstuk/` | Hoofdstuk | Deel | Intro |
-| `tr` | `/b[öo]l[üu]m/` | Bölüm | Kısım | Giriş |
-| `pt` | `/cap[íi]tulo/` | Capítulo | Parte | Introdução |
-| `pl` | `/rozdzia[łl]/` | Rozdział | Część | Wstęp |
-| `sv` | `/kapit(?:el\|let)/` | Kapitel | Del | Introduktion |
-| `da` | `/kapit(?:el\|let)/` | Kapitel | Del | Introduktion |
+| `en` | `/(?:chapter ()\|chapter)/` | Chapter | Part | Intro |
+| `de` | `/(?:kapitel ()\|kapitel)/` | Kapitel | Teil | Intro |
+| `fr` | `/(?:chapitre ()\|chapitre)/` | Chapitre | Partie | Introduction |
+| `es` | `/(?:cap[íi]tulo ()\|cap[íi]tulo)/` | Capítulo | Parte | Introducción |
+| `it` | `/(?:capitolo ()\|capitolo)/` | Capitolo | Parte | Introduzione |
+| `nl` | `/(?:hoofdstuk ()\|hoofdstuk)/` | Hoofdstuk | Deel | Intro |
+| `tr` | `/(?:b[öo]l[üu]m ()\|b[öo]l[üu]m)/` | Bölüm | Kısım | Giriş |
+| `pt` | `/(?:cap[íi]tulo ()\|cap[íi]tulo)/` | Capítulo | Parte | Introdução |
+| `pl` | `/(?:rozdzia[łl] ()\|rozdzia[łl])/` | Rozdział | Część | Wstęp |
+| `sv` | `/(?:kapit(?:el\|let) ()\|kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
+| `da` | `/(?:kapit(?:el\|let) ()\|kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
 
-The default phrases are regular expressions so that one language's spellings
-are covered at once: an accent Whisper dropped (`capitulo` for `capítulo`), a
-letter it wrote without its diacritic (`bolum` for `bölüm`), or a stem the
-language itself changes (Swedish and Danish say "kapitlet" as readily as
-"kapitel"). Nothing else changes — they are matched case-insensitively and as
-a substring exactly as a plain word would be, so an inflected ending needs no
-pattern of its own ("rozdziału" is found by `rozdzia[łl]`).
+Every one of them is the same shape: two alternatives, the first taking the
+number that follows the word directly ("Kapitel 12") and the second the bare
+word, which leaves the number to be read off whatever stands around it — the
+ordinal-first order ("Erstes Kapitel", and in Turkish "Birinci Bölüm", which is
+that language's only order). Neither asks for a pause.
+
+They are regular expressions so that one language's spellings are covered at
+once: an accent Whisper dropped (`capitulo` for `capítulo`), a letter it wrote
+without its diacritic (`bolum` for `bölüm`), or a stem the language itself
+changes (Swedish and Danish say "kapitlet" as readily as "kapitel"). Nothing
+else changes — the word is matched case-insensitively and as a substring
+exactly as a plain word would be, so an inflected ending needs no pattern of
+its own ("rozdziału" is found by `rozdzia[łl]`).
+
+`default` in a `--chapter-phrase` value stands for whichever of these rows the
+file's language resolves to.
 
 The same applies to the defaults of `--prologue-phrase`/`--prologue-title`
 and `--epilogue-phrase`/`--epilogue-title` (see

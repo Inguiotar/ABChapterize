@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Language;
+using ABChapterize.Language.Phrases;
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -53,7 +54,7 @@ internal static class ExistingMarkTitle
     private static readonly LanguageProfile[] Registered =
     [
         .. LanguageRegistry.Languages.Select(l => new LanguageProfile(
-            l.Code, l.ChapterPhrase, CompileAnchor(l.ChapterPhrase), PhraseHasNumberGroup: false,
+            l.Code, l.ChapterPhrase, CompileAnchor(l.ChapterPhrase, l.Code),
             l.ChapterTitle, l.PartTitle, l.IntroTitle, []))
     ];
 
@@ -161,12 +162,12 @@ internal static class ExistingMarkTitle
     /// <param name="number">Receives the chapter number on success.</param>
     private static bool TryAnchored(string title, LanguageProfile profile, out int number)
     {
-        foreach (Match anchor in profile.PhraseRegex.Matches(title))
-            if (TryAtAnchor(title, anchor, profile, out number))
+        foreach (var hit in profile.ChapterPattern.Matches(title))
+            if (TryAtAnchor(title, hit.Match, hit.Alternative.HasNumberGroup, profile, out number))
                 return true;
         foreach (Match anchor in Regex.Matches(
                      title, Regex.Escape(profile.Title), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-            if (TryAtAnchor(title, anchor, profile, out number))
+            if (TryAtAnchor(title, anchor, hasNumberGroup: false, profile, out number))
                 return true;
         number = 0;
         return false;
@@ -182,13 +183,15 @@ internal static class ExistingMarkTitle
     /// </summary>
     /// <param name="title">The mark's title.</param>
     /// <param name="anchor">Where the chapter word sits in it.</param>
+    /// <param name="hasNumberGroup">Whether the wording that matched captured the number itself.</param>
     /// <param name="profile">The language profile supplying the number grammar.</param>
     /// <param name="number">Receives the chapter number on success.</param>
-    private static bool TryAtAnchor(string title, Match anchor, LanguageProfile profile, out int number)
+    private static bool TryAtAnchor(
+        string title, Match anchor, bool hasNumberGroup, LanguageProfile profile, out int number)
     {
-        if (profile.PhraseHasNumberGroup && anchor.Groups.Count > 1 && anchor.Groups[1].Success)
-            return int.TryParse(
-                anchor.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out number);
+        if (hasNumberGroup &&
+            anchor.Groups[PhraseAlternative.NumberGroup] is { Success: true } captured)
+            return NumberWordParser.TryExtractNumber(captured.Value, profile.Language, out number);
 
         var behind = BeforeHeading(title[(anchor.Index + anchor.Length)..]);
         if (NumberWordParser.TryExtractNumber(behind, profile.Language, out number))
@@ -248,19 +251,14 @@ internal static class ExistingMarkTitle
     }
 
     /// <summary>
-    /// Compiles one language's built-in chapter phrase into its anchor expression. The built-ins are
-    /// all written in the same <c>/regexp/</c> spelling a user may type after
-    /// <c>--chapter-phrase</c>, and none of them carries a capturing group
-    /// (<c>EveryRegisteredLanguage_HasUsableDefaultPhrases</c> guards that) - so unlike
-    /// <see cref="ABChapterize.Cli.CliOptions"/>'s own compiler this one has no error path to report
-    /// and no capture convention to detect.
+    /// Compiles one language's built-in chapter phrase, through the same compiler a user's own
+    /// <c>--chapter-phrase</c> goes through - the built-ins are written in exactly that syntax, and
+    /// a second reading of it here is a second thing to keep in step.
     /// </summary>
     /// <param name="phrase">The language's <see cref="ILanguage.ChapterPhrase"/>.</param>
-    private static Regex CompileAnchor(string phrase)
-    {
-        var pattern = phrase.Length > 2 && phrase.StartsWith('/') && phrase.EndsWith('/')
-            ? phrase[1..^1]
-            : Regex.Escape(phrase);
-        return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    }
+    /// <param name="code">The language's own code, deciding what <c>()</c> expands to.</param>
+    private static PhrasePattern CompileAnchor(string phrase, string code)
+        => PhraseCompiler.Compile(
+            PhraseSpec.Parse(phrase, "chapter phrase").Entries.Select(e => e.Body).ToList(),
+            code, PhraseKind.Chapter, "chapter phrase");
 }

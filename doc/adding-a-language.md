@@ -84,7 +84,7 @@ public sealed class CzechLanguage : ILanguage
     public string Code => "cs";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/kapitol/";
+    public string ChapterPhrase => "/(?:kapitol ()|kapitol)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Kapitola";
@@ -121,6 +121,26 @@ could type after `--chapter-phrase` on the command line: either a plain word,
 or a regular expression wrapped in slashes. Use the `/regexp/` form — every
 built-in language does, for consistency.
 
+The chapter phrase has one more thing in it. Every built-in language spells it
+`/(?:WORD ()|WORD)/`: two alternatives of one phrase, where `()` stands for a
+chapter number in your language's own notation and captures it. The first
+alternative takes the number that follows the word directly ("Kapitola 12"),
+the second is the bare word, and the number is then read off whatever stands
+around it — which is what covers the ordinal-first order ("První kapitola").
+Copy the shape and change the word; the parts that vary by language are the
+word itself and the number grammar in step 3.
+
+Do not add a third alternative for the ordinal-first order (`() WORD`). It
+looks symmetrical and it is wrong: matches are taken leftmost-first, so on "Der
+erste Kapitel 5" such an alternative claims "erste Kapitel" before
+`kapitel ()` can claim "Kapitel 5", and the chapter comes out as 1. Six
+announcements across five books of the reference corpus have exactly that
+shape. The bare-word alternative already covers the order correctly.
+
+Do not add a `^` either, tempting though it is: it asks for a real pause in
+front of the announcement, and requiring one of every chapter was measured over
+that same corpus and would have cost a real chapter.
+
 Two rules about how they are matched, both of which save you work:
 
 - **Case is ignored.** Never write `[Kk]`.
@@ -139,9 +159,10 @@ What *does* need a pattern:
 | The stem itself changes | Swedish "kapitel" / "kapitlet" | `kapit(?:el\|let)` |
 | Two accepted spellings | "prolog" / "prologue" | just `prolog` — substring |
 
-Write the alternation as `(?:a|b)`, **not** `(a|b)`. A plain `(...)` is a
-*capturing* group, and ABChapterize reads a capturing group in a chapter
-phrase as "the user is capturing the chapter number here". A unit test
+Write any alternation of your own as `(?:a|b)`, **not** `(a|b)`. A plain
+`(...)` is a *capturing* group, and ABChapterize reads one in a phrase as "the
+chapter number is here" — which is exactly what the `()` above is, and what a
+second one would collide with. A unit test
 (`EveryRegisteredLanguage_HasUsableDefaultPhrases`) will fail if you slip.
 
 Do not try to cover a *different word* your language might use for a chapter
@@ -155,7 +176,7 @@ genuinely interchangeable as the thing narrators announce — not "one common
 one and one a publisher occasionally uses", but two you would be equally
 unsurprised to hear — then the default has to cover both, or half the
 audiobooks in that language get nothing. Write it as one alternation,
-`/(?:woord|kapittel)/`, and the earlier note applies: `(?:...)`, never
+`/(?:(?:woord|kapittel) ()|woord|kapittel)/`, and the earlier note applies: `(?:...)`, never
 `(...)`. Test it against prose before you commit to it. The bar is high on
 purpose, and no built-in language has cleared it so far: all eleven get by on
 a single word, and the only alternations among them (Swedish and Danish
@@ -269,6 +290,18 @@ Three things to get right, all of which the existing parsers demonstrate:
   any separator. If it just writes "17." — a number and a period — return an
   empty string; that case is already handled for every language.
 
+There is a fourth member, `NumberWordPattern`: a regex fragment matching one
+spoken number of your language, which is what the `()` of a phrase expands to.
+Build it from the very tables you parse with, using the helpers in
+`NumberWordPatterns.cs` — `TokenRun` for a language that writes a number as
+separate words, `Alt` and `AnyOf` for one that compounds it — so that adding a
+spelling to a table adds it to the pattern in the same edit. It is allowed, and
+meant, to be a *superset* of what your parser accepts: whatever it captures is
+handed straight back to `TryParse`, which is the authority on the value. Being
+generous costs nothing; missing a spelling costs a chapter. `NumberWordPatternTests`
+checks the direction that matters, replaying every spelling the reference
+spellers produce for 0-999 through it.
+
 ---
 
 ## 5. Step 4 — tests
@@ -294,12 +327,13 @@ Two you should extend by hand:
   point of the row.
 
 If you wrote a number parser, add it to the exhaustive round-trip tests as
-well: `ExhaustiveNumberWordTests.cs` for cardinals and
-`ExhaustiveOrdinalTests.cs` for ordinals. They spell out every number 0–999
-with an **independent** reference speller in `Spellers.cs` and feed it back
-through your parser — the grammar is deliberately written twice, so a
-misunderstanding of it cannot agree with itself. Copy the reference speller
-closest to your language, then add your language to those two files.
+well: `ExhaustiveNumberWordTests.cs` for cardinals, `ExhaustiveOrdinalTests.cs`
+for ordinals, and `NumberWordPatternTests.cs` for the `()` expansion. They spell
+out every number 0–999 with an **independent** reference speller in
+`Spellers.cs` and feed it back through your parser — the grammar is deliberately
+written twice, so a misunderstanding of it cannot agree with itself. Copy the
+reference speller closest to your language, then add your language to those
+three files.
 
 Finally, try it on a real book:
 
@@ -358,13 +392,15 @@ warning, not a silent typo.
 ## 8. Checklist
 
 - [ ] `src\Language\Languages\XxxLanguage.cs` written, all nine members filled in
-- [ ] Phrases use `(?:...)`, never `(...)`
+- [ ] Chapter phrase written as `/(?:WORD ()|WORD)/`; any other grouping `(?:...)`,
+      never `(...)`
 - [ ] Titles carry their proper capitalization and accents
 - [ ] One line added to `LanguageRegistry.All`
 - [ ] `src\Language\Parsers\XxxNumberParser.cs` written (or English borrowed, temporarily)
 - [ ] `SupportedLanguages_ListsAllParsers` and
       `DefaultPhrases_MatchTheirLanguagesAnnouncements` extended
-- [ ] Round-trip test + reference speller added, if there is a number parser
+- [ ] Round-trip tests, `NumberWordPattern` and reference speller added, if there is a
+      number parser
 - [ ] `doc\manual.md` section 7 tables updated
 - [ ] `CHANGELOG.md` entry added
 - [ ] `dotnet test` green, `dotnet build` free of warnings

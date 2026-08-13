@@ -90,6 +90,19 @@ public sealed class PolishNumberParser : INumberWordParser
         ["osiemsetny"] = 800, ["dziewiecsetny"] = 900,
     };
 
+    /// <summary>The diacritics <see cref="Normalize"/> strips, so the pattern admits both the
+    /// accented spelling and the ASCII one the tables are keyed with.</summary>
+    private const string Accents = "aą;cć;eę;lł;nń;oó;sś;zźż;";
+
+    /// <summary>Every token a Polish number may consist of - hundreds, tens and units are separate
+    /// words with no connector at all, cardinal and ordinal alike.</summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = NumberWordPatterns.TokenRun(
+        Units.Keys.Concat(Teens.Keys).Concat(Tens.Keys).Concat(HundredsCardinal.Keys)
+            .Concat(UnitsOrdinal.Keys).Concat(TeensOrdinal.Keys).Concat(TensOrdinal.Keys)
+            .Concat(HundredsOrdinal.Keys),
+        Accents);
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

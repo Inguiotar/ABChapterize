@@ -925,7 +925,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public async Task CustomTitle_ExpandsACapturingGroup()
     {
         var result = await DetectAsync(
-            Options("--custom", "/(interlude|intermezzo)/:The $1"),
+            Options("--custom", "/(?<kind>interlude|intermezzo)/:The ${kind}"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -4449,7 +4449,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 650, 662, 700, [], null, CancellationToken.None);
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 650, 662, 700, [], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         Assert.Equal(655.3, result.Mark, 3);
@@ -4474,7 +4474,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            641.06, _file, null, profile.PhraseRegex, profile.Language, 645.2, 647.2, 651.7, [], null, CancellationToken.None);
+            641.06, _file, null, profile.ChapterPattern, profile.Language, 645.2, 647.2, 651.7, [], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("chapter two", 639.75, result.Mark);
@@ -4500,7 +4500,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            699, _file, null, profile.PhraseRegex, profile.Language, 699.5, 717, 700,
+            699, _file, null, profile.ChapterPattern, profile.Language, 699.5, 717, 700,
             [], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -4527,7 +4527,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            307.13, _file, null, profile.PhraseRegex, profile.Language, 295.38, 302.38, 308.98,
+            307.13, _file, null, profile.ChapterPattern, profile.Language, 295.38, 302.38, 308.98,
             [], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -4550,7 +4550,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            307.13, _file, null, profile.PhraseRegex, profile.Language, 295.38, 302.38, 308.98,
+            307.13, _file, null, profile.ChapterPattern, profile.Language, 295.38, 302.38, 308.98,
             [], null, CancellationToken.None);
 
         Assert.False(result.PhraseHeard);
@@ -4580,7 +4580,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // ends within a hundredth of the segment - the tight anchor that produced the too-short
         // probes.
         var result = await refiner.RefinePreciseMarkAsync(
-            52.9, _file, null, profile.PhraseRegex, profile.Language, 52.7, 54.2, 54.19, [], null, CancellationToken.None);
+            52.9, _file, null, profile.ChapterPattern, profile.Language, 52.7, 54.2, 54.19, [], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("Zeittafel", 52.45, result.Mark);
@@ -4624,7 +4624,7 @@ public sealed class ChapterDetectorTests : IDisposable
             });
 
         var result = await refiner.RefinePreciseMarkAsync(
-            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, [], null, CancellationToken.None);
+            655, _file, null, profile.ChapterPattern, profile.Language, 658, 662, 700, [], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
         AssertMarkTime("chapter 2", 659.75, result.Mark);
@@ -4647,7 +4647,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var profile = Options().ResolveProfile("en");
 
         var result = await refiner.RefinePreciseMarkAsync(
-            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, [], null, CancellationToken.None);
+            655, _file, null, profile.ChapterPattern, profile.Language, 658, 662, 700, [], null, CancellationToken.None);
         var firstAttemptDecodes = audio.DecodeWindows.Count;
 
         Assert.False(result.PhraseHeard);
@@ -4661,7 +4661,7 @@ public sealed class ChapterDetectorTests : IDisposable
             (samples, _, ct) => alsoDeaf.TranscribeAsync(samples, ct));
         audio.DecodeWindows.Clear();
         await retrying.RefinePreciseMarkAsync(
-            655, _file, null, profile.PhraseRegex, profile.Language, 658, 662, 700, [], null, CancellationToken.None);
+            655, _file, null, profile.ChapterPattern, profile.Language, 658, 662, 700, [], null, CancellationToken.None);
 
         Assert.True(audio.DecodeWindows.Count > firstAttemptDecodes,
             $"retry ran {audio.DecodeWindows.Count} decodes, single attempt {firstAttemptDecodes}");
@@ -4715,7 +4715,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            6240.51, _file, null, profile.PhraseRegex, profile.Language, 6238.42, 6244.22, 6255,
+            6240.51, _file, null, profile.ChapterPattern, profile.Language, 6238.42, 6244.22, 6255,
             [new(6230.05, 6238.42), new(6239.28, 6240.86)], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -4743,7 +4743,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            11932.5, _file, null, profile.PhraseRegex, profile.Language, 11931.31, 11935.9, 11945,
+            11932.5, _file, null, profile.ChapterPattern, profile.Language, 11931.31, 11935.9, 11945,
             [new(11929.34, 11930.74), new(11931.99, 11932.59)], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -4767,7 +4767,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            6240.51, _file, null, profile.PhraseRegex, profile.Language, 6238.42, 6244.22, 6255,
+            6240.51, _file, null, profile.ChapterPattern, profile.Language, 6238.42, 6244.22, 6255,
             [new(6230.05, 6236.5), new(6239.28, 6240.86)], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -4788,7 +4788,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            15921, _file, null, profile.PhraseRegex, profile.Language, 15920.15, 15926, 15935,
+            15921, _file, null, profile.ChapterPattern, profile.Language, 15920.15, 15926, 15935,
             [new(15903.82, 15904.61), new(15911.16, 15920.21)], null, CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -4815,7 +4815,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], 659.7,
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 660, 663, 700, [], 659.7,
             CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -4834,7 +4834,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], 659.96,
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 660, 663, 700, [], 659.96,
             CancellationToken.None);
 
         Assert.Equal(659.96 - PinnedMarkLeadSeconds, result.Mark, 3);
@@ -4852,7 +4852,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], 658.5,
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 660, 663, 700, [], 658.5,
             CancellationToken.None);
 
         Assert.Equal(659.75, result.Mark, 3);
@@ -4870,7 +4870,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], 660.4,
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 660, 663, 700, [], 660.4,
             CancellationToken.None);
 
         Assert.Equal(659.75, result.Mark, 3);
@@ -4889,7 +4889,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700,
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 660, 663, 700,
             [new(658, 659.8)], 659.7, CancellationToken.None);
 
         Assert.Equal(659.8 - PinnedMarkLeadSeconds, result.Mark, 3);
@@ -7610,7 +7610,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            646.2, 659.75, _file, null, profile.PhraseRegex,
+            646.2, 659.75, _file, null, profile.ChapterPattern,
             [new(0, 640), new(645, 646.2), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(645, result);
@@ -7626,7 +7626,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            640, 659.75, _file, null, profile.PhraseRegex, [new(0, 640), new(660, 3600)], CancellationToken.None);
+            640, 659.75, _file, null, profile.ChapterPattern, [new(0, 640), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(640, result);
         Assert.Single(transcriber.Audio.DecodeStarts);
@@ -7644,7 +7644,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            0.05, 20, _file, null, profile.PhraseRegex, [], CancellationToken.None);
+            0.05, 20, _file, null, profile.ChapterPattern, [], CancellationToken.None);
 
         Assert.Equal(0.05, result);
     }
@@ -7663,7 +7663,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.VerifyMarkBeforeJingleAsync(
-            658.25, 659.75, _file, null, profile.PhraseRegex,
+            658.25, 659.75, _file, null, profile.ChapterPattern,
             [new(0, 650), new(655, 658.25), new(660, 3600)], CancellationToken.None);
 
         Assert.Equal(658.25, result);
@@ -7681,7 +7681,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], null,
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 660, 663, 700, [], null,
             CancellationToken.None);
 
         Assert.True(result.PhraseHeard);
@@ -7697,7 +7697,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (refiner, profile) = MakeVerifier(transcriber);
 
         var result = await refiner.RefinePreciseMarkAsync(
-            659.75, _file, null, profile.PhraseRegex, profile.Language, 660, 663, 700, [], null,
+            659.75, _file, null, profile.ChapterPattern, profile.Language, 660, 663, 700, [], null,
             CancellationToken.None);
 
         Assert.False(result.PhraseHeard);

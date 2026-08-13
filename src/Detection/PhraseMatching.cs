@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using ABChapterize.Language;
+using ABChapterize.Language.Phrases;
 using ABChapterize.Transcription;
 using static ABChapterize.Language.NumberWordParser;
 
@@ -33,9 +34,16 @@ internal static partial class PhraseMatching
     /// what such a match falls back on when <see cref="AnnouncementIsolation"/> cannot be run: an
     /// opening number is one the stricter reading would have taken anyway, a later one rests
     /// entirely on the isolation check and must not be kept without it.</param>
+    /// <param name="Guards">The pauses the wording that matched asked for with its <c>^</c> and
+    /// <c>$</c>. Carried on the match rather than looked up later because a phrase may hold several
+    /// wordings asking for different things, and only this one matched.</param>
+    /// <param name="IsBareNumber">Whether the wording that matched is a number spoken alone. What
+    /// decides whether a pass hunting known numbers has to vouch for the position on top of
+    /// whatever <paramref name="Guards"/> already asks for.</param>
     internal readonly record struct PhraseMatch(
         int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
-        bool SpansMerge = false, bool SpokenAlone = true);
+        bool SpansMerge = false, bool SpokenAlone = true,
+        IsolationRule Guards = IsolationRule.None, bool IsBareNumber = false);
 
     /// <summary>A non-numbered announcement (prologue, epilogue or a <c>--custom</c> mapping) found
     /// inside a transcribed window.</summary>
@@ -57,9 +65,13 @@ internal static partial class PhraseMatching
     /// <see cref="ChapterDetector.ResolveEpiloguePlacement"/>). The segment rather than the whole
     /// window: a window runs to half a minute of narration, and a mapping matching somewhere in
     /// <em>that</em> says nothing about this announcement.</param>
+    /// <param name="Guards">The pauses the wording that matched asked for with its <c>^</c> and
+    /// <c>$</c>, on top of whatever the phrase itself requires
+    /// (<see cref="NamedPhrase.RequiresLeadIn"/>).</param>
     internal readonly record struct NamedMatch(
         NamedPhrase Phrase, string Title,
-        double PhraseStartSeconds, double PhraseEndSeconds, double Confidence, string Text = "");
+        double PhraseStartSeconds, double PhraseEndSeconds, double Confidence, string Text = "",
+        IsolationRule Guards = IsolationRule.None);
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -82,30 +94,55 @@ internal static partial class PhraseMatching
         BareNumberReading reading = BareNumberReading.SpokenAloneAtSegmentStart)
     {
         if (segments.Count == 0)
-            yield break;
-        if (profile.BareNumberAnnouncements)
-        {
-            foreach (var match in FindBareNumbers(segments, profile, reading))
-                yield return match;
-            yield break;
-        }
+            return [];
 
+        var matches = new List<PhraseMatch>(FindByPattern(segments, profile, mergeBoundarySegIndex));
+        if (!profile.ChapterPattern.HasBareNumberAlternative)
+            return matches;
+        matches.AddRange(FindBareNumbers(segments, profile, reading));
+        // Chronological, because the accept loop walks these in order and only ever takes a number
+        // above the last one it took - two wordings of one phrase finding their announcements in a
+        // different order would cost the later pass its chapter. A stable ordering rather than
+        // List.Sort, so that two wordings matching in the same segment stay in the order they were
+        // written and a run is reproducible.
+        return matches.OrderBy(m => m.PhraseStartSeconds).ToList();
+    }
+
+    /// <summary>
+    /// The announcements the phrase's expression wordings find in one window, read off the flattened
+    /// window text. Every wording is searched and the matches merged, so a phrase written as several
+    /// alternatives behaves exactly as the one alternation it would otherwise have been.
+    /// </summary>
+    /// <param name="segments">The window's transcript segments, in the caller's time base.</param>
+    /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
+    /// <param name="mergeBoundarySegIndex">The cache/fresh boundary, if any; see
+    /// <see cref="FindPhraseMatches"/>.</param>
+    private static IEnumerable<PhraseMatch> FindByPattern(
+        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex)
+    {
         var (text, segStartChar) = Flatten(segments);
         var mergeBoundaryChar = mergeBoundarySegIndex is { } idx && idx > 0 && idx < segments.Count
             ? segStartChar[idx] : (int?)null;
 
-        foreach (Match m in profile.PhraseRegex.Matches(text))
+        foreach (var hit in profile.ChapterPattern.Matches(text))
         {
-            if (!TryParseAnnouncedNumber(text, m, profile, out var number, out var consumedStart, out var consumedEnd))
+            if (!TryParseAnnouncedNumber(
+                    text, hit, profile, out var number, out var consumedStart, out var consumedEnd))
                 continue;
 
-            var segIndex = SegmentIndexAt(segStartChar, m.Index);
+            var segIndex = SegmentIndexAt(segStartChar, hit.Match.Index);
             var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
             yield return new PhraseMatch(
                 number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
-                segments[segIndex].Probability, spansMerge);
+                segments[segIndex].Probability, spansMerge, Guards: GuardsOf(hit.Alternative));
         }
     }
+
+    /// <summary>The pauses one wording asks for, as the check that enforces them spells it.</summary>
+    /// <param name="alternative">The wording that matched.</param>
+    private static IsolationRule GuardsOf(PhraseAlternative alternative)
+        => (alternative.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None) |
+           (alternative.RequiresLeadOut ? IsolationRule.LeadOut : IsolationRule.None);
 
     /// <summary>
     /// The <c>--chapter-phrase none</c> reading of a window: a chapter is announced by speaking its
@@ -148,6 +185,7 @@ internal static partial class PhraseMatching
     private static IEnumerable<PhraseMatch> FindBareNumbers(
         List<TranscriptSegment> segments, LanguageProfile profile, BareNumberReading reading)
     {
+        var wording = profile.ChapterPattern.Alternatives.First(a => a.IsBareNumber);
         foreach (var segment in segments)
             if (NumberWordParser.FindBareNumberAnnouncement(
                     segment.Text, profile.Language, reading) is { } announced)
@@ -156,7 +194,7 @@ internal static partial class PhraseMatching
                 // announcement rather than start exactly on it.
                 yield return new PhraseMatch(
                     announced.Number, segment.StartSeconds, segment.EndSeconds, segment.Probability,
-                    SpokenAlone: announced.SpokenAlone);
+                    SpokenAlone: announced.SpokenAlone, Guards: GuardsOf(wording), IsBareNumber: true);
     }
 
     /// <summary>
@@ -200,17 +238,18 @@ internal static partial class PhraseMatching
     internal static IEnumerable<UnnumberedAnnouncement> FindUnnumberedAnnouncements(
         List<TranscriptSegment> segments, LanguageProfile profile)
     {
-        // With --chapter-phrase none there is no such thing: the number *is* the announcement, so an
-        // announcement whose number could not be read was never recognized as one in the first place.
-        if (segments.Count == 0 || profile.BareNumberAnnouncements)
+        // A number spoken alone has no such thing: the number *is* the announcement, so one whose
+        // number could not be read was never recognized as an announcement in the first place. Only
+        // the phrase's expression wordings can leave a phrase heard and unnumbered.
+        if (segments.Count == 0 || !profile.ChapterPattern.HasRegexAlternative)
             yield break;
 
         var (text, segStartChar) = Flatten(segments);
-        foreach (Match m in profile.PhraseRegex.Matches(text))
+        foreach (var hit in profile.ChapterPattern.Matches(text))
         {
-            if (TryParseAnnouncedNumber(text, m, profile, out _, out _, out _))
+            if (TryParseAnnouncedNumber(text, hit, profile, out _, out _, out _))
                 continue;
-            var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
+            var segment = segments[SegmentIndexAt(segStartChar, hit.Match.Index)];
             yield return new UnnumberedAnnouncement(
                 segment.StartSeconds, segment.EndSeconds, segment.Probability, Snippet(segment.Text));
         }
@@ -240,7 +279,8 @@ internal static partial class PhraseMatching
     /// unrelated number later in the same segment out.
     /// </summary>
     /// <param name="text">The flattened window text the match came from.</param>
-    /// <param name="m">The phrase match itself.</param>
+    /// <param name="hit">The match itself, with the wording that produced it - which is what says
+    /// whether the number was captured or has to be read off the words around it.</param>
     /// <param name="profile">Language profile supplying the number grammar and group convention.</param>
     /// <param name="number">The parsed chapter number, when one was found.</param>
     /// <param name="consumedStart">Start of the character range actually consulted - the match
@@ -249,13 +289,17 @@ internal static partial class PhraseMatching
     /// supplied it. Together the two tell <see cref="FindPhraseMatches"/> whether the detection drew
     /// on text from both sides of a Pass 2 overlap's cache/fresh boundary.</param>
     private static bool TryParseAnnouncedNumber(
-        string text, Match m, LanguageProfile profile,
+        string text, PhraseHit hit, LanguageProfile profile,
         out int number, out int consumedStart, out int consumedEnd)
     {
+        var m = hit.Match;
         consumedStart = m.Index;
         consumedEnd = m.Index + m.Length;
-        if (profile.PhraseHasNumberGroup && m.Groups.Count > 1 && m.Groups[1].Success)
-            return int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out number);
+        // A wording that captures the number says where it is; every other one leaves it to be read
+        // off the words around the match, which is what a phrase of a bare word has always done.
+        if (hit.Alternative.HasNumberGroup &&
+            m.Groups[PhraseAlternative.NumberGroup] is { Success: true } captured)
+            return NumberWordParser.TryExtractNumber(captured.Value, profile.Language, out number);
 
         var tail = text[(m.Index + m.Length)..];
         if (tail.Length > 80)
@@ -288,18 +332,18 @@ internal static partial class PhraseMatching
     internal static IEnumerable<NamedMatch> FindChapterAnnouncements(
         List<TranscriptSegment> segments, LanguageProfile profile)
     {
-        // Unreachable with --chapter-phrase none, which CliOptions refuses to combine with
+        // A bare-number wording is unreachable here: CliOptions refuses to combine it with
         // --ignore-chapter-numbers - see FindBareNumbers for why that pairing has no safety net.
-        if (segments.Count == 0 || profile.BareNumberAnnouncements)
+        if (segments.Count == 0 || !profile.ChapterPattern.HasRegexAlternative)
             yield break;
 
         var (text, segStartChar) = Flatten(segments);
-        foreach (Match m in profile.PhraseRegex.Matches(text))
+        foreach (var hit in profile.ChapterPattern.Matches(text))
         {
-            var title = TryParseAnnouncedNumber(text, m, profile, out var number, out _, out _)
+            var title = TryParseAnnouncedNumber(text, hit, profile, out var number, out _, out _)
                 ? $"{profile.Title} {number}"
                 : profile.Title;
-            var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
+            var segment = segments[SegmentIndexAt(segStartChar, hit.Match.Index)];
             yield return new NamedMatch(
                 profile.ChapterAnnouncement, title,
                 segment.StartSeconds, segment.EndSeconds, segment.Probability,
@@ -326,13 +370,13 @@ internal static partial class PhraseMatching
         var (text, segStartChar) = Flatten(segments);
         foreach (var phrase in profile.NamedPhrases)
         {
-            foreach (Match m in phrase.Regex.Matches(text))
+            foreach (var hit in phrase.Pattern.Matches(text))
             {
-                var segment = segments[SegmentIndexAt(segStartChar, m.Index)];
+                var segment = segments[SegmentIndexAt(segStartChar, hit.Match.Index)];
                 yield return new NamedMatch(
-                    phrase, phrase.ResolveTitle(m),
+                    phrase, phrase.ResolveTitle(hit.Match, profile.Language),
                     segment.StartSeconds, segment.EndSeconds, segment.Probability,
-                    NormalizeWhitespace(segment.Text));
+                    NormalizeWhitespace(segment.Text), GuardsOf(hit.Alternative));
             }
         }
     }

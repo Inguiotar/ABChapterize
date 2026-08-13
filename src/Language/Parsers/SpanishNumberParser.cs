@@ -95,6 +95,27 @@ public sealed class SpanishNumberParser : INumberWordParser
         ["undecimo"] = 11, ["undecima"] = 11, ["duodecimo"] = 12, ["duodecima"] = 12,
     };
 
+    /// <summary>The accents <see cref="Normalize"/> folds away, so the pattern admits the spelling a
+    /// transcript actually carries as well as the accent-free one the ordinal tables are keyed
+    /// with.</summary>
+    private const string Accents = "aá;eé;ií;oó;uú;";
+
+    /// <summary>
+    /// Every token a Spanish number may consist of. The ordinal scales are a sub-pattern rather
+    /// than a word list because they fuse with the unit ("vigesimoprimero", "decimoctavo"), which
+    /// as literals would be one alternative per stem-and-unit pair.
+    /// </summary>
+    /// <inheritdoc/>
+    public string NumberWordPattern { get; } = NumberWordPatterns.Run(NumberWordPatterns.AnyOf(
+        NumberWordPatterns.Alt(OrdinalScales.Select(s => s.Stem), Accents) +
+            NumberWordPatterns.AnyOf(
+                "[oa]" + NumberWordPatterns.Alt(OrdinalUnits.Keys, Accents) + "?",
+                NumberWordPatterns.Alt(OrdinalUnits.Keys, Accents)),
+        NumberWordPatterns.Alt(
+            Small.Keys.Concat(Hundreds.Keys).Concat(OrdinalUnits.Keys)
+                .Concat(OrdinalIrregulars.Keys).Append("y"),
+            Accents)));
+
     /// <inheritdoc/>
     public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
     {

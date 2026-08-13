@@ -1846,7 +1846,8 @@ internal sealed class RegionProber
         if (ResolveNamedMark(match, candidate, start, trimmedAbs) is not { } placement)
             return;
         var (time, markSilence, markRegion) = placement;
-        var markCtx = new MarkContext(_ctx.File, _ctx.Info.InputDecoder, match.Phrase.Regex,
+        var markCtx = new MarkContext(
+            _ctx.File, _ctx.Info.InputDecoder, match.Phrase.Pattern,
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
             _language.Profile.Language);
         // The prologue and epilogue must sit behind a real pause, in every pass rather than only in
@@ -1856,7 +1857,7 @@ internal sealed class RegionProber
         // book, so a false match does not merely add a mark, it replaces the real one.
         if (await _env.Marks.PlaceAsync(
                 null, time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion,
-                markCtx, NamedIsolationFor(match.Phrase, phraseAbs), ct) is not { } placed)
+                markCtx, NamedIsolationFor(match, phraseAbs), ct) is not { } placed)
             return;
         time = placed.TimeSeconds;
 
@@ -1892,18 +1893,29 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// The isolation check for a named (prologue/epilogue/<c>--custom</c>) mark:
-    /// <see cref="IsolationRule.LeadIn"/> for the two the language profile flags, nothing at all for
-    /// a <c>--custom</c> mapping. See <see cref="NamedPhrase.RequiresLeadIn"/> for why they differ.
+    /// The isolation check for a named (prologue/epilogue/<c>--custom</c>) mark: what the wording
+    /// that matched asked for with its <c>^</c> and <c>$</c>, plus
+    /// <see cref="IsolationRule.LeadIn"/> for a phrase the profile flags as a heading - the two
+    /// built-in ones, and any <c>--custom</c> mapping tagged <c>heading</c>.
+    /// <para>
+    /// The phrase-level flag is a floor rather than a synonym for a written <c>^</c>, deliberately:
+    /// it is what a prologue <em>is</em>, so <c>--prologue-phrase vorwort</c> keeps the guard that
+    /// stopped Italian "riepilogo" from replacing a real epilogue mark (2026-08-05) instead of
+    /// silently giving it up. See <see cref="NamedPhrase.RequiresLeadIn"/>.
+    /// </para>
     /// </summary>
-    /// <param name="phrase">The phrase that matched.</param>
+    /// <param name="match">The match being placed.</param>
     /// <param name="phraseAbs">Absolute start of the segment it was found in - the position to
     /// measure at when no refinement onset is available, which for a heading word opening its own
     /// segment is the announcement itself.</param>
-    internal static IsolationCheck NamedIsolationFor(NamedPhrase phrase, double phraseAbs)
-        => phrase.RequiresLeadIn
-            ? new IsolationCheck(IsolationRule.LeadIn, phraseAbs)
-            : IsolationCheck.None;
+    internal static IsolationCheck NamedIsolationFor(NamedMatch match, double phraseAbs)
+    {
+        var rule = match.Guards |
+                   (match.Phrase.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None);
+        return rule == IsolationRule.None
+            ? IsolationCheck.None
+            : new IsolationCheck(rule, phraseAbs);
+    }
 
     /// <summary>Which <c>--chapter-phrase none</c> reading a pass gets, from the one flag that also
     /// decides whether <see cref="AnnouncementIsolation"/> vets the result; see
@@ -2227,8 +2239,7 @@ internal sealed class RegionProber
         if (await _env.Marks.PlaceAsync(
                 check,
                 time, phraseAbs, start + match.PhraseEndSeconds, markSilence, markRegion, markCtx,
-                AnnouncementIsolation.ForChapter(
-                    _language.Profile, match, phraseAbs, WideBareNumberReading),
+                AnnouncementIsolation.ForChapter(match, phraseAbs, WideBareNumberReading),
                 ct) is not { } placed)
             return null;
         // Placement may have re-read the number out of the refinement's own probes, so everything

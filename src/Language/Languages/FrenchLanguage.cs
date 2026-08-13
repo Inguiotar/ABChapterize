@@ -13,7 +13,7 @@ public sealed class FrenchLanguage : ILanguage
     public string Code => "fr";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/chapitre/";
+    public string ChapterPhrase => "/(?:chapitre ()|chapitre)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Chapitre";
