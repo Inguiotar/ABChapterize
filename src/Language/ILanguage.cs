@@ -36,17 +36,22 @@ public interface ILanguage
 
     /// <summary>
     /// The word or <c>/regexp/</c> a chapter announcement is recognized by. Every language spells
-    /// this the same way: <c>/(?:WORD ()|WORD)/</c>, two wordings of one phrase. The first captures
+    /// this the same way: <c>/(?:^WORD ()|^WORD)/</c>, two wordings of one phrase. The first captures
     /// the number where it follows the word directly, which is the ordinary case and the only one a
     /// title's <c>${number}</c> can be built from; the second is the bare word, and the number is
     /// then read off the words around it - which is what covers the ordinal-first announcement order
     /// ("Erstes Kapitel", and in Turkish "Birinci Bölüm", that language's only order).
     /// <para>
-    /// Deliberately without a <c>^</c> guard, although one would read naturally here. Requiring a
-    /// pause in front of every chapter announcement was replayed over sixteen books (469 marks,
-    /// 2026-08-13) and would have dropped exactly one of them: "I Shall Wear Midnight" chapter 9,
-    /// where the previous chapter's last words end 0.64 s before the announcement against a
-    /// threshold of 0.85 s, and whose mark is otherwise perfect at -105.6 dBFS.
+    /// Both wordings carry a <c>^</c>: an announcement is by definition set off from what precedes
+    /// it, and saying so is what keeps a chapter word occurring in ordinary prose from becoming a
+    /// mark. It was not always safe to say. Against a pause alone it would have cost a real
+    /// chapter - "I Shall Wear Midnight" chapter 9, whose announcement follows the previous
+    /// chapter's last words after 0.64 s against a threshold of 0.85 s, its mark otherwise perfect
+    /// at -105.6 dBFS - and it is only affordable because a <c>^</c> is now satisfied by the
+    /// recognizer setting the announcement off as a transcript segment of its own as well, which
+    /// that chapter does (see <see cref="ABChapterize.Detection.AnnouncementIsolation.ForChapter"/>).
+    /// It is the one mark of the sixteen-book corpus with under 0.85 s in front of it; the
+    /// next-lowest has 0.99 s.
     /// </para>
     /// <para>
     /// And deliberately without a <c>() WORD</c> wording for the number-first order, which the two

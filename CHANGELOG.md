@@ -89,9 +89,10 @@ earn a round number.
 
   The whole syntax, with examples, is in
   [the manual](doc/manual.md#the-phrase-syntax). The built-in phrases are written in it too
-  — English is now `/(?:chapter ()|chapter)/` — and were checked against a sixteen-book
-  reference corpus first: every announcement of all of them is found at the same place, with
-  the same number, as before.
+  — English is now `/(?:^chapter ()|^chapter)/`, which says out loud what it always meant:
+  a chapter word in the middle of a sentence is not an announcement. They were checked
+  against a sixteen-book reference corpus first, and every announcement of all of them is
+  found at the same place, with the same number, as before.
 
 ### Removed
 

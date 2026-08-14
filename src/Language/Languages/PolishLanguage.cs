@@ -18,7 +18,7 @@ public sealed class PolishLanguage : ILanguage
     /// barred ł as a plain l.
     /// </summary>
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:rozdzia[łl] ()|rozdzia[łl])/";
+    public string ChapterPhrase => "/(?:^rozdzia[łl] ()|^rozdzia[łl])/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Rozdział";

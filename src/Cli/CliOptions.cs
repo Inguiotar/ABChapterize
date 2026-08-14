@@ -1880,7 +1880,7 @@ public sealed class CliOptions
 
         Phrases & titles:
           -c, --chapter-phrase <p>  Word/phrase that identifies a chapter start (default:
-                                    "/(?:chapter ()|chapter)/", localized by --lang). Matching is
+                                    "/(?:^chapter ()|^chapter)/", localized by --lang). Matching is
                                     always case-insensitive. A value is a list of alternatives
                                     separated by semicolons, each of them one of:
                                       word        the word with the chapter number beside it

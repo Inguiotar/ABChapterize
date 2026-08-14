@@ -1093,7 +1093,7 @@ phrase never being translated for you.
 
 `-c`, `--chapter-phrase <p>`
 : The word or phrase that announces a chapter (default:
-  `/(?:chapter ()|chapter)/`, localized by `--lang` — see
+  `/(?:^chapter ()|^chapter)/`, localized by `--lang` — see
   [section 7](#7-languages-and-number-recognition) for every language's
   default). Matching is always case-insensitive. The value is a list of
   **alternatives** separated by `;`, and every one of them is searched for:
@@ -1179,10 +1179,11 @@ and only the trailing one around "b". They mean this at the two edges of an
 alternative and nowhere else. A match that fails the check is dropped, and
 `--verbose` says so with both measurements and both thresholds.
 
-The built-in chapter phrases deliberately ask for **neither**. Requiring a
-pause in front of every chapter announcement was tried against a sixteen-book
-reference corpus and would have cost a real chapter, one whose announcement
-follows the previous chapter's last words by a little over half a second.
+The built-in chapter phrases carry a `^` and no `$`. The `^` is affordable only
+because a transcript segment start satisfies it too: against a pause alone it
+would have cost a real chapter of the reference corpus, one whose announcement
+follows the previous chapter's last words by 0.64 s — but which the recognizer
+wrote as a segment of its own, so it passes.
 
 ##### `[xx]` — restricting an alternative to one language
 
@@ -2134,23 +2135,25 @@ For these languages, `--lang` also localizes the defaults of
 
 | `--lang` | Default phrase | Default title word | Default part word | Default intro title |
 | --- | --- | --- | --- | --- |
-| `en` | `/(?:chapter ()\|chapter)/` | Chapter | Part | Intro |
-| `de` | `/(?:kapitel ()\|kapitel)/` | Kapitel | Teil | Intro |
-| `fr` | `/(?:chapitre ()\|chapitre)/` | Chapitre | Partie | Introduction |
-| `es` | `/(?:cap[íi]tulo ()\|cap[íi]tulo)/` | Capítulo | Parte | Introducción |
-| `it` | `/(?:capitolo ()\|capitolo)/` | Capitolo | Parte | Introduzione |
-| `nl` | `/(?:hoofdstuk ()\|hoofdstuk)/` | Hoofdstuk | Deel | Intro |
-| `tr` | `/(?:b[öo]l[üu]m ()\|b[öo]l[üu]m)/` | Bölüm | Kısım | Giriş |
-| `pt` | `/(?:cap[íi]tulo ()\|cap[íi]tulo)/` | Capítulo | Parte | Introdução |
-| `pl` | `/(?:rozdzia[łl] ()\|rozdzia[łl])/` | Rozdział | Część | Wstęp |
-| `sv` | `/(?:kapit(?:el\|let) ()\|kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
-| `da` | `/(?:kapit(?:el\|let) ()\|kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
+| `en` | `/(?:^chapter ()\|^chapter)/` | Chapter | Part | Intro |
+| `de` | `/(?:^kapitel ()\|^kapitel)/` | Kapitel | Teil | Intro |
+| `fr` | `/(?:^chapitre ()\|^chapitre)/` | Chapitre | Partie | Introduction |
+| `es` | `/(?:^cap[íi]tulo ()\|^cap[íi]tulo)/` | Capítulo | Parte | Introducción |
+| `it` | `/(?:^capitolo ()\|^capitolo)/` | Capitolo | Parte | Introduzione |
+| `nl` | `/(?:^hoofdstuk ()\|^hoofdstuk)/` | Hoofdstuk | Deel | Intro |
+| `tr` | `/(?:^b[öo]l[üu]m ()\|^b[öo]l[üu]m)/` | Bölüm | Kısım | Giriş |
+| `pt` | `/(?:^cap[íi]tulo ()\|^cap[íi]tulo)/` | Capítulo | Parte | Introdução |
+| `pl` | `/(?:^rozdzia[łl] ()\|^rozdzia[łl])/` | Rozdział | Część | Wstęp |
+| `sv` | `/(?:^kapit(?:el\|let) ()\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
+| `da` | `/(?:^kapit(?:el\|let) ()\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
 
 Every one of them is the same shape: two alternatives, the first taking the
 number that follows the word directly ("Kapitel 12") and the second the bare
 word, which leaves the number to be read off whatever stands around it — the
 ordinal-first order ("Erstes Kapitel", and in Turkish "Birinci Bölüm", which is
-that language's only order). Neither asks for a pause.
+that language's only order). Both carry a `^`, since an announcement is by
+definition set off from what precedes it — either by a pause or by the
+recognizer writing it as a segment of its own.
 
 They are regular expressions so that one language's spellings are covered at
 once: an accent Whisper dropped (`capitulo` for `capítulo`), a letter it wrote

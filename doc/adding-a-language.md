@@ -84,7 +84,7 @@ public sealed class CzechLanguage : ILanguage
     public string Code => "cs";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:kapitol ()|kapitol)/";
+    public string ChapterPhrase => "/(?:^kapitol ()|^kapitol)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Kapitola";
@@ -122,7 +122,7 @@ or a regular expression wrapped in slashes. Use the `/regexp/` form — every
 built-in language does, for consistency.
 
 The chapter phrase has one more thing in it. Every built-in language spells it
-`/(?:WORD ()|WORD)/`: two alternatives of one phrase, where `()` stands for a
+`/(?:^WORD ()|^WORD)/`: two alternatives of one phrase, where `()` stands for a
 chapter number in your language's own notation and captures it. The first
 alternative takes the number that follows the word directly ("Kapitola 12"),
 the second is the bare word, and the number is then read off whatever stands
@@ -139,9 +139,10 @@ because the narrator said it, all of them because a short probe window opened
 with a word Whisper invented. The bare-word alternative already covers the
 ordinal-first order correctly.
 
-Do not add a `^` either, tempting though it is: it asks for a real pause in
-front of the announcement, and requiring one of every chapter was measured over
-that same corpus and would have cost a real chapter.
+The `^` on both says the announcement must be set off from what precedes it —
+by a pause, or by the recognizer writing it as a transcript segment of its own.
+Keep it. It is what stops your chapter word becoming a mark every time it turns
+up in ordinary narration.
 
 Two rules about how they are matched, both of which save you work:
 
@@ -178,7 +179,7 @@ genuinely interchangeable as the thing narrators announce — not "one common
 one and one a publisher occasionally uses", but two you would be equally
 unsurprised to hear — then the default has to cover both, or half the
 audiobooks in that language get nothing. Write it as one alternation,
-`/(?:(?:woord|kapittel) ()|woord|kapittel)/`, and the earlier note applies: `(?:...)`, never
+`/(?:^(?:woord|kapittel) ()|^(?:woord|kapittel))/`, and the earlier note applies: `(?:...)`, never
 `(...)`. Test it against prose before you commit to it. The bar is high on
 purpose, and no built-in language has cleared it so far: all eleven get by on
 a single word, and the only alternations among them (Swedish and Danish
@@ -394,7 +395,7 @@ warning, not a silent typo.
 ## 8. Checklist
 
 - [ ] `src\Language\Languages\XxxLanguage.cs` written, all nine members filled in
-- [ ] Chapter phrase written as `/(?:WORD ()|WORD)/`; any other grouping `(?:...)`,
+- [ ] Chapter phrase written as `/(?:^WORD ()|^WORD)/`; any other grouping `(?:...)`,
       never `(...)`
 - [ ] Titles carry their proper capitalization and accents
 - [ ] One line added to `LanguageRegistry.All`

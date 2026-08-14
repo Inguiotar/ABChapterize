@@ -14,7 +14,7 @@ public sealed class DanishLanguage : ILanguage
     public string Code => "da";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:kapit(?:el|let) ()|kapit(?:el|let))/";
+    public string ChapterPhrase => "/(?:^kapit(?:el|let) ()|^kapit(?:el|let))/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Kapitel";

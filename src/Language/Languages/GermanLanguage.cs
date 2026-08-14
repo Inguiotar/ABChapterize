@@ -14,7 +14,7 @@ public sealed class GermanLanguage : ILanguage
     public string Code => "de";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:kapitel ()|kapitel)/";
+    public string ChapterPhrase => "/(?:^kapitel ()|^kapitel)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Kapitel";

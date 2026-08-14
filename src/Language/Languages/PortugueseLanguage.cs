@@ -16,7 +16,7 @@ public sealed class PortugueseLanguage : ILanguage
     public string Code => "pt";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:cap[íi]tulo ()|cap[íi]tulo)/";
+    public string ChapterPhrase => "/(?:^cap[íi]tulo ()|^cap[íi]tulo)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Capítulo";
