@@ -2,9 +2,11 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using ABChapterize.Detection;
 using ABChapterize.Errors;
 using ABChapterize.Language;
 using ABChapterize.Language.Phrases;
+using ABChapterize.Transcription;
 using Xunit;
 
 namespace ABChapterize.Tests;
@@ -281,6 +283,57 @@ public class PhraseCompilerTests
         Assert.Equal(
             pattern.MatchGroups(text).Select(g => (g[0].Match.Index, g[0].Alternative.Index)),
             pattern.Matches(text).Select(h => (h.Match.Index, h.Alternative.Index)));
+    }
+
+    /// <summary>
+    /// A number spoken alone is read segment by segment rather than matched, so it cannot be
+    /// superseded at a position - but where an expression wording read the same segment, the two are
+    /// readings of one announcement and the accept loop has to be able to fall back from one to the
+    /// other. It comes last: "none" is "/^()$/", which asks for a pause on both sides, so it is the
+    /// stricter reading of the two.
+    /// </summary>
+    [Fact]
+    public void ABareNumberJoinsTheExpressionReadingOfItsOwnSegment()
+    {
+        var profile = Profile("default;none", "de");
+        var readings = PhraseMatching.FindPhraseReadings(
+            [new TranscriptSegment(10, 12, "3. Kapitel.", 0.9)], profile).ToList();
+
+        var group = Assert.Single(readings);
+        Assert.Equal([false, false, true], group.Select(r => r.IsBareNumber));
+        Assert.All(group, r => Assert.Equal(3, r.Number));
+    }
+
+    /// <summary>...and stands alone where no expression wording read that segment, which is the
+    /// ordinary shape of a book that announces its chapters by number and nothing else.</summary>
+    [Fact]
+    public void ABareNumberWithoutAnExpressionReading_IsItsOwnAnnouncement()
+    {
+        var profile = Profile("default;none", "de");
+        var readings = PhraseMatching.FindPhraseReadings(
+            [new TranscriptSegment(10, 12, "Kapitel 4.", 0.9),
+             new TranscriptSegment(20, 22, "Und so begann es.", 0.9),
+             new TranscriptSegment(30, 32, "5.", 0.9)],
+            profile).ToList();
+
+        Assert.Equal(2, readings.Count);
+        Assert.All(readings[0], r => Assert.False(r.IsBareNumber));
+        Assert.True(Assert.Single(readings[1]).IsBareNumber);
+    }
+
+    /// <summary>Resolves a chapter phrase into the profile the detection passes are handed. Only the
+    /// chapter phrase matters here, so the rest of the profile is the language's own.</summary>
+    /// <param name="phrase">The value as it would be written after <c>--chapter-phrase</c>.</param>
+    /// <param name="language">Two-letter language code.</param>
+    private static LanguageProfile Profile(string phrase, string language)
+    {
+        var built = LanguageRegistry.For(language);
+        var bodies = PhraseSpec.Parse(phrase, "--chapter-phrase")
+            .For(language, () => [built.ChapterPhrase]);
+        var pattern = PhraseCompiler.Compile(bodies, language, PhraseKind.Chapter, "chapter phrase");
+        return new LanguageProfile(
+            language, pattern.Source, pattern, built.ChapterTitle, built.PartTitle,
+            built.IntroTitle, []);
     }
 
     [Theory]

@@ -1264,6 +1264,11 @@ announces some chapters and merely numbers the rest is covered by
 `/^()$/` — the number and nothing else, with a pause asked for on either side of
 it, which is what the `^` and the `$` are.
 
+Where a phrase alternative and `none` both read the same announcement, they are
+treated as two readings of it rather than two announcements, and the phrase
+reading is preferred: `none` asks for a pause on both sides, so it is the
+stricter of the two and the one to fall back on if the first is turned down.
+
 Later passes look harder than the first one does, and then check their work
 against the pauses the file actually has: an announcement they turn up is only
 marked if it is flanked by real non-speech on both sides — roughly a second of

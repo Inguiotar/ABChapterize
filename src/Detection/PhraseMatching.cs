@@ -136,13 +136,27 @@ internal static partial class PhraseMatching
         if (segments.Count == 0)
             return [];
 
-        var found = new List<IReadOnlyList<PhraseMatch>>(
-            FindByPattern(segments, profile, mergeBoundarySegIndex));
+        var found = FindByPattern(segments, profile, mergeBoundarySegIndex)
+            .Select(g => g.ToList()).ToList();
         if (!profile.ChapterPattern.HasBareNumberAlternative)
             return found;
+
         // A number spoken alone is a reading of the segment rather than of a span of characters, so
-        // it has no position to be superseded at and stands on its own.
-        found.AddRange(FindBareNumbers(segments, profile, reading).Select(m => (IReadOnlyList<PhraseMatch>)[m]));
+        // it cannot be superseded at a position the way one wording supersedes another. It is still a
+        // rival reading of the same announcement wherever an expression wording read that segment
+        // too, and joins it there, last: it is the wording that asks for the most (a pause on both
+        // sides, since "none" is written "/^()$/"), so it is the reading to fall back on rather than
+        // the one to lead with. Where the segment holds no expression reading, or more than one -
+        // which leaves nothing to say which of them this number belongs to - it stands on its own.
+        foreach (var bare in FindBareNumbers(segments, profile, reading))
+        {
+            var sameSegment = found.Where(g => g[0].PhraseStartSeconds.Equals(bare.PhraseStartSeconds))
+                .ToList();
+            if (sameSegment.Count == 1)
+                sameSegment[0].Add(bare);
+            else
+                found.Add([bare]);
+        }
         // Chronological, because the accept loop walks these in order and only ever takes a number
         // above the last one it took - two wordings of one phrase finding their announcements in a
         // different order would cost the later pass its chapter. A stable ordering rather than

@@ -99,7 +99,10 @@ earn a round number.
   decides between them instead of the leftmost match simply winning: a number that cannot
   follow the chapters already found is put aside and the next reading of those words is
   tried. Announcements the recognizer prefixes with an invented word — which it does, in a
-  short window — keep their real number this way.
+  short window — keep their real number this way. `none` takes part in that as any other
+  alternative does: where it and a phrase read the same announcement, the phrase is tried
+  first and the number spoken alone, which asks for a pause on both sides, is what the run
+  falls back on.
 
 ### Removed
 
