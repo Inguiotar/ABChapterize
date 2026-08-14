@@ -77,8 +77,9 @@ internal static class PhraseCompiler
     /// from the second, whose number is read off the words around the match. A third wording for
     /// the number-first order would be wrong rather than merely redundant - matches are taken
     /// leftmost-first, so on "Der erste Teil 5" it would claim "erste Teil" before the first wording
-    /// can claim "Teil 5", and the chapter would come out as 1. Six announcements across five books
-    /// of the reference corpus have exactly that shape (2026-08-13).
+    /// can claim "Teil 5", and the chapter would come out as 1. Three of the corpus's 12,916 probe
+    /// transcripts read exactly like that (2026-08-14); see
+    /// <see cref="ILanguage.ChapterPhrase"/> for what they turned out to be.
     /// </para>
     /// <para>
     /// And no <c>^</c>, although the number is now required to sit next to the word. Turning the

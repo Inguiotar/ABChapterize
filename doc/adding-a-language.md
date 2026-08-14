@@ -133,9 +133,11 @@ word itself and the number grammar in step 3.
 Do not add a third alternative for the ordinal-first order (`() WORD`). It
 looks symmetrical and it is wrong: matches are taken leftmost-first, so on "Der
 erste Kapitel 5" such an alternative claims "erste Kapitel" before
-`kapitel ()` can claim "Kapitel 5", and the chapter comes out as 1. Six
-announcements across five books of the reference corpus have exactly that
-shape. The bare-word alternative already covers the order correctly.
+`kapitel ()` can claim "Kapitel 5", and the chapter comes out as 1. Three
+transcripts in the reference corpus read exactly like that — none of them
+because the narrator said it, all of them because a short probe window opened
+with a word Whisper invented. The bare-word alternative already covers the
+ordinal-first order correctly.
 
 Do not add a `^` either, tempting though it is: it asks for a real pause in
 front of the announcement, and requiring one of every chapter was measured over

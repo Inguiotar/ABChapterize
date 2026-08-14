@@ -40,6 +40,16 @@ internal static class NumberPattern
     /// </summary>
     private const string EndOfNumber = @"(?![\p{L}\p{N}])";
 
+    /// <summary>
+    /// The same at the front: a number may not start in the middle of a word. Needed because Roman
+    /// numerals are ordinary letters, so without it the <em>tail</em> of a word reads as one -
+    /// "Kaska<b>l.</b>" as 50, "A<b>D</b>" as 500, "Part<b>i</b>" as 1. Harmless where the phrase
+    /// puts something in front of the group (<c>/chapter ()/</c> starts it after a space), and not
+    /// harmless at all where the number opens the wording, which is exactly what a phrase written
+    /// <c>/() chapter/</c> does. Found replaying the corpus transcripts, 2026-08-14.
+    /// </summary>
+    private const string StartOfNumber = @"(?<![\p{L}\p{N}])";
+
     /// <summary>Roman numerals, validated afterwards by <see cref="RomanNumerals"/> - the pattern
     /// only says "these letters and nothing else", which admits "MIX" and "DIM" as readily as
     /// "XIII". The length bound is the longest canonical numeral in range plus room to spare.</summary>
@@ -70,7 +80,7 @@ internal static class NumberPattern
     private static string Build(string code)
     {
         var words = LanguageRegistry.For(code).NumberParser.NumberWordPattern;
-        return $@"(?:{words}|{Digits}(?:{DigitOrdinalSuffixes()})?{OptionalPeriod}|" +
+        return $@"{StartOfNumber}(?:{words}|{Digits}(?:{DigitOrdinalSuffixes()})?{OptionalPeriod}|" +
                $"{Roman}{OptionalPeriod}){EndOfNumber}";
     }
 

@@ -52,8 +52,14 @@ public interface ILanguage
     /// And deliberately without a <c>() WORD</c> wording for the number-first order, which the two
     /// wordings above cover between them. Adding one is not merely redundant, it is wrong: matches
     /// are taken leftmost-first, so on "Der erste Kapitel 5" the number-first wording claims "erste
-    /// Kapitel" before <c>kapitel ()</c> can claim "Kapitel 5", and the chapter becomes 1. Six
-    /// announcements across five books of that corpus have exactly that shape.
+    /// Kapitel" before <c>kapitel ()</c> can claim "Kapitel 5", and the chapter becomes 1. Three of
+    /// the corpus's 12,916 probe transcripts read exactly like that (BARDIOC, Die Maahks and
+    /// Gruelfin, 2026-08-14), each of them costing its chapter's real number. The narrator says no
+    /// such thing in any of the three - "Der erste" is not even grammatical, and the neighbouring
+    /// probes of the same announcement transcribe it plainly as "Kapitel 5." - so what the wording
+    /// exposes is not an announcement style but Whisper's habit of filling a short window's opening
+    /// with plausible words. Only a phrase that can take a number from in front of the word is
+    /// vulnerable to that.
     /// </para>
     /// </summary>
     string ChapterPhrase { get; }

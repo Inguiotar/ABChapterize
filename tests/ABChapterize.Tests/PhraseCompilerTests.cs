@@ -133,8 +133,8 @@ public class PhraseCompilerTests
     /// <summary>
     /// A third wording for the number-first order would be wrong, not merely redundant: matches are
     /// taken leftmost-first, so "() part" would claim "seventh part" before "part ()" could claim
-    /// "part 5" and the chapter would come out as 7. Six announcements across five books of the
-    /// reference corpus have that shape (2026-08-13), which is why neither a literal phrase nor any
+    /// "part 5" and the chapter would come out as 7. Three of the reference corpus's 12,916 probe
+    /// transcripts read that way (2026-08-14), which is why neither a literal phrase nor any
     /// built-in default carries such a wording.
     /// </summary>
     [Fact]

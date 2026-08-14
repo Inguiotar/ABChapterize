@@ -209,6 +209,25 @@ public class NumberWordPatternTests
     public void NotationsSharedByEveryLanguage_Match(string text, string language)
         => AssertMatches(text, language);
 
+    /// <summary>
+    /// A number may not start in the middle of a word, and Roman numerals are what makes that a
+    /// real hazard rather than a theoretical one: they are ordinary letters, so without the guard
+    /// the <em>tail</em> of a word reads as one. All four of these were found in corpus transcripts
+    /// by a phrase written <c>/() chapter/</c> (2026-08-14) - "Kaskal." as 50, "AD" as 500 and
+    /// "Parti" as 1, each of them then displacing the real chapter number that followed.
+    /// </summary>
+    [Theory]
+    [InlineData("Kaskal.", "de")]
+    [InlineData("AD", "en")]
+    [InlineData("Parti", "fr")]
+    [InlineData("Livia", "en")]
+    public void ANumberMayNotStartInsideAWord(string text, string language)
+    {
+        var pattern = new Regex(NumberPattern.For(language),
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        Assert.False(pattern.IsMatch(text), $"[{language}] \"{text}\" holds no number");
+    }
+
     [Theory]
     // Ordinary words must not pass for numbers, or every phrase match would carry one.
     [InlineData("Mildred", "en")]
