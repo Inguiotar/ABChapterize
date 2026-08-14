@@ -93,11 +93,56 @@ public sealed class AnnouncementMatcher
     public static AnnouncementMatcher ForPattern(
         PhrasePattern pattern, string language,
         NumberWordParser.BareNumberReading reading, Func<int, bool> admits) =>
-        new(text => pattern.IsMatch(text) || NumberWordParser.FindBareNumberAnnouncement(
+        new(text => pattern.IsMatch(text) || BareNumberIn(text, language, reading, admits));
+
+    /// <summary>
+    /// A matcher for the single wording that found an announcement - which is what a refinement is
+    /// held to, rather than to the whole phrase.
+    /// <para>
+    /// The difference is not academic. A phrase holding both an expression and a number spoken alone
+    /// gives the whole-phrase matcher two ways to answer yes, and the loose one wins wherever the
+    /// probe window has already walked past the chapter word: the onset search then keeps going and
+    /// the mark lands inside the announcement. Measured on the build-328 corpus run, which had
+    /// <c>--chapter-phrase default;none</c> on every book - Stalker's chapter 3 answered "phrase" to
+    /// a probe reading "3. Fernweh 2.", with no chapter word in it at all, and the mark moved
+    /// 0.647 s late; 39 marks over four books moved the same way, every one of them later.
+    /// <see cref="ABChapterize.Detection.NumberCheck"/> cannot catch it, because the number read is
+    /// the right number - what is missing is the word.
+    /// </para>
+    /// <para>
+    /// This is also why <see cref="PhraseCompiler"/> multiplies out every alternation inside a
+    /// wording: a leaf that still offered a choice would reintroduce the same problem one level down.
+    /// </para>
+    /// </summary>
+    /// <param name="wording">The alternative that matched; see
+    /// <see cref="ABChapterize.Detection.PhraseMatching.PhraseMatch.Wording"/>.</param>
+    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="reading">The reading this mark's own match was found under.</param>
+    /// <param name="admits">Which numbers this stretch of the chapter sequence can hold; consulted
+    /// only by a bare-number wording, an expression already saying what it is looking for.</param>
+    public static AnnouncementMatcher ForWording(
+        PhraseAlternative wording, string language,
+        NumberWordParser.BareNumberReading reading, Func<int, bool> admits)
+        => wording.Regex is { } regex
+            ? new AnnouncementMatcher(regex.IsMatch)
+            : new AnnouncementMatcher(text => BareNumberIn(text, language, reading, admits));
+
+    /// <summary>Whether a probe's text holds a number spoken alone that this stretch of the sequence
+    /// can hold. The reading is widened by one step for a refinement: a probe decodes a few seconds
+    /// with a lead-in, so the transcript routinely opens with a fragment of whatever preceded the
+    /// announcement and the number lands in the second sentence rather than the first.</summary>
+    /// <param name="text">The probe's transcribed text.</param>
+    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="reading">The reading this mark's own match was found under.</param>
+    /// <param name="admits">Which numbers this stretch of the chapter sequence can hold.</param>
+    private static bool BareNumberIn(
+        string text, string language,
+        NumberWordParser.BareNumberReading reading, Func<int, bool> admits)
+        => NumberWordParser.FindBareNumberAnnouncement(
             text,
             language,
             reading == NumberWordParser.BareNumberReading.LeadingASentence
                 ? NumberWordParser.BareNumberReading.LeadingASentence
                 : NumberWordParser.BareNumberReading.SpokenAloneAnywhere,
-            admits) != null);
+            admits) != null;
 }

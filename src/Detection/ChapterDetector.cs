@@ -2171,7 +2171,7 @@ public sealed class ChapterDetector
             // and the one that keeps the onset walk off a year or quantity in the chapter's own
             // first sentence.
             profile.AnnouncementFor(
-                BareNumberReading.SpokenAloneAtSegmentStart, n => n == match.Number),
+                match.Wording, BareNumberReading.SpokenAloneAtSegmentStart, n => n == match.Number),
             language, phraseAbs, phraseEndAbs, windowStart + windowLen,
             // No Pass 1, so neither anchor has anything to work from: no silence list, and no VAD
             // region whose end would say where the music gives way to speech. Both are skipped, which
@@ -2736,7 +2736,8 @@ public sealed class ChapterDetector
         var markCtx = new MarkContext(
             file, inputDecoder,
             profile.AnnouncementFor(
-                RegionProber.BareNumberReadingFor(remaining is not null), check.AdmitsAsAnnouncement),
+                match.Wording, RegionProber.BareNumberReadingFor(remaining is not null),
+                check.AdmitsAsAnnouncement),
             allSilences, speechSegments, transcript, profile.Language);
         // Pass 3 only ever reads a bare number under the wider reading where the gap it is filling
         // has an expected-number list - the same condition RegionProber.WideBareNumberReading

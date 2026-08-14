@@ -245,7 +245,9 @@ public sealed class CliOptions
 
     /// <summary>
     /// Highest chapter number considered plausible for this book (--max-chapter-number / -N).
-    /// Null (the default) means no cap. Any chapter phrase whose parsed number exceeds it is
+    /// Null when the option was not given, which is not the same as no cap: see
+    /// <see cref="EffectiveMaxChapterNumber"/>, which then falls back on
+    /// <see cref="DefaultChapterCount"/>. Any chapter phrase whose parsed number exceeds it is
     /// discarded the moment it is found, before it can become a mark or widen the expected
     /// chapter sequence - a Whisper mishearing turning "chapter ten" into "chapter 510" otherwise
     /// leaves a 500-chapter "gap" for Pass 3 to hunt through and a file tagged with a
@@ -361,12 +363,32 @@ public sealed class CliOptions
         => ChapterCount is { } count ? (ExpectedStartChapter ?? 1) + count - 1 : null;
 
     /// <summary>
+    /// How many chapters a book is assumed to have at most when nothing says otherwise. Counted
+    /// from <see cref="ExpectedStartChapter"/>, so a file holding the second half of a split book
+    /// gets the same allowance from wherever its numbering begins.
+    /// <para>
+    /// A cap is not a nicety. Without one, a single misread number sets the sequence ceiling and
+    /// everything under it becomes a gap to hunt: the build-328 corpus run turned the years of a
+    /// Perry Rhodan "Zeittafel" into chapters 3578-3585, which pushed the real chapter 1 below the
+    /// sequence, split four books into parts that do not exist, cost "Raumschiff Erde" its prologue
+    /// (a chapter accepted at 0:01:53 closes the before-first-chapter scope the prologue at 0:03:55
+    /// needed) and left ".missing-marks" tags naming numbers no book ever had. 200 is comfortably
+    /// past the longest book on record here (67) and past the classics that run longest - "The Count
+    /// of Monte Cristo" has 117 - while excluding every year, price and house number a narrator
+    /// reads out. A book that really runs longer says so with --max-chapter-number.
+    /// </para>
+    /// </summary>
+    public const int DefaultChapterCount = 200;
+
+    /// <summary>
     /// The highest chapter number a match may carry and still be believed: whichever of
     /// <see cref="MaxChapterNumber"/> and <see cref="LastExpectedChapter"/> was given (never both -
-    /// <see cref="Parse"/> rejects the combination as two answers to one question), or null for no
-    /// cap at all.
+    /// <see cref="Parse"/> rejects the combination as two answers to one question), else
+    /// <see cref="DefaultChapterCount"/> chapters from where the numbering is expected to start.
+    /// Never null: a run without a cap is what <see cref="DefaultChapterCount"/> exists to prevent.
     /// </summary>
-    public int? EffectiveMaxChapterNumber => MaxChapterNumber ?? LastExpectedChapter;
+    public int? EffectiveMaxChapterNumber
+        => MaxChapterNumber ?? LastExpectedChapter ?? (ExpectedStartChapter ?? 1) + DefaultChapterCount - 1;
 
     /// <summary>
     /// Check pre-existing chapter marks against the audio instead of trusting them
@@ -2023,13 +2045,14 @@ public sealed class CliOptions
                                     was found at all, or after an --early-abort or
                                     --expected-start-chapter abort.
           -N, --max-chapter-number <n>
-                                    Highest chapter number this book plausibly has (default: none).
-                                    A detected chapter numbered above <n> is discarded on the spot
-                                    as a mishearing. Without it, a single "chapter 510" heard in a
-                                    twelve-chapter book still becomes a mark of its own and pushes
-                                    the real chapters behind it out of the sequence - it no longer
-                                    leaves a 500-chapter hole to hunt through, but the mark is
-                                    written and only the summary line says anything is wrong. Not
+                                    Highest chapter number this book plausibly has (default: 200,
+                                    counted from --expected-start-chapter). A detected chapter
+                                    numbered above <n> is discarded on the spot as a mishearing.
+                                    Raise it for a book that really runs longer - everything above
+                                    the cap is dropped silently. Lower it to roughly the real count
+                                    when you know it: a single "chapter 510" heard in a
+                                    twelve-chapter book otherwise becomes a mark of its own and
+                                    pushes the real chapters behind it out of the sequence. Not
                                     to be confused with --max-chapters, which counts a file's
                                     pre-existing marks rather than the numbers heard in the
                                     audio.

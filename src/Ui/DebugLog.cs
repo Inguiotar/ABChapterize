@@ -171,7 +171,11 @@ public sealed class DebugLog : IDisposable
                      $"mark-before-jingle {(o.MarkBeforeJingle ? "on" : "off")}";
         yield return $"early-abort {(o.EarlyAbortMinutes > 0 ? $"{o.EarlyAbortMinutes:0.#} min" : "off")}, " +
                      $"expected-start-chapter {o.ExpectedStartChapter?.ToString() ?? "-"}, " +
-                     $"max-chapter-number {o.MaxChapterNumber?.ToString() ?? "-"}, " +
+                     // The effective cap rather than the option, because there is always one now
+                     // and a log reading "-" would send the next person hunting for why a chapter
+                     // was discarded (see CliOptions.DefaultChapterCount).
+                     $"max-chapter-number {o.EffectiveMaxChapterNumber?.ToString() ?? "-"}" +
+                     $"{(o.MaxChapterNumber == null && o.ChapterCount == null ? " (default)" : "")}, " +
                      $"chapter-count {o.ChapterCount?.ToString() ?? "-"}, " +
                      $"trailing-scan {(o.TrailingScan ? "on" : "off")}";
         yield return $"ignore-chapter-numbers {(o.IgnoreChapterNumbers ? "on" : "off")}, " +

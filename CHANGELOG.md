@@ -128,6 +128,35 @@ earn a round number.
 
 ### Changed
 
+- **`--max-chapter-number` now defaults to 200** instead of to no limit at all, counted from
+  `--expected-start-chapter`. A chapter numbered above the cap is discarded as a mishearing, so
+  a stray number can no longer set the sequence's ceiling and turn every real chapter behind it
+  into one that "does not continue the sequence". A book that genuinely runs longer needs the
+  option set explicitly — chapters above the cap are dropped without a word.
+
+  What that is worth: a timetable of years read out in a book's front matter used to become a
+  run of chapters numbered by year, which pushed the real chapter 1 below the sequence, made
+  the book look like it held several parts, and could cost a prologue whose place in the book
+  had by then been given away.
+
+- **An alternation written inside a phrase alternative is now multiplied out.**
+  `/kapit(?:el|let) ()/` becomes two alternatives rather than one, and `/(?:a|b)c(?:d|e)/`
+  becomes four. Every alternative is now one expression with no choice left in it, which is
+  what lets a mark's re-transcription be held to the alternative that found it rather than to
+  the whole phrase. A phrase that would expand into more than 64 alternatives is refused with
+  an error naming the problem.
+
+- **A mark is now confirmed by the alternative that found it**, not by any alternative of the
+  phrase. This only shows where one value names several — most sharply where a phrase is
+  combined with `none`, since a number spoken alone would otherwise vouch for an announcement
+  found by a phrase, and the mark then drifted to the number and landed inside the
+  announcement rather than in front of it.
+
+- **Swedish: two ordinals are now recognized in the spelling the recognizer prefers.**
+  "Älfte" for "elfte" (11) and "tolvte" for "tolfte" (12) — both were previously reported as
+  an announcement with no readable number, which on a book announcing "Tolvte kapitlet" costs
+  the chapter.
+
 - **Three things about phrase and title options changed meaning.** All of them are visible
   the moment they matter, and each has a one-line fix:
 

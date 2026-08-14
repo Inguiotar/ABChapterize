@@ -2279,7 +2279,7 @@ internal sealed class RegionProber
         var check = new NumberCheck(match.Number, _language.Profile, SequenceBounds(windowLast));
         var markCtx = new MarkContext(
             _ctx.File, _ctx.Info.InputDecoder,
-            _language.Profile.AnnouncementFor(reading, check.AdmitsAsAnnouncement),
+            _language.Profile.AnnouncementFor(match.Wording, reading, check.AdmitsAsAnnouncement),
             _ctx.AllSilences, _ctx.SpeechSegments, new TranscriptWindow(trimmedAbs, start, windowEnd),
             _language.Profile.Language);
         if (await _env.Marks.PlaceAsync(

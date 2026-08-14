@@ -49,6 +49,17 @@ public sealed class SwedishNumberParser : INumberWordParser
     /// <summary>
     /// Irregular/base ordinals, keyed in normalized form. Covers 1-19, the bare tens
     /// 20-90 and 100, which is everything a regular suffix rule cannot derive cleanly.
+    /// <para>
+    /// The last three are not Swedish. They are what Whisper writes for the two ordinals whose
+    /// spelling does not follow their own cardinal: "elfte" (11) beside "elva", "tolfte" (12)
+    /// beside "tolv". On "De vandrande djäknarne" (LibriVox, ggml-small, 2026-08-14) it wrote
+    /// **"Älfte kapitlet"** at 3:10:09 and **"tolvte och sista kapitlet"** at 4:31:22, and both
+    /// announcements were logged as "no readable number" - the second cost the book its last
+    /// chapter outright. "elvte" is the same substitution as "tolvte" applied to 11 and has not
+    /// been seen, but none of the three is a Swedish word, so recognizing them can collide with
+    /// nothing. Deliberately *not* added: "skätte" for "sjätte", which the same run also produced -
+    /// it normalizes to "skatte", which is an ordinary Swedish word.
+    /// </para>
     /// </summary>
     private static readonly Dictionary<string, int> OrdinalBase = new()
     {
@@ -59,6 +70,7 @@ public sealed class SwedishNumberParser : INumberWordParser
         ["nittonde"] = 19, ["tjugonde"] = 20, ["trettionde"] = 30, ["fyrtionde"] = 40,
         ["femtionde"] = 50, ["sextionde"] = 60, ["sjuttionde"] = 70, ["attionde"] = 80,
         ["nittionde"] = 90, ["hundrade"] = 100,
+        ["alfte"] = 11, ["elvte"] = 11, ["tolvte"] = 12,
     };
 
     /// <summary>The diacritics <see cref="Normalize"/> strips ("första", "åtta").</summary>

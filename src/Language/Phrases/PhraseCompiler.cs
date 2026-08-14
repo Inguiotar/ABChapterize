@@ -59,7 +59,7 @@ internal static class PhraseCompiler
     {
         var leaves = new List<Leaf>();
         foreach (var entry in entries)
-            Split(BodyOf(entry, kind, what), leadIn: false, leadOut: false, leaves);
+            Split(BodyOf(entry, kind, what), leadIn: false, leadOut: false, leaves, what);
 
         // A number spoken alone goes last however the user ordered the entries, and the rest keep
         // the order they were written in. It is the wording with nothing to recognize an
@@ -126,31 +126,161 @@ internal static class PhraseCompiler
 
     /// <summary>
     /// Takes one entry's body apart into leaves: split at the top-level <c>|</c>, strip the edge
-    /// anchors, and descend into a group that spans the whole of what is left - which is what makes
-    /// <c>/^(?:a|b)$/</c> hand its two guards to both wordings.
+    /// anchors, descend into a group that spans the whole of what is left - which is what makes
+    /// <c>/^(?:a|b)$/</c> hand its two guards to both wordings - and finally distribute what remains
+    /// over any alternation still buried inside it.
+    /// <para>
+    /// A leaf carries no alternation at all when this is done, which is the property the whole
+    /// design leans on: the wording that found an announcement is what its re-transcription is held
+    /// to (<see cref="ABChapterize.Language.LanguageProfile.AnnouncementFor"/>), and a matcher that
+    /// still offered a choice would let one wording vouch for another's mark. So
+    /// <c>/kapit(?:el|let) ()/</c> becomes two wordings rather than one, and
+    /// <c>/(?:a|b)c(?:d|e)/</c> becomes four.
+    /// </para>
     /// </summary>
     /// <param name="body">The body to split.</param>
     /// <param name="leadIn">Whether an enclosing level already asked for a leading pause.</param>
     /// <param name="leadOut">Whether it already asked for a trailing one.</param>
     /// <param name="into">Accumulator for the leaves found.</param>
-    private static void Split(string body, bool leadIn, bool leadOut, List<Leaf> into)
+    /// <param name="what">How to name this phrase in an error message.</param>
+    /// <exception cref="CliError">Thrown when the expansion runs past <see cref="MaxWordings"/>.</exception>
+    private static void Split(string body, bool leadIn, bool leadOut, List<Leaf> into, string what)
     {
         var parts = TopLevelAlternatives(body);
         if (parts.Count > 1)
         {
             foreach (var part in parts)
-                Split(part, leadIn, leadOut, into);
+                Split(part, leadIn, leadOut, into, what);
             return;
         }
 
         var rest = TakeAnchors(parts[0], ref leadIn, ref leadOut);
         if (WholeGroupBody(rest) is { } inner)
         {
-            Split(inner, leadIn, leadOut, into);
+            Split(inner, leadIn, leadOut, into, what);
             return;
         }
-        if (rest.Length > 0)
-            into.Add(new Leaf(rest, leadIn, leadOut));
+        if (rest.Length == 0)
+            return;
+        foreach (var wording in Distribute(rest, what))
+            into.Add(new Leaf(wording, leadIn, leadOut));
+    }
+
+    /// <summary>
+    /// How many wordings one written entry may expand into. Generous next to anything a phrase is
+    /// really written as - the widest built-in default reaches six - and low enough that a
+    /// cross product nobody intended is reported rather than compiled into a window scan that
+    /// runs one regex per wording.
+    /// </summary>
+    private const int MaxWordings = 64;
+
+    /// <summary>
+    /// Multiplies out every alternation left inside one wording, so that <c>a(?:b|c)d</c> becomes
+    /// <c>abd</c> and <c>acd</c>. Only an unquantified <c>(?:...)</c> is expanded: a quantifier binds
+    /// to the group as a whole, and every other bracket - a capturing group, a named one, a
+    /// lookaround - either means something a copy would not preserve or holds the chapter number's
+    /// own notation, which is an alternation of a language's entire number grammar and must stay one
+    /// token (see <see cref="NumberPattern"/>).
+    /// </summary>
+    /// <param name="body">One wording, anchors already stripped and with no top-level alternation
+    /// left.</param>
+    /// <param name="what">How to name this phrase in an error message.</param>
+    /// <exception cref="CliError">Thrown when the expansion runs past <see cref="MaxWordings"/>.</exception>
+    private static List<string> Distribute(string body, string what)
+    {
+        var done = new List<string>();
+        Expand(body, done, body, what);
+        return done;
+    }
+
+    /// <summary>
+    /// One step of <see cref="Distribute"/>: expands the leftmost alternation and recurses into each
+    /// branch in turn. Depth-first, so the wordings come out in the order the regex engine would have
+    /// tried them - which is what decides the winner when two of them match at the same position.
+    /// </summary>
+    /// <param name="body">What is left to expand.</param>
+    /// <param name="into">Accumulator for the finished wordings.</param>
+    /// <param name="original">The wording as written, for the error message.</param>
+    /// <param name="what">How to name this phrase in an error message.</param>
+    /// <exception cref="CliError">Thrown when the expansion runs past <see cref="MaxWordings"/>.</exception>
+    private static void Expand(string body, List<string> into, string original, string what)
+    {
+        var (start, length, inner) = SplittableGroupAt(body);
+        if (start < 0)
+        {
+            if (into.Count == MaxWordings)
+                throw new CliError(
+                    $"The {what} \"{original}\" expands to more than {MaxWordings} wordings. " +
+                    "Alternatives inside it are multiplied out, one wording per combination - " +
+                    "write the ones you want as separate alternatives instead.");
+            into.Add(body);
+            return;
+        }
+        var prefix = body[..start];
+        var suffix = body[(start + length)..];
+        foreach (var branch in TopLevelAlternatives(inner))
+            Expand(prefix + branch + suffix, into, original, what);
+    }
+
+    /// <summary>
+    /// Finds the first non-capturing group that carries an alternation of its own and is not
+    /// quantified, as (start, length, body); start is -1 when there is none.
+    /// </summary>
+    /// <param name="body">The wording to scan.</param>
+    private static (int Start, int Length, string Inner) SplittableGroupAt(string body)
+    {
+        for (var i = 0; i < body.Length; i++)
+        {
+            if (body[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+            if (body[i] == '[')
+            {
+                while (++i < body.Length && body[i] != ']')
+                    if (body[i] == '\\')
+                        i++;
+                continue;
+            }
+            if (!body.AsSpan(i).StartsWith("(?:"))
+                continue;
+            if (GroupEnd(body, i) is not { } end)
+                continue;
+            // A quantifier binds to the whole group, so its alternation cannot be distributed.
+            if (end + 1 < body.Length && body[end + 1] is '?' or '*' or '+' or '{')
+                continue;
+            var inner = body[(i + 3)..end];
+            if (TopLevelAlternatives(inner).Count > 1)
+                return (i, end - i + 1, inner);
+        }
+        return (-1, 0, "");
+    }
+
+    /// <summary>The index of the ")" closing the group that opens at <paramref name="open"/>, or
+    /// null when it is never closed - which the regex compiler will report far better than this
+    /// could.</summary>
+    /// <param name="body">The wording to scan.</param>
+    /// <param name="open">Index of the opening "(".</param>
+    private static int? GroupEnd(string body, int open)
+    {
+        var depth = 0;
+        for (var i = open; i < body.Length; i++)
+        {
+            if (body[i] == '\\')
+                i++;
+            else if (body[i] == '[')
+                while (++i < body.Length && body[i] != ']')
+                {
+                    if (body[i] == '\\')
+                        i++;
+                }
+            else if (body[i] == '(')
+                depth++;
+            else if (body[i] == ')' && --depth == 0)
+                return i;
+        }
+        return null;
     }
 
     /// <summary>

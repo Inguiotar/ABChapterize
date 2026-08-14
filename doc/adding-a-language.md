@@ -146,6 +146,13 @@ own. Keep it. It is what stops your chapter word becoming a mark every time it
 turns up in ordinary narration, and on the second alternative it is also what
 lets an ordinal-first announcement be recognized by its own segment start.
 
+If your word needs a `(?:...)` for a stem change, as Swedish and Danish do with
+`kapit(?:el|let)`, write it and think no further: the alternation is multiplied
+out for you, so those three alternatives become six, one per spelling. That is
+deliberate — each alternative has to be a single expression with no choice left
+in it, because the one that finds an announcement is also the one its position is
+confirmed against later.
+
 Two rules about how they are matched, both of which save you work:
 
 - **Case is ignored.** Never write `[Kk]`.

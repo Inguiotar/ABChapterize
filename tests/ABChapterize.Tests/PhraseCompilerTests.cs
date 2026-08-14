@@ -50,13 +50,43 @@ public class PhraseCompilerTests
         Assert.Equal([0, 1, 2], pattern.Alternatives.Select(a => a.Index));
     }
 
-    /// <summary>A "|" inside a group or a character class belongs to that group, not to the phrase.</summary>
+    /// <summary>A "|" inside a character class, or escaped, is a character rather than an
+    /// alternation.</summary>
     [Theory]
-    [InlineData("/(?:alpha|beta) now/")]
     [InlineData("/[a|b]lpha/")]
     [InlineData(@"/alpha\|beta/")]
-    public void AlternationThatIsNotTopLevel_StaysOneWording(string phrase)
+    public void APipeThatIsNotAnAlternation_StaysOneWording(string phrase)
         => Assert.Single(Named(phrase).Alternatives);
+
+    /// <summary>
+    /// An alternation buried inside a wording is multiplied out rather than left in it, so that
+    /// every wording is one expression with no choice left in it. That is what lets a mark's
+    /// refinement be held to the wording that found it and nothing else - see
+    /// <see cref="ABChapterize.Language.AnnouncementMatcher.ForWording"/> for what a matcher that
+    /// still offered a choice cost on the build-328 corpus run.
+    /// </summary>
+    [Theory]
+    [InlineData("/(?:alpha|beta) now/", new[] { "alpha now", "beta now" })]
+    [InlineData("/kapit(?:el|let) ()/", new[] { "kapitel ()", "kapitlet ()" })]
+    [InlineData("/(?:a|b)c(?:d|e)/", new[] { "acd", "ace", "bcd", "bce" })]
+    [InlineData("/(?:(?:a|b)|c)d/", new[] { "ad", "bd", "cd" })]
+    public void AlternationInsideAWording_IsMultipliedOut(string phrase, string[] expected)
+        => Assert.Equal(expected, Named(phrase).Alternatives.Select(a => a.Source));
+
+    /// <summary>The chapter number's own group is never multiplied out: it stands for an alternation
+    /// of a whole language's number grammar, which would be thousands of wordings, and a capturing
+    /// group is what a title reads its text back from.</summary>
+    [Theory]
+    [InlineData("/chapter ()/")]
+    [InlineData("/chapter (one|two)/")]
+    [InlineData("/(?<kind>alpha|beta) now/")]
+    public void AGroupThatCapturesIsNeverMultipliedOut(string phrase)
+        => Assert.Single(Chapter(phrase).Alternatives);
+
+    /// <summary>A cross product nobody intended is reported rather than compiled.</summary>
+    [Fact]
+    public void AnExpansionThatRunsAway_IsAnError()
+        => Assert.Throws<CliError>(() => Named("/(?:a|b)(?:c|d)(?:e|f)(?:g|h)(?:i|j)(?:k|l)(?:m|n)/"));
 
     /// <summary>A group spanning the whole wording is descended into, which is what hands the outer
     /// anchors to every wording inside it.</summary>

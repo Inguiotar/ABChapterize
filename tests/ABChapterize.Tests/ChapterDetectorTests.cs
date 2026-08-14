@@ -1340,18 +1340,42 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.DoesNotContain(log, l => l.Contains("the chapter numbering appears to restart"));
     }
 
+    /// <summary>
+    /// The same script with no option at all: <see cref="CliOptions.DefaultChapterCount"/> caps the
+    /// run anyway, so the mishearing never becomes a chapter and the real chapter 2 behind it
+    /// survives. Before the default existed this is where a 510 displaced it.
+    /// </summary>
     [Fact]
-    public async Task ChapterNumberAboveTheCap_IsAccepted_WithoutTheCap()
+    public async Task ChapterNumberAboveTheDefaultCap_IsDiscarded()
     {
-        // The same script without --max-chapter-number: the mishearing becomes a chapter of its own
-        // and displaces the real chapter 2 behind it, which is now "not above the last accepted
-        // chapter 510" - exactly what the cap exists to prevent.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter five hundred ten."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+            });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        // Nothing to report as unverified either: the number never entered the sequence at all.
+        Assert.True(result.UnverifiedNumbers is null or []);
+        Assert.Contains(log, l => l.Contains("discarded chapter 510"));
+    }
+
+    [Fact]
+    public async Task ChapterNumberAboveTheSequence_IsAccepted_WhenTheCapAllowsIt()
+    {
+        // A cap raised past the mishearing puts the old behaviour back: 510 becomes a chapter of its
+        // own and displaces the real chapter 2 behind it, which is then "not above the last accepted
+        // chapter 510".
         //
-        // What it no longer does is declare 2..509 missing. Nothing corroborated the 510, so the
+        // What it does not do is declare 2..509 missing. Nothing corroborated the 510, so the
         // sequence refuses to measure the book by it (see DetectedChapter.NumberUnverified) and no
         // pass goes hunting behind it; the summary line says so instead.
         var result = await DetectAsync(
-            Options(),
+            Options("--max-chapter-number", "5000"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -6898,8 +6922,11 @@ public sealed class ChapterDetectorTests : IDisposable
         // that the file's named marks are in hand at both the stage before Pass 2.5 and the one
         // after Pass 3. Scripted as "Corsa nello spazio" reads: the epilogue's heading runs on into
         // a number, and under a bare-number reading that number is an announcement by definition.
+        // The cap is raised past the real book's 2179 so that the echo rule is what drops the mark:
+        // DefaultChapterCount would otherwise discard it several steps earlier and leave this test
+        // proving nothing about the wiring it exists for.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--quick-marks"),
+            Options("--quick-marks", "--max-chapter-number", "5000"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {

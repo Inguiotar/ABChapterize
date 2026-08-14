@@ -1112,10 +1112,11 @@ public sealed class CliOptionsTests : IDisposable
 
     /// <summary>
     /// Guards the shape <see cref="ABChapterize.Language.ILanguage.ChapterPhrase"/> states every
-    /// built-in chapter phrase has: three wordings, the first two capturing the number behind and in
-    /// front of the word and the third the bare word, each asking to be set off in front and none
-    /// behind - and no empty phrase, which is the prologue/epilogue opt-out spelling and must never
-    /// be a language's default.
+    /// built-in chapter phrase has: three wordings - the number behind the word, the number in front
+    /// of it, and the bare word - each asking to be set off in front and none behind, and no empty
+    /// phrase, which is the prologue/epilogue opt-out spelling and must never be a language's
+    /// default. Counted rather than indexed, because a stem alternation is multiplied out and
+    /// Swedish and Danish ("kapitel"/"kapitlet") therefore arrive as six.
     /// </summary>
     [Fact]
     public void EveryRegisteredLanguage_HasUsableDefaultPhrases()
@@ -1124,10 +1125,11 @@ public sealed class CliOptionsTests : IDisposable
         foreach (var language in LanguageRegistry.Languages)
         {
             var profile = o.ResolveProfile(language.Code);
-            Assert.Equal(3, profile.ChapterPattern.Alternatives.Count);
-            Assert.True(profile.ChapterPattern.Alternatives[0].HasNumberGroup, language.Code);
-            Assert.True(profile.ChapterPattern.Alternatives[1].HasNumberGroup, language.Code);
-            Assert.False(profile.ChapterPattern.Alternatives[2].HasNumberGroup, language.Code);
+            var wordings = profile.ChapterPattern.Alternatives;
+            Assert.Equal(0, wordings.Count % 3);
+            Assert.Equal(wordings.Count / 3 * 2, wordings.Count(a => a.HasNumberGroup));
+            Assert.True(wordings[0].HasNumberGroup, language.Code);
+            Assert.False(wordings[^1].HasNumberGroup, language.Code);
             Assert.All(profile.ChapterPattern.Alternatives, a =>
             {
                 Assert.True(a.RequiresLeadIn, language.Code);
@@ -1754,14 +1756,25 @@ public sealed class CliOptionsTests : IDisposable
     public void ChapterPhraseNone_WithIgnoreChapterNumbers_IsRejected()
         => Assert.Throws<CliError>(() => ParseFile("--chapter-phrase", "none", "--ignore-chapter-numbers"));
 
+    /// <summary>Neither option is given by default, but a run is never left without a cap: see
+    /// <see cref="CliOptions.DefaultChapterCount"/> for what an uncapped run costs.</summary>
     [Fact]
-    public void ChapterCount_DefaultsToNull_AndCapsNothing()
+    public void ChapterCount_DefaultsToNull_ButTheCapDoesNot()
     {
         var o = ParseFile()!;
         Assert.Null(o.ChapterCount);
         Assert.Null(o.LastExpectedChapter);
-        Assert.Null(o.EffectiveMaxChapterNumber);
+        Assert.Null(o.MaxChapterNumber);
+        Assert.Equal(CliOptions.DefaultChapterCount, o.EffectiveMaxChapterNumber);
     }
+
+    /// <summary>The default allowance is counted from where the numbering starts, so a file holding
+    /// the tail of a split book is not capped below its own first chapter.</summary>
+    [Fact]
+    public void TheDefaultCap_IsCountedFromExpectedStartChapter()
+        => Assert.Equal(
+            CliOptions.DefaultChapterCount + 249,
+            ParseFile("--expected-start-chapter", "250")!.EffectiveMaxChapterNumber);
 
     [Fact]
     public void ChapterCount_IsParsed_AndBecomesTheCap()

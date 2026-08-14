@@ -1136,6 +1136,15 @@ the chapter numbering cannot accept is put aside and the next one tried, so a
 wording claiming words the narrator never said does not cost the chapter.
 `none` is always considered last, whatever position it was written in.
 
+An alternation written *inside* an alternative is multiplied out, so that every
+alternative ends up as one expression with nothing left to choose between:
+`/kapit(?:el|let) ()/` is two alternatives and `/(?:a|b)c(?:d|e)/` is four. That
+matters beyond tidiness — the alternative that found an announcement is the one
+its position is later confirmed against, and one still offering a choice could
+confirm itself on words it never matched. A value that would expand past 64
+alternatives is refused. The chapter number's own `()`, and any capturing group,
+are left whole.
+
 Repeating the option is the same as writing the values as one list, so
 `--chapter-phrase a --chapter-phrase b` and `--chapter-phrase "a;b"` mean
 exactly the same thing. A `;` inside a regexp is written `\;`.
@@ -1549,11 +1558,15 @@ looking. None of these is needed for an ordinary book.
   starting at chapter 5 with `--chapter-count 3` runs 5 to 7.
 
 `-N`, `--max-chapter-number <n>`
-: The highest chapter number this book plausibly has (default: no limit; see
-  `--chapter-count` above for when the exact figure is known). A
+: The highest chapter number this book plausibly has (default: **200**, counted
+  from `--expected-start-chapter`; see `--chapter-count` above for when the
+  exact figure is known). A
   detected chapter numbered above `<n>` is discarded on the spot as a
-  mishearing rather than becoming a mark. Worth setting whenever you know the
-  chapter count roughly: a single "chapter five hundred and ten" misheard in a
+  mishearing rather than becoming a mark. Raise it for a book that really runs
+  longer — the default is well past the longest novels, but a collected edition
+  or a serial can pass it, and every chapter above the cap is silently dropped.
+  Lowering it to roughly the real count is worth it whenever you know that
+  figure: a single "chapter five hundred and ten" misheard in a
   twelve-chapter book otherwise becomes a mark of its own, and every real
   chapter behind it is then rejected for being numbered below it. A number that
   wild no longer drags the rest of the run with it — nothing between it and the

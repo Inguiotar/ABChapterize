@@ -210,6 +210,31 @@ public class NumberWordPatternTests
         => AssertMatches(text, language);
 
     /// <summary>
+    /// The two Swedish ordinals Whisper spells after their own cardinal rather than after the
+    /// dictionary - "Älfte" for "elfte" (11) and "tolvte" for "tolfte" (12), both from
+    /// "De vandrande djäknarne", where the second cost the book its last chapter. Both the pattern
+    /// and the parser have to take them, and the canonical spellings must keep working.
+    /// </summary>
+    [Theory]
+    [InlineData("elfte", 11)]
+    [InlineData("Älfte", 11)]
+    [InlineData("elvte", 11)]
+    [InlineData("tolfte", 12)]
+    [InlineData("tolvte", 12)]
+    public void SwedishOrdinalsWhisperMisspells_AreStillRead(string text, int expected)
+    {
+        AssertMatches(text, "sv");
+        Assert.True(NumberWordParser.TryExtractNumber(text, "sv", out var number));
+        Assert.Equal(expected, number);
+    }
+
+    /// <summary>...but a mangling that collides with an ordinary word is left alone: the same run
+    /// wrote "skätte" for "sjätte" (6), and that normalizes to "skatte", Swedish for "tax".</summary>
+    [Fact]
+    public void ASwedishManglingThatIsAlsoAWord_IsNotRead()
+        => Assert.False(NumberWordParser.TryExtractNumber("skätte", "sv", out _));
+
+    /// <summary>
     /// A number may not start in the middle of a word, and Roman numerals are what makes that a
     /// real hazard rather than a theoretical one: they are ordinary letters, so without the guard
     /// the <em>tail</em> of a word reads as one. All four of these were found in corpus transcripts
