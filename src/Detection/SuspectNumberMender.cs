@@ -433,8 +433,11 @@ internal sealed class SuspectNumberMender
         // Re-reads a window framed on an announcement already accepted, so the number is at the head
         // of its segment where the narrow reading finds it; the wider one would only add in-text
         // numbers from the surrounding prose to a ranking that is about *this* announcement.
+        // The winner of each position only: this is a ranking of announcements by distance, and a
+        // second reading of one announcement would enter it as a rival to the announcement itself.
         var candidates = _env
-            .FindCappedPhraseMatches(segments, profile, null, BareNumberReading.SpokenAloneAtSegmentStart)
+            .FindCappedPhraseReadings(segments, profile, null, BareNumberReading.SpokenAloneAtSegmentStart)
+            .Select(g => g[0])
             .Select(m => (m.Number, Distance: Math.Abs(frameStart + m.PhraseStartSeconds - phraseAbs)))
             .Where(m => m.Distance <= PhraseMarginSeconds)
             .OrderByDescending(m => bounds.Admits(m.Number))

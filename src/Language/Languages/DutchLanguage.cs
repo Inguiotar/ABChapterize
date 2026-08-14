@@ -13,7 +13,7 @@ public sealed class DutchLanguage : ILanguage
     public string Code => "nl";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:^hoofdstuk ()|^hoofdstuk)/";
+    public string ChapterPhrase => "/(?:^hoofdstuk ()|^() hoofdstuk|^hoofdstuk)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Hoofdstuk";

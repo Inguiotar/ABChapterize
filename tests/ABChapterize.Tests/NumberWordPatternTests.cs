@@ -222,6 +222,26 @@ public class NumberWordPatternTests
     [InlineData("Parti", "fr")]
     [InlineData("Livia", "en")]
     public void ANumberMayNotStartInsideAWord(string text, string language)
+        => AssertHoldsNoNumber(text, language);
+
+    /// <summary>
+    /// The same hazard one step further out: an abbreviation written with internal periods breaks
+    /// into pieces the word guard cannot see are pieces. "A.D." offers a "D." that is a perfectly
+    /// formed 500, and the turbo model writes exactly that in "Sergeant Mandela 2007-2024 A.D."
+    /// ("The Forever War", 0:25:01, 2026-08-14), where the number-first wording claimed
+    /// "D. Chapter" and cost the pass-3 re-read the announcement's real number.
+    /// </summary>
+    [Theory]
+    [InlineData("A.D.", "en")]
+    [InlineData("U.S. Marines", "en")]
+    [InlineData("H.M.S. Beagle", "en")]
+    public void ARomanNumeralMayNotBeAPieceOfAnAbbreviation(string text, string language)
+        => AssertHoldsNoNumber(text, language);
+
+    /// <summary>Asserts that a language's <c>()</c> expansion finds nothing at all in the text.</summary>
+    /// <param name="text">The text to search.</param>
+    /// <param name="language">Two-letter language code.</param>
+    private static void AssertHoldsNoNumber(string text, string language)
     {
         var pattern = new Regex(NumberPattern.For(language),
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

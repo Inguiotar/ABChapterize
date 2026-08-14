@@ -17,7 +17,7 @@ public sealed class EnglishLanguage : ILanguage
     public string Code => "en";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:^chapter ()|^chapter)/";
+    public string ChapterPhrase => "/(?:^chapter ()|^() chapter|^chapter)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Chapter";

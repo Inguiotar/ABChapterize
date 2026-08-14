@@ -36,7 +36,9 @@ namespace ABChapterize.Detection;
 /// <param name="Marks">The file's mark placer, shared with every other pass.</param>
 /// <param name="TranscribeCounting">The detector's statistics-counting transcribe wrapper.</param>
 /// <param name="LogTranscript">Logs a decoded window's transcript under --verbose.</param>
-/// <param name="FindCappedPhraseMatches">The detector's --max-chapter-number-capped phrase matcher.</param>
+/// <param name="FindCappedPhraseReadings">The detector's --max-chapter-number-capped phrase matcher,
+/// in its every-reading form: Pass 2 is the one caller that can act on a wording another one
+/// superseded (see <see cref="PhraseMatching.FindPhraseReadings"/>).</param>
 /// <param name="SecondOpinion">Transcribes samples with the heavier <c>--pass3-model</c> in a given
 /// language, for the two Pass 2 steps that are worth asking a better recognizer:
 /// <see cref="SuspectNumberMender"/>'s re-read of an implausible chapter number, and
@@ -52,7 +54,8 @@ internal sealed record ProbeEnvironment(
     MarkPlacer Marks,
     Func<float[], CancellationToken, ITranscriber?, Task<List<TranscriptSegment>>> TranscribeCounting,
     Action<string, List<TranscriptSegment>> LogTranscript,
-    Func<List<TranscriptSegment>, LanguageProfile, int?, BareNumberReading, IEnumerable<PhraseMatch>> FindCappedPhraseMatches,
+    Func<List<TranscriptSegment>, LanguageProfile, int?, BareNumberReading,
+        IEnumerable<IReadOnlyList<PhraseMatch>>> FindCappedPhraseReadings,
     Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? SecondOpinion = null);
 
 /// <summary>
@@ -1505,52 +1508,90 @@ internal sealed class RegionProber
         if (_env.Options.IgnoreChapterNumbers)
             return marks;
 
-        foreach (var heard in _env.FindCappedPhraseMatches(
+        foreach (var readings in _env.FindCappedPhraseReadings(
                      segments, _language.Profile, mergeBoundarySegIndex,
                      BareNumberReadingFor(WideBareNumberReading)))
         {
-            var match = heard;
-            var phraseAbs = start + match.PhraseStartSeconds;
-            // Before the mender, because a number continuing a suspected new part is not in doubt at
-            // all - it is corroborated by the announcements already held back - while the mender
-            // would judge it against the sequence it is in the process of leaving and "correct" it
-            // into that one's numbering.
-            if (RestartTrackingAllowed && ContinuesPendingRestart(match))
+            // The wording that claimed these words may not be the one the narrator spoke, so a reading
+            // the sequence turns down is not the end of the announcement: the wordings it superseded
+            // are tried behind it, and the first reading that yields a mark is the one taken. See
+            // PhrasePattern.MatchGroups for why a phrase produces rival readings at all.
+            var heard = readings[0];
+            var outOfSequence = false;
+            var accepted = false;
+            var tried = new List<(int Number, IsolationRule Guards, bool OpensSegment)>();
+            for (var i = 0; i < readings.Count && !accepted; i++)
             {
-                marks.AddRange(await TrackRestartAsync(
-                    match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct));
-                windowLast = _lastNumber ?? windowLast;
-                continue;
-            }
-            // Ahead of the sequence check rather than after it, because a number that fails that check
-            // is exactly one of the two shapes worth questioning: a mishearing downwards is
-            // indistinguishable from an in-text mention until the audio is asked again. A mend that
-            // finds nothing leaves the reading untouched, so the check below then does what it always
-            // did - including rejecting it.
-            if (_ctx.SecondGuessNumbers &&
-                await _mender.MendAsync(
-                    match, _language.Profile, start, windowEnd, SequenceBounds(windowLast), ct) is { } mended)
-                match = match with { Number = mended };
-            if (IsOutOfSequence(match, phraseAbs, windowLast))
-            {
-                // Strictly below, so not a re-detection of the chapter just accepted: this is either
-                // an in-text mention or the opening of a part that counts from 1 again, and only the
-                // announcements that follow can tell the two apart.
-                if (match.Number < windowLast && RestartTrackingAllowed && OpensPendingRestart(match))
+                var match = readings[i];
+                var phraseAbs = start + match.PhraseStartSeconds;
+                // Before the mender, because a number continuing a suspected new part is not in doubt
+                // at all - it is corroborated by the announcements already held back - while the
+                // mender would judge it against the sequence it is in the process of leaving and
+                // "correct" it into that one's numbering.
+                if (RestartTrackingAllowed && ContinuesPendingRestart(match))
+                {
                     marks.AddRange(await TrackRestartAsync(
                         match, candidate, start, windowEnd, phraseAbs, trimmedAbs, ct));
-                windowLast = _lastNumber ?? windowLast;
-                continue;
+                    windowLast = _lastNumber ?? windowLast;
+                    accepted = true;
+                    break;
+                }
+                // Ahead of the sequence check rather than after it, because a number that fails that
+                // check is exactly one of the two shapes worth questioning: a mishearing downwards is
+                // indistinguishable from an in-text mention until the audio is asked again. A mend
+                // that finds nothing leaves the reading untouched, so the check below then does what
+                // it always did - including rejecting it.
+                // Only what the window itself heard is ever mended: a rival is reached because that
+                // reading was turned down, and paying a re-read of the audio to argue the next one
+                // into the sequence would be spending decodes on the readings least likely to be
+                // right. A rival that does not fit simply loses, as it did before it had a name.
+                if (i == 0)
+                {
+                    if (_ctx.SecondGuessNumbers &&
+                        await _mender.MendAsync(
+                            match, _language.Profile, start, windowEnd,
+                            SequenceBounds(windowLast), ct) is { } mended)
+                        match = match with { Number = mended };
+                    heard = match;
+                }
+                // Two readings that agree on the number and on what has to be vouched for are one
+                // question asked twice - the sequence and the placement both answer them alike, and
+                // placement is where the audio gets decoded again - so the rival is dropped rather
+                // than sent to fail identically. Which is the ordinary case: the built-in wordings
+                // differ in where the number sits, not in what it turns out to be.
+                var shape = (match.Number, match.Guards, match.OpensSegment);
+                if (tried.Contains(shape))
+                    continue;
+                tried.Add(shape);
+                if (IsOutOfSequence(match, phraseAbs, windowLast))
+                {
+                    outOfSequence |= i == 0;
+                    continue;
+                }
+                if (await AcceptMatchAsync(
+                        match, candidate, start, windowEnd, phraseAbs, trimmedAbs, windowLast, ct)
+                    is not { } mark)
+                    continue;
+                // A chapter of the sequence in force ends any restart being tracked: a part that had
+                // really started would have no more chapters of the old numbering left to announce.
+                AbandonPendingRestart();
+                marks.Add(mark);
+                windowLast = mark.Number;
+                accepted = true;
             }
-            if (await AcceptMatchAsync(
-                    match, candidate, start, windowEnd, phraseAbs, trimmedAbs, windowLast, ct)
-                is not { } mark)
+            if (accepted || !outOfSequence)
                 continue;
-            // A chapter of the sequence in force ends any restart being tracked: a part that had
-            // really started would have no more chapters of the old numbering left to announce.
-            AbandonPendingRestart();
-            marks.Add(mark);
-            windowLast = mark.Number;
+
+            // The window's own reading was below the sequence and nothing behind it rescued the
+            // announcement. It is then either an in-text mention or the opening of a part that counts
+            // from 1 again, and only the announcements that follow can tell the two apart - a
+            // question about the number the window actually heard, so it is asked of that reading and
+            // not of a rival that was only ever a fallback. Strictly below, so not a re-detection of
+            // the chapter just accepted.
+            if (heard.Number < windowLast && RestartTrackingAllowed && OpensPendingRestart(heard))
+                marks.AddRange(await TrackRestartAsync(
+                    heard, candidate, start, windowEnd, start + heard.PhraseStartSeconds, trimmedAbs, ct));
+            windowLast = _lastNumber ?? windowLast;
         }
 
         return marks;

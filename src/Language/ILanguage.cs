@@ -36,13 +36,13 @@ public interface ILanguage
 
     /// <summary>
     /// The word or <c>/regexp/</c> a chapter announcement is recognized by. Every language spells
-    /// this the same way: <c>/(?:^WORD ()|^WORD)/</c>, two wordings of one phrase. The first captures
-    /// the number where it follows the word directly, which is the ordinary case and the only one a
-    /// title's <c>${number}</c> can be built from; the second is the bare word, and the number is
-    /// then read off the words around it - which is what covers the ordinal-first announcement order
-    /// ("Erstes Kapitel", and in Turkish "Birinci Bölüm", that language's only order).
+    /// this the same way: <c>/(?:^WORD ()|^() WORD|^WORD)/</c>, three wordings of one phrase. The
+    /// first captures the number where it follows the word directly, which is the ordinary case; the
+    /// second where it precedes it ("Erstes Kapitel", and in Turkish "Birinci Bölüm", that language's
+    /// only order); the third is the bare word, and the number is then read off the words around it,
+    /// which is what still finds an announcement the other two do not fit.
     /// <para>
-    /// Both wordings carry a <c>^</c>: an announcement is by definition set off from what precedes
+    /// Every wording carries a <c>^</c>: an announcement is by definition set off from what precedes
     /// it, and saying so is what keeps a chapter word occurring in ordinary prose from becoming a
     /// mark. It was not always safe to say. Against a pause alone it would have cost a real
     /// chapter - "I Shall Wear Midnight" chapter 9, whose announcement follows the previous
@@ -54,17 +54,23 @@ public interface ILanguage
     /// next-lowest has 0.99 s.
     /// </para>
     /// <para>
-    /// And deliberately without a <c>() WORD</c> wording for the number-first order, which the two
-    /// wordings above cover between them. Adding one is not merely redundant, it is wrong: matches
-    /// are taken leftmost-first, so on "Der erste Kapitel 5" the number-first wording claims "erste
-    /// Kapitel" before <c>kapitel ()</c> can claim "Kapitel 5", and the chapter becomes 1. Three of
-    /// the corpus's 12,916 probe transcripts read exactly like that (BARDIOC, Die Maahks and
-    /// Gruelfin, 2026-08-14), each of them costing its chapter's real number. The narrator says no
-    /// such thing in any of the three - "Der erste" is not even grammatical, and the neighbouring
-    /// probes of the same announcement transcribe it plainly as "Kapitel 5." - so what the wording
-    /// exposes is not an announcement style but Whisper's habit of filling a short window's opening
-    /// with plausible words. Only a phrase that can take a number from in front of the word is
-    /// vulnerable to that.
+    /// The number-first wording is what gives an ordinal-first language that same rescue. Without it
+    /// "Birinci Bölüm" is found by the bare word, whose match starts at "Bölüm" and so never opens
+    /// its segment however the recognizer split it - leaving Turkish, alone among the eleven,
+    /// dependent on the pause. It also earns the ordinal-first order a <c>${number}</c> a title can
+    /// be built from, which reading the number off the surrounding words does not.
+    /// </para>
+    /// <para>
+    /// It is also the one wording that can be claimed by words the narrator never said. Matches are
+    /// taken leftmost-first, so on "Der erste Kapitel 5" it claims "erste Kapitel" before
+    /// <c>kapitel ()</c> can claim "Kapitel 5", and the chapter would become 1. Three of the corpus's
+    /// 12,916 probe transcripts read exactly like that (BARDIOC, Die Maahks and Gruelfin,
+    /// 2026-08-14); the narrator says no such thing in any of them - "Der erste" is not even
+    /// grammatical, and the neighbouring probes of the same announcement transcribe it plainly as
+    /// "Kapitel 5." - so what it exposes is Whisper's habit of filling a short window's opening with
+    /// plausible words. Which is why a superseded wording is kept rather than discarded: the sequence
+    /// turns the 1 down and the reading behind it, "Kapitel 5", is taken instead (see
+    /// <see cref="Phrases.PhrasePattern.MatchGroups"/> and Pass 2's accept loop).
     /// </para>
     /// </summary>
     string ChapterPhrase { get; }

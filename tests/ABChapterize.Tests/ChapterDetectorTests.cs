@@ -1154,6 +1154,30 @@ public sealed class ChapterDetectorTests : IDisposable
             l.Contains("(in-text mention?)"));
     }
 
+    /// <summary>
+    /// A wording claiming words the narrator never said loses the announcement to the wording behind
+    /// it. Whisper fills a short window's opening with plausible text, and "Two chapter three" is a
+    /// shape three of the reference corpus's 12,916 probe transcripts really have (2026-08-14): the
+    /// number-first wording claims "Two chapter" for its earlier start and reads chapter 2, which
+    /// the sequence has already had. The reading it superseded says 3, and that is the mark.
+    /// </summary>
+    [Fact]
+    public async Task ANumberHallucinatedInFrontOfTheChapterWord_LosesToTheReadingBehindIt()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.4, " Chapter two."));
+                s.Add(1200, Seg(0.3, " Two chapter three."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 600.15), new(3, 1199.95)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("skipped chapter 2 at 0:20:00.30"));
+    }
+
     [Fact]
     public async Task ChapterNumberEqualToTheLastAccepted_IsLoggedWithoutTheInTextHint()
     {
@@ -6494,6 +6518,20 @@ public sealed class ChapterDetectorTests : IDisposable
         // chapters 13 and 15 that the window was searching.
         var readings = Enumerable.Repeat(Reading("Chapter fourteen."), 4).ToList();
         Assert.Equal(14, Recount(readings, heard: 40, new NumberBounds(13, 15)));
+    }
+
+    /// <summary>
+    /// And the same re-read is what settles a hallucinated prefix the sequence had no reason to turn
+    /// down. A window reading "Two chapter three" while the sequence stands at 1 offers a 2 that
+    /// fits, so no rival is ever reached - but the probes framed on the announcement itself say
+    /// "Chapter three", and the vote is taken on what they say rather than on which wording read
+    /// them. That is the after-refinement check the number-first wording is affordable under.
+    /// </summary>
+    [Fact]
+    public void RefinedNumberVote_OverrulesAHallucinatedPrefix()
+    {
+        var readings = Enumerable.Repeat(Reading("Chapter three."), 4).ToList();
+        Assert.Equal(3, Recount(readings, heard: 2, new NumberBounds(1, null)));
     }
 
     [Fact]

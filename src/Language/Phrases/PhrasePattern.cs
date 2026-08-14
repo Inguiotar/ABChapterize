@@ -90,6 +90,24 @@ public sealed record PhrasePattern(IReadOnlyList<PhraseAlternative> Alternatives
     /// </summary>
     /// <param name="text">The window's transcript, flattened and whitespace-normalized.</param>
     public IEnumerable<PhraseHit> Matches(string text)
+        => MatchGroups(text).Select(g => g[0]);
+
+    /// <summary>
+    /// The same, but keeping the hits each winner displaced: one group per position, the wording
+    /// that claimed it first and then the ones it superseded, in the order they were written.
+    /// <para>
+    /// A superseded wording is not noise. Two wordings of one phrase can read the same words
+    /// differently - "Der erste Kapitel 5" is "erste Kapitel" to one and "Kapitel 5" to another -
+    /// and which of them is right is a question about the audio, not about character positions. So
+    /// detection keeps the losers within reach and lets the sequence, and then the announcement's
+    /// own re-transcription, settle it (see
+    /// <see cref="ABChapterize.Detection.RegionProber"/>'s accept loop). Every other caller takes
+    /// <see cref="Matches"/> and sees only the winners, which is what a single alternation would
+    /// have given them.
+    /// </para>
+    /// </summary>
+    /// <param name="text">The window's transcript, flattened and whitespace-normalized.</param>
+    public IEnumerable<IReadOnlyList<PhraseHit>> MatchGroups(string text)
     {
         var hits = new List<PhraseHit>();
         foreach (var alternative in Alternatives)
@@ -101,14 +119,25 @@ public sealed record PhrasePattern(IReadOnlyList<PhraseAlternative> Alternatives
             ? a.Match.Index.CompareTo(b.Match.Index)
             : a.Alternative.Index.CompareTo(b.Alternative.Index));
 
+        var group = new List<PhraseHit>();
         var consumedTo = 0;
         foreach (var hit in hits)
         {
             if (hit.Match.Index < consumedTo)
+            {
+                // Overlaps the winner, so it is one of its rivals rather than an announcement of
+                // its own - unless nothing has been claimed yet, which cannot happen here.
+                group.Add(hit);
                 continue;
+            }
+            if (group.Count > 0)
+                yield return group.ToList();
+            group.Clear();
+            group.Add(hit);
             consumedTo = hit.Match.Index + hit.Match.Length;
-            yield return hit;
         }
+        if (group.Count > 0)
+            yield return group;
     }
 
     /// <summary>Whether any alternative matches - the cheap question the mark refinement asks of a

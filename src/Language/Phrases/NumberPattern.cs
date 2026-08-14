@@ -55,6 +55,17 @@ internal static class NumberPattern
     /// "XIII". The length bound is the longest canonical numeral in range plus room to spare.</summary>
     private const string Roman = "[IVXLCDM]{1,15}";
 
+    /// <summary>
+    /// What a Roman numeral additionally may not follow: a period. <see cref="StartOfNumber"/> keeps
+    /// one out of the middle of a word, but an abbreviation written with internal periods breaks
+    /// <em>into</em> pieces that read as numerals - "A.D." offers a "D." that is a perfectly formed
+    /// 500, and the turbo model writes exactly that in "Sergeant Mandela 2007-2024 A.D." ("The
+    /// Forever War", 0:25:01, 2026-08-14), where a <c>/() chapter/</c> wording then claimed
+    /// "D. Chapter" and took the announcement's number with it. Only the Roman branch needs this:
+    /// digits and spoken words cannot be produced by chopping an abbreviation up.
+    /// </summary>
+    private const string NotAfterAnAbbreviation = @"(?<!\.)";
+
     /// <summary>One to four digits: enough for any chapter number a book has ever had, and short
     /// enough that a year or a phone number in the prose cannot pose as one indefinitely. The
     /// notation is language-independent, and so is this bound.</summary>
@@ -81,7 +92,7 @@ internal static class NumberPattern
     {
         var words = LanguageRegistry.For(code).NumberParser.NumberWordPattern;
         return $@"{StartOfNumber}(?:{words}|{Digits}(?:{DigitOrdinalSuffixes()})?{OptionalPeriod}|" +
-               $"{Roman}{OptionalPeriod}){EndOfNumber}";
+               $"{NotAfterAnAbbreviation}{Roman}{OptionalPeriod}){EndOfNumber}";
     }
 
     /// <summary>

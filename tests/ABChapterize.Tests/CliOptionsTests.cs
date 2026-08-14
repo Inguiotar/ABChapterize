@@ -51,7 +51,7 @@ public sealed class CliOptionsTests : IDisposable
         // The parse-time DefaultProfile/ChapterPhrase/Title/IntroTitle are the English
         // fallback used when a file's own auto-detection is inconclusive or skipped;
         // ChapterDetector resolves a fresh profile per file when actually detecting.
-        Assert.Equal("/(?:^chapter ()|^chapter)/", o.ChapterPhrase);
+        Assert.Equal("/(?:^chapter ()|^() chapter|^chapter)/", o.ChapterPhrase);
         Assert.Equal("Chapter", o.Title);
         Assert.Equal("Intro", o.IntroTitle);
         // The probing model and the pass-3 model are deliberately different by default: short probe
@@ -100,7 +100,7 @@ public sealed class CliOptionsTests : IDisposable
         var o = ParseFile()!; // auto, no overrides
         var profile = o.ResolveProfile("de");
         Assert.Equal("de", profile.Language);
-        Assert.Equal("/(?:^kapitel ()|^kapitel)/", profile.ChapterPhrase);
+        Assert.Equal("/(?:^kapitel ()|^() kapitel|^kapitel)/", profile.ChapterPhrase);
         Assert.Equal("Kapitel", profile.Title);
         Assert.Equal("Intro", profile.IntroTitle);
     }
@@ -295,7 +295,7 @@ public sealed class CliOptionsTests : IDisposable
         var profile = ParseFile("--chapter-phrase", "[fr]chapitre", "--chapter-title", "[fr]Chapitre")!
             .ResolveProfile("de");
 
-        Assert.Equal("/(?:^kapitel ()|^kapitel)/", profile.ChapterPhrase);
+        Assert.Equal("/(?:^kapitel ()|^() kapitel|^kapitel)/", profile.ChapterPhrase);
         Assert.Equal("Kapitel", profile.Title);
     }
 
@@ -351,8 +351,12 @@ public sealed class CliOptionsTests : IDisposable
     {
         var options = ParseFile("-c", "/abschnitt/;[de]default;[fr]default")!;
 
-        Assert.Equal("/abschnitt/;/(?:^kapitel ()|^kapitel)/", options.ResolveProfile("de").ChapterPhrase);
-        Assert.Equal("/abschnitt/;/(?:^chapitre ()|^chapitre)/", options.ResolveProfile("fr").ChapterPhrase);
+        Assert.Equal(
+            "/abschnitt/;/(?:^kapitel ()|^() kapitel|^kapitel)/",
+            options.ResolveProfile("de").ChapterPhrase);
+        Assert.Equal(
+            "/abschnitt/;/(?:^chapitre ()|^() chapitre|^chapitre)/",
+            options.ResolveProfile("fr").ChapterPhrase);
         // A language the value says nothing extra about keeps only what it was given.
         Assert.Equal("/abschnitt/", options.ResolveProfile("en").ChapterPhrase);
     }
@@ -364,8 +368,8 @@ public sealed class CliOptionsTests : IDisposable
     {
         var profile = ParseFile("-c", "default;none", "--lang", "de")!.DefaultProfile;
 
-        // "default" brings the language's own two wordings, "none" adds a third.
-        Assert.Equal(3, profile.ChapterPattern.Alternatives.Count);
+        // "default" brings the language's own three wordings, "none" adds a fourth.
+        Assert.Equal(4, profile.ChapterPattern.Alternatives.Count);
         Assert.True(profile.BareNumberAnnouncements);
         PhraseAssert.Matches(profile.ChapterPattern, "kapitel 3");
     }
@@ -1098,7 +1102,7 @@ public sealed class CliOptionsTests : IDisposable
     public void Lang_LocalizesPhraseTitleAndIntro()
     {
         var o = ParseFile("--lang", "tr")!;
-        Assert.Equal("/(?:^b[öo]l[üu]m ()|^b[öo]l[üu]m)/", o.ChapterPhrase);
+        Assert.Equal("/(?:^b[öo]l[üu]m ()|^() b[öo]l[üu]m|^b[öo]l[üu]m)/", o.ChapterPhrase);
         Assert.Equal("Bölüm", o.Title);
         Assert.Equal("Giriş", o.IntroTitle);
         // The point of the regexp default: a transcript that lost the dotted vowels still matches.
@@ -1108,10 +1112,10 @@ public sealed class CliOptionsTests : IDisposable
 
     /// <summary>
     /// Guards the shape <see cref="ABChapterize.Language.ILanguage.ChapterPhrase"/> states every
-    /// built-in chapter phrase has: two wordings, the first capturing the number that follows the
-    /// word and the second the bare word, each asking to be set off in front and neither behind -
-    /// and no empty phrase, which is the prologue/epilogue opt-out spelling and must never be a
-    /// language's default.
+    /// built-in chapter phrase has: three wordings, the first two capturing the number behind and in
+    /// front of the word and the third the bare word, each asking to be set off in front and none
+    /// behind - and no empty phrase, which is the prologue/epilogue opt-out spelling and must never
+    /// be a language's default.
     /// </summary>
     [Fact]
     public void EveryRegisteredLanguage_HasUsableDefaultPhrases()
@@ -1120,9 +1124,10 @@ public sealed class CliOptionsTests : IDisposable
         foreach (var language in LanguageRegistry.Languages)
         {
             var profile = o.ResolveProfile(language.Code);
-            Assert.Equal(2, profile.ChapterPattern.Alternatives.Count);
+            Assert.Equal(3, profile.ChapterPattern.Alternatives.Count);
             Assert.True(profile.ChapterPattern.Alternatives[0].HasNumberGroup, language.Code);
-            Assert.False(profile.ChapterPattern.Alternatives[1].HasNumberGroup, language.Code);
+            Assert.True(profile.ChapterPattern.Alternatives[1].HasNumberGroup, language.Code);
+            Assert.False(profile.ChapterPattern.Alternatives[2].HasNumberGroup, language.Code);
             Assert.All(profile.ChapterPattern.Alternatives, a =>
             {
                 Assert.True(a.RequiresLeadIn, language.Code);

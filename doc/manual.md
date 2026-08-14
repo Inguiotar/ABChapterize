@@ -1093,7 +1093,7 @@ phrase never being translated for you.
 
 `-c`, `--chapter-phrase <p>`
 : The word or phrase that announces a chapter (default:
-  `/(?:^chapter ()|^chapter)/`, localized by `--lang` — see
+  `/(?:^chapter ()|^() chapter|^chapter)/`, localized by `--lang` — see
   [section 7](#7-languages-and-number-recognition) for every language's
   default). Matching is always case-insensitive. The value is a list of
   **alternatives** separated by `;`, and every one of them is searched for:
@@ -2135,25 +2135,30 @@ For these languages, `--lang` also localizes the defaults of
 
 | `--lang` | Default phrase | Default title word | Default part word | Default intro title |
 | --- | --- | --- | --- | --- |
-| `en` | `/(?:^chapter ()\|^chapter)/` | Chapter | Part | Intro |
-| `de` | `/(?:^kapitel ()\|^kapitel)/` | Kapitel | Teil | Intro |
-| `fr` | `/(?:^chapitre ()\|^chapitre)/` | Chapitre | Partie | Introduction |
-| `es` | `/(?:^cap[íi]tulo ()\|^cap[íi]tulo)/` | Capítulo | Parte | Introducción |
-| `it` | `/(?:^capitolo ()\|^capitolo)/` | Capitolo | Parte | Introduzione |
-| `nl` | `/(?:^hoofdstuk ()\|^hoofdstuk)/` | Hoofdstuk | Deel | Intro |
-| `tr` | `/(?:^b[öo]l[üu]m ()\|^b[öo]l[üu]m)/` | Bölüm | Kısım | Giriş |
-| `pt` | `/(?:^cap[íi]tulo ()\|^cap[íi]tulo)/` | Capítulo | Parte | Introdução |
-| `pl` | `/(?:^rozdzia[łl] ()\|^rozdzia[łl])/` | Rozdział | Część | Wstęp |
-| `sv` | `/(?:^kapit(?:el\|let) ()\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
-| `da` | `/(?:^kapit(?:el\|let) ()\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
+| `en` | `/(?:^chapter ()\|^() chapter\|^chapter)/` | Chapter | Part | Intro |
+| `de` | `/(?:^kapitel ()\|^() kapitel\|^kapitel)/` | Kapitel | Teil | Intro |
+| `fr` | `/(?:^chapitre ()\|^() chapitre\|^chapitre)/` | Chapitre | Partie | Introduction |
+| `es` | `/(?:^cap[íi]tulo ()\|^() cap[íi]tulo\|^cap[íi]tulo)/` | Capítulo | Parte | Introducción |
+| `it` | `/(?:^capitolo ()\|^() capitolo\|^capitolo)/` | Capitolo | Parte | Introduzione |
+| `nl` | `/(?:^hoofdstuk ()\|^() hoofdstuk\|^hoofdstuk)/` | Hoofdstuk | Deel | Intro |
+| `tr` | `/(?:^b[öo]l[üu]m ()\|^() b[öo]l[üu]m\|^b[öo]l[üu]m)/` | Bölüm | Kısım | Giriş |
+| `pt` | `/(?:^cap[íi]tulo ()\|^() cap[íi]tulo\|^cap[íi]tulo)/` | Capítulo | Parte | Introdução |
+| `pl` | `/(?:^rozdzia[łl] ()\|^() rozdzia[łl]\|^rozdzia[łl])/` | Rozdział | Część | Wstęp |
+| `sv` | `/(?:^kapit(?:el\|let) ()\|^() kapit(?:el\|let)\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
+| `da` | `/(?:^kapit(?:el\|let) ()\|^() kapit(?:el\|let)\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
 
-Every one of them is the same shape: two alternatives, the first taking the
-number that follows the word directly ("Kapitel 12") and the second the bare
-word, which leaves the number to be read off whatever stands around it — the
-ordinal-first order ("Erstes Kapitel", and in Turkish "Birinci Bölüm", which is
-that language's only order). Both carry a `^`, since an announcement is by
-definition set off from what precedes it — either by a pause or by the
-recognizer writing it as a segment of its own.
+Every one of them is the same shape: three alternatives, the first taking the
+number that follows the word directly ("Kapitel 12"), the second the number that
+precedes it ("Erstes Kapitel", and in Turkish "Birinci Bölüm", which is that
+language's only order), and the third the bare word, which leaves the number to
+be read off whatever stands around it. All three carry a `^`, since an
+announcement is by definition set off from what precedes it — either by a pause
+or by the recognizer writing it as a segment of its own.
+
+Where two of them read the same words differently, the announcement is decided
+by the chapter sequence rather than by which alternative got there first: a
+number that cannot follow the chapters already found is put aside and the next
+reading of the same words is tried.
 
 They are regular expressions so that one language's spellings are covered at
 once: an accent Whisper dropped (`capitulo` for `capítulo`), a letter it wrote

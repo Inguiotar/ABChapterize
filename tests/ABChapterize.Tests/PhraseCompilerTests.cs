@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Errors;
+using ABChapterize.Language;
 using ABChapterize.Language.Phrases;
 using Xunit;
 
@@ -33,6 +34,11 @@ public class PhraseCompilerTests
     /// <param name="phrases">The wordings as they would be written before the colon.</param>
     private static PhrasePattern Named(params string[] phrases)
         => PhraseCompiler.Compile(phrases, "en", PhraseKind.Named, "custom 1 phrase");
+
+    /// <summary>English's own default, read out of the registry rather than written out again, so
+    /// that the wordings these tests reason about are the ones a run really gets.</summary>
+    private static PhrasePattern BuiltInChapterPhrase()
+        => Chapter(LanguageRegistry.For("en").ChapterPhrase);
 
     [Fact]
     public void TopLevelAlternation_BecomesSeparateWordings()
@@ -131,11 +137,13 @@ public class PhraseCompilerTests
     }
 
     /// <summary>
-    /// A third wording for the number-first order would be wrong, not merely redundant: matches are
-    /// taken leftmost-first, so "() part" would claim "seventh part" before "part ()" could claim
-    /// "part 5" and the chapter would come out as 7. Three of the reference corpus's 12,916 probe
-    /// transcripts read that way (2026-08-14), which is why neither a literal phrase nor any
-    /// built-in default carries such a wording.
+    /// A literal gets no third wording for the number-first order, unlike the built-in defaults.
+    /// Matches are taken leftmost-first, so "() part" would claim "seventh part" before "part ()"
+    /// could claim "part 5" and the chapter would come out as 7 - three of the reference corpus's
+    /// 12,916 probe transcripts read exactly that way (2026-08-14). A default can afford it because
+    /// every one of its wordings carries a "^", which is what makes the wrong reading visible and
+    /// lets the sequence fall back on the one behind it; a literal carries no guards at all, and a
+    /// user who wants that order can write the wording out.
     /// </summary>
     [Fact]
     public void ALiteralChapterPhrase_TakesTheNumberBehindTheWordFirst()
@@ -239,6 +247,40 @@ public class PhraseCompilerTests
         var hits = pattern.Matches("an interlude the second, then another interlude").ToList();
         Assert.Equal(2, hits.Count);
         Assert.All(hits, h => Assert.Equal(0, h.Alternative.Index));
+    }
+
+    /// <summary>
+    /// What a superseded wording is kept for: on words two wordings read differently, the loser is
+    /// still a reading of the same announcement. Here the built-in chapter phrase over Whisper's
+    /// "Two chapter three" - number-first claims "Two chapter" for its earlier start, number-behind
+    /// reads the same words as chapter 3, and only the sequence can say which is right.
+    /// </summary>
+    [Fact]
+    public void MatchGroups_KeepTheWordingsAWinnerSuperseded()
+    {
+        var groups = BuiltInChapterPhrase().MatchGroups("Two chapter three, and later chapter four")
+            .ToList();
+        Assert.Equal(2, groups.Count);
+        // Leftmost wins the position: "Two chapter" starts before "chapter three" does.
+        Assert.Equal(1, groups[0][0].Alternative.Index);
+        Assert.Equal("Two chapter", groups[0][0].Match.Value);
+        // ... and the two wordings it displaced are behind it, in the order they were written.
+        Assert.Equal([0, 2], groups[0].Skip(1).Select(h => h.Alternative.Index));
+        Assert.All(groups[0].Skip(1), h => Assert.StartsWith("chapter", h.Match.Value));
+        // The second announcement is contested only by the bare word, which reads it the same way.
+        Assert.Equal([0, 2], groups[1].Select(h => h.Alternative.Index));
+    }
+
+    /// <summary>The winner alone is what every caller but the accept loop sees, and it is the same
+    /// answer one alternation would have given.</summary>
+    [Fact]
+    public void Matches_IsTheWinnerOfEachGroup()
+    {
+        const string text = "Two chapter three, and later chapter four";
+        var pattern = BuiltInChapterPhrase();
+        Assert.Equal(
+            pattern.MatchGroups(text).Select(g => (g[0].Match.Index, g[0].Alternative.Index)),
+            pattern.Matches(text).Select(h => (h.Match.Index, h.Alternative.Index)));
     }
 
     [Theory]

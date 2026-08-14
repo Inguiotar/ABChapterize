@@ -28,6 +28,15 @@ public class AnnouncementIsolationTests
     private static List<SpeechSegment> Speech(params (double Start, double End)[] segments)
         => segments.Select(s => new SpeechSegment(s.Start, s.End)).ToList();
 
+    /// <summary>One wording of a phrase, asking for the given pauses - what a match carries, and the
+    /// only thing about it these tests care about. Written out rather than compiled from source
+    /// because the point here is the guard, not the syntax that requests it.</summary>
+    /// <param name="guards">The pauses its <c>^</c>/<c>$</c> asked for.</param>
+    /// <param name="bare">Whether it is a number spoken alone rather than an expression.</param>
+    private static PhraseAlternative Wording(IsolationRule guards, bool bare = false)
+        => new(0, bare ? null : new Regex("x"), bare ? "^()$" : "x", bare,
+            guards.HasFlag(IsolationRule.LeadIn), guards.HasFlag(IsolationRule.LeadOut));
+
     /// <summary>
     /// A typical chapter of "Corsa nello spazio": narration, a ~3 s pause, the number spoken alone
     /// for two thirds of a second, a ~2 s pause, then the chapter's first sentence. Chapter 59's
@@ -147,8 +156,8 @@ public class AnnouncementIsolationTests
     public void ForChapter_TakesTheWordingsGuardsAndTheWiderReadingsOwn()
     {
         var phrase = new PhraseMatching.PhraseMatch(3, 10, 11, 0.9);
-        var heading = phrase with { Guards = IsolationRule.LeadIn };
-        var bare = phrase with { Guards = IsolationRule.Both, IsBareNumber = true };
+        var heading = phrase with { Wording = Wording(IsolationRule.LeadIn) };
+        var bare = phrase with { Wording = Wording(IsolationRule.Both, bare: true) };
         // A wording that asks for nothing is never checked, whatever the pass is doing.
         Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(phrase, 10, false).Rule);
         Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(phrase, 10, true).Rule);
@@ -159,7 +168,7 @@ public class AnnouncementIsolationTests
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, false).Rule);
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, true).Rule);
         // ... and a wide-reading pass adds them even to a bare wording that asked for neither.
-        var unguarded = phrase with { IsBareNumber = true };
+        var unguarded = phrase with { Wording = Wording(IsolationRule.None, bare: true) };
         Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(unguarded, 10, false).Rule);
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(unguarded, 10, true).Rule);
     }
@@ -173,13 +182,14 @@ public class AnnouncementIsolationTests
     [Fact]
     public void ForChapter_TakesASegmentStartForTheLeadIn()
     {
-        var match = new PhraseMatching.PhraseMatch(9, 10, 11, 0.9, Guards: IsolationRule.Both);
+        var match = new PhraseMatching.PhraseMatch(
+            9, 10, 11, 0.9, Wording: Wording(IsolationRule.Both));
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(match, 10, false).Rule);
         Assert.Equal(
             IsolationRule.LeadOut,
             AnnouncementIsolation.ForChapter(match with { OpensSegment = true }, 10, false).Rule);
         // A wording that asked for the lead-in alone is then not checked at all.
-        var heading = match with { Guards = IsolationRule.LeadIn, OpensSegment = true };
+        var heading = match with { Wording = Wording(IsolationRule.LeadIn), OpensSegment = true };
         Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(heading, 10, false).Rule);
     }
 
@@ -192,7 +202,7 @@ public class AnnouncementIsolationTests
     public void ForChapter_DoesNotTakeASegmentStartForABareNumber()
     {
         var bare = new PhraseMatching.PhraseMatch(
-            9, 10, 11, 0.9, Guards: IsolationRule.Both, IsBareNumber: true, OpensSegment: true);
+            9, 10, 11, 0.9, Wording: Wording(IsolationRule.Both, bare: true), OpensSegment: true);
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, false).Rule);
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, true).Rule);
     }
@@ -206,7 +216,8 @@ public class AnnouncementIsolationTests
     [Fact]
     public void ForChapter_OnlyOffersAFallbackForANumberSpokenAlone()
     {
-        var opening = new PhraseMatching.PhraseMatch(3, 10, 11, 0.9, IsBareNumber: true);
+        var opening = new PhraseMatching.PhraseMatch(
+            3, 10, 11, 0.9, Wording: Wording(IsolationRule.None, bare: true));
         var buried = opening with { SpokenAlone = false };
         Assert.Equal(10, AnnouncementIsolation.ForChapter(opening, 10, true).FallbackPosition);
         Assert.Null(AnnouncementIsolation.ForChapter(buried, 10, true).FallbackPosition);

@@ -18,7 +18,7 @@ public sealed class SwedishLanguage : ILanguage
     /// stem's second e, so it is not reachable by a suffix and needs the alternation.
     /// </summary>
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:^kapit(?:el|let) ()|^kapit(?:el|let))/";
+    public string ChapterPhrase => "/(?:^kapit(?:el|let) ()|^() kapit(?:el|let)|^kapit(?:el|let))/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Kapitel";

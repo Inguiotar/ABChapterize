@@ -459,7 +459,7 @@ public sealed class ChapterDetector
             (samples, ct, transcriber) => TranscribeCountingAsync(samples, ct, transcriber),
             LogTranscript,
             (segments, profile, mergeBoundary, reading) =>
-                FindCappedPhraseMatches(segments, profile, mergeBoundary, reading),
+                FindCappedPhraseReadings(segments, profile, mergeBoundary, reading),
             _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
                 ? SecondOpinionAsync
                 : null);
@@ -2944,16 +2944,37 @@ public sealed class ChapterDetector
     private IEnumerable<PhraseMatch> FindCappedPhraseMatches(
         List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null,
         BareNumberReading reading = BareNumberReading.SpokenAloneAtSegmentStart)
+        => FindCappedPhraseReadings(segments, profile, mergeBoundarySegIndex, reading).Select(g => g[0]);
+
+    /// <summary>
+    /// The same, over <see cref="PhraseMatching.FindPhraseReadings"/>: every reading of each
+    /// announcement rather than only the one that claimed it, with the cap applied to each of them
+    /// separately. A group whose every reading is above the cap disappears entirely, which is the
+    /// same answer the capped winner alone would have given.
+    /// </summary>
+    /// <param name="segments">The transcript segments to search, in the caller's time base.</param>
+    /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
+    /// <param name="mergeBoundarySegIndex">Passed straight through.</param>
+    /// <param name="reading">The same, and defaulted the same.</param>
+    private IEnumerable<IReadOnlyList<PhraseMatch>> FindCappedPhraseReadings(
+        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null,
+        BareNumberReading reading = BareNumberReading.SpokenAloneAtSegmentStart)
     {
-        foreach (var match in FindPhraseMatches(segments, profile, mergeBoundarySegIndex, reading))
+        foreach (var group in FindPhraseReadings(segments, profile, mergeBoundarySegIndex, reading))
         {
-            if (_options.EffectiveMaxChapterNumber is { } cap && match.Number > cap)
+            var kept = new List<PhraseMatch>(group.Count);
+            foreach (var match in group)
             {
-                var option = _options.MaxChapterNumber != null ? "--max-chapter-number" : "--chapter-count";
-                _log?.Invoke($"discarded chapter {match.Number} - above the {option} cap of {cap}");
-                continue;
+                if (_options.EffectiveMaxChapterNumber is { } cap && match.Number > cap)
+                {
+                    var option = _options.MaxChapterNumber != null ? "--max-chapter-number" : "--chapter-count";
+                    _log?.Invoke($"discarded chapter {match.Number} - above the {option} cap of {cap}");
+                    continue;
+                }
+                kept.Add(match);
             }
-            yield return match;
+            if (kept.Count > 0)
+                yield return kept;
         }
     }
 }

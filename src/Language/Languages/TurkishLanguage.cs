@@ -18,7 +18,7 @@ public sealed class TurkishLanguage : ILanguage
     /// matched as a substring, so anything appended to the stem is found anyway.
     /// </summary>
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:^b[öo]l[üu]m ()|^b[öo]l[üu]m)/";
+    public string ChapterPhrase => "/(?:^b[öo]l[üu]m ()|^() b[öo]l[üu]m|^b[öo]l[üu]m)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Bölüm";

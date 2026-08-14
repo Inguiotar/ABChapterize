@@ -34,20 +34,32 @@ internal static partial class PhraseMatching
     /// what such a match falls back on when <see cref="AnnouncementIsolation"/> cannot be run: an
     /// opening number is one the stricter reading would have taken anyway, a later one rests
     /// entirely on the isolation check and must not be kept without it.</param>
-    /// <param name="Guards">The pauses the wording that matched asked for with its <c>^</c> and
-    /// <c>$</c>. Carried on the match rather than looked up later because a phrase may hold several
-    /// wordings asking for different things, and only this one matched.</param>
-    /// <param name="IsBareNumber">Whether the wording that matched is a number spoken alone. What
-    /// decides whether a pass hunting known numbers has to vouch for the position on top of
-    /// whatever <paramref name="Guards"/> already asks for.</param>
+    /// <param name="Wording">The alternative of the phrase that produced this reading. Carried
+    /// rather than looked up later because a phrase may hold several wordings asking for different
+    /// things, and only this one matched - and because a reading superseded at the same position
+    /// stands behind it as a rival the accept loop may fall back on
+    /// (<see cref="Language.Phrases.PhrasePattern.MatchGroups"/>). Null only where a match is
+    /// synthesized rather than found, which is a mark whose number a re-read supplied.</param>
     /// <param name="OpensSegment">Whether the match begins where its transcript segment begins,
     /// which is the second way a <c>^</c> can be satisfied - see
     /// <see cref="AnnouncementIsolation.ForChapter"/>.</param>
     internal readonly record struct PhraseMatch(
         int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
         bool SpansMerge = false, bool SpokenAlone = true,
-        IsolationRule Guards = IsolationRule.None, bool IsBareNumber = false,
-        bool OpensSegment = false);
+        PhraseAlternative? Wording = null, bool OpensSegment = false)
+    {
+        /// <summary>The pauses <see cref="Wording"/> asked for with its <c>^</c> and <c>$</c>, as
+        /// the check that enforces them spells it.</summary>
+        internal IsolationRule Guards => Wording is null
+            ? IsolationRule.None
+            : (Wording.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None) |
+              (Wording.RequiresLeadOut ? IsolationRule.LeadOut : IsolationRule.None);
+
+        /// <summary>Whether the wording that matched is a number spoken alone. What decides whether a
+        /// pass hunting known numbers has to vouch for the position on top of whatever
+        /// <see cref="Guards"/> already asks for.</summary>
+        internal bool IsBareNumber => Wording?.IsBareNumber == true;
+    }
 
     /// <summary>A non-numbered announcement (prologue, epilogue or a <c>--custom</c> mapping) found
     /// inside a transcribed window.</summary>
@@ -98,20 +110,45 @@ internal static partial class PhraseMatching
     internal static IEnumerable<PhraseMatch> FindPhraseMatches(
         List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null,
         BareNumberReading reading = BareNumberReading.SpokenAloneAtSegmentStart)
+        => FindPhraseReadings(segments, profile, mergeBoundarySegIndex, reading).Select(g => g[0]);
+
+    /// <summary>
+    /// The same search, keeping every reading of each announcement rather than only the one that
+    /// claimed it: one group per position, the winning wording first and the wordings it superseded
+    /// behind it (see <see cref="Language.Phrases.PhrasePattern.MatchGroups"/>).
+    /// <para>
+    /// Only the accept loop takes these. It is the one caller that can act on a rival - by asking the
+    /// chapter sequence, and then the announcement's own re-transcription, which reading of the words
+    /// is the real one - and the one caller for which taking the wrong reading costs a chapter rather
+    /// than a vote.
+    /// </para>
+    /// </summary>
+    /// <param name="segments">The window's transcript segments, in window-relative time.</param>
+    /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
+    /// <param name="mergeBoundarySegIndex">The cache/fresh boundary, if any; see
+    /// <see cref="FindPhraseMatches"/>.</param>
+    /// <param name="reading">How far into a transcript segment a <c>--chapter-phrase none</c>
+    /// announcement may sit; see <see cref="FindBareNumbers"/>.</param>
+    internal static IEnumerable<IReadOnlyList<PhraseMatch>> FindPhraseReadings(
+        List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex = null,
+        BareNumberReading reading = BareNumberReading.SpokenAloneAtSegmentStart)
     {
         if (segments.Count == 0)
             return [];
 
-        var matches = new List<PhraseMatch>(FindByPattern(segments, profile, mergeBoundarySegIndex));
+        var found = new List<IReadOnlyList<PhraseMatch>>(
+            FindByPattern(segments, profile, mergeBoundarySegIndex));
         if (!profile.ChapterPattern.HasBareNumberAlternative)
-            return matches;
-        matches.AddRange(FindBareNumbers(segments, profile, reading));
+            return found;
+        // A number spoken alone is a reading of the segment rather than of a span of characters, so
+        // it has no position to be superseded at and stands on its own.
+        found.AddRange(FindBareNumbers(segments, profile, reading).Select(m => (IReadOnlyList<PhraseMatch>)[m]));
         // Chronological, because the accept loop walks these in order and only ever takes a number
         // above the last one it took - two wordings of one phrase finding their announcements in a
         // different order would cost the later pass its chapter. A stable ordering rather than
         // List.Sort, so that two wordings matching in the same segment stay in the order they were
         // written and a run is reproducible.
-        return matches.OrderBy(m => m.PhraseStartSeconds).ToList();
+        return found.OrderBy(g => g[0].PhraseStartSeconds).ToList();
     }
 
     /// <summary>
@@ -123,29 +160,41 @@ internal static partial class PhraseMatching
     /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
     /// <param name="mergeBoundarySegIndex">The cache/fresh boundary, if any; see
     /// <see cref="FindPhraseMatches"/>.</param>
-    private static IEnumerable<PhraseMatch> FindByPattern(
+    private static IEnumerable<IReadOnlyList<PhraseMatch>> FindByPattern(
         List<TranscriptSegment> segments, LanguageProfile profile, int? mergeBoundarySegIndex)
     {
         var (text, segStartChar) = Flatten(segments);
         var mergeBoundaryChar = mergeBoundarySegIndex is { } idx && idx > 0 && idx < segments.Count
             ? segStartChar[idx] : (int?)null;
 
-        foreach (var hit in profile.ChapterPattern.Matches(text))
+        foreach (var group in profile.ChapterPattern.MatchGroups(text))
         {
-            if (!TryParseAnnouncedNumber(
-                    text, hit, profile, out var number, out var consumedStart, out var consumedEnd))
-                continue;
+            var readings = new List<PhraseMatch>();
+            foreach (var hit in group)
+            {
+                // A wording that found the announcement but no number is no reading of it at all, so
+                // it drops out here - including where it was the one that claimed the position, which
+                // is how a phrase that captures its number lets a plainer wording of itself supply
+                // one the capture could not parse.
+                if (!TryParseAnnouncedNumber(
+                        text, hit, profile, out var number, out var consumedStart, out var consumedEnd))
+                    continue;
 
-            var segIndex = SegmentIndexAt(segStartChar, hit.Match.Index);
-            var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
-            yield return new PhraseMatch(
-                number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
-                segments[segIndex].Probability, spansMerge, Guards: GuardsOf(hit.Alternative),
-                OpensSegment: hit.Match.Index == segStartChar[segIndex]);
+                var segIndex = SegmentIndexAt(segStartChar, hit.Match.Index);
+                var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
+                readings.Add(new PhraseMatch(
+                    number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
+                    segments[segIndex].Probability, spansMerge, Wording: hit.Alternative,
+                    OpensSegment: hit.Match.Index == segStartChar[segIndex]));
+            }
+            if (readings.Count > 0)
+                yield return readings;
         }
     }
 
-    /// <summary>The pauses one wording asks for, as the check that enforces them spells it.</summary>
+    /// <summary>The pauses one wording asks for, as the check that enforces them spells it. A chapter
+    /// match keeps the wording itself and derives this from it (<see cref="PhraseMatch.Guards"/>); a
+    /// named one has nothing else to do with the wording and carries only the answer.</summary>
     /// <param name="alternative">The wording that matched.</param>
     private static IsolationRule GuardsOf(PhraseAlternative alternative)
         => (alternative.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None) |
@@ -201,7 +250,7 @@ internal static partial class PhraseMatching
                 // announcement rather than start exactly on it.
                 yield return new PhraseMatch(
                     announced.Number, segment.StartSeconds, segment.EndSeconds, segment.Probability,
-                    SpokenAlone: announced.SpokenAlone, Guards: GuardsOf(wording), IsBareNumber: true,
+                    SpokenAlone: announced.SpokenAlone, Wording: wording,
                     OpensSegment: announced.SpokenAlone);
     }
 
@@ -253,10 +302,13 @@ internal static partial class PhraseMatching
             yield break;
 
         var (text, segStartChar) = Flatten(segments);
-        foreach (var hit in profile.ChapterPattern.Matches(text))
+        // Over the groups rather than the winners: an announcement one wording could not put a number
+        // to is not unnumbered if another wording of the same phrase read one off the same words.
+        foreach (var group in profile.ChapterPattern.MatchGroups(text))
         {
-            if (TryParseAnnouncedNumber(text, hit, profile, out _, out _, out _))
+            if (group.Any(h => TryParseAnnouncedNumber(text, h, profile, out _, out _, out _)))
                 continue;
+            var hit = group[0];
             var segment = segments[SegmentIndexAt(segStartChar, hit.Match.Index)];
             yield return new UnnumberedAnnouncement(
                 segment.StartSeconds, segment.EndSeconds, segment.Probability, Snippet(segment.Text));
@@ -346,11 +398,15 @@ internal static partial class PhraseMatching
             yield break;
 
         var (text, segStartChar) = Flatten(segments);
-        foreach (var hit in profile.ChapterPattern.Matches(text))
+        foreach (var group in profile.ChapterPattern.MatchGroups(text))
         {
-            var title = TryParseAnnouncedNumber(text, hit, profile, out var number, out _, out _)
-                ? $"{profile.Title} {number}"
-                : profile.Title;
+            // Any wording of the phrase may supply the number for the title; nothing here checks it
+            // against a sequence, so there is no reading to prefer over another.
+            var numbered = group.Select(h =>
+                    TryParseAnnouncedNumber(text, h, profile, out var n, out _, out _) ? n : (int?)null)
+                .FirstOrDefault(n => n != null);
+            var title = numbered is { } number ? $"{profile.Title} {number}" : profile.Title;
+            var hit = group[0];
             var segment = segments[SegmentIndexAt(segStartChar, hit.Match.Index)];
             yield return new NamedMatch(
                 profile.ChapterAnnouncement, title,
@@ -378,6 +434,9 @@ internal static partial class PhraseMatching
         var (text, segStartChar) = Flatten(segments);
         foreach (var phrase in profile.NamedPhrases)
         {
+            // Only the winner of each position, unlike the chapter scan: a named announcement carries
+            // no number, so two wordings claiming the same words say the same thing and there is
+            // nothing for a rival to settle.
             foreach (var hit in phrase.Pattern.Matches(text))
             {
                 var segIndex = SegmentIndexAt(segStartChar, hit.Match.Index);

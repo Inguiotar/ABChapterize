@@ -122,27 +122,29 @@ or a regular expression wrapped in slashes. Use the `/regexp/` form — every
 built-in language does, for consistency.
 
 The chapter phrase has one more thing in it. Every built-in language spells it
-`/(?:^WORD ()|^WORD)/`: two alternatives of one phrase, where `()` stands for a
-chapter number in your language's own notation and captures it. The first
-alternative takes the number that follows the word directly ("Kapitola 12"),
-the second is the bare word, and the number is then read off whatever stands
-around it — which is what covers the ordinal-first order ("První kapitola").
-Copy the shape and change the word; the parts that vary by language are the
+`/(?:^WORD ()|^() WORD|^WORD)/`: three alternatives of one phrase, where `()`
+stands for a chapter number in your language's own notation and captures it.
+The first alternative takes the number that follows the word directly
+("Kapitola 12"), the second the number that precedes it ("První kapitola"), and
+the third is the bare word, where the number is read off whatever stands around
+it. Copy the shape and change the word; the parts that vary by language are the
 word itself and the number grammar in step 3.
 
-Do not add a third alternative for the ordinal-first order (`() WORD`). It
-looks symmetrical and it is wrong: matches are taken leftmost-first, so on "Der
-erste Kapitel 5" such an alternative claims "erste Kapitel" before
-`kapitel ()` can claim "Kapitel 5", and the chapter comes out as 1. Three
-transcripts in the reference corpus read exactly like that — none of them
-because the narrator said it, all of them because a short probe window opened
-with a word Whisper invented. The bare-word alternative already covers the
-ordinal-first order correctly.
+Keep all three, in that order. The order matters where two of them read the
+same words differently: on "Der erste Kapitel 5" the second alternative claims
+"erste Kapitel" — it starts earlier, and the leftmost match wins — and would
+make that chapter 1. Three transcripts in the reference corpus read exactly
+like that, none because the narrator said it, all because a short probe window
+opened with a word Whisper invented. What saves them is that a reading the
+chapter sequence cannot accept is put aside and the next one tried, so
+"Kapitel 5" gets its turn; the ordering is what decides which reading is
+preferred when both would fit.
 
-The `^` on both says the announcement must be set off from what precedes it —
-by a pause, or by the recognizer writing it as a transcript segment of its own.
-Keep it. It is what stops your chapter word becoming a mark every time it turns
-up in ordinary narration.
+The `^` on all three says the announcement must be set off from what precedes
+it — by a pause, or by the recognizer writing it as a transcript segment of its
+own. Keep it. It is what stops your chapter word becoming a mark every time it
+turns up in ordinary narration, and on the second alternative it is also what
+lets an ordinal-first announcement be recognized by its own segment start.
 
 Two rules about how they are matched, both of which save you work:
 
@@ -395,8 +397,8 @@ warning, not a silent typo.
 ## 8. Checklist
 
 - [ ] `src\Language\Languages\XxxLanguage.cs` written, all nine members filled in
-- [ ] Chapter phrase written as `/(?:^WORD ()|^WORD)/`; any other grouping `(?:...)`,
-      never `(...)`
+- [ ] Chapter phrase written as `/(?:^WORD ()|^() WORD|^WORD)/`; any other grouping
+      `(?:...)`, never `(...)`
 - [ ] Titles carry their proper capitalization and accents
 - [ ] One line added to `LanguageRegistry.All`
 - [ ] `src\Language\Parsers\XxxNumberParser.cs` written (or English borrowed, temporarily)
