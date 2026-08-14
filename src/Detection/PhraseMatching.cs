@@ -40,10 +40,14 @@ internal static partial class PhraseMatching
     /// <param name="IsBareNumber">Whether the wording that matched is a number spoken alone. What
     /// decides whether a pass hunting known numbers has to vouch for the position on top of
     /// whatever <paramref name="Guards"/> already asks for.</param>
+    /// <param name="OpensSegment">Whether the match begins where its transcript segment begins,
+    /// which is the second way a <c>^</c> can be satisfied - see
+    /// <see cref="AnnouncementIsolation.ForChapter"/>.</param>
     internal readonly record struct PhraseMatch(
         int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
         bool SpansMerge = false, bool SpokenAlone = true,
-        IsolationRule Guards = IsolationRule.None, bool IsBareNumber = false);
+        IsolationRule Guards = IsolationRule.None, bool IsBareNumber = false,
+        bool OpensSegment = false);
 
     /// <summary>A non-numbered announcement (prologue, epilogue or a <c>--custom</c> mapping) found
     /// inside a transcribed window.</summary>
@@ -68,10 +72,12 @@ internal static partial class PhraseMatching
     /// <param name="Guards">The pauses the wording that matched asked for with its <c>^</c> and
     /// <c>$</c>, on top of whatever the phrase itself requires
     /// (<see cref="NamedPhrase.RequiresLeadIn"/>).</param>
+    /// <param name="OpensSegment">Whether the match begins where its transcript segment begins; see
+    /// <see cref="PhraseMatch.OpensSegment"/>.</param>
     internal readonly record struct NamedMatch(
         NamedPhrase Phrase, string Title,
         double PhraseStartSeconds, double PhraseEndSeconds, double Confidence, string Text = "",
-        IsolationRule Guards = IsolationRule.None);
+        IsolationRule Guards = IsolationRule.None, bool OpensSegment = false);
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -134,7 +140,8 @@ internal static partial class PhraseMatching
             var spansMerge = mergeBoundaryChar is { } b && consumedStart < b && b < consumedEnd;
             yield return new PhraseMatch(
                 number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
-                segments[segIndex].Probability, spansMerge, Guards: GuardsOf(hit.Alternative));
+                segments[segIndex].Probability, spansMerge, Guards: GuardsOf(hit.Alternative),
+                OpensSegment: hit.Match.Index == segStartChar[segIndex]);
         }
     }
 
@@ -194,7 +201,8 @@ internal static partial class PhraseMatching
                 // announcement rather than start exactly on it.
                 yield return new PhraseMatch(
                     announced.Number, segment.StartSeconds, segment.EndSeconds, segment.Probability,
-                    SpokenAlone: announced.SpokenAlone, Guards: GuardsOf(wording), IsBareNumber: true);
+                    SpokenAlone: announced.SpokenAlone, Guards: GuardsOf(wording), IsBareNumber: true,
+                    OpensSegment: announced.SpokenAlone);
     }
 
     /// <summary>
@@ -372,11 +380,13 @@ internal static partial class PhraseMatching
         {
             foreach (var hit in phrase.Pattern.Matches(text))
             {
-                var segment = segments[SegmentIndexAt(segStartChar, hit.Match.Index)];
+                var segIndex = SegmentIndexAt(segStartChar, hit.Match.Index);
+                var segment = segments[segIndex];
                 yield return new NamedMatch(
                     phrase, phrase.ResolveTitle(hit.Match, profile.Language),
                     segment.StartSeconds, segment.EndSeconds, segment.Probability,
-                    NormalizeWhitespace(segment.Text), GuardsOf(hit.Alternative));
+                    NormalizeWhitespace(segment.Text), GuardsOf(hit.Alternative),
+                    hit.Match.Index == segStartChar[segIndex]);
             }
         }
     }

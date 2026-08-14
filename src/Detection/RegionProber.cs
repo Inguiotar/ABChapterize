@@ -1912,7 +1912,12 @@ internal sealed class RegionProber
     {
         var rule = match.Guards |
                    (match.Phrase.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None);
-        return rule == IsolationRule.None
+        // A match the recognizer set off as a segment of its own has answered the lead-in question
+        // already; see AnnouncementIsolation.ForChapter. The Italian "riepilogo" this guard was
+        // built for is unaffected, having matched in the middle of a sentence.
+        if (match.OpensSegment)
+            rule &= ~IsolationRule.LeadIn;
+        return rule == IsolationCheck.None.Rule
             ? IsolationCheck.None
             : new IsolationCheck(rule, phraseAbs);
     }

@@ -165,6 +165,39 @@ public class AnnouncementIsolationTests
     }
 
     /// <summary>
+    /// The second way a <c>^</c> is satisfied: the recognizer set the announcement off as a segment
+    /// of its own. "I Shall Wear Midnight" chapter 9 is the case - the one mark of the sixteen-book
+    /// corpus with under 0.85 s in front of it (0.64 s), and transcribed as
+    /// "Chapter 9 The Duchess and the Cook" in a segment of its own, so it passes on that.
+    /// </summary>
+    [Fact]
+    public void ForChapter_TakesASegmentStartForTheLeadIn()
+    {
+        var match = new PhraseMatching.PhraseMatch(9, 10, 11, 0.9, Guards: IsolationRule.Both);
+        Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(match, 10, false).Rule);
+        Assert.Equal(
+            IsolationRule.LeadOut,
+            AnnouncementIsolation.ForChapter(match with { OpensSegment = true }, 10, false).Rule);
+        // A wording that asked for the lead-in alone is then not checked at all.
+        var heading = match with { Guards = IsolationRule.LeadIn, OpensSegment = true };
+        Assert.Equal(IsolationRule.None, AnnouncementIsolation.ForChapter(heading, 10, false).Rule);
+    }
+
+    /// <summary>
+    /// A number spoken alone is excepted, and that exception is the whole calibration of that
+    /// wording: its claim to being an announcement <em>is</em> the pause around it, and the mode
+    /// exists because Whisper's segmentation cannot be trusted to say where one is.
+    /// </summary>
+    [Fact]
+    public void ForChapter_DoesNotTakeASegmentStartForABareNumber()
+    {
+        var bare = new PhraseMatching.PhraseMatch(
+            9, 10, 11, 0.9, Guards: IsolationRule.Both, IsBareNumber: true, OpensSegment: true);
+        Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, false).Rule);
+        Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, true).Rule);
+    }
+
+    /// <summary>
     /// What a wide-reading match falls back on when neither model could confirm its announcement.
     /// One that opened its segment is a match the narrow reading would have taken anyway, so its
     /// segment start is an honest position to measure at; one found further in has no such position

@@ -1161,10 +1161,14 @@ A `^` at the start of an alternative and a `$` at its end are **not** anchors.
 They say what the audio around a match has to look like before a mark is
 written:
 
-- `^` — the announcement must be preceded by real non-speech: at least
-  0.85 s of silence or jingle music. That is what a heading has and a sentence
-  in the middle of a paragraph does not, and it is the same request the
-  `heading` hint makes for a `--custom` mapping.
+- `^` — the announcement must be set off from what precedes it, either by at
+  least 0.85 s of real non-speech (silence, or the jingle music a book plays
+  into its chapters) **or** by the recognizer having written it as a transcript
+  segment of its own. That is what a heading has and a sentence in the middle of
+  a paragraph does not, and it is the same request the `heading` hint makes for a
+  `--custom` mapping. The one exception is `none`, a number spoken alone: its
+  entire claim to being an announcement is the pause around it, so there the
+  pause is required outright.
 - `$` — the announcement must be followed by at least 0.3 s of non-speech.
   Only sensible for something spoken alone, such as a bare number: a narrator
   routinely runs straight from a heading into the text behind it.

@@ -76,7 +76,8 @@ earn a round number.
   language has** — digits, digit ordinals, Roman numerals, spoken cardinals and ordinals —
   and captures it, so `/chapter ()/` covers "Chapter 12", "Chapter XII." and "Chapter one
   hundred and five" alike. A leading **`^`** asks for a real pause in front of the
-  announcement and a trailing **`$`** for one behind it; neither is an anchor, and each
+  announcement — either a real pause or the recognizer writing it as a transcript segment of
+  its own — and a trailing **`$`** for one behind it; neither is an anchor, and each
   belongs to the alternative that carries it. **`default`** pulls this tool's own phrase for
   the language into the list, so a value can add to it rather than replace it, and
   **`none`** — the bare-number wording — is now one alternative among others rather than a

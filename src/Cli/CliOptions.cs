@@ -1890,9 +1890,10 @@ public sealed class CliOptions
                                     e.g. --chapter-phrase "/se[ck]tion ()/;partie;default"
                                     Inside a regexp, "()" stands for a chapter number in any
                                     notation the language has - digits, ordinals, Roman numerals,
-                                    spoken words - and captures it. A leading "^" asks for a pause
-                                    in front of the announcement and a trailing "$" for one behind
-                                    it; neither is an anchor.
+                                    spoken words - and captures it. A leading "^" asks for the
+                                    announcement to be set off in front - by a real pause, or by the
+                                    recognizer writing it as a segment of its own - and a trailing
+                                    "$" for a pause behind it; neither is an anchor.
                                     An alternative may be restricted to one language by a leading
                                     "[xx]" tag, e.g. --chapter-phrase "[fr]/chapitre ()/;section".
                                     Untagged alternatives apply to every language; a language the

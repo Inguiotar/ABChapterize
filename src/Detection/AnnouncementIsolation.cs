@@ -80,13 +80,35 @@ internal static class AnnouncementIsolation
     internal static IsolationCheck ForChapter(
         PhraseMatching.PhraseMatch match, double phraseAbs, bool wideReading)
     {
-        var rule = match.Guards;
+        var rule = WithoutSatisfiedLeadIn(match.Guards, match.OpensSegment && !match.IsBareNumber);
         if (match.IsBareNumber && wideReading)
             rule |= IsolationRule.Both;
-        return rule == IsolationRule.None
+        return rule == IsolationCheck.None.Rule
             ? IsolationCheck.None
             : new IsolationCheck(rule, match.SpokenAlone ? phraseAbs : null);
     }
+
+    /// <summary>
+    /// Drops the lead-in requirement where the recognizer already answered it: a match that begins
+    /// exactly where its transcript segment begins is one Whisper set off by itself. That is the
+    /// second way a <c>^</c> can be satisfied, and it is why a heading whose pause is a shade too
+    /// short for the threshold is not thrown away - "I Shall Wear Midnight" chapter 9, the one mark
+    /// of the sixteen-book corpus with under 0.85 s in front of it (0.64 s), is transcribed as a
+    /// segment of its own and passes on that.
+    /// <para>
+    /// Deliberately <em>not</em> extended to a number spoken alone, whose whole claim to being an
+    /// announcement is the pause around it. That mode exists because Whisper's segmentation is not
+    /// dependable - it glued ten of one book's announcements onto the following sentence
+    /// (2026-08-05) - so re-admitting that signal there would undo the measurement the mode is
+    /// built on. A phrase carries its own evidence and can afford the second reading; a bare number
+    /// cannot. Note the segmentation's <em>unreliable</em> direction is the harmless one here: a
+    /// real announcement Whisper failed to set off simply falls back on the pause test.
+    /// </para>
+    /// </summary>
+    /// <param name="rule">What the wording asked for.</param>
+    /// <param name="opensSegment">Whether the recognizer began a segment at the match.</param>
+    private static IsolationRule WithoutSatisfiedLeadIn(IsolationRule rule, bool opensSegment)
+        => opensSegment ? rule & ~IsolationRule.LeadIn : rule;
 
     /// <summary>
     /// Measures the non-speech either side of the announcement at <paramref name="onset"/>: finds
