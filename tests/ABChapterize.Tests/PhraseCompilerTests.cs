@@ -123,33 +123,35 @@ public class PhraseCompilerTests
         PhraseAssert.Matches(pattern, "part three");
     }
 
-    /// <summary>A literal chapter phrase is the same two wordings a built-in default has: the word
-    /// with the number behind it, then the bare word. Both announcement orders come out of them -
-    /// "Teil sieben" from the first, "Siebter Teil" from the second, whose number is read off the
-    /// words around the match rather than captured.</summary>
+    /// <summary>A literal chapter phrase is two wordings, both of which capture: the word with the
+    /// number behind it ("Teil sieben") and the word with the number in front ("Siebter Teil"). No
+    /// bare word - reading the number off the surrounding text is what a hand-written regexp without
+    /// a "()" is for, and a literal that wants it can be written as one.</summary>
     [Fact]
-    public void ALiteralChapterPhrase_HasTheSameTwoWordingsAsADefault()
+    public void ALiteralChapterPhrase_CapturesTheNumberInEitherOrder()
     {
         var pattern = Chapter("part");
         Assert.Equal(2, pattern.Alternatives.Count);
-        Assert.True(pattern.Alternatives[0].HasNumberGroup);
-        Assert.False(pattern.Alternatives[1].HasNumberGroup);
+        Assert.All(pattern.Alternatives, a => Assert.True(a.HasNumberGroup));
         Assert.Equal("seven", PhraseAssert.Captured(pattern, "part seven"));
-        PhraseAssert.Matches(pattern, "the seventh part of it");
+        Assert.Equal("seventh", PhraseAssert.Captured(pattern, "the seventh part of it"));
     }
 
     /// <summary>
-    /// A literal gets no third wording for the number-first order, unlike the built-in defaults.
-    /// Matches are taken leftmost-first, so "() part" would claim "seventh part" before "part ()"
-    /// could claim "part 5" and the chapter would come out as 7 - three of the reference corpus's
-    /// 12,916 probe transcripts read exactly that way (2026-08-14). A default can afford it because
-    /// every one of its wordings carries a "^", which is what makes the wrong reading visible and
-    /// lets the sequence fall back on the one behind it; a literal carries no guards at all, and a
-    /// user who wants that order can write the wording out.
+    /// Which of the two claims a text both could read is decided by position, not by their order in
+    /// the phrase: "seventh part" starts before "part 5" does, so the number-first wording takes it
+    /// and reads 7. That reading is wrong here - it is the shape three of the reference corpus's
+    /// 12,916 probe transcripts have (2026-08-14), where Whisper opened a short window with a word
+    /// nobody said - and what saves the chapter is that the wording it superseded stands behind it
+    /// for the sequence to fall back on.
     /// </summary>
     [Fact]
-    public void ALiteralChapterPhrase_TakesTheNumberBehindTheWordFirst()
-        => Assert.Equal("5", PhraseAssert.Captured(Chapter("part"), "the seventh part 5 begins"));
+    public void ALiteralChapterPhrase_LetsThePositionDecideBetweenItsWordings()
+    {
+        var group = Chapter("part").MatchGroups("the seventh part 5 begins").ToList();
+        Assert.Equal("seventh part", Assert.Single(group)[0].Match.Value);
+        Assert.Equal("part 5", group[0][1].Match.Value);
+    }
 
     /// <summary>A literal named phrase is exactly the word: nothing parses a number there.</summary>
     [Fact]
@@ -183,6 +185,23 @@ public class PhraseCompilerTests
         var pattern = Named("none");
         Assert.False(Assert.Single(pattern.Alternatives).IsBareNumber);
         PhraseAssert.Matches(pattern, "and none of it mattered");
+    }
+
+    /// <summary>However the entries were ordered, a number spoken alone is the last wording: it is
+    /// the one with nothing to recognize an announcement by but the pauses around the number, so it
+    /// is what a phrase falls back on rather than leads with.</summary>
+    [Fact]
+    public void ABareNumberWordingSortsLast()
+    {
+        foreach (var written in new[] { "none;/section ()/;part", "/section ()/;none;part" })
+        {
+            var alternatives = Chapter(written).Alternatives;
+            Assert.Equal(4, alternatives.Count);
+            Assert.Equal(["section ()", "part ()", "() part", "()"],
+                alternatives.Select(a => a.Source));
+            // ... and the phrase still reports itself as the user wrote it.
+            Assert.Equal(written, Chapter(written).Source);
+        }
     }
 
     /// <summary>A bare-number wording may sit beside ordinary ones - the whole reason bare numbers

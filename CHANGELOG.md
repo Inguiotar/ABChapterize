@@ -102,7 +102,14 @@ earn a round number.
   short window — keep their real number this way. `none` takes part in that as any other
   alternative does: where it and a phrase read the same announcement, the phrase is tried
   first and the number spoken alone, which asks for a pause on both sides, is what the run
-  falls back on.
+  falls back on. It is also always considered last, wherever in the value it was written.
+
+  A plain word given as a chapter phrase now becomes the same pair of wordings a built-in
+  default has — the number behind the word and the number in front of it, both asking for a
+  pause before the announcement — so `--chapter-phrase sektion` finds "Sektion 5" and
+  "Fünfte Sektion" alike and a title's `${number}` works under either. It no longer falls
+  back on reading a number off whatever else is nearby; a phrase that needs that is written
+  as a `/regexp/` without a `()`.
 
 ### Removed
 

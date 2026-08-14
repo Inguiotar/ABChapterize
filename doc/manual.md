@@ -1116,15 +1116,25 @@ a list of **alternatives** separated by `;`, each of which may be:
 
 | Alternative | Means |
 | --- | --- |
-| `chapitre` | a plain word, with the chapter number beside it |
+| `chapitre` | a plain word, with the chapter number in front of it or behind it |
 | `/regexp/` | a regular expression |
 | `none` | the number spoken alone, with no phrase at all (chapter phrase only) |
 | `default` | this tool's own phrase for the file's language |
 
+A plain word given as a **chapter** phrase becomes two wordings — the word with
+the number behind it and the word with the number in front of it, each asking
+for a pause before the announcement — so `--chapter-phrase sektion` finds
+"Sektion 5" and "Fünfte Sektion" alike, and a title's `${number}` works under
+either. A plain word given anywhere else is exactly the word: nothing is parsed
+beside it and nothing is asked for around it.
+
 Every alternative is searched, not just the first that matches something: a
 book that says "Kapitel 5" in some places and "Fünftes Kapitel" in others is
 served by one value naming both. Where two alternatives match the same words,
-the one written first wins.
+the leftmost match wins, and the one written first breaks a tie — but a reading
+the chapter numbering cannot accept is put aside and the next one tried, so a
+wording claiming words the narrator never said does not cost the chapter.
+`none` is always considered last, whatever position it was written in.
 
 Repeating the option is the same as writing the values as one list, so
 `--chapter-phrase a --chapter-phrase b` and `--chapter-phrase "a;b"` mean
@@ -1144,11 +1154,11 @@ Chapter 12th    Chapter one hundred and five
 and, being a capturing group, it also **captures** what it matched, so a title
 can write it out — see [Titles](#titles-what-a-mark-is-called) below.
 
-A plain-word alternative is shorthand for exactly the shape the built-in phrases
-have: `partie` is read as `/(?:partie ()|partie)/` — the word with the number
-behind it, or the bare word, whose number is then read off whatever stands
-around it. Both announcement orders come out of those two, "partie sept" from
-the first and "septième partie" from the second.
+A plain-word chapter alternative is shorthand for the shape the built-in phrases
+have, minus their bare-word fallback: `partie` is read as
+`/(?:^partie ()|^() partie)/`, so both announcement orders are covered —
+"partie sept" by the first wording, "septième partie" by the second — and both
+capture their number.
 
 Any other capturing group must be **named**, `(?<name>...)`; write `(?:...)`
 where you only need brackets for grouping. A non-empty *unnamed* group is read

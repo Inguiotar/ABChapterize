@@ -61,34 +61,36 @@ internal static class PhraseCompiler
         foreach (var entry in entries)
             Split(BodyOf(entry, kind, what), leadIn: false, leadOut: false, leaves);
 
+        // A number spoken alone goes last however the user ordered the entries, and the rest keep
+        // the order they were written in. It is the wording with nothing to recognize an
+        // announcement by except the pauses around the number, so it is the reading to fall back on
+        // rather than the one to lead with - and the phrase's own order is what says so, both where
+        // two wordings claim the same words and in the -v log.
+        var ordered = leaves.Where(l => !IsBareNumber(l)).Concat(leaves.Where(IsBareNumber));
+
         var alternatives = new List<PhraseAlternative>();
-        foreach (var leaf in leaves)
+        foreach (var leaf in ordered)
             alternatives.Add(Build(leaf, alternatives.Count, language, what));
         return new PhrasePattern(alternatives, string.Join(';', entries));
     }
 
     /// <summary>
     /// The regex body one written entry stands for. A <c>/regexp/</c> is its own body; anything
-    /// else is a literal, which for a chapter phrase is the same two wordings every built-in
-    /// default has - the word with the number behind it, then the bare word - and for a named
-    /// phrase is just the word.
+    /// else is a literal, which for a chapter phrase is the word with the number behind it and the
+    /// word with the number in front of it, and for a named phrase is just the word.
     /// <para>
-    /// Both announcement orders come out of those two: "Teil sieben" from the first, "Siebter Teil"
-    /// from the second, whose number is read off the words around the match. A third wording for
-    /// the number-first order would be wrong rather than merely redundant - matches are taken
-    /// leftmost-first, so on "Der erste Teil 5" it would claim "erste Teil" before the first wording
-    /// can claim "Teil 5", and the chapter would come out as 1. Three of the corpus's 12,916 probe
-    /// transcripts read exactly like that (2026-08-14); see
-    /// <see cref="ILanguage.ChapterPhrase"/> for what they turned out to be.
+    /// Both wordings capture, so a literal phrase always says where its number is and a title's
+    /// <c>${number}</c> works under either announcement order ("Teil sieben", "Siebter Teil"). It
+    /// gets no bare-word wording, unlike a built-in default: reading the number off whatever stands
+    /// around the match is what a hand-written <c>/regexp/</c> without a <c>()</c> is for, and a
+    /// literal that wants it can be written as one.
     /// </para>
     /// <para>
-    /// And no <c>^</c>, although the number is now required to sit next to the word. Turning the
-    /// lead-in guard on for chapter announcements was measured over sixteen books (469 marks,
-    /// 2026-08-13) and would have dropped exactly one of them - chapter 9 of "I Shall Wear
-    /// Midnight", whose announcement follows the previous chapter's last words after 0.64 s against
-    /// a threshold of 0.85 s, and whose mark is otherwise perfect at -105.6 dBFS. A guard that costs
-    /// a real chapter to catch nothing on record is not worth having by default; <c>^</c> remains
-    /// available to anyone who wants it.
+    /// Both carry a <c>^</c>, for the same reason every built-in default does - an announcement is
+    /// set off from what precedes it - and it is what pays for the number-first wording, which
+    /// otherwise claims "erste Teil" on "Der erste Teil 5" and reads chapter 1. See
+    /// <see cref="ILanguage.ChapterPhrase"/> for that measurement and for what a superseded reading
+    /// is kept for.
     /// </para>
     /// </summary>
     /// <param name="entry">One entry as written.</param>
@@ -105,7 +107,7 @@ internal static class PhraseCompiler
                 $"{what}: \"{entry}\" looks like a \"/regexp/\" but is missing its other \"/\".");
 
         var word = Regex.Escape(entry);
-        return kind == PhraseKind.Chapter ? $"{word} ()|{word}" : word;
+        return kind == PhraseKind.Chapter ? $"^{word} ()|^() {word}" : word;
     }
 
     /// <summary>One leaf of the alternation: a wording plus the guards its edges asked for.</summary>
@@ -113,6 +115,14 @@ internal static class PhraseCompiler
     /// <param name="LeadIn">Whether a <c>^</c> asked for a pause in front.</param>
     /// <param name="LeadOut">Whether a <c>$</c> asked for a pause behind.</param>
     private readonly record struct Leaf(string Body, bool LeadIn, bool LeadOut);
+
+    /// <summary>Whether a wording is nothing but the number group, which is not something a regular
+    /// expression can look for: what makes a lone number an announcement is the sentence around it,
+    /// and that is read off the transcript segments rather than matched
+    /// (<see cref="NumberWordParser.FindBareNumberAnnouncement"/>). Asked while the token is still
+    /// recognizable, before <c>()</c> is expanded into a language's whole number grammar.</summary>
+    /// <param name="leaf">The wording to test.</param>
+    private static bool IsBareNumber(Leaf leaf) => leaf.Body.Trim() == "()";
 
     /// <summary>
     /// Takes one entry's body apart into leaves: split at the top-level <c>|</c>, strip the edge
@@ -243,10 +253,7 @@ internal static class PhraseCompiler
     /// <exception cref="CliError">Thrown for an invalid regexp.</exception>
     private static PhraseAlternative Build(Leaf leaf, int index, string language, string what)
     {
-        // A wording that is nothing but the number group is not something a regular expression can
-        // look for: what makes a lone number an announcement is the sentence around it. Recognized
-        // before the expansion, while it is still one recognizable token.
-        if (leaf.Body.Trim() == "()")
+        if (IsBareNumber(leaf))
             return new PhraseAlternative(
                 index, null, leaf.Body, HasNumberGroup: true, leaf.LeadIn, leaf.LeadOut);
 

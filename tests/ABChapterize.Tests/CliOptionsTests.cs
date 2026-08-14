@@ -1827,13 +1827,26 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     /// <summary>
-    /// A literal phrase carries no <c>^</c>: requiring a pause in front of every chapter
-    /// announcement was measured over sixteen books and would have dropped a real chapter, so the
-    /// guard has to be asked for rather than implied. See <c>PhraseCompiler.BodyOf</c>.
+    /// A literal chapter phrase asks for a pause in front, exactly as a built-in default does: a
+    /// chapter word in the middle of a sentence is not an announcement, whoever supplied the word.
+    /// Nothing behind it, though - a heading runs straight into its own text. See
+    /// <c>PhraseCompiler.BodyOf</c>.
     /// </summary>
     [Fact]
-    public void LiteralChapterPhrase_AsksForNoPause()
+    public void LiteralChapterPhrase_AsksForAPauseInFront()
         => Assert.All(ParseFile("-c", "part")!.DefaultProfile.ChapterPattern.Alternatives,
+            a =>
+            {
+                Assert.True(a.RequiresLeadIn);
+                Assert.False(a.RequiresLeadOut);
+            });
+
+    /// <summary>A literal named phrase still asks for nothing: a prologue or a <c>--custom</c>
+    /// mapping says what it wants with a <c>[heading]</c> hint or a <c>^</c> of its own.</summary>
+    [Fact]
+    public void LiteralNamedPhrase_AsksForNoPause()
+        => Assert.All(ParseFile("-u", "zwischenspiel:Zwischenspiel")!
+                .DefaultProfile.NamedPhrases[^1].Pattern.Alternatives,
             a =>
             {
                 Assert.False(a.RequiresLeadIn);
