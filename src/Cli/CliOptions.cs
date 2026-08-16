@@ -1926,6 +1926,10 @@ public sealed class CliOptions
                                     "none" is [EXPERIMENTAL] and cannot be combined with
                                     --ignore-chapter-numbers, the chapter sequence being the only
                                     thing that tells such an announcement from a year or a price.
+                                    Give it only to books that really are announced this way: on a
+                                    book that names its chapters, adding "none" buys nothing and
+                                    lets a year in a timetable, a number in dialogue or one in the
+                                    closing pages become a chapter.
                                     See doc/manual.md for the whole syntax, with examples.
           -p, --prologue-phrase <p> Word/phrase that identifies a prologue (default: /prolog/,
                                     localized by --lang). Takes the same alternatives, tags and

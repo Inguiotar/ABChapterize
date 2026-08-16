@@ -1118,7 +1118,7 @@ a list of **alternatives** separated by `;`, each of which may be:
 | --- | --- |
 | `chapitre` | a plain word, with the chapter number in front of it or behind it |
 | `/regexp/` | a regular expression |
-| `none` | the number spoken alone, with no phrase at all (chapter phrase only) |
+| `none` | the number spoken alone, with no phrase at all — chapter phrase only, and only for books really announced that way ([why](#bare-numbers-as-announcements)) |
 | `default` | this tool's own phrase for the file's language |
 
 A plain word given as a **chapter** phrase becomes two wordings — the word with
@@ -1277,9 +1277,22 @@ still counts even when the recognizer runs it together with what follows
 ("Seventeen. He was late again."), which is common and no longer costs the
 chapter.
 
-`none` is one alternative among however many the value names, so a book that
-announces some chapters and merely numbers the rest is covered by
-`--chapter-phrase "default;none"`. Written out, `none` is exactly
+**Give it only to the books that need it.** Being one alternative among others,
+`none` invites being added to every run — "then anything numbered gets found" —
+and it does not work that way. On a book whose chapters *are* announced by a
+phrase, `none` finds nothing the phrase would have missed, and a great deal it
+should not have found: a timetable of years in the front matter becomes a run of
+chapters numbered by year, a number spoken in dialogue becomes a chapter, and so
+does one in the closing pages. Each of those costs more than one wrong mark. A
+number far above the real ones sets the sequence's ceiling, so the genuine
+chapters behind it stop continuing the sequence; the book can come out looking as
+though it holds several parts, numbered from the phantom onwards; and a prologue
+can lose its place to a phantom accepted ahead of it. Reach for `none` when a
+narrator really does announce chapters by saying nothing but the number, and
+leave it off otherwise.
+
+Where a book does both — some chapters announced, the rest merely numbered —
+`--chapter-phrase "default;none"` covers it. Written out, `none` is exactly
 `/^()$/` — the number and nothing else, with a pause asked for on either side of
 it, which is what the `^` and the `$` are.
 
