@@ -159,6 +159,38 @@ internal static class DetectionTuning
     internal const double SilenceLeadInSeconds = 3.0;
 
     /// <summary>
+    /// How much speech may sit between a sub-threshold pause and the candidate pause behind it for
+    /// <see cref="RegionProber.SandwichedSilences"/> to read the two as bracketing an announcement
+    /// and promote the first to a candidate of its own.
+    /// <para>
+    /// The defect it exists for: an announcement can be flanked by a pause too short to be a
+    /// candidate and a pause long enough to be one, in which case the only window covering that
+    /// stretch opens on the <em>second</em> pause - that is, immediately after the announcement has
+    /// been spoken - and no pass ever reads it. Two corpus cases, and they are structurally
+    /// identical: "De vandrande djäknarne" chapter 2 (0.95 s pause, 2.89 s of announcement, then the
+    /// 2.75 s candidate) lost the chapter outright, and "The Philosopher's Stone" chapter 11
+    /// (1.39 s, 0.98 s, then the 1.78 s candidate) cost a Pass 2.5 recovery. Both were verified with
+    /// the wprobe harness: a window opened at the earlier pause reads the announcement first try.
+    /// </para>
+    /// <para>
+    /// Promotion keeps the invariant <see cref="SilenceLeadInSeconds"/> protects, which is why it is
+    /// the shape of the fix: the window still opens <em>inside a silence</em>, so "the first speech
+    /// heard here is the announcement" stays true. Reaching an existing candidate's window backwards
+    /// into the narration instead would have broken it.
+    /// </para>
+    /// <para>
+    /// 3.5 s rather than the 3.0 s that would just cover both cases (djäknarne's announcement runs
+    /// 2.89 s). Replaying the rule over all seventeen build-331 logs' own Pass 1 silence lists, the
+    /// bound decides the cost: 2.0 s misses djäknarne, 3.0 s costs 1.19x the corpus's candidates,
+    /// 3.5 s costs 1.31x and 5.0 s 1.49x. The margin is worth the difference - a chapter announced
+    /// with its title runs well past 3 s - and the count overstates the real cost anyway, since a
+    /// promoted candidate sits a few seconds ahead of the one that promoted it and the overlap cache
+    /// serves most of the second window from the first.
+    /// </para>
+    /// </summary>
+    internal const double SandwichedAnnouncementSeconds = 3.5;
+
+    /// <summary>
     /// The same run-up for a jingle candidate, taken from inside the music, and deliberately longer:
     /// the point it is measured back from is a VAD speech onset rather than a silencedetect edge, so
     /// it carries the detector's own latency plus whatever timeline drift survives Pass 1's resync

@@ -82,6 +82,10 @@ internal sealed record ProbeEnvironment(
 /// --early-abort gives up, or +infinity when the check does not apply.</param>
 /// <param name="ExpectedStartChapter">--expected-start-chapter's abort threshold, or null when
 /// the check does not apply.</param>
+/// <param name="AdaptiveFloorSeconds">The shortest pause this run will entertain as a chapter break
+/// - what the sub-floor sweep sweeps down to. <see cref="RegionProber.SandwichedSilences"/> holds a
+/// promoted pause to the same bar, so the two passes agree on what a chapter break can sound like
+/// rather than each carrying its own idea of it.</param>
 /// <param name="Transcriber">The recognizer this region's probes decode with - the pass-2
 /// transcriber for Pass 2 proper, the pass-3 one for a pass 2.5 re-probe (see
 /// <see cref="ChapterDetector.RunPass25Async"/>). Only the probe transcriptions follow it; mark
@@ -100,7 +104,8 @@ internal readonly record struct Pass2Context(
     string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond,
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
     List<SpeechSegment> SpeechSegments, List<Jingle> Jingles, double EarlyAbortSeconds,
-    int? ExpectedStartChapter, ITranscriber Transcriber, bool SecondGuessNumbers = true);
+    int? ExpectedStartChapter, ITranscriber Transcriber, double AdaptiveFloorSeconds = 0.8,
+    bool SecondGuessNumbers = true);
 
 /// <summary>One position Pass 2 may probe: the region start, a silence's end, or the start of a
 /// VAD jingle region. Exactly one of the two anchors is set, except for the region-start candidate,
@@ -672,7 +677,91 @@ internal sealed class RegionProber
                 WindowSeconds: silence.EndSeconds - start + ReachSeconds,
                 Class: CandidateClass.Silence));
         }
+        foreach (var silence in PromotableSilences(candidates, fromSeconds, toSeconds))
+        {
+            var start = Math.Max(silence.StartSeconds, silence.EndSeconds - leadIn);
+            candidates.Add(new ProbeCandidate(
+                start, silence, null,
+                ExpectAtSeconds: silence.EndSeconds,
+                WindowSeconds: silence.EndSeconds - start + ReachSeconds,
+                Class: CandidateClass.Silence));
+        }
         return candidates;
+    }
+
+    /// <summary>
+    /// The sub-threshold pauses that look like the front of an announcement rather than a break in
+    /// narration: long enough to be a chapter pause at all, and followed within
+    /// <see cref="SandwichedAnnouncementSeconds"/> by a pause that <em>is</em> a candidate. Speech
+    /// bracketed by two pauses that short is the shape of an announcement, and without this the only
+    /// window covering it opens on the second pause - after the announcement has been spoken. See
+    /// <see cref="SandwichedAnnouncementSeconds"/> for the two corpus chapters that named the rule
+    /// and for what the bound costs.
+    /// <para>
+    /// Only for a pass that is still probing at the user's own threshold. A gap re-probe or a
+    /// sub-floor sweep has already opened the floor (<see cref="SilenceSource"/>), so every silence
+    /// this would promote is a candidate there already, and promoting again would merely duplicate
+    /// windows the sweep is budgeting for.
+    /// </para>
+    /// </summary>
+    /// <param name="candidates">The candidates built so far, whose starts say which pauses already
+    /// have a window; the promoted ones are appended by the caller.</param>
+    /// <param name="fromSeconds">Start of the stretch, as <see cref="CandidatesIn"/> bounds it.</param>
+    /// <param name="toSeconds">End of the stretch, as <see cref="CandidatesIn"/> bounds it.</param>
+    private IEnumerable<Silence> PromotableSilences(
+        List<ProbeCandidate> candidates, double fromSeconds, double toSeconds)
+    {
+        if (_sweeping || _subFloorSeconds is not null)
+            return [];
+
+        var probed = candidates
+            .Where(c => c.Class == CandidateClass.Silence && c.Silence is not null)
+            .Select(c => c.Silence!.Value)
+            .ToList();
+        return SandwichedSilences(
+            _ctx.AllSilences, probed, _ctx.AdaptiveFloorSeconds, fromSeconds, toSeconds);
+    }
+
+    /// <summary>
+    /// The rule itself, over explicit lists: every stored pause that is long enough to be a chapter
+    /// break and has a probed pause beginning within <see cref="SandwichedAnnouncementSeconds"/> of
+    /// its end. Internal and static for unit testing, exactly as
+    /// <see cref="GapPlanning.PlanWindowEnd"/> is.
+    /// </summary>
+    /// <param name="allSilences">Every silence Pass 1 kept, in time order.</param>
+    /// <param name="probed">The pauses that already have a window of their own.</param>
+    /// <param name="floorSeconds">Shortest pause that may be promoted; see
+    /// <see cref="Pass2Context.AdaptiveFloorSeconds"/>.</param>
+    /// <param name="fromSeconds">Start of the stretch being planned.</param>
+    /// <param name="toSeconds">End of the stretch being planned.</param>
+    internal static IEnumerable<Silence> SandwichedSilences(
+        IReadOnlyList<Silence> allSilences, IReadOnlyCollection<Silence> probed,
+        double floorSeconds, double fromSeconds, double toSeconds)
+    {
+        var alreadyProbed = probed.Select(s => s.StartSeconds).ToHashSet();
+        var pauseStarts = probed.Select(s => s.StartSeconds).OrderBy(t => t).ToList();
+        if (pauseStarts.Count == 0)
+            yield break;
+
+        foreach (var silence in allSilences)
+        {
+            if (silence.EndSeconds < fromSeconds || silence.EndSeconds >= toSeconds - 1)
+                continue;
+            if (alreadyProbed.Contains(silence.StartSeconds))
+                continue;
+            // Long enough to be a chapter break at all - the bar the sub-floor sweep uses - or
+            // "sandwiched" would promote every breath drawn shortly before a real pause.
+            if (silence.EndSeconds - silence.StartSeconds < floorSeconds)
+                continue;
+
+            var index = pauseStarts.BinarySearch(silence.EndSeconds);
+            var behind = index >= 0 ? index : ~index;
+            if (behind >= pauseStarts.Count)
+                continue;
+            // The speech in between runs from this pause's end to where the next one begins.
+            if (pauseStarts[behind] - silence.EndSeconds <= SandwichedAnnouncementSeconds)
+                yield return silence;
+        }
     }
 
     /// <summary>

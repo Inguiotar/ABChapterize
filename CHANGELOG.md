@@ -218,6 +218,14 @@ earn a round number.
 
 ### Fixed
 
+- **A chapter announced between two pauses is no longer missed when the first pause is a
+  short one.** Where a heading sits between a brief pause and a longer one, the only window
+  covering that stretch used to open on the longer pause — that is, just after the heading
+  had been spoken — so nothing ever read it. Such a book lost the chapter outright when no
+  later chapter happened to bracket it. The short pause is now probed in its own right when
+  a longer one follows within a few seconds, which is what a spoken heading sounds like.
+  Marks that were already found do not move.
+
 - **An announcement spoken over a chapter's jingle is looked for properly.** Where the
   music might be hiding the announcement rather than preceding it, the tool used to widen
   one probe window to cover the whole jingle — and a window that long is exactly what makes

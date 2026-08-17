@@ -391,7 +391,8 @@ public sealed class ChapterDetector
         var pass2Ctx = new Pass2Context(
             file, info, work, bytesPerSecond,
             allSilences, silences, nonSpeechRegions, speechSegments, jingles,
-            earlyAbortSeconds, expectedStartChapter, _transcriber);
+            earlyAbortSeconds, expectedStartChapter, _transcriber,
+            _options.AdaptiveFloorSeconds);
 
         // The shortest chapter break any region measured, which is what decides whether the sweep
         // below has anything to do. Taken across regions rather than per region: it is a statement
