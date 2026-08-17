@@ -32,6 +32,11 @@
          uses a scripted FakeVad and never touches this. -->
     <EmbeddedResource Include="..\..\assets\silero_vad.onnx"
                       LogicalName="ABChapterize.silero_vad.onnx" />
+    <!-- Likewise for the denoiser: SpeechDenoiserTests runs the real model, since the transforms
+         around it are ours and only a real inference says whether they match what it was trained
+         on. -->
+    <EmbeddedResource Include="..\..\assets\lavasr_denoiser.onnx"
+                      LogicalName="ABChapterize.lavasr_denoiser.onnx" />
   </ItemGroup>
 
 </Project>

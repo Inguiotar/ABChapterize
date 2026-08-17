@@ -110,6 +110,15 @@
     <EmbeddedResource Include="assets\silero_vad.onnx" LogicalName="ABChapterize.silero_vad.onnx" />
   </ItemGroup>
 
+  <!-- LavaSR's speech denoiser, converted to ONNX by github.com/Topping1/LavaSR-ONNX
+       (denoiser_core_legacy_fixed63.onnx, release Alpha-v0.1) and bundled for the same reason as
+       the VAD above: 1.8 MB embeds without a download step. Apache-2.0, like LavaSR itself - see
+       THIRD-PARTY-NOTICES.md, which also carries the upstream SHA-256 and the note to re-check
+       that release monthly, the conversion being an alpha. Loaded by SpeechDenoiser. -->
+  <ItemGroup>
+    <EmbeddedResource Include="assets\lavasr_denoiser.onnx" LogicalName="ABChapterize.lavasr_denoiser.onnx" />
+  </ItemGroup>
+
   <!-- Ship the docs, third-party notices/license texts, and readme alongside the executable:
        LICENSE plus the licenses/ glob satisfy the "include the copyright notice" redistribution
        condition of ABChapterize's own MIT license and of every bundled MIT component, and

@@ -14,6 +14,30 @@ detectable amplitude gap. The pre-pass runs over every file processed.
 - License: MIT — see [`licenses/silero-vad-LICENSE`](licenses/silero-vad-LICENSE)
 - Copyright (c) 2020-present Silero Team
 
+## LavaSR (speech denoiser)
+
+`assets/lavasr_denoiser.onnx` is LavaSR's speech-enhancement denoiser, embedded
+into the executable and used to re-read a probe window whose announcement the
+recognizer garbled on low-fidelity audio.
+
+- Project: https://github.com/ysharma3501/LavaSR
+- ONNX conversion: https://github.com/Topping1/LavaSR-ONNX
+- License: Apache-2.0 — see [`licenses/lavasr-LICENSE`](licenses/lavasr-LICENSE)
+- Copyright (c) the LavaSR authors (the upstream LICENSE carries Apache's
+  unfilled copyright placeholder, so no holder is named here rather than one
+  being guessed at)
+
+The bundled file is `denoiser_core_legacy_fixed63.onnx` from the conversion's
+`Alpha-v0.1` release, 1,815,317 bytes, SHA-256
+`8afa7f4db9f356f7bfb575bb207d8673a728a7baf6773e0b10226a5e15687f2a`.
+
+**Maintenance note — re-check this release about monthly.** The conversion is
+labelled alpha, so its assets may be replaced in place or superseded without a
+new tag. Compare the SHA-256 above against the current
+`Alpha-v0.1` asset (and look for a newer release); if it has changed, re-run the
+equivalence check in `SpeechDenoiserTests` before taking the new file, since the
+denoiser's exact output is what a probe's transcript depends on.
+
 ## Whisper.net
 
 The `Whisper.net`, `Whisper.net.Runtime`, `Whisper.net.Runtime.Cuda`, and

@@ -4,8 +4,8 @@
 
 using Microsoft.ML.OnnxRuntime;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using ABChapterize.Errors;
+using ABChapterize.Onnx;
 
 namespace ABChapterize.Vad;
 
@@ -87,36 +87,13 @@ internal sealed class SileroWorker : IDisposable
     private readonly OrtValue[] _inputs;
     private readonly OrtValue[] _outputs;
 
-    /// <summary>Redirects Microsoft.ML.OnnxRuntime's native "onnxruntime" P/Invoke lookup to
-    /// <c>runtimes\&lt;rid&gt;\</c> next to the executable, matching where the deployment puts it
-    /// (see the csproj's PruneForeignRuntimes target) instead of the flat publish-root layout the
-    /// package's own default probing expects. Registered on this type because it is the only one in
-    /// the codebase that touches OnnxRuntime, so the CLR guarantees this runs before the first
-    /// <see cref="InferenceSession"/> is constructed below - which matters, because the runtime
-    /// registers a resolver of its own on first use and refuses a second one.</summary>
-    static SileroWorker()
-    {
-        NativeLibrary.SetDllImportResolver(typeof(InferenceSession).Assembly, ResolveOnnxRuntimeNativeLibrary);
-    }
-
-    /// <summary>Loads "onnxruntime" from <c>runtimes\&lt;rid&gt;\</c> when it's there (the published
-    /// layout); otherwise returns <see cref="IntPtr.Zero"/> to fall back to the default search (an
-    /// unpublished build output, where the native still sits flat next to the assembly). Any other
-    /// library name also falls through unchanged - "onnxruntime_providers_shared", the only other
-    /// native OnnxRuntime ships, is never P/Invoked from managed code; onnxruntime itself loads it
-    /// from its own directory, so moving both together is enough without a second entry here.</summary>
-    private static IntPtr ResolveOnnxRuntimeNativeLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
-    {
-        if (libraryName != "onnxruntime")
-            return IntPtr.Zero;
-        var fileName = OperatingSystem.IsWindows() ? "onnxruntime.dll" : "libonnxruntime.so";
-        var path = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, fileName);
-        return File.Exists(path) ? NativeLibrary.Load(path) : IntPtr.Zero;
-    }
-
     /// <summary>Creates a worker with its own session over the bundled model.</summary>
     internal SileroWorker()
     {
+        // Must precede the session: the native lookup this installs is what finds onnxruntime in a
+        // published layout. It used to be this type's static constructor, which was sound while the
+        // VAD was the only ONNX model here; see OnnxRuntimeNative for why a second model moved it.
+        OnnxRuntimeNative.EnsureRegistered();
         using var options = SessionOptionsForOneWorker();
         _session = new InferenceSession(LoadModelBytes(), options);
         // "state" and "stateN" must stay distinct buffers: ORT writes the output while the input is
