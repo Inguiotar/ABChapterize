@@ -181,6 +181,21 @@ internal static class PhraseCompiler
     /// lookaround - either means something a copy would not preserve or holds the chapter number's
     /// own notation, which is an alternation of a language's entire number grammar and must stay one
     /// token (see <see cref="NumberPattern"/>).
+    /// <para>
+    /// The quantifier exemption is documented in the manual as the way to say "one wording, two
+    /// transcriptions of it" (user's call, 2026-08-17), so <c>{1}</c> is a contract now rather than a
+    /// side effect - <c>PhraseCompilerTests.AQuantifiedAlternation_StaysOneWordingAndMatchesEitherSpelling</c>
+    /// holds it. It exists because splitting is the right default and the wrong one for exactly one
+    /// case: an alternation that names two ways the *recognizer* writes the same words. On
+    /// "Paula Monti" (build 331, 2026-08-16) Whisper wrote one announcement as "Première partie,
+    /// chapitre 2" and as "1ère partie, chapitre 2" at probe positions 0.05 s apart, so the user's
+    /// <c>/(?:premi|1).re partie.? chapitre/</c> became two wordings that each refused to confirm the
+    /// other's spelling; the onset walk stopped where the spelling flipped rather than where the
+    /// announcement was clipped, costing chapter 2 a mark 1.114 s early and moving five more. Making
+    /// the user spell the intent is what distinguishes that from the case splitting is *for* - two
+    /// genuinely different wordings, where one vouching for the other is the build-328 defect
+    /// <see cref="ABChapterize.Language.AnnouncementMatcher.ForWording"/> records.
+    /// </para>
     /// </summary>
     /// <param name="body">One wording, anchors already stripped and with no top-level alternation
     /// left.</param>

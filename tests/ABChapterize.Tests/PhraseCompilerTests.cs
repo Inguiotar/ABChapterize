@@ -73,6 +73,40 @@ public class PhraseCompilerTests
     public void AlternationInsideAWording_IsMultipliedOut(string phrase, string[] expected)
         => Assert.Equal(expected, Named(phrase).Alternatives.Select(a => a.Source));
 
+    /// <summary>
+    /// A <c>{1}</c> keeps an alternation inside one wording, which is the spelling the manual gives
+    /// users for "these are two transcriptions of one wording, not two wordings". It works because a
+    /// quantifier binds to the group as a whole and so cannot be distributed - but the manual now
+    /// promises it, which turns an implementation property into a contract this test holds.
+    /// <para>
+    /// The case it exists for is Whisper's notation wobble. On "Paula Monti" (build 331, 2026-08-16)
+    /// the recognizer wrote the identical announcement as "Première partie, chapitre 2" and as
+    /// "1ère partie, chapitre 2" at probe positions 0.05 s apart, and the plainly-written
+    /// <c>/(?:premi|1).re partie.? chapitre/</c> - two wordings, each confirming only its own
+    /// spelling - cost chapter 2 a mark 1.114 s early and moved five more.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AQuantifiedAlternation_StaysOneWordingAndMatchesEitherSpelling()
+    {
+        var pattern = Chapter("/(?:premi|1){1}.re partie.? chapitre ()/", "fr");
+        Assert.Single(pattern.Alternatives);
+        PhraseAssert.Matches(pattern, "première partie, chapitre 2, une intrigue.");
+        PhraseAssert.Matches(pattern, "1ère partie, chapitre 2, une intrigue.");
+    }
+
+    /// <summary>Without the quantifier the same phrase is two wordings, neither of which recognizes
+    /// the other's spelling - the regression the manual's <c>{1}</c> advice exists to avoid.</summary>
+    [Fact]
+    public void TheSameAlternationUnquantified_IsTwoWordingsThatDoNotCoverEachOther()
+    {
+        var pattern = Chapter("/(?:premi|1).re partie.? chapitre ()/", "fr");
+        Assert.Equal(2, pattern.Alternatives.Count);
+        Assert.DoesNotMatch(pattern.Alternatives[0].Regex!, "1ère partie, chapitre 2, une intrigue.");
+        Assert.DoesNotMatch(
+            pattern.Alternatives[1].Regex!, "première partie, chapitre 2, une intrigue.");
+    }
+
     /// <summary>The chapter number's own group is never multiplied out: it stands for an alternation
     /// of a whole language's number grammar, which would be thousands of wordings, and a capturing
     /// group is what a title reads its text back from.</summary>

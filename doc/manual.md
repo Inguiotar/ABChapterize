@@ -1145,6 +1145,17 @@ confirm itself on words it never matched. A value that would expand past 64
 alternatives is refused. The chapter number's own `()`, and any capturing group,
 are left whole.
 
+One more kind of group is left whole, and this one is deliberately in your
+hands: a group quantified with `{1}`. Use it when an alternation does not name
+two wordings but two *transcriptions* of one wording — the recognizer likes to
+wobble between, say, "Première partie" and "1ère partie" for the identical
+audio, and `/(?:premi|1).re partie/` written plainly becomes two alternatives,
+each of which refuses to confirm a position on the other one's spelling.
+Written `/(?:premi|1){1}.re partie/` the choice stays inside one alternative:
+the `{1}` changes nothing about what the expression matches, it only declares
+"this is one wording, however it comes out spelled", and the announcement's
+position is then confirmed under either spelling.
+
 Repeating the option is the same as writing the values as one list, so
 `--chapter-phrase a --chapter-phrase b` and `--chapter-phrase "a;b"` mean
 exactly the same thing. A `;` inside a regexp is written `\;`.
