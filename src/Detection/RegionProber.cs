@@ -350,17 +350,76 @@ internal sealed class RegionProber
     private double _cacheTo = double.NegativeInfinity;
 
     /// <summary>
-    /// The --min-silence-length auto threshold as adapted so far, or null while probing is still
-    /// unthrottled. Probing proceeds unthrottled until the second mark is found (its anchor silence
-    /// is the first real inter-chapter break - the silence before the first mark is typically the
-    /// intro/title silence, often longer, so it must not be used to tighten). From there each
-    /// mark's anchor silence proposes <see cref="AdaptiveTightenFactor"/> times its own length,
-    /// bounded below by <see cref="CliOptions.AdaptiveFloorSeconds"/>, and this is the running
-    /// <em>minimum</em> of those proposals - the first one sets the effective threshold, in either
+    /// What this region's marks have measured this book's chapter breaks down to, or null while
+    /// nothing has qualified yet. Probing proceeds unthrottled until the second mark is found (its
+    /// anchor silence is the first real inter-chapter break - the silence before the first mark is
+    /// typically the intro/title silence, often longer, so it must not be used to tighten). From
+    /// there each mark's anchor silence proposes <see cref="AdaptiveTightenFactor"/> times its own
+    /// length, bounded below by <see cref="CliOptions.AdaptiveFloorSeconds"/>, and this is the
+    /// running <em>minimum</em> of those proposals - the first one sets the figure, in either
     /// direction from the starting demand, and every later one can only lower it (see
     /// <see cref="AdaptiveTightenFactor"/> for why a raise is never safe).
+    /// <para>
+    /// This is <em>evidence about the narrator</em>, not the probing budget: every accepted mark
+    /// feeds it, gap-recovered ones included, and it is read by the two gap-scoped mechanisms that
+    /// act on a short break - <see cref="SubFloorForReprobe"/> and, through
+    /// <see cref="AdaptedThresholdSeconds"/>, <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/>.
+    /// The primary scan's own gate is <see cref="_scanFloorSeconds"/>, which is deliberately fed
+    /// less; see there for the measurement that separated the two.
+    /// </para>
     /// </summary>
     private double? _adaptedThresholdSeconds;
+
+    /// <summary>
+    /// The same running minimum, minus one class of observation: a mark recovered by a sequence-gap
+    /// re-probe whose break came out <em>at or under</em>
+    /// <see cref="CliOptions.AdaptiveFloorSeconds"/>. This is what
+    /// <see cref="AdoptProposedThreshold"/> copies into <see cref="_threshold"/>, and therefore the
+    /// only thing that decides how much the forward scan probes.
+    /// <para>
+    /// The split exists because one field was serving two purposes that pull in opposite
+    /// directions: a short break is <em>evidence</em> that this narrator's chapter breaks can be
+    /// short, and separately a <em>licence to spend</em> probes on every short pause left in the
+    /// book. Where the evidence arrives from a gap recovery at floor level, the second does not
+    /// follow from the first - the break is below anything the forward scan probes for anyway, and
+    /// the two gap-scoped mechanisms already reach down there on their own budget
+    /// (<see cref="SubFloorForReprobe"/>, and the sub-floor sweep), while the forward scan has
+    /// nothing telling it anything is missing.
+    /// </para>
+    /// <para>
+    /// The floor test is what makes the rule safe rather than merely cheap, and it was arrived at by
+    /// being wrong first: withholding <em>every</em> gap recovery from this gate broke
+    /// <c>AutoMinSilence_AfterAGapRecovery_...</c>, which builds the case that needs the opposite -
+    /// a chapter recovered at a 3 s break teaching a 2.25 s gate, so that a <em>later</em> chapter at
+    /// 2.5 s is still probed, and that later chapter being last means no gap could ever bracket it.
+    /// A bounded "lower by at most a factor" variant cannot serve both: that case needs the gate to
+    /// follow 3.75 -> 2.25 (a factor of 0.6 or less) while the case below needs it not to follow
+    /// 2.5 -> 0.8 (0.9 or more). Whether the proposal was clamped to the floor separates them
+    /// cleanly, because it asks whether the break is one the forward scan could ever have probed.
+    /// </para>
+    /// <para>
+    /// Measured on "Die Cyber-Brutzellen" (builds 331 and 339, 2026-08-17). Chapter 14 is recovered
+    /// inside a gap re-probe at a genuine 1.01 s break - 0.7575 s once scaled, hence clamped to the
+    /// floor - which floored the threshold at minute 11 of
+    /// the run with chapters 16-29 - about 9.5 hours of audio - still to scan: 921 -> 2177 probes,
+    /// 26.5 -> 55.7 minutes, Whisper audio 4:20:51 -> 12:13:36. It bought <b>nothing</b>. Build 331
+    /// is the control experiment, its Pass 2 having run at 2.5 s throughout because the identical
+    /// lowering landed in Pass 2.5 when nothing was left to scan: all 29 chapters at identical
+    /// positions, and the seven that build 339 accepted "at a silence" (16, 18, 20, 21, 23, 27, 29)
+    /// were accepted "at a jingle" by build 331 at the same millisecond. That book's chapters are
+    /// announced after music; the extra silence candidates only won the race to the same
+    /// announcement.
+    /// </para>
+    /// <para>
+    /// What the lowering does buy, it buys through the gap-scoped consumers, so this split keeps it.
+    /// "I Shall Wear Midnight" chapter 9 sits behind a 0.74 s break where the book's other thirteen
+    /// run 4.47-5.25 s, and it was recovered by the sub-floor sweep, not by the scan gate; "Paula
+    /// Monti" chapters 4 and 12 likewise. A book whose breaks really are short still throttles
+    /// itself, because its <em>own forward scan</em> measures them: "De vandrande djäknarne" reaches
+    /// 0.8 s from chapter 3, a primary-scan mark.
+    /// </para>
+    /// </summary>
+    private double? _scanFloorSeconds;
 
     /// <summary>
     /// What this region's marks measured this book's chapter breaks to be, or null where nothing
@@ -372,7 +431,7 @@ internal sealed class RegionProber
     internal double? AdaptedThresholdSeconds => _adaptedThresholdSeconds;
 
     /// <summary>The silence length a candidate must reach to be probed at all; the
-    /// --min-silence-length the run opened at until <see cref="_adaptedThresholdSeconds"/> starts
+    /// --min-silence-length the run opened at until <see cref="_scanFloorSeconds"/> starts
     /// moving it, up or down. Without --min-silence-length auto every candidate is probed
     /// unconditionally and this never changes, exactly as before that feature existed.</summary>
     private double _threshold;
@@ -2777,6 +2836,7 @@ internal sealed class RegionProber
             note + $"re-probing {candidates.Count} candidate(s), " +
             $"{FormatTimestamp(fromSeconds)}-{FormatTimestamp(toSeconds)}");
         var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
+        var measuredBefore = _adaptedThresholdSeconds;
         for (var si = 0; si < candidates.Count; si++)
         {
             var gapMarks = await ProbeAsync(
@@ -2803,6 +2863,14 @@ internal sealed class RegionProber
                                  $"{si + 1} of {candidates.Count} candidate(s)");
             break;
         }
+        // Without this the evidence is invisible here: the scan gate no longer follows a gap recovery
+        // down (see _scanFloorSeconds), so the "threshold lowered" line this used to produce is gone,
+        // and what the break was measured at would next surface only in a sub-floor sweep thousands
+        // of log lines later - or, on a book that needs no sweep, nowhere at all.
+        if (_adaptedThresholdSeconds is { } measured && measured != measuredBefore)
+            _env.Log?.Invoke(
+                note + $"measured a {measured:0.##} s chapter break - kept for the gap passes, " +
+                "not applied to the forward scan");
         _reprobing = false;
         _gapAbove = null;
         _subFloorSeconds = null;
@@ -2841,7 +2909,11 @@ internal sealed class RegionProber
     {
         if (_sweeping)
             return null;
-        var floor = Math.Min(_threshold, _env.Options.MinSilenceSeconds);
+        // Deliberately the evidence minimum rather than the scan gate: this is one of the two
+        // gap-scoped mechanisms _scanFloorSeconds withholds a gap recovery from, and withholding it
+        // here as well would leave a measured short break with nothing at all able to act on it.
+        var measured = _adaptedThresholdSeconds ?? _env.Options.MinSilenceSeconds;
+        var floor = Math.Min(measured, _env.Options.MinSilenceSeconds);
         return floor < _env.Options.MinSilenceSeconds ? floor : null;
     }
 
@@ -2878,7 +2950,7 @@ internal sealed class RegionProber
     {
         // The first set can go either way from the starting demand; everything after it can only
         // ever be a lowering.
-        var newThreshold = _adaptedThresholdSeconds ?? _env.Options.MinSilenceSeconds;
+        var newThreshold = _scanFloorSeconds ?? _env.Options.MinSilenceSeconds;
         if (newThreshold != _threshold)
             _env.Log?.Invoke($"threshold {(newThreshold > _threshold ? "tightened" : "lowered")} " +
                              $"to {newThreshold:0.##} s after {after}");
@@ -2902,9 +2974,17 @@ internal sealed class RegionProber
     {
         if (thresholdSilence is not { } silence)
             return;
-        var proposed = Math.Max(_env.Options.AdaptiveFloorSeconds,
-            AdaptiveTightenFactor * (silence.EndSeconds - silence.StartSeconds));
+        var measured = AdaptiveTightenFactor * (silence.EndSeconds - silence.StartSeconds);
+        var proposed = Math.Max(_env.Options.AdaptiveFloorSeconds, measured);
         _adaptedThresholdSeconds = Math.Min(_adaptedThresholdSeconds ?? proposed, proposed);
+
+        // A gap recovery whose break lands at or under the floor is withheld from the forward scan's
+        // own gate - see _scanFloorSeconds. One that lands above it is not: that is an ordinary
+        // chapter break this book demonstrably has, and the scan needs to know. The evidence above is
+        // kept either way, so both gap-scoped mechanisms still act on it regardless.
+        if (_reprobing && measured <= _env.Options.AdaptiveFloorSeconds)
+            return;
+        _scanFloorSeconds = Math.Min(_scanFloorSeconds ?? proposed, proposed);
     }
 
     /// <summary>

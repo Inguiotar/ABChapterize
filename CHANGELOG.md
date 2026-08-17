@@ -239,6 +239,15 @@ earn a round number.
   a longer one follows within a few seconds, which is what a spoken heading sounds like.
   Marks that were already found do not move.
 
+- **Recovering a chapter no longer makes the rest of the file crawl.** When a chapter was found by
+  the deeper search that runs after a gap in the numbering, the very short pause it turned up behind
+  was taken as a statement about the whole book, and everything after it was searched at that
+  setting — on one long audiobook this doubled the running time while finding exactly the same
+  chapters, all of them announced after music the search was already looking at. Such a pause is now
+  remembered for the recovery passes, which are the ones that can act on it, without opening up the
+  main scan. A book whose chapters really do follow short pauses still adapts as before, because its
+  own main scan measures them.
+
 - **A mark no longer lands in the middle of whatever was said just before the chapter.**
   Where only a short pause separates a chapter announcement from speech in front of it — a
   recording that names its reader before each chapter is the case that turned this up — the

@@ -3381,6 +3381,56 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoMinSilence_AGapRecoveryAtFloorLevel_TeachesTheGapPassesWithoutOpeningTheForwardScan()
+    {
+        // The other side of the test above, and the reason the rule keys on the adaptive floor
+        // rather than on "was this a gap recovery". Same shape - chapter 2's 5 s anchor sets a
+        // 3.75 s threshold, chapter 3 is skipped and recovered from the gap - but chapter 3's break
+        // is 1 s, which scales to 0.75 s and is therefore clamped to the 0.8 s floor. A break the
+        // forward scan would never probe for even at its most generous says nothing about what the
+        // forward scan should spend on the rest of the book, so the gate stays at 3.75 s and the
+        // 1.2 s decoy pause at 1100 - which the old running minimum would have decoded, the gate
+        // having dropped to 0.8 s - is passed over. The evidence is still recorded for the two
+        // gap-scoped mechanisms that can act on it.
+        //
+        // Measured on "Die Cyber-Brutzellen" (builds 331 vs 339, 2026-08-17): exactly this, at
+        // 1.01 s, floored the threshold with 9.5 hours of book left to scan and cost 921 -> 2177
+        // probes and 26.5 -> 55.7 minutes for byte-identical output - all 29 chapters at the same
+        // positions, the seven build 339 accepted "at a silence" having been accepted "at a jingle"
+        // by build 331 at the same millisecond.
+        // Getting a floor-level anchor takes the route a real book takes, because an ordinary
+        // candidate cannot produce one: Pass 1 only stores silences of 1.5 s and up, and 0.75 x 1.5
+        // is still 1.125 s. Chapter 3 is announced behind the 1 s pause at 700-701, which reaches the
+        // candidate list only by being promoted (the sandwiched-announcement rule admits a stored
+        // pause once a probed one follows within 3.5 s - here the 4 s pause at 702-706). Promoted or
+        // not it is still under the 3.75 s gate, so the forward scan skips it and only the gap
+        // re-probe reads it; the mark it recovers anchors to that 1 s pause, scaling to 0.75 s and
+        // clamping to the floor.
+        //
+        // The decoy is 2 s rather than something shorter for the same reason: below 1.5 s it would
+        // never be a candidate and the assertion would pass without proving anything.
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options(),
+            [new(595, 600), new(700, 701), new(702, 706), new(895, 900),
+             new(1098, 1100), new(1495, 1500)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter two."));
+                s.Add(701, Seg(0.3, " Chapter three."));
+                s.Add(900, Seg(0.3, " Chapter four."));
+                s.Add(1500, Seg(0.3, " Chapter five."));
+            });
+
+        Assert.False(result.GapRemains);
+        Assert.Equal([1, 2, 3, 4, 5], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("measured a 0.8 s chapter break") &&
+                                  l.Contains("not applied to the forward scan"));
+        Assert.DoesNotContain(log, l => l.Contains("threshold lowered to 0.8"));
+        Assert.DoesNotContain(audio.DecodeStarts, d => d is >= 1096 and <= 1101);
+    }
+
+    [Fact]
     public async Task AGapReprobe_StopsAtTheChapterThatClosesTheGap_WithoutRefindingIt()
     {
         // Three consecutive skipped candidates (2.0 s silences, below the 3.75 s threshold chapter
