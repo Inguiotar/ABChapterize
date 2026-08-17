@@ -7843,4 +7843,70 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Contains(debug, l => l.Contains("onset probe") && l.Contains("-> phrase"));
     }
+
+    /// <summary>
+    /// The failure the denoiser rescue exists for: the recognizer keeps a chapter's number and
+    /// loses the word beside it, so no wording of the phrase can match and the window yields
+    /// nothing. Measured on "De vandrande djaknarne", where "Forsta kapitlet Djaknetag" came back
+    /// as "1. Jaknuktag" and cost the book its first chapter.
+    /// <para>
+    /// The fixture's audio is digital silence, which the fidelity check reports as unmeasurable
+    /// rather than dull, so permission is refused here - but the request having been made is what
+    /// these tests are about. The denoising itself is covered against the real model in
+    /// <see cref="SpeechDenoiserTests"/>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ANumberWithoutItsChapterWord_AsksToBeDenoised()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options(), [new(595, 600)], s => s.Add(600, Seg(0.5, " 1. Jaknuktag")));
+
+        Assert.Contains(log, l => l.Contains("heard a chapter number but not the word"));
+        Assert.Contains(log, l => l.Contains("could not measure"));
+    }
+
+    /// <summary>A window that produced a mark is never re-read: the rescue is a fallback for a lost
+    /// announcement, not a second opinion on a found one.</summary>
+    [Fact]
+    public async Task AnAnnouncementThatWasHeardProperly_IsNotDenoised()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options(), [new(595, 600)], s => s.Add(600, Seg(0.5, " Chapter one.")));
+
+        Assert.DoesNotContain(log, l => l.Contains("heard a chapter number but not the word"));
+    }
+
+    /// <summary>Narration with no number in it is a different kind of empty window, and has its own
+    /// remedies; denoising it would spend a decode on nothing.</summary>
+    [Fact]
+    public async Task AWindowWithNoNumberAtAll_IsNotDenoised()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options(), [new(595, 600)], s => s.Add(600, Seg(0.5, " and he walked on into the evening.")));
+
+        Assert.DoesNotContain(log, l => l.Contains("heard a chapter number but not the word"));
+    }
+
+    /// <summary>A number inside a sentence is prose rather than a heading standing on its own. The
+    /// strict reading is what keeps this rescue off ordinary text, which it would otherwise ask
+    /// about on every empty window of every dull-sounding book.</summary>
+    [Fact]
+    public async Task ANumberInsideASentence_IsNotDenoised()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options(), [new(595, 600)], s => s.Add(600, Seg(0.5, " he had walked 1 mile that evening.")));
+
+        Assert.DoesNotContain(log, l => l.Contains("heard a chapter number but not the word"));
+    }
+
+    /// <summary>--no-denoise switches the whole thing off, the request included.</summary>
+    [Fact]
+    public async Task NoDenoise_SuppressesTheRequestEntirely()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--no-denoise"), [new(595, 600)], s => s.Add(600, Seg(0.5, " 1. Jaknuktag")));
+
+        Assert.DoesNotContain(log, l => l.Contains("heard a chapter number but not the word"));
+    }
 }

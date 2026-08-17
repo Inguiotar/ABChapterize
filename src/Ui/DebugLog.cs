@@ -168,7 +168,8 @@ public sealed class DebugLog : IDisposable
         yield return $"min-silence-length {DescribeMinSilence(o)}, " +
                      $"mark-lead {o.MarkLeadSeconds:0.##} s";
         yield return $"mark-refinement {(o.PreciseMark ? "on" : "off (--quick-marks)")}, " +
-                     $"mark-before-jingle {(o.MarkBeforeJingle ? "on" : "off")}";
+                     $"mark-before-jingle {(o.MarkBeforeJingle ? "on" : "off")}, " +
+                     $"denoise-rescue {(o.Denoise ? "on" : "off (--no-denoise)")}";
         yield return $"early-abort {(o.EarlyAbortMinutes > 0 ? $"{o.EarlyAbortMinutes:0.#} min" : "off")}, " +
                      $"expected-start-chapter {o.ExpectedStartChapter?.ToString() ?? "-"}, " +
                      // The effective cap rather than the option, because there is always one now

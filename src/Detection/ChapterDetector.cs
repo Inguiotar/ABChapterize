@@ -51,6 +51,22 @@ public sealed class ChapterDetector
     /// count toward the same per-file statistics - which also resets those measurements.</summary>
     private MarkPlacer? _marks;
 
+    /// <summary>The speech denoiser this file's probes may fall back on, or null when the run
+    /// switched it off or the file sounded clean enough not to need it. Resolved on first demand by
+    /// <see cref="DenoiserForFileAsync"/> and disposed with the file, since an ONNX session is worth
+    /// neither holding across a whole batch nor building per window.</summary>
+    private SpeechDenoiser? _denoiser;
+
+    /// <summary>Whether <see cref="DenoiserForFileAsync"/> has already decided for this file, so a
+    /// second garbled window neither re-measures nor re-opens the session. A flag of its own rather
+    /// than a null check, since "measured and refused" is a real answer.</summary>
+    private bool _denoiserDecided;
+
+    /// <summary>What the fidelity check needs to sample this file, captured where the detection core
+    /// still has it. Held rather than threaded through <see cref="BuildProbeEnvironment"/> because
+    /// the resolver is reached from four different passes, none of which has it in scope.</summary>
+    private (string File, double DurationSeconds, string? Decoder)? _denoiseSource;
+
     /// <summary>Per-file log sink set by <see cref="SetLog"/>, reaching every destination there is;
     /// null when nothing is listening. What a detection line is normally written to.</summary>
     private Action<string>? _log;
@@ -388,6 +404,13 @@ public sealed class ChapterDetector
         var expectedStartChapter = confirmedSeed.Count == 0 ? _options.ExpectedStartChapter : null;
         int? belowExpectedStartNumber = null;
 
+        // Only what the fidelity check would need, and no measuring yet: most files never garble an
+        // announcement, and the ones that do not should not pay to be told so.
+        _denoiser?.Dispose();
+        _denoiser = null;
+        _denoiserDecided = false;
+        _denoiseSource = (file, info.DurationSeconds, info.InputDecoder);
+
         var pass2Ctx = new Pass2Context(
             file, info, work, bytesPerSecond,
             allSilences, silences, nonSpeechRegions, speechSegments, jingles,
@@ -443,9 +466,81 @@ public sealed class ChapterDetector
                 chapters, namedFound, pass2Ctx, language.Profile, ct);
         }
 
+        // The ONNX session belongs to this file: a batch would otherwise carry one file's session
+        // through every later file that never asks for one.
+        _denoiser?.Dispose();
+        _denoiser = null;
+
         return BuildDetectionResult(
             chapters, namedFound, speechSegments, language.Profile, language.DetectedLanguage,
             language.DetectedProbability, earlyAborted, belowExpectedStartNumber);
+    }
+
+    /// <summary>
+    /// Decides, once per file and only when something asks, whether a garbled announcement here may
+    /// be re-read through the speech denoiser.
+    /// <para>
+    /// The check is a permission, not a diagnosis. What actually asks is a probe window that heard a
+    /// chapter number without the word beside it
+    /// (<see cref="RegionProber.RereadDenoisedAsync"/>); this only decides whether that request may
+    /// be granted, and it exists so a book with plenty of treble - where the failure has never been
+    /// observed - does not pay for the possibility. The threshold is therefore set well clear of the
+    /// books that motivated the work rather than between them: granting it to a clean file costs
+    /// nothing, since the trigger still has to fire, while refusing a dark one silently loses a
+    /// chapter. See <see cref="AudioFidelity"/> for what the measure is and what it is not.
+    /// </para>
+    /// <para>
+    /// Lazy rather than run up front, which is what keeps it free: a file whose announcements all
+    /// come through cleanly never reaches this at all, and so never spends the
+    /// <see cref="FidelityExcerpts"/> decodes on being told it did not need to. The decision is
+    /// cached either way, so a book with many garbled windows measures once.
+    /// </para>
+    /// <para>
+    /// Sampled at <see cref="FidelityExcerpts"/> positions spread over the file rather than one
+    /// stretch: within a single book the measure moves several-fold between excerpts, so one look
+    /// decides nothing and the median of several is the smallest honest reading.
+    /// </para>
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The denoiser to re-read through, or null when this file may not be denoised.</returns>
+    private async Task<SpeechDenoiser?> DenoiserForFileAsync(CancellationToken ct)
+    {
+        if (_denoiserDecided)
+            return _denoiser;
+        _denoiserDecided = true;
+        if (!_options.Denoise || _denoiseSource is not { } source || source.DurationSeconds <= 0)
+            return null;
+
+        var excerpts = new List<double?>();
+        for (var i = 0; i < FidelityExcerpts; i++)
+        {
+            // Spread over the middle 80%, keeping front and back matter - credits, a publisher's
+            // card, closing music - out of a measurement meant to describe the narration.
+            var at = source.DurationSeconds * (0.10 + 0.80 * i / (FidelityExcerpts - 1.0));
+            var length = Math.Min(FidelityExcerptSeconds, source.DurationSeconds - at);
+            if (length < 1)
+                continue;
+            var samples = await _audio.DecodePcmAsync(source.File, at, length, source.Decoder, ct);
+            excerpts.Add(AudioFidelity.Measure(samples, SpeechDenoiser.SampleRate));
+        }
+
+        var fidelity = AudioFidelity.Combine(excerpts);
+        if (fidelity is not { } measured)
+        {
+            _log?.Invoke("denoiser: could not measure this file's fidelity - not denoising");
+            return null;
+        }
+        if (measured >= AudioFidelity.Threshold)
+        {
+            _log?.Invoke(
+                $"denoiser: high-frequency ratio {measured:0.#####} at or above " +
+                $"{AudioFidelity.Threshold:0.#####} - clear enough, not denoising");
+            return null;
+        }
+        _log?.Invoke(
+            $"denoiser: high-frequency ratio {measured:0.#####} below " +
+            $"{AudioFidelity.Threshold:0.#####} - a garbled announcement may be re-read denoised");
+        return _denoiser = new SpeechDenoiser();
     }
 
     /// <summary>
@@ -463,7 +558,8 @@ public sealed class ChapterDetector
                 FindCappedPhraseReadings(segments, profile, mergeBoundary, reading),
             _options.Pass3ModelIsUpgrade && !ReferenceEquals(_pass3Transcriber, _transcriber)
                 ? SecondOpinionAsync
-                : null);
+                : null,
+            DenoiserForFileAsync);
 
     /// <summary>
     /// The pipeline stage between Pass 2 and Pass 2.5: hands

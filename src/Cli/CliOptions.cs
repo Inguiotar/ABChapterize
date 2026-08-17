@@ -507,6 +507,22 @@ public sealed class CliOptions
     public bool PreciseMark => !QuickMarks;
 
     /// <summary>
+    /// Whether a probe window that heard a chapter number without the word beside it may be read
+    /// again through the bundled speech denoiser (--no-denoise switches it off). On by default, and
+    /// on a book with ordinary audio it never runs at all: the file has to sound dull enough to
+    /// pass <see cref="Audio.AudioFidelity.Threshold"/> before a window is even allowed to ask, and
+    /// then a window has to fail in that particular way.
+    /// <para>
+    /// Kept as an opt-out rather than an opt-in because the failure it repairs is invisible from
+    /// outside - a chapter that was never marked, with nothing in the output to say a heading was
+    /// heard and discarded - so a user has no way of knowing they should have asked for it. The
+    /// switch exists for reproducing an older run and for the case where the extra decode is not
+    /// wanted.
+    /// </para>
+    /// </summary>
+    public bool Denoise { get; private set; } = true;
+
+    /// <summary>
     /// Minimum silence duration in seconds that counts as a potential chapter break
     /// (--min-silence-length / -n). Every such silence triggers a Whisper probe, so an
     /// explicit higher value can reduce the number of probes further still. With an explicit
@@ -826,7 +842,7 @@ public sealed class CliOptions
     /// added.
     /// </summary>
     private bool AnyProcessingOptionGiven
-        => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || !TrailingScan || DryRun
+        => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || !TrailingScan || !Denoise || DryRun
            || Export || Import || SimpleMetadata || Verify || Fix || IgnoreProgress
            || UseGpu != null || VadThreads != null || WhisperThreads != null
            || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
@@ -879,6 +895,7 @@ public sealed class CliOptions
                 $"chaptercount={ChapterCount}",
                 $"trailingscan={TrailingScan}", $"verify={Verify}/{Fix}", $"verifythreshold={VerifyFailThreshold}",
                 $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}", $"marklead={MarkLeadSeconds}",
+                $"denoise={Denoise}",
                 $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
@@ -1018,13 +1035,14 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || !o.Denoise || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
                 "--mark-before-jingle, --quick-marks, --mark-lead, --min-silence-length, " +
                 "--noise-floor, --early-abort, " +
-                "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, --verify, " +
+                "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, " +
+                "--no-denoise, --verify, " +
                 "--named-mark-distance, " +
                 "--chapter-title, --part-title, --intro-title, --prologue-title and --epilogue-title " +
                 "have no effect and cannot be combined with it.");
@@ -1224,6 +1242,7 @@ public sealed class CliOptions
             case "--mark-before-jingle": MarkBeforeJingle = true; return true;
             case "--quick-marks": QuickMarks = true; return true;
             case "--no-trailing-scan": TrailingScan = false; return true;
+            case "--no-denoise": Denoise = false; return true;
             // Inverted in 0.11.0. Named rather than left to "Unknown option" so a script carrying it
             // - or the -L it still maps from - is told the scan it asked for is now what it gets
             // anyway, instead of only that the option is gone.
@@ -2048,6 +2067,17 @@ public sealed class CliOptions
                                     for far less time. Nothing is scanned anyway when no chapter
                                     was found at all, or after an --early-abort or
                                     --expected-start-chapter abort.
+              --no-denoise          Do not re-read a garbled announcement through the built-in
+                                    speech denoiser (default: it may). On a dull-sounding
+                                    recording the recognizer sometimes writes a chapter's number
+                                    but loses the word beside it - "1. The Long Road" where the
+                                    narrator said "Chapter one, The Long Road" - and the chapter
+                                    is then missed with nothing in the output to show for it.
+                                    Where that happens, and only there, the window is read once
+                                    more through a denoiser first. It costs one extra decode on
+                                    the few windows that fail this way, never moves a mark that
+                                    was already found, and does not run at all on a book whose
+                                    audio is clear enough not to need it.
           -N, --max-chapter-number <n>
                                     Highest chapter number this book plausibly has (default: 200,
                                     counted from --expected-start-chapter). A detected chapter

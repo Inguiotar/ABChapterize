@@ -87,13 +87,19 @@ internal sealed class SileroWorker : IDisposable
     private readonly OrtValue[] _inputs;
     private readonly OrtValue[] _outputs;
 
+    /// <summary>
+    /// Points OnnxRuntime's native lookup at the published layout before anything on this type
+    /// touches it. It has to be the static constructor rather than the instance one: the CLR runs a
+    /// type initializer before any field initializer, and <see cref="_runOptions"/> above is a field
+    /// initializer that loads the native library. Registering from the constructor body instead
+    /// crashed a published build outright (0xC0000005 inside OnnxRuntime's own static init), because
+    /// the field had already gone looking for onnxruntime.dll in the wrong place.
+    /// </summary>
+    static SileroWorker() => OnnxRuntimeNative.EnsureRegistered();
+
     /// <summary>Creates a worker with its own session over the bundled model.</summary>
     internal SileroWorker()
     {
-        // Must precede the session: the native lookup this installs is what finds onnxruntime in a
-        // published layout. It used to be this type's static constructor, which was sound while the
-        // VAD was the only ONNX model here; see OnnxRuntimeNative for why a second model moved it.
-        OnnxRuntimeNative.EnsureRegistered();
         using var options = SessionOptionsForOneWorker();
         _session = new InferenceSession(LoadModelBytes(), options);
         // "state" and "stateN" must stay distinct buffers: ORT writes the output while the input is

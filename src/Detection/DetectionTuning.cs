@@ -191,6 +191,20 @@ internal static class DetectionTuning
     internal const double SandwichedAnnouncementSeconds = 3.5;
 
     /// <summary>
+    /// How many excerpts <see cref="ChapterDetector.DenoiserForFileAsync"/> measures a file's
+    /// fidelity over. Eight because one says nothing: the measure moves 3.2x to 24.1x between excerpts of the
+    /// same book (sixteen-book corpus, 2026-08-17), and re-sampling a book at different positions
+    /// reshuffles the bottom of the corpus ranking outright, so only a median over several is worth
+    /// reading at all.
+    /// </summary>
+    internal const int FidelityExcerpts = 8;
+
+    /// <summary>How much audio each of those excerpts covers. Long enough to hold speech through
+    /// several sentences and their pauses, short enough that the eight together cost a fraction of
+    /// one probe's decode.</summary>
+    internal const double FidelityExcerptSeconds = 30.0;
+
+    /// <summary>
     /// The same run-up for a jingle candidate, taken from inside the music, and deliberately longer:
     /// the point it is measured back from is a VAD speech onset rather than a silencedetect edge, so
     /// it carries the detector's own latency plus whatever timeline drift survives Pass 1's resync

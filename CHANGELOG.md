@@ -216,6 +216,19 @@ earn a round number.
   a window long enough to span a book's longest jingle is exactly the width that loses a
   one-word announcement. The same goes for pass 2.5 and the gap sweeps.
 
+### Added
+
+- **A garbled announcement on a dull-sounding recording gets a second chance.** On some
+  recordings the recognizer writes a chapter's *number* but loses the word beside it —
+  "1. The Long Road" where the narrator said "Chapter one, The Long Road" — and the chapter
+  is then missed with nothing in the output to show a heading was heard at all. Where that
+  happens, the window is now read once more through a built-in speech denoiser, which on
+  the book this was measured against turned a coin flip into every attempt succeeding.
+
+  It costs one extra pass over the few windows that fail this way, never moves a mark that
+  was already found, and does not run at all on a book whose audio is clear enough not to
+  need it — most files never reach it. **`--no-denoise`** switches it off.
+
 ### Fixed
 
 - **A chapter announced between two pauses is no longer missed when the first pause is a

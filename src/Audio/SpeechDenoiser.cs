@@ -64,11 +64,16 @@ public sealed class SpeechDenoiser : IDisposable
     private readonly string _inputName;
     private readonly float[] _window = Hann(FftSize);
 
+    /// <summary>Points OnnxRuntime's native lookup at the published layout before anything here
+    /// touches it. The static constructor rather than the instance one, for the ordering reason
+    /// <see cref="Vad.SileroWorker"/>'s own records: a type initializer is the only thing guaranteed
+    /// to run before a field initializer, and a field that reaches OnnxRuntime is one edit away.</summary>
+    static SpeechDenoiser() => OnnxRuntimeNative.EnsureRegistered();
+
     /// <summary>Loads the bundled model into a session of its own.</summary>
     /// <exception cref="AppError">Thrown when the embedded resource is missing.</exception>
     public SpeechDenoiser()
     {
-        OnnxRuntimeNative.EnsureRegistered();
         // One thread, like the VAD workers: this runs inside a per-file pipeline that already has
         // the machine busy, and the model is far too small to repay waking a pool per inference.
         using var options = new SessionOptions

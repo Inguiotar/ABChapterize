@@ -46,6 +46,13 @@ namespace ABChapterize.Detection;
 /// decode's framing lost. Null when no upgrade model was chosen, and null for a pass 2.5 re-probe,
 /// which already decodes every window through that model and so has no better opinion left to
 /// ask.</param>
+/// <param name="Denoiser">Asks the detector for the speech denoiser a garbled announcement may be
+/// re-read through, which answers null when this file is not to be denoised - the run switched it
+/// off, or the file sounds clean enough not to need it. Deliberately a request rather than the
+/// object: deciding means measuring the file's fidelity, and a book whose announcements all come
+/// through cleanly should never pay for that (see
+/// <see cref="ChapterDetector.DenoiserForFileAsync"/>, which measures at most once per file). Null
+/// only where no detector supplied one at all, as the recovery passes' own environments do.</param>
 internal sealed record ProbeEnvironment(
     CliOptions Options,
     IAudioSource Audio,
@@ -56,7 +63,8 @@ internal sealed record ProbeEnvironment(
     Action<string, List<TranscriptSegment>> LogTranscript,
     Func<List<TranscriptSegment>, LanguageProfile, int?, BareNumberReading,
         IEnumerable<IReadOnlyList<PhraseMatch>>> FindCappedPhraseReadings,
-    Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? SecondOpinion = null);
+    Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? SecondOpinion = null,
+    Func<CancellationToken, Task<SpeechDenoiser?>>? Denoiser = null);
 
 /// <summary>
 /// Region-loop-invariant Pass 2 inputs, gathered here instead of threading each field through
@@ -1064,11 +1072,103 @@ internal sealed class RegionProber
             marks = await RereadInOnePassAsync(candidate, start, windowEnd, ct);
         if (marks.Count == 0 && _namedFound.Count == namedBefore)
             marks = await RereadJingleMusicAsync(candidate, ct);
+        if (marks.Count == 0 && _namedFound.Count == namedBefore)
+            marks = await RereadDenoisedAsync(candidate, start, windowEnd, segments, ct);
         if (marks.Count == 0)
             marks = await RecoverUnnumberedAnnouncementsAsync(
                 candidate, start, windowEnd, segments, trimmedAbs, ct);
         return marks;
     }
+
+    /// <summary>
+    /// Last look at a window that heard a chapter <em>number</em> but not the word beside it, on
+    /// audio the file-level check thought worth denoising: the same window, put through the speech
+    /// denoiser and read again.
+    /// <para>
+    /// The shape it answers to is narrow on purpose. A window that came back empty is somebody
+    /// else's case (the two jingle re-reads above); this one is the opposite - the recognizer heard
+    /// the announcement, wrote its number, and dropped the word that would have made it one. On
+    /// "De vandrande djäknarne" that is literally what happened: chapter 1 was transcribed
+    /// <c>"1. Jäknuktåg"</c>, the number and the chapter's title with "Första kapitlet" collapsed
+    /// into the digit, so no wording of the phrase could match and the chapter was lost.
+    /// </para>
+    /// <para>
+    /// Denoising is what fixes it, measured rather than hoped: across 22 window framings 20 ms apart
+    /// over that announcement, ggml-small recovers the word from 10 of them on the raw audio and
+    /// from <b>all 22</b> denoised, at a steady p≈0.6 instead of a notation that swung between
+    /// "1. Kapitlet – Gjäknupptåg", "1. KAPITLET", "1. KAPITLÄT", "1. KJÄKNUGTÅG" and "1. Jäknuktåg".
+    /// It is also cheaper than the alternative that works equally well - medium and large-v3-turbo
+    /// read it at every framing too, at 2-3x the decode cost of a denoise plus a re-read.
+    /// </para>
+    /// <para>
+    /// Like the re-reads above it can only ever <em>add</em> a mark: it runs only where the window
+    /// produced none, keeps the window's own start and end so nothing is reframed, and hands its
+    /// transcript to the ordinary scan, so every acceptance rule applies to a denoised mark exactly
+    /// as to a first-pass one. Denoising does not help a window whose announcement simply is not in
+    /// it - that failure is geometry, and enhancement cannot recover audio a window does not contain
+    /// (measured on The Philosopher's Stone chapter 11: 3 of 12 framings raw, 4 of 12 denoised).
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The candidate whose window produced no mark.</param>
+    /// <param name="start">Absolute start of that window, kept unchanged.</param>
+    /// <param name="windowEnd">Absolute planned end of that window, kept unchanged.</param>
+    /// <param name="segments">Its transcript in window-relative time, which the trigger reads.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The marks the re-read produced, or an empty list when it did not run or found
+    /// nothing.</returns>
+    private async Task<List<ProbeMark>> RereadDenoisedAsync(
+        ProbeCandidate candidate, double start, double windowEnd,
+        List<TranscriptSegment> segments, CancellationToken ct)
+    {
+        // The trigger first, the permission second: asking costs a fidelity measurement, and only a
+        // window that failed this particular way has any use for the answer. --no-denoise is checked
+        // here as well as at the permission itself, so a run that switched the rescue off does not
+        // narrate windows it was never going to re-read.
+        if (!_env.Options.Denoise || _env.Denoiser is not { } ask ||
+            !HeardANumberWithoutItsWord(segments))
+            return [];
+
+        // Logged before the permission is sought, not after it is granted: a reader asking why a
+        // chapter went missing needs to see that this window was recognized as the shape at all,
+        // and the file-level refusal that may follow says nothing about which window prompted it.
+        _env.Log?.Invoke(
+            $"window at {FormatTimestamp(start)} heard a chapter number but not the word");
+        if (await ask(ct) is not { } denoiser)
+            return [];
+
+        var samples = await _env.Audio.DecodePcmAsync(
+            _ctx.File, start, windowEnd - start, _ctx.Info.InputDecoder, ct);
+        var fresh = await _env.TranscribeCounting(denoiser.Denoise(samples), ct, _ctx.Transcriber);
+        _env.LogTranscript(
+            $"denoised re-read {windowEnd - start:0.0}s@{FormatTimestamp(start)}", fresh);
+
+        var freshAbs = TrimLeadingNonSpeech(
+            ShiftSegments(fresh, start), _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
+        return await ScanWindowForMarksAsync(
+            candidate, start, windowEnd, ShiftSegments(freshAbs, -start), freshAbs, null, ct);
+    }
+
+    /// <summary>
+    /// Whether this window's transcript holds a chapter number standing on its own where the phrase
+    /// expected a word beside it - the one shape denoising is known to rescue.
+    /// <para>
+    /// The strict <see cref="BareNumberReading.SpokenAloneAtSegmentStart"/> reading, the same one
+    /// Pass 2's forward scan trusts, because this runs on every empty window of every file that
+    /// passed the fidelity check and a looser reading would spend a decode on ordinary prose - in
+    /// Italian "un", "una" and "uno" all parse as 1.
+    /// </para>
+    /// <para>
+    /// A phrase with no expression wording at all is excluded: where the number <em>is</em> the whole
+    /// announcement there is no word to have been dropped, and a number this window found without
+    /// producing a mark was refused by the sequence or the isolation guard rather than misheard.
+    /// </para>
+    /// </summary>
+    /// <param name="segments">The window's transcript, in window-relative time.</param>
+    private bool HeardANumberWithoutItsWord(List<TranscriptSegment> segments)
+        => _language.Profile.ChapterPattern.HasRegexAlternative &&
+           segments.Any(s => NumberWordParser.FindBareNumberAnnouncement(
+               s.Text, _language.Profile.Language,
+               BareNumberReading.SpokenAloneAtSegmentStart) is not null);
 
     /// <summary>
     /// Second, short look at a probe window that heard no announcement while VAD insists there was

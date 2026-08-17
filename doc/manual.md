@@ -1552,6 +1552,31 @@ looking. None of these is needed for an ordinary book.
   how many chapters the book has, `--chapter-count` answers the same question
   for a fraction of the time, and giving it switches the blind scan off for you.
 
+`--no-denoise`
+: Do not re-read a garbled announcement through the built-in speech denoiser
+  (default: it may). No short form.
+
+  On a dull-sounding recording the recognizer sometimes writes a chapter's
+  *number* while losing the word beside it — "1. The Long Road" where the
+  narrator said "Chapter one, The Long Road". Nothing matches the chapter phrase
+  then, so the chapter is missed, and this is the quiet kind of miss: no gap in
+  the numbering to notice if it happens before the first chapter found, and
+  nothing in the log to say a heading was heard and thrown away. Where a window
+  fails in exactly that way, it is read a second time through a denoiser first.
+
+  It is cheap because it is narrow. A window that produced a mark never reaches
+  it, nor does one that heard nothing at all — that is a different failure with
+  its own remedies — and a book whose audio carries enough treble is refused it
+  outright, so most files never run it once. What it costs where it does fire is
+  one extra pass over that one window. It can only ever add a mark: the window
+  keeps its own bounds, and anything it finds goes through exactly the same
+  acceptance rules as a first-pass find.
+
+  Turn it off to reproduce an older run, or where the extra pass is not wanted.
+  It will not rescue an announcement that simply is not inside the window —
+  that is a framing problem, and no amount of cleaning up the audio can recover
+  words a window does not contain.
+
 `--chapter-count <n>`
 : How many numbered chapters this book has, exactly (default: no expectation).
   Takes exactly one file, never a directory or several files — it is a
