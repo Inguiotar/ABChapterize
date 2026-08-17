@@ -408,4 +408,63 @@ public class AnnouncementIsolationTests
     /// <param name="language">Two-letter language code.</param>
     private static PhrasePattern Compile(string phrase, string language)
         => PhraseCompiler.Compile([phrase], language, PhraseKind.Chapter, "chapter phrase");
+
+    /// <summary>
+    /// "De vandrande djäknarne" chapter 6, the geometry the mark-inside-speech guard was built for
+    /// (build 339, 2026-08-17). Pass 1's own segments around 1:37: the LibriVox boilerplate, then the
+    /// reader's credit "Inläsning av Lars Rolander" running 1:37:17.66-1:37:20.00, a 0.55 s pause,
+    /// then "Sjätte kapitlet" at 1:37:20.41. Absolute times kept so the figures match the debug log.
+    /// </summary>
+    private static List<SpeechSegment> ReaderCreditTimeline()
+        => Speech((5831.64, 5836.99), (5837.66, 5840.00), (5840.41, 5841.56), (5842.14, 5843.93));
+
+    [Fact]
+    public void AMarkInThePauseAfterTheReaderCredit_IsNotInsideSpeech()
+    {
+        // 1:37:20.06 - the default-mode mark, sitting in the 0.55 s pause. The position the guard
+        // restores, and the one the user confirmed by ear.
+        Assert.Null(AnnouncementIsolation.DepthInsideSpeech(5840.06, ReaderCreditTimeline()));
+    }
+
+    [Fact]
+    public void TheRefinedMarkThatLandedInTheReaderCredit_MeasuresItsRealDepth()
+    {
+        // 1:37:18.66 - what the survival walk actually produced, 1.00 s into the credit. The only
+        // two non-zero depths in the whole build-339 corpus were this and chapter 11's 1.42 s.
+        var depth = AnnouncementIsolation.DepthInsideSpeech(5838.66, ReaderCreditTimeline());
+        Assert.NotNull(depth);
+        Assert.Equal(1.00, depth!.Value, 2);
+        Assert.True(depth.Value > DetectionTuning.MarkInsideSpeechSeconds);
+    }
+
+    [Fact]
+    public void AMarkAtASegmentBoundary_ReportsNoSpeechElapsed()
+    {
+        // Half-open [Start, End): a mark exactly on a speech start has zero speech behind it, which
+        // is the honest answer and safely under the threshold either way, while a mark on a segment's
+        // end is past that segment entirely. Both edges occur constantly at VAD's 0.1 s resolution,
+        // so neither may throw the verdict off.
+        Assert.Equal(0.0, AnnouncementIsolation.DepthInsideSpeech(5840.41, ReaderCreditTimeline())!.Value, 4);
+        Assert.Null(AnnouncementIsolation.DepthInsideSpeech(5840.00, ReaderCreditTimeline()));
+        Assert.Equal(0.01, AnnouncementIsolation.DepthInsideSpeech(5840.42, ReaderCreditTimeline())!.Value, 2);
+    }
+
+    [Fact]
+    public void WithoutAVadPrePass_DepthIsUnmeasurable()
+    {
+        // Same contract as Measure: no segments means no verdict, so a run without VAD is exactly as
+        // well off as it was before the guard existed rather than having every mark second-guessed.
+        Assert.Null(AnnouncementIsolation.DepthInsideSpeech(5838.66, Speech()));
+    }
+
+    [Fact]
+    public void AMarkBeforeAJingle_IsNotInsideSpeech()
+    {
+        // Why 441 of 443 corpus marks measure exactly zero: music reads as non-speech, so a mark
+        // anchored to a jingle's leading edge is outside every segment even though it is far from
+        // silent - which is also why dBFS cannot stand in for this measurement.
+        var timeline = Speech((0, 10), (30.0, 45.0));
+        Assert.Null(AnnouncementIsolation.DepthInsideSpeech(12.0, timeline));
+        Assert.Null(AnnouncementIsolation.DepthInsideSpeech(29.9, timeline));
+    }
 }

@@ -239,6 +239,15 @@ earn a round number.
   a longer one follows within a few seconds, which is what a spoken heading sounds like.
   Marks that were already found do not move.
 
+- **A mark no longer lands in the middle of whatever was said just before the chapter.**
+  Where only a short pause separates a chapter announcement from speech in front of it — a
+  recording that names its reader before each chapter is the case that turned this up — the
+  step that pins a mark to the exact start of the announcement could walk straight past that
+  pause and settle inside the earlier words, putting the mark a second or more too early. A
+  mark that would land inside speech is now refused and keeps the position it had before that
+  step, which in every observed case was already the right one. Marks that sit in a pause or
+  in a chapter's music, which is all of them on a well-behaved book, are untouched.
+
 - **An announcement spoken over a chapter's jingle is looked for properly.** Where the
   music might be hiding the announcement rather than preceding it, the tool used to widen
   one probe window to cover the whole jingle — and a window that long is exactly what makes

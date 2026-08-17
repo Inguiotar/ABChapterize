@@ -237,7 +237,12 @@ mark that cannot be confirmed this way is searched for once more, in full, throu
 the model `--pass3-model` names where that is a better one than `--model` — a
 quietly-spoken announcement inside a jingle can be lost on the smaller model and
 plain to the larger. Only when neither hears it is the mark left as originally
-placed rather than guessed at. Finally, whatever mark results —
+placed rather than guessed at. A corrected mark that would land in the middle of
+speech is refused the same way, and keeps the position it had before the
+correction: a mark belongs in a pause or in a chapter's music, and only a short
+gap between the announcement and whatever was said just before it — a recording
+that names its reader before each chapter, say — can lead the search into the
+earlier words. Finally, whatever mark results —
 confirmed, corrected, or left as is — is nudged up to 0.15 seconds earlier to
 the quietest point in that stretch, but only when doing so is a clear (at
 least 6 dB) improvement over the mark's own position; a mark is never moved

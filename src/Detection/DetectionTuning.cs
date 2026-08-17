@@ -440,6 +440,44 @@ internal static class DetectionTuning
     internal const double OnsetSegmentToleranceSeconds = 0.1;
 
     /// <summary>
+    /// How far a finished mark may sit inside a VAD speech segment before the refinement that put it
+    /// there is disbelieved (<see cref="AnnouncementIsolation.DepthInsideSpeech"/>, applied in
+    /// <see cref="MarkPlacer.KeepOutOfSpeech"/>). A mark belongs in a pause or in jingle music, both
+    /// of which VAD reads as non-speech, so any real depth here means the mark landed in somebody
+    /// else's words.
+    /// <para>
+    /// The failure this exists to stop, reported by ear on "De vandrande djäknarne" (build 339,
+    /// 2026-08-17): that book is a LibriVox recording which announces "Inläsning av Lars Rolander"
+    /// before some chapters, and the credit-to-announcement pause is short (0.55 s at chapter 6,
+    /// 0.82 s at chapter 11). The survival walk kept retreating through it - a window opening
+    /// mid-credit still transcribes "av Lars Rolander, sjätte kapitlet, ...", the phrase matches
+    /// inside that, and the <c>^</c> guard is satisfied by the segment-start rescue because Whisper
+    /// opens a segment at the announcement - so the onset converged 1.4 s inside the credit and the
+    /// marks were written into the reader's name. Their default-mode positions were already right.
+    /// </para>
+    /// <para>
+    /// Calibration is unusually clean because this quantity is bimodal, not distributed. Replayed
+    /// over all seventeen build-339 logs' own Pass 1 speech segments, <b>441 of 443 marks measure
+    /// exactly zero</b> - every jingle mark included, since the jingle anchor lands them at the music
+    /// edge ahead of the segment - and the only two non-zero values in the corpus are the two
+    /// reported chapters, at 1.00 s and 1.42 s. So any threshold in (0, 1.00) separates them and
+    /// there is no distribution tail to fit; this sits halfway across that empty band. The measure on
+    /// the <em>onset</em> rather than the mark was rejected for exactly this reason: it has a
+    /// populated tail out to 0.15 s over 104 marks, mostly jingles, so a cut there would sit inside
+    /// real data.
+    /// </para>
+    /// <para>
+    /// Generous rather than tight on purpose, because VAD is capable of calling music speech: two
+    /// marks in "Gruelfin.m4b" have it hearing speech 2.54 s and 2.65 s early inside a jingle (see
+    /// <see cref="PreciseMarkMusicAnchorCapSeconds"/>). No corpus mark actually lands inside such a
+    /// segment, but a spurious one is the only way this guard could fire on a good mark, and the
+    /// comparison in <see cref="MarkPlacer.KeepOutOfSpeech"/> - which declines unless the
+    /// default-mode position is demonstrably better - is the other half of that protection.
+    /// </para>
+    /// </summary>
+    internal const double MarkInsideSpeechSeconds = 0.5;
+
+    /// <summary>
     /// Minimum letters-plus-digits per second a transcript segment must average for
     /// <see cref="JingleGeometry"/>'s corroboration checks (<c>IsGenuineSpeech</c>) to accept it
     /// as evidence that a VAD blip is real narration rather than jingle music. "The transcript

@@ -142,6 +142,47 @@ internal static class AnnouncementIsolation
         return new AnnouncementFlanks(leadIn, leadOut, speech[i].StartSeconds);
     }
 
+    /// <summary>
+    /// How far <paramref name="at"/> sits past the start of the VAD speech segment containing it -
+    /// i.e. how much continuous speech was already under way when the mark landed. Null when it
+    /// falls in no segment at all, which is where a correct mark belongs: in a pause, or in jingle
+    /// music, both of which read as non-speech.
+    /// <para>
+    /// Unlike <see cref="Measure"/> this asks about the finished mark rather than the announcement,
+    /// and it deliberately does not look for a neighbouring segment: the question is only "is this
+    /// position inside somebody's words", so an answer of "no" needs no further geometry.
+    /// </para>
+    /// </summary>
+    /// <param name="at">The position to test, normally a finished mark.</param>
+    /// <param name="speech">The VAD pre-pass's speech segments, chronological. Empty when the
+    /// pre-pass did not run, which yields null - no measurement rather than a false verdict.</param>
+    /// <returns>Seconds of speech already elapsed at <paramref name="at"/>, or null when it is not
+    /// inside a speech segment.</returns>
+    internal static double? DepthInsideSpeech(double at, IReadOnlyList<SpeechSegment> speech)
+    {
+        // Chronological and non-overlapping, so the last segment starting at or before `at` is the
+        // only one that can contain it.
+        var lo = 0;
+        var hi = speech.Count - 1;
+        var found = -1;
+        while (lo <= hi)
+        {
+            var mid = lo + (hi - lo) / 2;
+            if (speech[mid].StartSeconds <= at)
+            {
+                found = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+        return found >= 0 && at < speech[found].EndSeconds
+            ? at - speech[found].StartSeconds
+            : null;
+    }
+
     /// <summary>Whether <paramref name="flanks"/> clear the thresholds <paramref name="rule"/>
     /// asks for.</summary>
     /// <param name="flanks">The measurement from <see cref="Measure"/>.</param>

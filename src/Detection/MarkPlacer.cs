@@ -8,6 +8,7 @@ using ABChapterize.Language;
 using ABChapterize.Transcription;
 using ABChapterize.Vad;
 using static ABChapterize.Detection.DetectionFormatting;
+using static ABChapterize.Detection.DetectionTuning;
 using static ABChapterize.Detection.JingleGeometry;
 using static ABChapterize.Detection.PhraseMatching;
 
@@ -207,6 +208,7 @@ internal sealed class MarkPlacer
                 phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ctx.AllSilences,
                 statRegion?.EndSeconds, ct);
             (time, phraseHeard, onset) = (refined.Mark, refined.PhraseHeard, refined.OnsetSeconds);
+            (time, onset) = KeepOutOfSpeech(time, defaultMark, onset, number, ctx);
             if (chapter is { } check &&
                 RefinedNumberVote.Recount(
                     refined.PhraseReadings, check.Profile, _findMatches, check.Number, check.Bounds,
@@ -220,6 +222,51 @@ internal sealed class MarkPlacer
         if (number is { } chapterNumber)
             Record(chapterNumber, statSilence, statRegion, phraseAbs);
         return new MarkPlacement(time, number);
+    }
+
+    /// <summary>
+    /// Refuses a refined mark that landed inside somebody else's words, falling back on the
+    /// default-mode position the pass computed. The refinement locates an announcement by walking a
+    /// probe window backwards until the phrase stops surviving, and where a short pause separates the
+    /// announcement from speech in front of it, that walk can step over the pause entirely: the
+    /// window then opens mid-sentence, the phrase still matches inside the transcript, and the onset
+    /// converges into the wrong utterance. See <see cref="MarkInsideSpeechSeconds"/> for the book
+    /// that reported it and the corpus measurement behind the threshold.
+    /// <para>
+    /// Declines unless the default-mode position is demonstrably better - not inside speech itself -
+    /// so a book where both candidates sit in speech keeps the refined one rather than trading a
+    /// measured position for an unmeasured one. That, and the deliberately generous threshold, are
+    /// what keep the guard from acting on a VAD segment that merely mistook music for speech.
+    /// </para>
+    /// <para>
+    /// The onset goes back to what the default mark implies, rather than to null or to the walked
+    /// value. Null would send <see cref="IsolationHolds"/> to
+    /// <see cref="IsolationCheck.FallbackPosition"/> and could drop a bare-number match outright -
+    /// turning a slightly misplaced mark into a lost chapter - while keeping the walked onset would
+    /// have the isolation guard measure pauses at a position this method has just declared wrong.
+    /// </para>
+    /// </summary>
+    /// <param name="refinedMark">What the refinement produced.</param>
+    /// <param name="defaultMark">The default-mode mark the caller's own pass computed.</param>
+    /// <param name="onset">The refined onset, or null when nothing was confirmed.</param>
+    /// <param name="number">The chapter number, for the log line; null for a named mark.</param>
+    /// <param name="ctx">The file's mark-placement constants, for the VAD speech segments.</param>
+    /// <returns>The mark to use and the onset to judge its isolation at.</returns>
+    private (double Time, double? Onset) KeepOutOfSpeech(
+        double refinedMark, double defaultMark, double? onset, int? number, MarkContext ctx)
+    {
+        if (AnnouncementIsolation.DepthInsideSpeech(refinedMark, ctx.SpeechSegments) is not { } depth ||
+            depth <= MarkInsideSpeechSeconds)
+            return (refinedMark, onset);
+        if (AnnouncementIsolation.DepthInsideSpeech(defaultMark, ctx.SpeechSegments)
+            is { } fallbackDepth && fallbackDepth > MarkInsideSpeechSeconds)
+            return (refinedMark, onset);
+
+        var what = number is { } n ? $"chapter {n}" : "the named mark";
+        _log?.Invoke(
+            $"refined mark for {what} at {FormatTimestamp(refinedMark)} sits {depth:0.00} s inside " +
+            $"speech - keeping the default {FormatTimestamp(defaultMark)}");
+        return (defaultMark, defaultMark + _options.MarkLeadSeconds);
     }
 
     /// <summary>
