@@ -359,6 +359,22 @@ internal static class DetectionTuning
     internal const double MinJingleObservationSeconds = 2.0;
 
     /// <summary>
+    /// How much music a file must have, per hour of play time, before Pass 2 reads its jingles first
+    /// and its pauses only where the chapter sequence still wants one (see
+    /// <see cref="JingleFirstScan"/>). Counted over the whole <see cref="JingleCensus"/>, so it means
+    /// the same thing as the --verbose jingle tally.
+    /// <para>
+    /// One per hour is a low bar and is meant to be: it separates two populations rather than
+    /// grading one. The corpus books this shape targets run 20-60 jingles over 10-18 hours, and the
+    /// books it must not fire on have no chapter music at all - their whole-file tallies are 0 or 1
+    /// (see <see cref="JingleCensus"/> for the reading that brought the spurious ones down that far).
+    /// Nothing in the corpus sits between the two, so a bar drawn anywhere in that empty band would
+    /// be a number with nothing behind it.
+    /// </para>
+    /// </summary>
+    internal const double JingleFirstMinPerHour = 1.0;
+
+    /// <summary>
     /// With the VAD pre-pass, a "speech" segment shorter than this between two non-speech regions
     /// does not end the surrounding jingle - the regions are merged and the blip treated as VAD
     /// noise. Silero VAD is not reliable on jingle music: a vocal-like transient or a strong

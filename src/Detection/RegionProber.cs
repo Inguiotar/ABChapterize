@@ -177,6 +177,31 @@ internal enum CandidateClass
 }
 
 /// <summary>
+/// Which of a region's candidates one Pass 2 walk takes. <see cref="Everything"/> is the shape Pass
+/// 2 has always had; the other two are the halves the jingle-first scan splits it into (see
+/// <see cref="JingleFirstScan"/>), and they exist because on a book that announces every chapter
+/// after music the pauses in between are thousands of windows that can only ever confirm what the
+/// music already said.
+/// <para>
+/// Only the walk's own candidate list is filtered. A sequence-gap re-probe inside either half keeps
+/// the union set it has always had, that being a second look at a stretch which has already failed
+/// rather than a first look at a class of candidate.
+/// </para>
+/// </summary>
+internal enum ScanShape
+{
+    /// <summary>The region start, its jingles and its pauses, in chronological order.</summary>
+    Everything,
+
+    /// <summary>The region start and its jingles only - the jingle-first scan's first half.</summary>
+    JinglesOnly,
+
+    /// <summary>Its pauses only, the region start included in neither: the jingle-first scan's
+    /// second half, run over the stretches the first half left unsettled.</summary>
+    SilencesOnly,
+}
+
+/// <summary>
 /// One probe window as planned, together with the candidate sequence it came from - enough for the
 /// decode to work out how far it may read ahead (see <see cref="RegionProber.ExtendToPlannedSeam"/>)
 /// without the intervening layers having to thread a candidate list through by hand.
@@ -567,6 +592,13 @@ internal sealed class RegionProber
     /// </summary>
     private readonly HashSet<int>? _hunting;
 
+    /// <summary>
+    /// Which of the region's candidates this walk takes; see <see cref="ScanShape"/>. Always
+    /// <see cref="ScanShape.Everything"/> for a recovery pass and for a sub-floor sweep, whose
+    /// candidate sets are already chosen for them.
+    /// </summary>
+    private readonly ScanShape _shape;
+
     /// <summary>Creates a prober for one region.</summary>
     /// <param name="env">The detector-owned tools and callbacks to probe with.</param>
     /// <param name="ctx">Region-loop-invariant Pass 2 inputs.</param>
@@ -582,10 +614,13 @@ internal sealed class RegionProber
     /// <see cref="_recovery"/>.</param>
     /// <param name="hunting">The chapter numbers this run was sent to find, or null for a scan with
     /// no such list; see <see cref="_hunting"/>.</param>
+    /// <param name="shape">Which of the region's candidates to walk; see <see cref="ScanShape"/>.
+    /// Defaults to all of them, which is every caller but the jingle-first scan.</param>
     internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
         double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false,
-        bool recovery = false, IEnumerable<int>? hunting = null)
+        bool recovery = false, IEnumerable<int>? hunting = null,
+        ScanShape shape = ScanShape.Everything)
     {
         _env = env;
         _ctx = ctx;
@@ -598,6 +633,7 @@ internal sealed class RegionProber
         _sweeping = sweepingSubFloorSilences;
         _recovery = recovery || sweepingSubFloorSilences;
         _hunting = hunting is null ? null : [.. hunting];
+        _shape = shape;
         _sequence = region.Sequence;
         _lastNumber = region.LowerNumber > 0 ? region.LowerNumber : null;
         _cacheFrom = region.FromSeconds;
@@ -674,18 +710,32 @@ internal sealed class RegionProber
     /// they start at their own jingle start (i.e. nothing else leads them) and are long enough to be
     /// worth observing yet short enough to still be this book's jingle.
     /// <para>
-    /// A sub-floor sweep takes the silences and nothing else - see <see cref="_sweeping"/>.
+    /// A sub-floor sweep takes the silences and nothing else - see <see cref="_sweeping"/>. So does
+    /// the jingle-first scan's second half, and its first half takes the jingles and the region
+    /// start - see <see cref="ScanShape"/>. The filter sits here rather than in
+    /// <see cref="CandidatesIn"/> on purpose: this method builds the walk's own list, while that one
+    /// also builds a sequence-gap re-probe's, which must keep its union set whatever shape the walk
+    /// around it has.
     /// </para>
     /// </summary>
     private List<ProbeCandidate> BuildCandidates()
     {
-        var candidates = _sweeping
+        var candidates = _sweeping || _shape == ScanShape.SilencesOnly
             ? []
             : new List<ProbeCandidate> { RegionStartCandidate() };
-        candidates.AddRange(CandidatesIn(_region.FromSeconds, _region.ToSeconds));
+        candidates.AddRange(CandidatesIn(_region.FromSeconds, _region.ToSeconds).Where(Walks));
         // A jingle candidate opens after its own music, so the list is no longer in silence order.
         return candidates.OrderBy(c => c.Start).ToList();
     }
+
+    /// <summary>Whether this walk takes the given candidate at all; see <see cref="ScanShape"/>.</summary>
+    /// <param name="candidate">One candidate of the region.</param>
+    private bool Walks(ProbeCandidate candidate) => _shape switch
+    {
+        ScanShape.JinglesOnly => candidate.IsJingle,
+        ScanShape.SilencesOnly => !candidate.IsJingle,
+        _ => true,
+    };
 
     /// <summary>
     /// The candidates of one stretch of the region, where what made a place a candidate also decides
@@ -1041,7 +1091,11 @@ internal sealed class RegionProber
         // counts instead; otherwise every such run would abort at the threshold regardless.
         var foundSomething = _found.Count > 0 ||
                              (_env.Options.IgnoreChapterNumbers && _namedFound.Count > 0);
-        if (candidate.Start < _ctx.EarlyAbortSeconds || foundSomething)
+        // A jingle-only walk has read the music and nothing else, so "nothing found in the first
+        // hour of play time" is not the evidence this check reasons about - the pauses of that hour
+        // have not been looked at yet. The question is asked again by the walk that does look at
+        // them, whose head stretch spans the whole region precisely when nothing was found.
+        if (_shape == ScanShape.JinglesOnly || candidate.Start < _ctx.EarlyAbortSeconds || foundSomething)
             return false;
         EarlyAborted = true;
         _env.Log?.Invoke($"early-abort: no chapter found within the first " +
@@ -2052,8 +2106,8 @@ internal sealed class RegionProber
         var inScope = phrase.Scope switch
         {
             NamedPhraseScope.Anywhere => true,
-            NamedPhraseScope.BeforeFirstChapter => ChaptersSoFar == 0,
-            _ => ChaptersSoFar > 0,
+            NamedPhraseScope.BeforeFirstChapter => ChaptersBefore(phraseAbs) == 0,
+            _ => ChaptersBefore(phraseAbs) > 0,
         };
         if (!inScope && _env.Log != null && _scopeDropsNoted.Add(phrase.Kind))
             _env.Log($"{phrase.Kind} heard at {FormatTimestamp(phraseAbs)}, outside the " +
@@ -2078,14 +2132,24 @@ internal sealed class RegionProber
     /// ordinary run is per file - a recovery pass over a gap may repeat it once.</summary>
     private readonly HashSet<string> _scopeDropsNoted = [];
 
-    /// <summary>How many chapter announcements this region has accepted so far - the landmark both
-    /// positional <see cref="NamedPhraseScope"/>s are measured against. Under
+    /// <summary>
+    /// How many chapters are known to sit <em>before</em> this position in the file - the landmark
+    /// both positional <see cref="NamedPhraseScope"/>s are measured against. Under
     /// <c>--ignore-chapter-numbers</c> chapters live in the named list rather than in the numbered
-    /// one, and counting only the latter would leave the epilogue's scope shut for the whole
-    /// file.</summary>
-    private int ChaptersSoFar => _env.Options.IgnoreChapterNumbers
-        ? _namedFound.Count(m => m.Kind == ChapterKind)
-        : _found.Count;
+    /// one, and counting only the latter would leave the epilogue's scope shut for the whole file.
+    /// <para>
+    /// Counted by position rather than by how many have been accepted so far, which are the same
+    /// number for a walk that runs strictly forward and only that walk. The jingle-first scan's
+    /// second half runs back over the head of the file with every jingle-found chapter already in
+    /// hand, and a prologue there is still a prologue; so is one found by a wide window that had
+    /// already picked up the chapter behind it. The scopes say "before the first chapter", not
+    /// "before the first chapter was noticed".
+    /// </para>
+    /// </summary>
+    /// <param name="phraseAbs">Absolute time the announcement being judged was heard at.</param>
+    private int ChaptersBefore(double phraseAbs) => _env.Options.IgnoreChapterNumbers
+        ? _namedFound.Count(m => m.Kind == ChapterKind && m.TimeSeconds < phraseAbs)
+        : _found.Count(c => c.TimeSeconds < phraseAbs);
 
     /// <summary>Seconds every default-mode mark is placed ahead of the announcement onset
     /// (<c>--mark-lead</c>), named once here because all four placement paths below must agree on
@@ -2742,7 +2806,15 @@ internal sealed class RegionProber
             // The gap re-probe runs regardless of --min-silence-length mode: with the
             // overlap-sequence skip, candidates can be skipped even with an explicit threshold, and
             // a sequence gap is the signal that one of them hid a chapter.
-            if (_lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
+            //
+            // Except on a jingle-only walk, where a hole between two jingle-found chapters is not a
+            // failure to be recovered from but the ordinary result of having deferred every pause:
+            // the walk that follows re-reads exactly those stretches, and it does so in the primary
+            // scan's own framing rather than a recovery pass's trimmed one, which is what a first
+            // look at that audio is owed (see RecoveryLeadInTrimSeconds for why a second look is
+            // framed differently at all).
+            if (_shape != ScanShape.JinglesOnly &&
+                _lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
                 await HandleSequenceGapAsync(previousNumber, mark.Number, expectAt, ct);
 
             if (_env.Options.AutoMinSilence && !_sweeping)

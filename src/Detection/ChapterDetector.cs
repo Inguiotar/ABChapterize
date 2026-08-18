@@ -396,13 +396,11 @@ public sealed class ChapterDetector
         var earlyAbortSeconds = _options.EarlyAbortMinutes > 0 && confirmedSeed.Count == 0
             ? _options.EarlyAbortMinutes * 60
             : double.PositiveInfinity;
-        var earlyAborted = false;
 
         // --expected-start-chapter's abort half, restricted to fresh runs for the same reason: with
         // a seeded chapter the "first chapter found" it guards is never the file's very first.
         // Null disables the check, as +infinity does above.
         var expectedStartChapter = confirmedSeed.Count == 0 ? _options.ExpectedStartChapter : null;
-        int? belowExpectedStartNumber = null;
 
         // Only what the fidelity check would need, and no measuring yet: most files never garble an
         // announcement, and the ones that do not should not pay to be told so.
@@ -417,25 +415,32 @@ public sealed class ChapterDetector
             earlyAbortSeconds, expectedStartChapter, _transcriber,
             _options.AdaptiveFloorSeconds);
 
+        // Whether this file's music is enough of its structure to be read on its own first, and its
+        // pauses only where the sequence still wants one - see JingleFirstScan, which also decides
+        // what to say about it in the log.
+        var jingleFirst = JingleFirstScan.Decide(
+            _options, jingles, info.DurationSeconds, language.Profile,
+            freshRun: confirmedSeed.Count == 0 && regions.Count == 1);
+        if (jingleFirst.Note is { } shapeNote)
+            _log?.Invoke(shapeNote);
+
         // The shortest chapter break any region measured, which is what decides whether the sweep
         // below has anything to do. Taken across regions rather than per region: it is a statement
         // about the narrator, and a region that found only one mark measured nothing at all.
-        double? measuredBreakSeconds = null;
-        foreach (var region in regions)
-        {
-            var prober = new RegionProber(
-                BuildProbeEnvironment(), pass2Ctx, region, found, namedFound, language);
-            await prober.RunAsync(ct);
-            earlyAborted = prober.EarlyAborted;
-            belowExpectedStartNumber = prober.BelowExpectedStartNumber;
-            _customLimitHit |= prober.CustomLimitHit;
-            _sequenceRestartSkips += prober.SequenceRestartSkips;
-            if (prober.AdaptedThresholdSeconds is { } measured)
-                measuredBreakSeconds = Math.Min(measuredBreakSeconds ?? measured, measured);
+        var scan = await ProbeRegionsAsync(
+            pass2Ctx, regions, found, namedFound, language,
+            jingleFirst.Run ? ScanShape.JinglesOnly : ScanShape.Everything,
+            bytesPerSecond, wholeFileProgress: true, ct);
 
-            if (earlyAborted || belowExpectedStartNumber != null)
-                break;
-        }
+        // The pauses the jingle half deferred, over the stretches it left unsettled. Not run after
+        // an abort: both of them mean this file is not being detected at all, and the pauses cannot
+        // change that verdict - --early-abort's own is the one this half's head stretch would
+        // deliver anyway.
+        if (jingleFirst.Run && !scan.EarlyAborted && scan.BelowExpectedStartNumber == null)
+            scan = scan.And(await ProbePausesAfterJinglesAsync(
+                pass2Ctx, regions[0], found, namedFound, language, bytesPerSecond, ct));
+
+        var (earlyAborted, belowExpectedStartNumber, measuredBreakSeconds) = scan;
 
         if (!earlyAborted && belowExpectedStartNumber == null && !_options.IgnoreChapterNumbers)
             await SweepAdaptiveSubFloorAsync(
@@ -474,6 +479,140 @@ public sealed class ChapterDetector
         return BuildDetectionResult(
             chapters, namedFound, speechSegments, language.Profile, language.DetectedLanguage,
             language.DetectedProbability, earlyAborted, belowExpectedStartNumber);
+    }
+
+    /// <summary>
+    /// What one sweep of Pass 2 regions reported back - the two verdicts that end detection for a
+    /// file, plus the one measurement the sub-floor sweep after Pass 2 reads. Gathered into a record
+    /// because Pass 2 now runs the same loop twice on a jingle-first file, and the second run has to
+    /// combine its answers with the first's rather than replace them.
+    /// </summary>
+    /// <param name="EarlyAborted">Whether --early-abort fired.</param>
+    /// <param name="BelowExpectedStartNumber">The first chapter number found, when it sat below
+    /// --expected-start-chapter and detection was abandoned; null otherwise.</param>
+    /// <param name="MeasuredBreakSeconds">The shortest chapter break any region measured, or null
+    /// where nothing qualified.</param>
+    private readonly record struct Pass2Outcome(
+        bool EarlyAborted, int? BelowExpectedStartNumber, double? MeasuredBreakSeconds)
+    {
+        /// <summary>This outcome together with a later sweep's, for the file as a whole: either
+        /// verdict stands wherever it was reached, and the measurement is the shorter of the two -
+        /// it is a statement about the narrator and belongs to the file, not to the sweep that
+        /// happened to hear it.</summary>
+        /// <param name="next">The later sweep's outcome.</param>
+        internal Pass2Outcome And(Pass2Outcome next)
+            => new(EarlyAborted || next.EarlyAborted,
+                   BelowExpectedStartNumber ?? next.BelowExpectedStartNumber,
+                   MeasuredBreakSeconds is { } mine
+                       ? next.MeasuredBreakSeconds is { } theirs ? Math.Min(mine, theirs) : mine
+                       : next.MeasuredBreakSeconds);
+    }
+
+    /// <summary>
+    /// Probes a list of Pass 2 regions in order, stopping at the first one that gives up on the
+    /// file. The marks land in the accumulators; what comes back is what the caller has to act on.
+    /// </summary>
+    /// <param name="ctx">The file's Pass 2 context.</param>
+    /// <param name="regions">The regions to probe, in file order.</param>
+    /// <param name="found">Accumulator of confirmed chapters.</param>
+    /// <param name="namedFound">Accumulator of the file's named marks.</param>
+    /// <param name="language">The file's settled language resolution.</param>
+    /// <param name="shape">Which of each region's candidates to walk; see <see cref="ScanShape"/>.</param>
+    /// <param name="bytesPerSecond">The file's play time to progress-byte rate.</param>
+    /// <param name="wholeFileProgress">Whether the enclosing phase's total is the whole file, in
+    /// which case a region's absolute position <em>is</em> its progress. False for a phase whose
+    /// budget is the summed length of its regions, where each one's position is mapped onto that
+    /// shorter timeline so the bar runs from 0 to 100 % once across the pass; see
+    /// <see cref="RegionProber"/>'s progress-offset remarks.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<Pass2Outcome> ProbeRegionsAsync(
+        Pass2Context ctx, IReadOnlyList<DetectionRegion> regions,
+        List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
+        ScanShape shape, double bytesPerSecond, bool wholeFileProgress, CancellationToken ct)
+    {
+        var outcome = new Pass2Outcome(false, null, null);
+        var secondsDone = 0.0;
+        foreach (var region in regions)
+        {
+            var prober = new RegionProber(
+                BuildProbeEnvironment(), ctx, region, found, namedFound, language,
+                wholeFileProgress ? 0 : secondsDone - region.FromSeconds, shape: shape);
+            await prober.RunAsync(ct);
+            _customLimitHit |= prober.CustomLimitHit;
+            _sequenceRestartSkips += prober.SequenceRestartSkips;
+            outcome = outcome.And(new Pass2Outcome(
+                prober.EarlyAborted, prober.BelowExpectedStartNumber, prober.AdaptedThresholdSeconds));
+
+            secondsDone += region.ToSeconds - region.FromSeconds;
+            if (!wholeFileProgress)
+                ctx.Work.SetPhaseProgress((long)(secondsDone * bytesPerSecond));
+            if (outcome.EarlyAborted || outcome.BelowExpectedStartNumber != null)
+                break;
+        }
+        return outcome;
+    }
+
+    /// <summary>
+    /// The second half of a jingle-first Pass 2: the pauses of every stretch the jingle half left
+    /// unsettled - the head of the file, any hole in the chapter numbering, and the tail. See
+    /// <see cref="JingleFirstScan"/> for why the pauses in between are the ones that can be skipped.
+    /// <para>
+    /// A phase of its own, because its budget is the summed length of those stretches rather than
+    /// the whole file: reporting a whole-file position against it would send the bar back to the
+    /// start of a phase it is not in. It is also the honest thing to show - the run really is
+    /// looking at the book a second time, over a fraction of it.
+    /// </para>
+    /// <para>
+    /// Each stretch is walked by an ordinary prober in the primary scan's own framing, not a
+    /// recovery pass's trimmed one. Nothing has read these pauses yet, and the trimmed framing exists
+    /// to ask a <em>differently</em> framed question of audio that already came back empty (see
+    /// <see cref="DetectionTuning.RecoveryLeadInTrimSeconds"/>) - the wrong instrument for a first
+    /// look, and one that would quietly downgrade every pause-announced chapter in the file.
+    /// </para>
+    /// <para>
+    /// What the split does cost is the transcript overlap cache, which belongs to one prober: a
+    /// pause window neighbouring a jingle window no longer picks up what that decode read ahead, and
+    /// the audio at such a junction is read twice. Small against what the shape saves - a jingle book
+    /// has one junction per chapter and thousands of pauses - and it also shows up as a mark's
+    /// confidence differing from the one the ordinary shape reports for the same position, the
+    /// window around it having been framed differently.
+    /// </para>
+    /// </summary>
+    /// <param name="ctx">The file's Pass 2 context.</param>
+    /// <param name="region">The region both halves walk - the whole file, this shape being
+    /// restricted to a fresh run.</param>
+    /// <param name="found">Accumulator of confirmed chapters, holding the jingle half's finds.</param>
+    /// <param name="namedFound">Accumulator of the file's named marks.</param>
+    /// <param name="language">The file's settled language resolution.</param>
+    /// <param name="bytesPerSecond">The file's play time to progress-byte rate.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<Pass2Outcome> ProbePausesAfterJinglesAsync(
+        Pass2Context ctx, DetectionRegion region,
+        List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
+        double bytesPerSecond, CancellationToken ct)
+    {
+        var stretches = JingleFirstScan.UnsettledStretches(found, region);
+        var stretchSeconds = stretches.Sum(s => s.ToSeconds - s.FromSeconds);
+        _log?.Invoke(
+            $"Pass 2: the jingles are done and {found.Count} chapter(s) came out of them - " +
+            $"now probing the pauses of {stretches.Count} stretch(es), " +
+            $"{FormatLength(stretchSeconds)} of {FormatLength(region.ToSeconds - region.FromSeconds)}");
+        foreach (var stretch in stretches)
+            _log?.Invoke(
+                $"pass 2b: {FormatTimestamp(stretch.FromSeconds)}-{FormatTimestamp(stretch.ToSeconds)}, " +
+                (stretch.LowerNumber > 0
+                    ? $"above chapter {stretch.LowerNumber}"
+                    : "before every chapter found") +
+                (stretch.UpperNumber is { } upper
+                    ? $" and below chapter {upper}"
+                    : " and open at the top"));
+        if (stretchSeconds <= 0)
+            return new Pass2Outcome(false, null, null);
+
+        ctx.Work.BeginPhase("Pass 2b", (long)(stretchSeconds * bytesPerSecond));
+        return await ProbeRegionsAsync(
+            ctx, stretches, found, namedFound, language,
+            ScanShape.SilencesOnly, bytesPerSecond, wholeFileProgress: false, ct);
     }
 
     /// <summary>

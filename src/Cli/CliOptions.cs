@@ -489,6 +489,23 @@ public sealed class CliOptions
     public bool MarkBeforeJingle { get; private set; }
 
     /// <summary>
+    /// Forces the jingle-first shape of Pass 2 on a file that would not qualify for it by itself
+    /// (--jingle-first): the music is read end to end first, and the pauses only where the chapter
+    /// sequence still has a hole plus the head and tail of the file. See
+    /// <see cref="ABChapterize.Detection.JingleFirstScan"/> for what qualifies a file automatically
+    /// and for what the automatic gate is protecting.
+    /// <para>
+    /// A force switch and not an on/off pair, because the two answers are not symmetric: a book that
+    /// meets the gate has been measured to gain from the shape, while a book that does not is an
+    /// experiment somebody wants to run. If the shape turns out to need switching <em>off</em> on a
+    /// qualifying book, that is a defect in the gate rather than an option the user should have to
+    /// find.
+    /// </para>
+    /// <para><b>Experimental.</b></para>
+    /// </summary>
+    public bool JingleFirst { get; private set; }
+
+    /// <summary>
     /// How far before the announcement's onset a mark is placed, in seconds (--mark-lead, default
     /// <see cref="DetectionTuning.DefaultMarkLeadSeconds"/>).
     /// </summary>
@@ -879,6 +896,7 @@ public sealed class CliOptions
     /// </summary>
     private bool AnyProcessingOptionGiven
         => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || !TrailingScan || !Denoise || DryRun
+           || JingleFirst
            || Export || Import || SimpleMetadata || Verify || Fix || IgnoreProgress
            || UseGpu != null || VadThreads != null || WhisperThreads != null
            || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
@@ -932,6 +950,7 @@ public sealed class CliOptions
                 $"chaptercount={ChapterCount}",
                 $"trailingscan={TrailingScan}", $"verify={Verify}/{Fix}", $"verifythreshold={VerifyFailThreshold}",
                 $"jingle={MarkBeforeJingle}", $"quickmarks={QuickMarks}", $"marklead={MarkLeadSeconds}",
+                $"jinglefirst={JingleFirst}",
                 $"denoise={Denoise}",
                 $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
@@ -1077,11 +1096,11 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.QuickMarks || !o.TrailingScan || !o.Denoise || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.JingleFirst || o.QuickMarks || !o.TrailingScan || !o.Denoise || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
                 "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
-                "--mark-before-jingle, --quick-marks, --mark-lead, --min-silence-length, " +
+                "--mark-before-jingle, --jingle-first, --quick-marks, --mark-lead, --min-silence-length, " +
                 "--noise-floor, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, " +
                 "--no-denoise, --verify, " +
@@ -1116,6 +1135,17 @@ public sealed class CliOptions
                 "--ignore-chapter-numbers forms no opinion about chapter numbers, so --pass3-model, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count and --verify " +
                 "have nothing to act on and cannot be combined with it.");
+
+        // Its own entry rather than a sixth name in the list above, because what it names is not an
+        // expectation about the numbers but a dependence on there being a sequence at all: the
+        // jingle-first shape skips the pauses between two chapters whose numbers are consecutive, and
+        // with no numbers no two chapters ever are, so every pause in the book would be probed after
+        // the jingles had been - the ordinary Pass 2 plus a wasted pass over the music.
+        if (o.IgnoreChapterNumbers && o.JingleFirst)
+            throw new CliError(
+                "--jingle-first defers a book's pauses to wherever its chapter sequence still has " +
+                "a hole, which --ignore-chapter-numbers leaves it no way to know - the two cannot " +
+                "be combined.");
 
         if (o.MaxChapterNumber is { } cap && o.ExpectedStartChapter is { } start && cap < start)
             throw new CliError(
@@ -1282,6 +1312,7 @@ public sealed class CliOptions
             case "--cpu-only": CpuOnly = true; return true;
             case "--force": Force = true; return true;
             case "--mark-before-jingle": MarkBeforeJingle = true; return true;
+            case "--jingle-first": JingleFirst = true; return true;
             case "--quick-marks": QuickMarks = true; return true;
             case "--no-trailing-scan": TrailingScan = false; return true;
             case "--no-denoise": Denoise = false; return true;
@@ -1904,6 +1935,22 @@ public sealed class CliOptions
                                     be. Without this option, the mark is always placed
                                     --mark-lead seconds before the chapter phrase, no matter
                                     what precedes it.
+              --jingle-first        [EXPERIMENTAL] Read this book's music first and its pauses
+                                    afterwards. Pass 2 normally walks both together, in one
+                                    sweep through the file; with this it probes every jingle
+                                    first, then looks at the pauses only where the chapter
+                                    sequence still has a hole, plus before the first chapter
+                                    found and after the last - which is where a prologue and
+                                    an epilogue are. On a book that announces every chapter
+                                    after a music sting, the pauses in between can only
+                                    confirm what the music already said, and skipping them
+                                    saves a great deal of time. This shape is chosen by
+                                    itself for a file with at least one jingle per hour of
+                                    play time, unless one of your own --custom mappings may
+                                    be announced between two chapters - which is the one
+                                    thing it would stop looking for. Give this option to use
+                                    it anyway, on a file that qualifies for neither reason.
+                                    --verbose says which shape a file ran under.
           -k, --mark-lead <seconds> How far before the announcement a mark is placed (default
                                     0.35). Purely a matter of taste: marks are located to the
                                     same accuracy whatever this is, it only decides how much
@@ -2228,7 +2275,8 @@ public sealed class CliOptions
                                     --lang, --chapter-phrase, --prologue-phrase,
                                     --epilogue-phrase, --custom, --custom-file,
                                     --ignore-chapter-numbers, --model, --pass3-model,
-                                    --mark-before-jingle, --quick-marks, --mark-lead,
+                                    --mark-before-jingle, --jingle-first, --quick-marks,
+                                    --mark-lead,
                                     --min-silence-length, --noise-floor, --early-abort,
                                     --expected-start-chapter, --max-chapter-number,
                                     --chapter-count, --no-trailing-scan, --no-denoise, --verify,

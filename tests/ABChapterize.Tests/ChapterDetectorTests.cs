@@ -322,6 +322,25 @@ public sealed class ChapterDetectorTests : IDisposable
     /// tests that are about it.</summary>
     private CliOptions OptionsWithTrailingScan(params string[] args) => BuildOptions(args);
 
+    /// <summary>
+    /// Like <see cref="Options"/>, but keeping Pass 2 in its ordinary one-sweep shape on a fixture
+    /// whose scripted VAD happens to hold a jingle. A file with at least one jingle per hour of play
+    /// time otherwise reads its music first and its pauses afterwards (see
+    /// <see cref="JingleFirstScan"/>), and these fixtures run an hour, so a single non-speech region
+    /// is enough to trip that - which for a test about how a pause window and a jingle window share
+    /// a seam, or about which of two announcements is heard first, is the one thing that must not
+    /// happen.
+    /// <para>
+    /// Pinned with a <c>--custom</c> mapping rather than an option of its own, because that is the
+    /// pin the tool has: a mapping that may be announced between two chapters is exactly what the
+    /// jingle-first gate declines to run without, the pauses between two consecutive chapters being
+    /// the one place such a mapping could be heard. The phrase is written so that nothing a fixture
+    /// scripts can ever match it.
+    /// </para>
+    /// </summary>
+    private CliOptions OptionsWithoutJingleFirst(params string[] args)
+        => Options([.. args, "--custom", "/nothing-ever-says-this/:Marker"]);
+
     /// <summary>The shared body of the two option builders above.</summary>
     /// <param name="args">The option list, already carrying whatever trailing-scan choice was made.</param>
     private CliOptions BuildOptions(string[] args)
@@ -2091,7 +2110,7 @@ public sealed class ChapterDetectorTests : IDisposable
             ],
         };
         var (result, log, _) = await DetectWithLogAsync(
-            Options(),
+            OptionsWithoutJingleFirst(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -5734,7 +5753,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // and the swallowed candidate start (640) never are. Chapter one is scripted at low
         // confidence so the overlap-sequence skip stays out of the way.
         var (_, _, audio) = await DetectFullAsync(
-            Options("--mark-before-jingle"),
+            OptionsWithoutJingleFirst("--mark-before-jingle"),
             [new(598, 600), new(638, 640)],
             s => s.Add(600, Seg(2, " Chapter one.", confidence: 0.3)),
             new FakeVad { Speech = [new(0, 648), new(655, 3600)] });
@@ -7963,5 +7982,168 @@ public sealed class ChapterDetectorTests : IDisposable
             Options("--no-denoise"), [new(595, 600)], s => s.Add(600, Seg(0.5, " 1. Jaknuktag")));
 
         Assert.DoesNotContain(log, l => l.Contains("heard a chapter number but not the word"));
+    }
+
+    /// <summary>
+    /// A book announcing every chapter after music, which is the shape the jingle-first Pass 2 exists
+    /// for: three jingles, three chapters, and two ordinary pauses in between that hold nothing. The
+    /// jingles are read first, the sequence comes out complete, and neither pause is ever decoded -
+    /// which is the whole saving, since on a real book of this shape those pauses number in the
+    /// thousands.
+    /// </summary>
+    [Fact]
+    public async Task JingleFirst_SkipsThePausesBetweenTwoConsecutiveChapters()
+    {
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(500, 503), new(1500, 1503)],
+            s =>
+            {
+                s.Add(102, Seg(8, " Chapter one."));
+                s.Add(1002, Seg(8, " Chapter two."));
+                s.Add(2002, Seg(8, " Chapter three."));
+            },
+            new FakeVad { Speech = [new(0, 100), new(110, 1000), new(1010, 2000), new(2010, 3600)] });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.DoesNotContain(500.0, audio.DecodeStarts);
+        Assert.DoesNotContain(1500.0, audio.DecodeStarts);
+    }
+
+    /// <summary>The other half of the bargain: a chapter the music did not announce leaves a hole,
+    /// and the pause half walks exactly that hole and finds it.</summary>
+    [Fact]
+    public async Task JingleFirst_StillFindsAChapterAnnouncedAfterAPause()
+    {
+        var (result, _, audio) = await DetectFullAsync(
+            Options(),
+            [new(1000, 1003)],
+            s =>
+            {
+                s.Add(102, Seg(8, " Chapter one."));
+                s.Add(1000, Seg(3.2, " Chapter two."));
+                s.Add(2002, Seg(8, " Chapter three."));
+            },
+            new FakeVad { Speech = [new(0, 100), new(110, 2000), new(2010, 3600)] });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Contains(1000.0, audio.DecodeStarts);
+    }
+
+    /// <summary>
+    /// The prologue, which is the reason the pause half walks the head of the file at all - and the
+    /// reason a phrase's scope is measured by position rather than by how many chapters have been
+    /// accepted so far. Every chapter of this book is already in hand when its opening minute is
+    /// finally read, and a prologue there is still a prologue.
+    /// </summary>
+    [Fact]
+    public async Task JingleFirst_StillFindsAPrologueBeforeTheFirstChapter()
+    {
+        var result = await DetectAsync(
+            Options(),
+            [new(50, 53)],
+            s =>
+            {
+                s.Add(50, Seg(3.2, " Prologue."));
+                s.Add(102, Seg(8, " Chapter one."));
+                s.Add(1002, Seg(8, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 100), new(110, 1000), new(1010, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        AssertNamed([("prologue", "Prologue", 53)], result);
+    }
+
+    /// <summary>And the epilogue, which is why it walks the tail.</summary>
+    [Fact]
+    public async Task JingleFirst_StillFindsAnEpilogueAfterTheLastChapter()
+    {
+        var result = await DetectAsync(
+            Options(),
+            [new(3000, 3003)],
+            s =>
+            {
+                s.Add(102, Seg(8, " Chapter one."));
+                s.Add(1002, Seg(8, " Chapter two."));
+                s.Add(3000, Seg(3.2, " Epilogue."));
+            },
+            new FakeVad { Speech = [new(0, 100), new(110, 1000), new(1010, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        AssertNamed([("epilogue", "Epilogue", 3003)], result);
+    }
+
+    /// <summary>What --verbose says about it - the shape a file ran under is otherwise invisible,
+    /// and it decides which windows the whole pass opened.</summary>
+    [Fact]
+    public async Task JingleFirst_IsAnnouncedInTheLog()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(500, 503)],
+            s => s.Add(102, Seg(8, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 100), new(110, 3600)] });
+
+        Assert.Contains(log, l => l.StartsWith("jingle-first Pass 2: 1 jingle(s), 1.0 per hour"));
+        Assert.Contains(log, l => l.Contains("now probing the pauses of"));
+    }
+
+    /// <summary>A book with no music at all keeps the ordinary one-sweep shape, whatever its
+    /// pauses hold.</summary>
+    [Fact]
+    public async Task WithoutJingles_TheOrdinaryShapeIsKept()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(500, 503)],
+            s => s.Add(500, Seg(3.2, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.DoesNotContain(log, l => l.Contains("jingle-first"));
+    }
+
+    /// <summary>
+    /// --jingle-first on a file the gate would have declined. With no music the jingle half probes
+    /// only the region start, so the pause half is handed the whole book - the ordinary Pass 2 in
+    /// all but name, which is what makes forcing the shape safe enough to be worth measuring with.
+    /// </summary>
+    [Fact]
+    public async Task JingleFirstOption_ForcesTheShapeAndStillFindsEverything()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--jingle-first"),
+            [new(500, 503), new(1500, 1503)],
+            s =>
+            {
+                s.Add(500, Seg(3.2, " Chapter one."));
+                s.Add(1500, Seg(3.2, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("jingle-first Pass 2 (--jingle-first)"));
+    }
+
+    /// <summary>
+    /// --early-abort is asked once, by the half that has actually looked at the pauses. The jingle
+    /// half reads the music and nothing else, so "nothing found yet" says nothing there - and this
+    /// book's first jingle sits well past the abort threshold, which is exactly the framing that
+    /// would have given up on a book that does yield chapters.
+    /// </summary>
+    [Fact]
+    public async Task JingleFirst_LeavesTheEarlyAbortToThePauseHalf()
+    {
+        var result = await DetectAsync(
+            Options("--early-abort", "10"),
+            [new(500, 503)],
+            s =>
+            {
+                s.Add(500, Seg(3.2, " Chapter one."));
+                s.Add(1002, Seg(8, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 1000), new(1010, 3600)] });
+
+        Assert.False(result.EarlyAborted);
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
     }
 }

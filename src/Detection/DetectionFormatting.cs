@@ -26,6 +26,14 @@ internal static class DetectionFormatting
     /// <param name="seconds">Position in seconds.</param>
     internal static string FormatTimestamp(double seconds) => TimeFormat.Hms(seconds, 2);
 
+    /// <summary>Formats a <em>length</em> of time - how much audio a pass is about to read, say -
+    /// as opposed to a position in the file, which <see cref="FormatTimestamp"/> is for. The
+    /// distinction is worth keeping in the log: "0:41:12" of audio read out of "3:17:40" says
+    /// something a pair of positions does not.</summary>
+    /// <param name="seconds">The length in seconds.</param>
+    internal static string FormatLength(double seconds)
+        => TimeFormat.Duration(TimeSpan.FromSeconds(Math.Max(0, seconds)));
+
     /// <summary>
     /// Renders one Whisper transcript as a single log line: the caller's context, then every
     /// segment with its window-relative times and confidence. One line rather than one per segment

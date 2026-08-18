@@ -634,6 +634,24 @@ public sealed class CliOptionsTests : IDisposable
         => Assert.True(ParseFile("--ignore-chapter-numbers", opt, value)!.IgnoreChapterNumbers);
 
     [Fact]
+    public void JingleFirst_IsOffByDefault()
+        => Assert.False(ParseFile()!.JingleFirst);
+
+    [Fact]
+    public void JingleFirst_ForcesTheShape()
+        => Assert.True(ParseFile("--jingle-first")!.JingleFirst);
+
+    /// <summary>The shape defers a book's pauses to wherever its chapter sequence still has a hole,
+    /// which is not a question that can be asked of a run forming no opinion about the numbers.</summary>
+    [Fact]
+    public void JingleFirst_CannotBeCombinedWithIgnoreChapterNumbers()
+        => Assert.Throws<CliError>(() => ParseFile("--jingle-first", "--ignore-chapter-numbers"));
+
+    [Fact]
+    public void JingleFirst_ChangesTheRunFingerprint()
+        => Assert.NotEqual(ParseFile()!.RunFingerprint, ParseFile("--jingle-first")!.RunFingerprint);
+
+    [Fact]
     public void IgnoreChapterNumbers_IsAccepted_WithEveryNamedPhraseSwitchedOff()
     {
         var options = ParseFile(
@@ -764,6 +782,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--intro-title", "Intro")]
     [InlineData("--prologue-title", "Prologue")]
     [InlineData("--epilogue-title", "Epilogue")]
+    [InlineData("--jingle-first")]
     public void ImportWithDetectionOptions_IsAnError(params string[] extra)
     {
         Assert.Throws<CliError>(() => ParseFile([.. new[] { "--import" }, .. extra]));
@@ -772,6 +791,7 @@ public sealed class CliOptionsTests : IDisposable
     [Theory]
     [InlineData("--import", "--lang", "de")]
     [InlineData("--ignore-chapter-numbers", "--verify")]
+    [InlineData("--ignore-chapter-numbers", "--jingle-first")]
     public void AnIncompatibilityMessage_NamesOnlyOptionsTheHelpAlsoLists(params string[] args)
     {
         // Each of these lists of mutually exclusive options exists three times over: the check

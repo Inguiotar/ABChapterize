@@ -13,6 +13,38 @@ release is whatever felt big enough to deserve one — the program has turned in
 different animal, or a headline feature landed, or it has simply grown up enough to
 earn a round number.
 
+## [0.12.1] — unreleased
+
+### Added
+
+- **Books that announce every chapter after a jingle are now probed music-first, which
+  saves a great deal of time.** Instead of walking a file's pauses and its music together
+  in one sweep, such a book gets its jingles read first, in order, and its pauses
+  afterwards — but only where they can still be carrying something: anywhere the chapter
+  numbering still has a hole, everything before the first chapter found, and everything
+  after the last. So a prologue and an epilogue are still looked for exactly where they
+  belong, and the pauses that get skipped are the ones between two chapters whose numbers
+  already run consecutively, where nothing else could be announced anyway.
+
+  A file takes this shape by itself when it has at least one jingle per hour of play time,
+  unless one of your own `--custom` mappings may be announced between two chapters — that
+  being the one thing the shape would stop looking for. A mapping restricted to
+  `before-first-chapter` or `after-last-chapter` costs nothing.
+
+  **Experimental.** `--jingle-first` asks for the shape on any file, including one that
+  qualifies for neither reason; it cannot be combined with `--ignore-chapter-numbers`,
+  which leaves no chapter sequence to scope the second half by. `--verbose` says which
+  shape a file ran under, and the progress bar shows the second half as a phase of its
+  own, `Pass 2b`.
+
+### Fixed
+
+- **A prologue or epilogue is now judged by where it sits, not by when it was heard.** A
+  phrase restricted to "before the first chapter" or "after the first chapter" was measured
+  against how many chapters had been found so far, which is the same thing only for a pass
+  that reads a book strictly forward. A prologue heard by a window that had already picked
+  up the chapter behind it was refused.
+
 ## [0.12.0] — 2026-08-18
 
 ### Added

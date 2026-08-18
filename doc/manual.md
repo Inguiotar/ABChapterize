@@ -149,6 +149,32 @@ comes up at all (see [Pass 3](#pass-3--gap-filling-only-when-needed) and
 `--mark-before-jingle`), is measured from the file's own jingles rather than
 assumed.
 
+#### Reading the music first
+
+**Experimental (0.12.1).** On a book that announces every chapter after a music
+sting, the pauses in between can only ever confirm what the music already said —
+and there are thousands of them. Such a file is probed in two halves instead of
+one sweep: every jingle first, in order, and only then the pauses, and only
+where they can still be carrying something. That is any stretch of the file
+where the chapter numbering still has a hole, everything before the first
+chapter found, and everything after the last — so a prologue and an epilogue are
+still looked for exactly where they belong. The pauses between two chapters
+whose numbers already run consecutively are the ones that are skipped, and
+nothing else can be announced there: there is no number left for a chapter to
+carry, and neither a prologue nor an epilogue may sit there.
+
+A file gets this shape by itself when it has at least one jingle per hour of
+play time — unless one of your own [`--custom`](#custom-marks) mappings may be
+announced between two chapters, which is exactly what would then stop being
+looked for. A mapping restricted to `before-first-chapter` or
+`after-last-chapter` costs nothing; an untagged one, or one restricted to
+`after-first-chapter`, keeps the file on the ordinary single sweep.
+`--jingle-first` asks for the shape whatever the file looks like.
+
+`--verbose` says which shape a file ran under, and the progress bar shows the
+second half as a phase of its own (`Pass 2b`) whose length is the stretches it
+has left to read, not the whole book.
+
 Each transcript is matched against the chapter phrase (see `--chapter-phrase`),
 and the chapter number is parsed from digits, Roman numerals or number words
 (see [section 7](#7-languages-and-number-recognition)).
@@ -1070,6 +1096,19 @@ so that logs and reports stay comparable regardless of regional settings.
   regardless of this option. Without `--mark-before-jingle`, a mark is
   always placed `--mark-lead` seconds before the chapter phrase, no matter what
   precedes it.
+
+`--jingle-first`
+: **Experimental.** Read this book's music first and its pauses afterwards, in
+  two halves rather than one sweep — see
+  [Reading the music first](#reading-the-music-first) for what the second half
+  still looks at and why the rest can be skipped. A file with at least one
+  jingle per hour of play time takes this shape by itself, unless one of your
+  own [`--custom`](#custom-marks) mappings may be announced between two
+  chapters; this option asks for it regardless, which is what makes a book
+  outside that description measurable without changing anything else. It cannot
+  be combined with `--ignore-chapter-numbers`, which leaves no chapter sequence
+  for the second half to be scoped by. `--verbose` says which shape a file ran
+  under.
 
 `-k`, `--mark-lead <seconds>`
 : How far in front of the announcement a mark is placed; default 0.35.
@@ -2778,7 +2817,10 @@ where every mark is an
 announcement without a number, the state shows the plain total instead:
 `mk 12`. Pass 2's percentage follows the probe position within the
 file's play time, so it can move nonlinearly — and, briefly, backwards,
-when a sequence gap makes the detector re-probe earlier candidates. Pass 3
+when a sequence gap makes the detector re-probe earlier candidates. `Pass 2b`
+is [pass 2's second half](#reading-the-music-first) on a file that read its
+music first; its percentage runs over the stretches that half still has to
+read rather than over the whole file. Pass 3
 transcribes in chunks of several minutes each, and the bar follows the
 recognizer's own position through the chunk it is working on rather than
 jumping once per finished chunk — so a long gap keeps showing that something
