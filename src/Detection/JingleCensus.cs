@@ -76,7 +76,7 @@ internal static class JingleCensus
     /// The silence floor is load-bearing and is not an approximation worth "fixing": silences below
     /// <see cref="MinStoredSilenceSeconds"/> were never recorded, so a beat of quiet inside a music
     /// sting does not split one jingle into two, which is what keeps the measured lengths
-    /// comparable to the ones --max-jingle-length reasons about.
+    /// comparable to the reach <see cref="ReachSeconds"/> derives from them.
     /// </para>
     /// <para>
     /// What keeps narration out is that cut, not the speech segments: a passage of short words
@@ -133,7 +133,7 @@ internal static class JingleCensus
     /// <summary>Renders a census as the one --verbose line it is worth: how many jingles the file
     /// has and how long they run. The spread matters as much as the count - a book whose jingles
     /// are all within a second of each other plays one sting, while a wide spread means the music
-    /// varies per chapter and --max-jingle-length has to cover the longest.</summary>
+    /// varies per chapter and the file's reach has to cover the longest.</summary>
     /// <param name="jingles">What <see cref="Measure"/> found.</param>
     internal static string Describe(List<Jingle> jingles)
         => $"{jingles.Count} jingle(s) of >= {MinJingleObservationSeconds:0.#} s found" +

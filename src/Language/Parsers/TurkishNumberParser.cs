@@ -21,10 +21,14 @@ public sealed class TurkishNumberParser : INumberWordParser
     /// <summary>
     /// The optional apostrophe Turkish puts before its ordinal suffix is baked in here
     /// rather than assumed by <see cref="NumberWordParser"/>, since it is specific to
-    /// Turkish's vowel-harmony suffix ("5'inci" and "5inci" both parse).
+    /// Turkish's vowel-harmony suffix ("5'inci" and "5inci" both parse). Both the ASCII
+    /// apostrophe and the typographic one are admitted, for the same reason the suffix itself is
+    /// listed in accented as well as plain spellings: which one a transcript carries is the
+    /// recognizer's choice, and admitting a form too many costs nothing here - the digits still
+    /// have to be there - while missing one costs a chapter.
     /// </summary>
     /// <inheritdoc/>
-    public string DigitOrdinalSuffixPattern => "'?(?:inci|nci|uncu|ncu|ncı|ncü|ıncı|üncü)";
+    public string DigitOrdinalSuffixPattern => "['’]?(?:inci|nci|uncu|ncu|ncı|ncü|ıncı|üncü)";
 
     /// <summary>Directly addable words 0-10, keyed in normalized ASCII form.</summary>
     private static readonly Dictionary<string, int> Units = new()

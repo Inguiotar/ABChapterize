@@ -2640,7 +2640,9 @@ internal sealed class RegionProber
     /// <para>
     /// Note what this does <em>not</em> reach: with a VAD pre-pass - the default - the rules below
     /// never run for either kind, because the VAD path returns first and places every match it is
-    /// given. Unifying the two therefore changes behaviour only under <c>--max-jingle-length 0</c>.
+    /// given - and since 0.12.0 the pre-pass always runs, so nothing below this is reachable in a
+    /// production run at all. What still exercises it is the detector's own tests, which construct
+    /// one without a VAD. Unifying the two therefore changed no shipped behaviour.
     /// </para>
     /// </remarks>
     /// <param name="phraseStartSeconds">Phrase start, relative to the window start.</param>
@@ -3071,10 +3073,10 @@ internal sealed class RegionProber
     /// </summary>
     /// <param name="candidates">The region's candidate sequence.</param>
     /// <param name="ci">Index of the candidate just probed.</param>
-    /// <param name="windowEnd">That window's <em>actual</em> probed end - a mid-probe resize
-    /// (--max-jingle-length auto) must not retroactively pretend the window was narrower than what
-    /// was really decoded - while the links beyond it use ends computed at the current width, the
-    /// same ends those windows would be probed with.</param>
+    /// <param name="windowEnd">That window's <em>actual</em> probed end, which a seam snap or a
+    /// narrowed re-read can pull in ahead of the planned one and which must not be retroactively
+    /// pretended narrower than what was really decoded - while the links beyond it use ends
+    /// computed at the current width, the same ends those windows would be probed with.</param>
     /// <param name="probeMarks">The marks that window produced.</param>
     /// <returns>The index the candidate loop is to continue from.</returns>
     private int SkipSettledWindows(

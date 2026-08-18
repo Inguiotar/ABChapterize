@@ -43,8 +43,8 @@ internal readonly record struct TranscriptWindow(
 
 /// <summary>Locates and resolves VAD non-speech regions (jingles) and silence-based anchors
 /// around a chapter phrase: computing the regions themselves from raw VAD speech segments,
-/// matching a region to its phrase, and deriving where the chapter mark and the various
-/// --min-silence-length/--max-jingle-length auto statistics should anchor.</summary>
+/// matching a region to its phrase, and deriving where the chapter mark, the --min-silence-length
+/// auto threshold and the per-file jingle statistics should anchor.</summary>
 internal static class JingleGeometry
 {
     /// <summary>
@@ -137,8 +137,8 @@ internal static class JingleGeometry
     /// <summary>
     /// Resolves the jingle/silence anchor for a matched phrase, independent of whichever silence
     /// happened to trigger the probe. Used whenever the VAD pre-pass ran: to place the mark with
-    /// --mark-before-jingle, and - regardless of that option - to feed the
-    /// --min-silence-length/--max-jingle-length auto mechanisms and the per-file statistics. The
+    /// --mark-before-jingle, and - regardless of that option - to feed the --min-silence-length
+    /// auto threshold and the per-file jingle statistics. The
     /// jingle is the VAD non-speech region the phrase belongs to (see
     /// <see cref="FindJingleRegionForPhrase"/>, by containment, so an announcement spoken
     /// <em>inside</em> the jingle does not lose the region); a silence is accepted as the anchor
@@ -857,8 +857,8 @@ internal static class JingleGeometry
     /// for the segment carrying a chapter announcement after a pause and/or a jingle, that is the
     /// start of the leading non-speech, not of the spoken phrase. Left uncorrected, the phrase's
     /// apparent start sits back in the previous chapter's trailing audio, which both mis-places the
-    /// mark (the anchor logic keys off the phrase start) and feeds the --min-silence-length /
-    /// --max-jingle-length auto mechanisms a mis-measured (usually too short) silence. Both
+    /// mark (the anchor logic keys off the phrase start) and feeds the --min-silence-length auto
+    /// threshold and the per-file jingle statistics a mis-measured (usually too short) silence. Both
     /// detectors' findings are available here - silencedetect down to
     /// <see cref="MinStoredSilenceSeconds"/>, plus VAD regions when the pre-pass ran - so the real
     /// onset is the far end of the contiguous run of non-speech intervals beginning at (or a hair

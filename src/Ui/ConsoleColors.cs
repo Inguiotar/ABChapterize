@@ -142,6 +142,15 @@ public static class ConsoleColors
     /// Cuts a line of spans down to at most <paramref name="width"/> visible characters, splitting
     /// the span the cut lands in rather than dropping it whole.
     /// </summary>
+    /// <remarks>
+    /// Counts UTF-16 code units, not display columns, which is right for the ASCII and Latin-1
+    /// names this measures in practice and wrong in two known ways it does not try to correct: a
+    /// CJK or emoji title occupies two columns per unit and so overruns the width, and a cut
+    /// landing between the halves of a surrogate pair leaves a lone surrogate the terminal draws as
+    /// a replacement character. Both are cosmetic and both cost a full grapheme-plus-east-asian-
+    /// width implementation to fix properly - .NET offers neither - so the line is allowed to be a
+    /// little too long rather than the code a lot more complicated.
+    /// </remarks>
     /// <param name="spans">The spans making up one line.</param>
     /// <param name="width">Maximum number of visible characters to keep.</param>
     public static List<ColoredSpan> Truncate(IReadOnlyList<ColoredSpan> spans, int width)

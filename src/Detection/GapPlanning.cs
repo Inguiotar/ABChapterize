@@ -483,8 +483,9 @@ internal static class GapPlanning
     /// silence triggered the probe. A probe window can span the previous chapter's trailing speech,
     /// an unrelated in-text pause long enough to pass --min-silence-length itself, the real
     /// inter-chapter silence, the jingle (with the VAD pre-pass) and finally the phrase - so
-    /// trusting the triggering silence would anchor the --mark-before-jingle position and the
-    /// --min-silence-length/--max-jingle-length auto mechanisms to the wrong, earlier one. Returns
+    /// trusting the triggering silence would anchor the --mark-before-jingle position, the
+    /// --min-silence-length auto threshold and the per-file jingle statistics to the wrong, earlier
+    /// one. Returns
     /// null when no silence lies between the window start and the phrase, meaning the triggering
     /// silence (ending exactly at windowStart) was the real one after all.
     /// </summary>
@@ -595,8 +596,9 @@ internal static class GapPlanning
     /// <summary>
     /// Plans a single Pass 2 probe window's end, called right before that window is probed -
     /// on the fly, so the end always reflects the <paramref name="probeSeconds"/> in effect at
-    /// that moment (the adaptive --max-jingle-length resizes apply to the very next window,
-    /// with no pre-computed bulk plan to go stale). The window naturally spans
+    /// that moment - a candidate's own window length is settled when the candidate is built, and a
+    /// plan computed for the whole region up front would only be a plan to go stale. The window
+    /// naturally spans
     /// <paramref name="probeSeconds"/> from its candidate start (clamped to the file end), but
     /// when the next candidate's window overlaps it, their shared border is snapped to the
     /// nearest silence (or, with the VAD pre-pass, VAD non-speech region) mid-point anywhere within

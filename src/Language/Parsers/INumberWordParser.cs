@@ -56,6 +56,12 @@ public interface INumberWordParser
     /// Receives the count of leading tokens that form the number. Callers matching a
     /// number that must end at a known position (e.g. directly before the chapter
     /// phrase) use this to reject parses that leave trailing tokens unconsumed.
+    /// A token only <em>partly</em> numeric counts for nothing here even though it
+    /// contributes to <paramref name="number"/>: a hyphenated "twenty-odd" arrives as one
+    /// token, and its value is worth reading after a chapter phrase while it is emphatically
+    /// not a number ending at one. So a parse may legitimately return true with a
+    /// <paramref name="consumed"/> that does not reach the token it stopped in, and the
+    /// callers that demand an exact end reject it on exactly that.
     /// </param>
     /// <returns>True when the leading tokens form a number.</returns>
     bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed);

@@ -153,7 +153,8 @@ public sealed class DebugLog : IDisposable
     private static IEnumerable<string> DescribeSettings(CliOptions o)
     {
         yield return $"model {o.Model}, pass3-model {o.Pass3Model}, lang {o.Language}";
-        yield return $"chapter-phrase {o.ChapterPhrase}, title \"{o.Title}\", intro-title \"{o.IntroTitle}\"";
+        yield return $"chapter-phrase {o.ChapterPhrase}, title \"{o.Title}\", " +
+                     $"part-title \"{o.PartTitle}\", intro-title \"{o.IntroTitle}\"";
         yield return $"prologue {o.ProloguePhrase} -> \"{o.PrologueTitle}\", " +
                      $"epilogue {o.EpiloguePhrase} -> \"{o.EpilogueTitle}\"";
         // The language tag is echoed with the mapping rather than dropped: this list is what a
@@ -180,7 +181,18 @@ public sealed class DebugLog : IDisposable
                      $"chapter-count {o.ChapterCount?.ToString() ?? "-"}, " +
                      $"trailing-scan {(o.TrailingScan ? "on" : "off")}";
         yield return $"ignore-chapter-numbers {(o.IgnoreChapterNumbers ? "on" : "off")}, " +
-                     $"verify {(o.Verify ? "on" : "off")}, force {(o.Force ? "on" : "off")}, " +
+                     $"verify {(o.Verify ? (o.Fix ? "on (--fix)" : "on") : "off")}" +
+                     (o.VerifyFailThreshold is { } threshold ? $" over {threshold}" : "") + ", " +
+                     $"force {(o.Force ? "on" : "off")}, " +
+                     $"max-chapters {o.MaxChapters?.ToString() ?? "-"}, " +
                      $"dry-run {(o.DryRun ? "on" : "off")}";
+        // Last because they are the rarest, and first among equals when they are there: a
+        // --run-before may hand detection a different file from the one named on the command
+        // line (joining a split book, re-encoding it), so a header that does not mention the
+        // hook cannot explain the audio its own probe line goes on to describe.
+        if (o.RunBefore is { } before)
+            yield return $"run-before {before.Raw}";
+        if (o.RunAfter is { } after)
+            yield return $"run-after {after.Raw}";
     }
 }

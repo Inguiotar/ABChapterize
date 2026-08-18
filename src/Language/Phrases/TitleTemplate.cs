@@ -48,8 +48,10 @@ public sealed partial class TitleTemplate
     /// <summary>Parses a title template.</summary>
     /// <param name="raw">The template as written.</param>
     /// <param name="what">How to name this title in an error message.</param>
-    /// <exception cref="CliError">Thrown for an index reference, an unknown conversion, or an
-    /// unterminated <c>${</c>.</exception>
+    /// <exception cref="CliError">Thrown for an index reference, an unknown conversion, or a
+    /// reference naming no group. An <em>unterminated</em> <c>${</c> is not an error: with no
+    /// closing brace there is no reference to recognize, so it falls through to literal text like
+    /// any other dollar sign.</exception>
     public TitleTemplate(string raw, string what)
     {
         Raw = raw;
@@ -126,8 +128,10 @@ public sealed partial class TitleTemplate
     /// </summary>
     /// <param name="raw">The template as written.</param>
     /// <param name="what">How to name this title in an error message.</param>
-    /// <exception cref="CliError">Thrown for an index reference, an unknown conversion, or an
-    /// unterminated <c>${</c>.</exception>
+    /// <exception cref="CliError">Thrown for an index reference, an unknown conversion, or a
+    /// reference naming no group. An <em>unterminated</em> <c>${</c> is not an error: with no
+    /// closing brace there is no reference to recognize, so it falls through to literal text like
+    /// any other dollar sign.</exception>
     private static List<Piece> Parse(string raw, string what)
     {
         var pieces = new List<Piece>();
@@ -172,7 +176,8 @@ public sealed partial class TitleTemplate
     /// <param name="raw">The whole template.</param>
     /// <param name="start">Index of the <c>$</c>.</param>
     /// <param name="what">How to name this title in an error message.</param>
-    /// <exception cref="CliError">Thrown for an unknown conversion or an unterminated <c>{</c>.</exception>
+    /// <exception cref="CliError">Thrown for an unknown conversion, or for a reference naming no
+    /// group. An unterminated <c>{</c> simply fails to match and returns null.</exception>
     private static (Piece Piece, int End)? Reference(string raw, int start, string what)
     {
         var m = ReferenceSyntax().Match(raw, start);
@@ -207,6 +212,14 @@ public sealed partial class TitleTemplate
     /// carry-over: a rewrite of a file's whole mark set must not silently drop a numberless mark,
     /// and its written text is all there is to match on. Every reference becomes a wildcard, since
     /// what it expanded to is exactly what varies from one mark to the next.
+    /// <para>
+    /// A template that is <em>nothing but</em> a reference therefore compiles to "any non-empty
+    /// title", and on a resume it claims every unnumbered mark in the file for its own phrase.
+    /// Tolerable rather than tolerated by accident: the marks in such a file were all written by
+    /// this tool in the run being resumed, so what is at stake is which phrase a carried-over mark
+    /// is attributed to, not whether somebody else's mark is mistaken for one of ours - and a
+    /// title with no literal text of its own is a strange thing to ask for to begin with.
+    /// </para>
     /// </summary>
     internal Regex Matcher => _matcher ??= BuildMatcher();
 

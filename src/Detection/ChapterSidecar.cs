@@ -81,8 +81,12 @@ public static partial class ChapterSidecar
     /// their TIMEBASE/START/title keys are read; everything else (global tags, [STREAM]
     /// sections) is ignored. A title containing a literal embedded newline - written by
     /// our own <see cref="FfmpegClient.BuildFfMetadata"/> as a backslash followed by a
-    /// real line break - is not reconstructed across lines; chapter titles never contain
-    /// newlines in this tool's own output, so this is not a practical limitation.
+    /// real line break - is not reconstructed across lines: the title is cut at the break and
+    /// the continuation is read as another key, or as a section of its own where it happens to
+    /// look like one. Nothing this tool writes can produce that, so a sidecar it exported and a
+    /// user did not edit round-trips exactly. A hand-edited one is the case to know about, that
+    /// being what --import exists for - a newline typed into a title is lost quietly rather than
+    /// reported, so keep a title on one line.
     /// </summary>
     /// <param name="text">Raw sidecar file content.</param>
     /// <param name="sidecarPath">Path of the sidecar file, for error messages.</param>

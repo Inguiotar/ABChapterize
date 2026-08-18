@@ -1396,7 +1396,7 @@ public sealed class ChapterDetector
         var env = BuildProbeEnvironment() with { SecondOpinion = null };
         // Seeded with what is already known, exactly as DetectCoreAsync seeds Pass 2 proper:
         // RegionProber reports per-mark progress and "still missing" notes off this list, and gates
-        // the --max-jingle-length auto observation on it not being the file's very first mark - all
+        // the --min-silence-length auto observation on it not being the file's very first mark - all
         // nonsense on a list holding only this pass's own finds.
         var found = new List<DetectedChapter>(chapters);
         var knownCount = found.Count;

@@ -429,7 +429,7 @@ internal sealed class MarkPlacer
     /// <see cref="ResolveJingleAnchor"/>), or none for a silence-less jingle. The jingle length runs
     /// from its true start (that leading silence's end, else the region start) up to the phrase,
     /// clipped at the region end so an announcement spoken inside the jingle - or a merge-inflated
-    /// region end - never overstates it, matching the --max-jingle-length auto observation.
+    /// region end - never overstates it, matching what <see cref="JingleCensus"/> measures.
     /// </summary>
     /// <param name="number">The detected chapter number.</param>
     /// <param name="precedingSilence">The silence the mark anchored to, or null when none.</param>

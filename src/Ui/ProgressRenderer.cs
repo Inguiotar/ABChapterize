@@ -328,6 +328,10 @@ public sealed class ProgressRenderer : IDisposable
             var width = SafeWindowWidth() - 1;
             var spans = BuildSpans(slot);
             var line = ConsoleColors.PlainText(spans);
+            // Below a dozen columns the bar is not truncated but left to wrap, which ClearBar - it
+            // erases exactly one line - then cannot fully undo. Deliberate: a bar cut to ten
+            // columns says nothing at all, and a terminal that narrow is not a case worth carrying
+            // multi-line erase logic for.
             if (width > 10 && line.Length > width)
             {
                 spans = ConsoleColors.Truncate(spans, width);
