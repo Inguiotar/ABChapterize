@@ -1033,7 +1033,11 @@ public sealed class CliOptions
                         continue;
                     if (k != letters.Length - 1)
                         throw new CliError($"Option -{c} takes a parameter and cannot be collapsed with other options ({arg}).");
-                    o.TryApplyValueOption(longName, () => NextParam($"-{c}"));
+                    // Checked like the long form's, although every letter in ShortOptions maps to a
+                    // name one of the two switches handles: a letter added to that table without a
+                    // handler would otherwise be accepted and then do nothing at all.
+                    if (!o.TryApplyValueOption(longName, () => NextParam($"-{c}")))
+                        throw new CliError($"Unknown option: -{c}");
                 }
             }
             else

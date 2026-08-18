@@ -280,6 +280,17 @@ earn a round number.
 
 ### Fixed
 
+- **Finishing a file never overwrites another one to get its name.** When a run renames a
+  file it has just written — taking a `.missing-marks-...` tag off, or putting one on — and
+  something is already sitting under that name, the rename is now refused and the file keeps
+  the name it has. Its marks are written either way, and the summary line says which name it
+  ended up with. Previously the file in the way was replaced without a word, which could cost
+  you a copy you had put back beside a tagged book.
+
+- **`--cleanup` given a whole drive now finds its leftovers.** Naming a drive root as the
+  target (`--cleanup -R X:\`) matched nothing at all and reported "nothing to clean up",
+  however much there was to do. Ordinary folders were never affected.
+
 - **A chapter announced between two pauses is no longer missed when the first pause is a
   short one.** Where a heading sits between a brief pause and a longer one, the only window
   covering that stretch used to open on the longer pause — that is, just after the heading

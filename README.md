@@ -45,8 +45,9 @@ Prebuilt binaries for Windows and Linux are available on the
   the jingle/silence itself instead of the default fixed offset before the
   phrase.
 - **Self-healing** — when the detected chapter numbers have gaps (e.g. chapter 12
-  was announced without a pause before it), the suspicious regions are
-  transcribed in full to find the missing ones.
+  was announced without a pause before it), the stretch the missing chapter has to
+  be in is gone over again: first by listening more closely and at shorter pauses
+  than the run was willing to probe, and only then by transcribing it in full.
 - **Zero setup for models** — the Whisper model is downloaded automatically on
   first use, and checked against pinned SHA-256 and SHA3-256 digests before
   it is used — a compromised or tampered-with download is rejected rather

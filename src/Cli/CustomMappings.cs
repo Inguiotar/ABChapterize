@@ -83,8 +83,12 @@ internal static class CustomMappingParser
         {
             lines = File.ReadAllLines(path);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or ArgumentException or NotSupportedException)
         {
+            // NotSupportedException alongside the rest so a path shape the platform refuses is
+            // reported as the command line error it is, the way LogFile and DebugLog report theirs,
+            // rather than escaping as an unexpected exception with a type name in front of it.
             throw new CliError($"Cannot read --custom-file \"{path}\": {ex.Message}");
         }
 

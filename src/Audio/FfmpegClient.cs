@@ -56,13 +56,21 @@ public sealed partial class FfmpegClient : IAudioSource
     public const int SampleRate = 16000;
 
     /// <summary>
+    /// What every name this tool parks a file under carries, whatever it parks it for. Its own
+    /// constant because the file enumeration skips such a file on this stem alone - it has no
+    /// business asking which kind of scratch file it is looking at - and a stem that only agreed
+    /// with the two names below by coincidence would put a half-written remux up for processing.
+    /// </summary>
+    public const string ScratchInfix = ".abchapterize.";
+
+    /// <summary>
     /// Infix of the remux target <see cref="WriteChaptersAsync"/> writes before swapping it in
     /// (the file's own extension follows, so ffmpeg picks the muxer from it). Named here rather
     /// than spelled out at the one place it is built, because <c>--cleanup</c> has to recognize
     /// one left behind by a run that was killed before its <c>finally</c> could delete it, and a
     /// housekeeping mode that no longer matches what the writer produces is worse than none.
     /// </summary>
-    public const string TempInfix = ".abchapterize.tmp";
+    public const string TempInfix = ScratchInfix + "tmp";
 
     /// <summary>
     /// Suffix the original is parked under while <see cref="SwapInto"/> moves the new file into
@@ -70,7 +78,7 @@ public sealed partial class FfmpegClient : IAudioSource
     /// note that an orphaned one is the audiobook itself rather than a scratch file, so cleanup
     /// puts it back instead of deleting it.
     /// </summary>
-    public const string ParkedSuffix = ".abchapterize.orig";
+    public const string ParkedSuffix = ScratchInfix + "orig";
 
     /// <summary>Creates a client using the given executable paths (see <see cref="FfmpegLocator"/>).</summary>
     /// <param name="ffmpegPath">Full path of ffmpeg.exe.</param>

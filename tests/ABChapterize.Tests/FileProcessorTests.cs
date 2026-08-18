@@ -281,4 +281,47 @@ public sealed class FileProcessorTests : IDisposable
     [Fact]
     public void IsWholesaleFailure_HoldsWithNothingConfirmed_WhateverTheThresholdSays()
         => Assert.True(FileProcessor.IsWholesaleFailure(Verified(confirmed: 0, failed: 3), 100));
+
+    /// <summary>
+    /// The ordinary rename: a file finishing under a new name gets it, and reports it.
+    /// </summary>
+    [Fact]
+    public void RenameCommitted_MovesTheFile_WhenTheNameIsFree()
+    {
+        var target = Path.Combine(_dir, "book.missing-marks-3.m4b");
+        Assert.Equal(target, FileProcessor.RenameCommitted(_file, target));
+        Assert.True(File.Exists(target));
+        Assert.False(File.Exists(_file));
+    }
+
+    /// <summary>
+    /// A resume that closed none of its gaps re-tags with the numbers the file already carries, so
+    /// the destination is the file itself. That is not a rename and must not be refused as a
+    /// collision - which a plain non-overwriting move would do.
+    /// </summary>
+    [Fact]
+    public void RenameCommitted_LeavesTheFileAlone_WhenItIsAlreadyCalledThat()
+    {
+        Assert.Equal(_file, FileProcessor.RenameCommitted(_file, _file));
+        Assert.Equal("x", File.ReadAllText(_file));
+    }
+
+    /// <summary>
+    /// The guard this method exists for: an audiobook already sitting under the destination name is
+    /// one this run did not write, and is kept. Before this, the move overwrote it silently.
+    /// </summary>
+    [Fact]
+    public void RenameCommitted_KeepsBothFiles_WhenTheDestinationIsTaken()
+    {
+        var occupied = Path.Combine(_dir, "somebody-elses.m4b");
+        File.WriteAllText(occupied, "not ours");
+        Assert.Equal(_file, FileProcessor.RenameCommitted(_file, occupied));
+        Assert.Equal("not ours", File.ReadAllText(occupied));
+        Assert.Equal("x", File.ReadAllText(_file));
+    }
+
+    /// <summary>A file that keeps its name asks for no move at all.</summary>
+    [Fact]
+    public void RenameCommitted_DoesNothing_WithoutADestination()
+        => Assert.Equal(_file, FileProcessor.RenameCommitted(_file, null));
 }

@@ -51,6 +51,10 @@ internal sealed class RunOutcomes
     /// the same reason <see cref="SkippedCount"/> is.</summary>
     internal int NoChaptersCount => _noChapters.Count;
 
+    /// <summary>How many files the run has left with chapter marks still missing, counted from the
+    /// listing for the same reason <see cref="SkippedCount"/> is.</summary>
+    internal int MissingMarksCount => _missingMarks.Count;
+
     /// <summary>Records one skipped file for the closing listing.</summary>
     /// <param name="name">The file's bare name.</param>
     /// <param name="reason">Why it was skipped, as a sentence fragment following the name.</param>

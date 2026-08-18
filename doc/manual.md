@@ -80,13 +80,15 @@ naming one directly as the target is an error.
 
 ## 3. How detection works
 
-Detection runs in up to three Whisper-transcription passes per file, plus a
-voice-activity (VAD) pre-pass that runs over every file. This section is an
-overview of what each pass does; the machinery that keeps it accurate and
-fast — how probe windows are sized and stitched together word-safely, how
-each mark is pinpointed to its exact position, the transcript caching and the
-self-tuning that cut the number of Whisper calls — is documented in the
-source. Only what affects using the tool is covered here.
+Detection opens with one scan of the whole file that transcribes nothing, and
+then puts as much of the file through Whisper as it has to: the probing pass
+every file pays for, and up to three further passes that run only where chapters
+are still missing. This section is an overview of what each pass does; the
+machinery that keeps it accurate and fast — how probe windows are sized and
+stitched together word-safely, how each mark is pinpointed to its exact
+position, the transcript caching and the self-tuning that cut the number of
+Whisper calls — is documented in the source. Only what affects using the tool
+is covered here.
 
 ### Pass 1 — silence scan (and VAD pre-pass)
 
@@ -252,9 +254,9 @@ later. This keeps a player from starting playback abruptly mid-sound (an
 audible "plop") without ever risking eating into the announcement itself.
 This costs a handful of extra Whisper transcriptions per chapter on top of pass
 2's own probe — a mark that already sits close to its announcement is the
-cheapest case, one left seconds away from it the most expensive. `--quick-marks`/`-Q` skips the whole layer when that time matters more
-than the last few tenths of a second of accuracy (the machinery is documented
-in the source).
+quickest case, one left seconds away from it the slowest. `--quick-marks`/`-Q`
+skips the whole layer when that time matters more than the last few tenths of a
+second of accuracy (the machinery is documented in the source).
 
 `--mark-before-jingle` anchors the mark to the end of the
 previous chapter's actual narration instead, by walking backward from
@@ -307,9 +309,9 @@ numbering re-reads its own stretch with the pauses down to it, so a chapter
 behind a pause the run was never willing to probe is often recovered on the spot
 and on the cheap model. And when pass 2 is done, the gaps still open are swept
 for those pauses once more — a tenth of a second at a time, longest first, each
-slice costing only what it costs, so a gap dense with short pauses still gets the
-slice most likely to hold the chapter rather than being given up as too expensive
-in one piece. The sweep stops as soon as the gap closes.
+slice taking only the time it takes, so a gap dense with short pauses still gets
+the slice most likely to hold the chapter rather than being given up as too slow
+to attempt in one piece. The sweep stops as soon as the gap closes.
 
 **The sweep runs off the gap, not off the measurement.** A book whose chapters
 all open with music measures nothing at all (see above), and it is exactly such a

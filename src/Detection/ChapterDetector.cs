@@ -79,10 +79,6 @@ public sealed class ChapterDetector
     /// reaches the debug file in a fuller form - see <see cref="LogTranscript"/>.</summary>
     private Action<string>? _plainLog;
 
-    /// <summary>Total seconds of audio actually decoded and handed to Whisper during the current
-    /// file's detection (every probe window and gap chunk, counted each time it is transcribed -
-    /// re-probed audio counts again, since Whisper processed it again). Reset per file, reported
-    /// as a --verbose/--summary statistic.</summary>
     /// <summary>
     /// How far back this file's music reaches (<see cref="JingleCensus.ReachSeconds"/>), set once
     /// Pass 1 has counted the jingles and read by everything that has to look back over music: Pass
@@ -91,6 +87,10 @@ public sealed class ChapterDetector
     /// </summary>
     private double _jingleReachSeconds = PhraseMarginSeconds;
 
+    /// <summary>Total seconds of audio actually decoded and handed to Whisper during the current
+    /// file's detection (every probe window and gap chunk, counted each time it is transcribed -
+    /// re-probed audio counts again, since Whisper processed it again). Reset per file, reported
+    /// as a --verbose/--summary statistic.</summary>
     private double _whisperAudioSeconds;
 
     /// <summary>Wall-clock seconds spent inside the Whisper transcription calls for the current
@@ -1544,7 +1544,7 @@ public sealed class ChapterDetector
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
         List<Silence> allSilences, double progressOffsetSeconds, string phase, CancellationToken ct)
     {
-        var stillMissing = StillMissing(missing, found);
+        var stillMissing = StillMissing(missing, found, gap.Sequence);
         if (stillMissing.Count == 0)
             return;
 
@@ -1588,7 +1588,7 @@ public sealed class ChapterDetector
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
 
-            stillMissing = StillMissing(stillMissing, found);
+            stillMissing = StillMissing(stillMissing, found, gap.Sequence);
             if (stillMissing.Count == 0)
             {
                 _log?.Invoke($"{phase}: sub-floor sweep closed the gap at {min:0.0#}-{max:0.0#} s");
@@ -1651,7 +1651,9 @@ public sealed class ChapterDetector
     /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="measuredBreakSeconds">The shortest chapter break Pass 2's marks measured, or
-    /// null where none of them measured one at all.</param>
+    /// null where none of them measured one at all. Reported and nothing more: the sweep looks
+    /// below where probing started, so what the book's own breaks came to says nothing about
+    /// whether a shorter pause is worth a look inside a gap that is still missing a chapter.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task SweepAdaptiveSubFloorAsync(
         Pass2Context ctx, List<DetectedChapter> found, List<DetectedMark> namedFound,
@@ -1669,8 +1671,11 @@ public sealed class ChapterDetector
             return;
 
         var env = BuildProbeEnvironment();
+        // "below" only where it is below: the shortest break a book measures is regularly longer
+        // than the threshold probing started at, and the line used to call that "below" too.
         _log?.Invoke("pass 2: " + (measuredBreakSeconds is { } measured
-                ? $"chapter breaks measure down to {measured:0.0#} s, below the " +
+                ? $"chapter breaks measure down to {measured:0.0#} s, " +
+                  (measured < _options.MinSilenceSeconds ? "below the " : "against the ") +
                   $"{_options.MinSilenceSeconds:0.0#} s probing started at"
                 : $"no chapter break measured, nothing confirms the {_options.MinSilenceSeconds:0.0#} s " +
                   "probing started at") +
@@ -1685,8 +1690,12 @@ public sealed class ChapterDetector
     /// <summary>Which of <paramref name="expected"/> the accumulator still has no chapter for.</summary>
     /// <param name="expected">The chapter numbers a gap was expected to yield.</param>
     /// <param name="found">Chapters known so far.</param>
-    private static List<int> StillMissing(List<int> expected, List<DetectedChapter> found)
-        => expected.Where(n => !found.Any(c => c.Number == n)).ToList();
+    /// <param name="sequence">The part the gap belongs to. Identity is (part, number) here as it is
+    /// in <see cref="RepairSequenceOutliersAsync"/> and <see cref="ResolveTrailingRegion"/>: on a
+    /// book whose numbering restarts, part 1's chapter 3 says nothing about part 2's, and reading it
+    /// as an answer would declare the gap closed and skip the sweep about to go looking.</param>
+    private static List<int> StillMissing(List<int> expected, List<DetectedChapter> found, int sequence)
+        => expected.Where(n => !found.Any(c => c.Sequence == sequence && c.Number == n)).ToList();
 
     /// <summary>
     /// One sweep band's candidate silences: those inside <paramref name="gap"/> whose length falls

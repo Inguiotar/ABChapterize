@@ -143,9 +143,12 @@ public sealed class FileProcessor
         {
             ct.ThrowIfCancellationRequested();
             var original = bak[..^4]; // strip ".bak"
-            if (File.Exists(original))
-                File.Delete(original);
-            File.Move(bak, original);
+            // One replacing move rather than a delete followed by a rename: the two-step version
+            // has a window in which the processed file is already gone and the backup has not yet
+            // taken its place, and a move that fails there leaves the folder looking emptier than
+            // it is. Overwriting is what --revert is for, so nothing here needs the refusal
+            // CommitChaptersAsync makes.
+            File.Move(bak, original, overwrite: true);
             if (!_options.Quiet)
                 _progress.Announce($"{Path.GetFileName(original)}: reverted from backup");
         }
@@ -706,13 +709,18 @@ public sealed class FileProcessor
         // - is recorded there already, and a second opinion could only ever disagree with the
         // listing --summary prints from it.
         var skippedBefore = _outcomes.SkippedCount;
+        // And the same question for "did this file finish": a book left with chapters missing is
+        // coming back in a later run, so --run-after must not be told it is done. Asked here rather
+        // than off the name below, because the tag that says so is what a rename onto an occupied
+        // name fails to apply.
+        var incompleteBefore = _outcomes.MissingMarksCount;
         var renamedTo = await CommitOneAsync(ctx, detector, plan, watch, ct);
         // The debug log belongs beside the audiobook under the book's own name, so it follows the
         // file back when the tag comes off - but not when one is put on, where the untagged name it
         // already has is the right one (see DebugLog.PathFor).
         if (renamedTo != null && !MissingMarksTag.IsTagged(renamedTo))
             debug?.FollowTo(renamedTo);
-        if (_outcomes.SkippedCount == skippedBefore)
+        if (_outcomes.SkippedCount == skippedBefore && _outcomes.MissingMarksCount == incompleteBefore)
             await RunAfterHookAsync(renamedTo ?? file, name, ct);
         return renamedTo;
     }
@@ -923,12 +931,12 @@ public sealed class FileProcessor
                 important: true);
             return null;
         }
-        var backupNote = await CommitChaptersAsync(ctx, chapters, retarget, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, retarget, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
-            $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")}, re-tagged as " +
-            $"{Path.GetFileName(retarget)}{backupNote}", important: true);
-        return retarget;
+            $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")}" +
+            $"{RenameNote(retarget, finalPath, "re-tagged as")}{backupNote}", important: true);
+        return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
     /// <summary>Commits a resume that closed every gap: the full chapter set is written and the
@@ -955,11 +963,11 @@ public sealed class FileProcessor
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
-        var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: resume complete - {written}" +
-            $", renamed to {Path.GetFileName(restored)}{backupNote}");
-        return restored;
+            $"{RenameNote(restored, finalPath)}{backupNote}");
+        return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
     /// <summary>
@@ -1025,8 +1033,10 @@ public sealed class FileProcessor
     {
         if (_options.RunAfter is not { } template)
             return;
-        // A tagged file is coming back in a later run, so a command that archives or tidies up
-        // after a finished book must not be told this one is finished.
+        // The other half of the caller's completeness check, and not a duplicate of it: a file
+        // whose marks are all there can still be sitting under a tag, where the rename that should
+        // have taken it off found the name occupied. A later run picks such a file up by its name
+        // alone, so it is not finished either.
         if (MissingMarksTag.IsTagged(file))
             return;
         var result = await RunHookAsync(template, "--run-after", file, name, ct);
@@ -1191,7 +1201,7 @@ public sealed class FileProcessor
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
-        var backupNote = await CommitChaptersAsync(ctx, chapters, null, ct);
+        var (_, backupNote) = await CommitChaptersAsync(ctx, chapters, null, ct);
         _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {what}{backupNote}");
         return null;
     }
@@ -1259,12 +1269,12 @@ public sealed class FileProcessor
                 important: true);
             return null;
         }
-        var backupNote = await CommitChaptersAsync(ctx, chapters, target, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, target, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
-            $"wrote {FormatWrittenCount(result, chapters, "partial mark(s)")}, renamed to " +
-            $"{Path.GetFileName(target)}{backupNote}", important: true);
-        return target;
+            $"wrote {FormatWrittenCount(result, chapters, "partial mark(s)")}" +
+            $"{RenameNote(target, finalPath)}{backupNote}", important: true);
+        return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
     /// <summary>
@@ -1367,7 +1377,6 @@ public sealed class FileProcessor
         // --force, which redetects the whole file from scratch.
         var restored = MissingMarksTag.IsTagged(ctx.File) ? MissingMarksTag.StripFrom(ctx.File) : null;
         RecordLowConfidence(ctx, result, restored);
-        var renameNote = restored != null ? $", renamed to {Path.GetFileName(restored)}" : "";
 
         if (_options.DryRun)
         {
@@ -1378,11 +1387,11 @@ public sealed class FileProcessor
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}", important);
             return null;
         }
-        var backupNote = await CommitChaptersAsync(ctx, chapters, restored, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: {DescribeDropped(dropped, prospective: false)}{what}" +
-            $"{notes}{renameNote}{backupNote}", important);
-        return restored;
+            $"{notes}{RenameNote(restored, finalPath)}{backupNote}", important);
+        return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
     /// <summary>
@@ -1538,17 +1547,69 @@ public sealed class FileProcessor
     /// <param name="chapters">The chapters to write.</param>
     /// <param name="renameTo">Path to move the written file to, or null to leave its name alone.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The backup note for the file's summary line.</returns>
-    private async Task<string> CommitChaptersAsync(
+    /// <returns>Where the file ended up - see <see cref="RenameCommitted"/> - and the backup note
+    /// for its summary line.</returns>
+    private async Task<(string Path, string Note)> CommitChaptersAsync(
         FileContext ctx, List<Chapter> chapters, string? renameTo, CancellationToken ct)
     {
         var earlierBakKept = await ctx.Ffmpeg.WriteChaptersAsync(
             ctx.File, chapters, ctx.Info.DurationSeconds, _options.Backup,
             BeginMuxingPhase(ctx.Work, ctx.Info), ct);
-        if (renameTo != null)
-            File.Move(ctx.File, renameTo, overwrite: true);
-        return FormatBackupNote(_options.Backup, earlierBakKept);
+        return (RenameCommitted(ctx.File, renameTo), FormatBackupNote(_options.Backup, earlierBakKept));
     }
+
+    /// <summary>
+    /// Puts a freshly written file under the name its outcome calls for, and answers where it
+    /// actually ended up.
+    /// </summary>
+    /// <param name="file">The file just written, under the name it came in with.</param>
+    /// <param name="renameTo">The name the outcome calls for, or null when it keeps its own.</param>
+    /// <returns>The path the file now has: <paramref name="renameTo"/> when the move happened,
+    /// <paramref name="file"/> when there was nothing to do or the destination was taken.</returns>
+    /// <remarks>
+    /// <para>
+    /// The move never overwrites, and that is the whole point of the method. The destination is an
+    /// audiobook's name, and anything already sitting under it is a file this run did not write - a
+    /// copy the user put back beside a tagged one, or an earlier run's tagged result. Replacing it
+    /// would destroy the only copy of something to save the caller a warning, which is the trade
+    /// <see cref="CleanupRunner"/> refuses at length and this path used to make in silence.
+    /// </para>
+    /// <para>
+    /// Renaming a file onto its own name is not a rename and is skipped rather than refused: a
+    /// resume that closes none of its gaps re-tags with the numbers it already carries, and a
+    /// non-overwriting move would fail on the destination it is itself sitting in.
+    /// </para>
+    /// </remarks>
+    internal static string RenameCommitted(string file, string? renameTo)
+    {
+        if (renameTo == null || SamePath(file, renameTo) || File.Exists(renameTo))
+            return file;
+        File.Move(file, renameTo);
+        return renameTo;
+    }
+
+    /// <summary>Whether two paths name the same file, by the platform's own rules.</summary>
+    /// <param name="left">One path.</param>
+    /// <param name="right">The other.</param>
+    private static bool SamePath(string left, string right)
+        => CliOptions.PathComparer.Equals(
+            CliOptions.NormalizePath(left), CliOptions.NormalizePath(right));
+
+    /// <summary>
+    /// The clause a summary line closes with about the file's name: what it was renamed to, or -
+    /// where <see cref="RenameCommitted"/> found the destination occupied - that it was not. Said
+    /// out loud rather than quietly omitted, because the marks are written either way and a reader
+    /// who goes looking for the new name has to be told why it is not there.
+    /// </summary>
+    /// <param name="wanted">The name the outcome called for, or null when none was.</param>
+    /// <param name="final">Where the file actually ended up.</param>
+    /// <param name="verb">How this path words a rename that did happen.</param>
+    private static string RenameNote(string? wanted, string final, string verb = "renamed to")
+        => wanted == null
+            ? ""
+            : SamePath(final, wanted)
+                ? $", {verb} {Path.GetFileName(wanted)}"
+                : $", NOT {verb} {Path.GetFileName(wanted)} - a file of that name is already there";
 
     /// <summary>Formats the indented "&lt;timestamp&gt;  &lt;title&gt;" block every --dry-run
     /// summary line ends with.</summary>
@@ -1712,7 +1773,7 @@ public sealed class FileProcessor
             return;
         }
 
-        var backupNote = await CommitChaptersAsync(
+        var (_, backupNote) = await CommitChaptersAsync(
             new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), chapters, null, ct);
         _progress.FinishWithSummary(work,
             $"{name}: {DescribeDropped(dropped, prospective: false)}{chapters.Count} chapter(s) " +
@@ -1766,7 +1827,7 @@ public sealed class FileProcessor
 
         return candidates
             .Where(f => suffixes.Any(s => f.EndsWith(s, StringComparison.OrdinalIgnoreCase)))
-            .Where(f => !f.Contains(".abchapterize.", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !f.Contains(FfmpegClient.ScratchInfix, StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.Revert || !f.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.FilterRegex == null || _options.FilterRegex.IsMatch(f))
             .OrderBy(f => f, NaturalPathComparer.Instance);

@@ -265,10 +265,21 @@ public sealed class CleanupRunner
     /// <summary>Whether a file lies under a directory target, at any depth.</summary>
     /// <param name="path">The file's path.</param>
     /// <param name="directory">The directory target's path.</param>
+    /// <remarks>
+    /// The separator is appended only where there is not one already, because a drive root
+    /// normalizes to "X:\" with its own: a second one makes every path under it fail to match, and
+    /// a cleanup of a whole media drive then reports "nothing to clean up" over a folder full of
+    /// leftovers.
+    /// </remarks>
     private static bool IsUnder(string path, string directory)
-        => CliOptions.NormalizePath(path).StartsWith(
-            CliOptions.NormalizePath(directory) + Path.DirectorySeparatorChar,
+    {
+        var root = CliOptions.NormalizePath(directory);
+        if (!Path.EndsInDirectorySeparator(root))
+            root += Path.DirectorySeparatorChar;
+        return CliOptions.NormalizePath(path).StartsWith(
+            root,
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
 
     /// <summary>Whether two paths name the same book, tagged or not.</summary>
     /// <param name="left">One path.</param>
