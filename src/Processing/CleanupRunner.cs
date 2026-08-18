@@ -487,8 +487,11 @@ public sealed class CleanupRunner
 
     /// <summary>
     /// Obtains the go-ahead: <c>--yes</c>, or a typed confirmation at an interactive console.
-    /// Skipped entirely under <c>--revert</c>, where nothing is thrown away - every ".bak" is put
-    /// back rather than deleted, which is what plain <c>--revert</c> already does unasked.
+    /// Skipped entirely under <c>--revert</c>, where no <em>backup</em> is thrown away - every
+    /// ".bak" is put back rather than deleted, which is what plain <c>--revert</c> already does
+    /// unasked. The leftovers the mode also removes go unasked there with it (temporary files,
+    /// ".debug.log"s, batch progress files, a parked original whose partner is present); none of
+    /// them is anything's only copy, which is what makes skipping the question defensible.
     /// </summary>
     /// <param name="plan">The plan the user is being asked about.</param>
     /// <returns>True to go ahead.</returns>

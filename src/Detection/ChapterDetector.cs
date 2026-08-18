@@ -3065,7 +3065,12 @@ public sealed class ChapterDetector
             {
                 if (_options.EffectiveMaxChapterNumber is { } cap && match.Number > cap)
                 {
-                    var option = _options.MaxChapterNumber != null ? "--max-chapter-number" : "--chapter-count";
+                    // Named the other way round from the fallback chain in EffectiveMaxChapterNumber:
+                    // only --chapter-count can have supplied the cap when it was given, and
+                    // everything else - including the default nobody typed - is
+                    // --max-chapter-number's, which is the option documenting that default and the
+                    // one to reach for after reading this line.
+                    var option = _options.ChapterCount != null ? "--chapter-count" : "--max-chapter-number";
                     _log?.Invoke($"discarded chapter {match.Number} - above the {option} cap of {cap}");
                     continue;
                 }

@@ -61,6 +61,12 @@ public sealed class SpeechDenoiser : IDisposable
     internal const int ChunkSamples = (Frames - 1) * HopSize;
 
     private readonly InferenceSession _session;
+
+    /// <summary>Held for the session's lifetime rather than made per inference: it owns a native
+    /// handle, and a denoiser rescue over one probe window runs twenty-odd inferences.
+    /// <see cref="Vad.SileroWorker"/> does the same with its own, for the same reason.</summary>
+    private readonly RunOptions _runOptions = new();
+
     private readonly string _inputName;
     private readonly float[] _window = Hann(FftSize);
 
@@ -139,7 +145,7 @@ public sealed class SpeechDenoiser : IDisposable
             Transform(chunk, spectrogram);
             using var input = OrtValue.CreateTensorValueFromMemory(spectrogram, [1, 2, Frames, Bins]);
             using var results = _session.Run(
-                new RunOptions(), [_inputName], [input], _session.OutputNames);
+                _runOptions, [_inputName], [input], _session.OutputNames);
             var enhanced = results[0].GetTensorDataAsSpan<float>();
 
             InverseTransform(enhanced, chunk);
@@ -300,5 +306,9 @@ public sealed class SpeechDenoiser : IDisposable
     }
 
     /// <inheritdoc/>
-    public void Dispose() => _session.Dispose();
+    public void Dispose()
+    {
+        _session.Dispose();
+        _runOptions.Dispose();
+    }
 }

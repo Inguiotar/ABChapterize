@@ -62,7 +62,7 @@ earn a round number.
 
   ```
   --custom "[de,before-first-chapter,once]/vorwort/:Vorwort"
-  --custom "[after-last-chapter,heading]nachwort:Nachwort"
+  --custom "[after-last-chapter,once]/^nachwort/:Nachwort"
   --custom "[max=3]/zwischenspiel/:Zwischenspiel"
   ```
 
@@ -136,20 +136,16 @@ earn a round number.
   back on reading a number off whatever else is nearby; a phrase that needs that is written
   as a `/regexp/` without a `()`.
 
-### Removed
+- **A garbled announcement on a dull-sounding recording gets a second chance.** On some
+  recordings the recognizer writes a chapter's *number* but loses the word beside it —
+  "1. The Long Road" where the narrator said "Chapter one, The Long Road" — and the chapter
+  is then missed with nothing in the output to show a heading was heard at all. Where that
+  happens, the window is now read once more through a built-in speech denoiser, which on
+  the book this was measured against turned a coin flip into every attempt succeeding.
 
-- **`--max-jingle-length` / `-X` is gone**, and the voice-activity pre-pass it could switch
-  off now runs on every file. Its last job was to say how far back a book's music can reach,
-  which the tool measures from the file's own jingles instead — tighter than the 45-second
-  assumption on nearly every book, and no longer something to get wrong from the command
-  line. A script still passing it gets an error saying so rather than a silent
-  "unknown option". `--min-silence-length 0` (probe only at jingles) no longer conflicts with
-  anything and can be given on its own.
-
-  One consequence worth knowing: the pre-pass is now required, so a failure to load the
-  bundled voice-activity model ends the run instead of quietly continuing without it. It also
-  means a mark can land a shade differently where an announcement is preceded by an unusually
-  long stretch of music.
+  It costs one extra pass over the few windows that fail this way, never moves a mark that
+  was already found, and does not run at all on a book whose audio is clear enough not to
+  need it — most files never reach it. **`--no-denoise`** switches it off.
 
 ### Changed
 
@@ -185,9 +181,12 @@ earn a round number.
 - **Three things about phrase and title options changed meaning.** All of them are visible
   the moment they matter, and each has a one-line fix:
 
-  - A `;` now always separates alternatives. It used to do so only once some entry carried a
-    `[xx]` tag, so a value with no tag anywhere was taken whole, semicolons included. Write
-    `\;` for a semicolon that belongs to a regexp.
+  - A `;` now always separates alternatives in a **phrase** option (`--chapter-phrase`,
+    `--prologue-phrase`, `--epilogue-phrase`) and in `--custom`. It used to do so only once
+    some entry carried a `[xx]` tag, so a value with no tag anywhere was taken whole,
+    semicolons included. Write `\;` for a semicolon that belongs to a regexp. The title
+    options are unchanged: they hold one value per language, and an untagged value is still
+    taken whole — a title containing a semicolon is a title, not two titles.
   - An untagged alternative now applies to **every** language rather than only to the ones
     the value does not name: `"[fr]chapitre;kapitel"` has French listening for both, where it
     used to listen for "chapitre" alone. Tag it as well to keep the old reading.
@@ -241,18 +240,43 @@ earn a round number.
   a window long enough to span a book's longest jingle is exactly the width that loses a
   one-word announcement. The same goes for pass 2.5 and the gap sweeps.
 
-### Added
+- **The epilogue mark now has to follow the book's last chapter.** "Epilogue" is an
+  ordinary word, and a match sitting between two chapters was never the book's epilogue —
+  it was the word turning up in prose, or an omnibus part ending halfway through the file.
+  Such a mark is dropped, and `--verbose` says which one and why. If you do want a mark
+  there, `--custom` is bound by no position and can claim exactly the same announcements
+  (`--custom "/epilog/:Interlude"`); a mapping of yours that matches the same words even
+  inherits the dropped mark, so it stays where it was under your own title.
 
-- **A garbled announcement on a dull-sounding recording gets a second chance.** On some
-  recordings the recognizer writes a chapter's *number* but loses the word beside it —
-  "1. The Long Road" where the narrator said "Chapter one, The Long Road" — and the chapter
-  is then missed with nothing in the output to show a heading was heard at all. Where that
-  happens, the window is now read once more through a built-in speech denoiser, which on
-  the book this was measured against turned a coin flip into every attempt succeeding.
+- **The prologue and the epilogue now keep the announcement later in the book**, rather
+  than the one heard latest in the run. Both are written at most once per file, and the
+  later announcement wins because front matter tends to name what is coming before the
+  narrator announces it — but the recovery passes work backwards through a book's gaps
+  after the main scan, so a stray match early in the file could displace the real mark
+  found near the end.
 
-  It costs one extra pass over the few windows that fail this way, never moves a mark that
-  was already found, and does not run at all on a book whose audio is clear enough not to
-  need it — most files never reach it. **`--no-denoise`** switches it off.
+- **A detected prologue now implies that the book starts at chapter 1.** A first chapter
+  numbered above 1 is normally trusted outright, because nothing tells a legitimate
+  split-book part from a chapter the scan simply missed — but a book's prologue is in the
+  file that holds its beginning, so once one is found the chapters under the first one
+  detected really are missing, and they are searched for and reported as such.
+  `--expected-start-chapter` still wins where it is given, which is how a split part that
+  carries its own prologue says so.
+
+### Removed
+
+- **`--max-jingle-length` / `-X` is gone**, and the voice-activity pre-pass it could switch
+  off now runs on every file. Its last job was to say how far back a book's music can reach,
+  which the tool measures from the file's own jingles instead — tighter than the 45-second
+  assumption on nearly every book, and no longer something to get wrong from the command
+  line. A script still passing it gets an error saying so rather than a silent
+  "unknown option". `--min-silence-length 0` (probe only at jingles) no longer conflicts with
+  anything and can be given on its own.
+
+  One consequence worth knowing: the pre-pass is now required, so a failure to load the
+  bundled voice-activity model ends the run instead of quietly continuing without it. It also
+  means a mark can land a shade differently where an announcement is preceded by an unusually
+  long stretch of music.
 
 ### Fixed
 
@@ -289,30 +313,27 @@ earn a round number.
   window behind it came up empty, in overlapping pieces short enough to be heard reliably.
   Nothing else moves: on every mark checked the position is unchanged to the millisecond.
 
-### Changed
+- **A `--run-before` / `--run-after` folder placeholder no longer breaks the command on
+  Windows.** `$-1` and its relatives always end in a path separator, and Windows reads a
+  backslash in front of a quote as escaping that quote — so a folder whose name contains a
+  space handed the started program one mangled argument with everything after it swallowed.
+  The separator is now escaped where it needs to be.
 
-- **The epilogue mark now has to follow the book's last chapter.** "Epilogue" is an
-  ordinary word, and a match sitting between two chapters was never the book's epilogue —
-  it was the word turning up in prose, or an omnibus part ending halfway through the file.
-  Such a mark is dropped, and `--verbose` says which one and why. If you do want a mark
-  there, `--custom` is bound by no position and can claim exactly the same announcements
-  (`--custom "/epilog/:Interlude"`); a mapping of yours that matches the same words even
-  inherits the dropped mark, so it stays where it was under your own title.
+- **ffmpeg is found behind a quoted `PATH` entry.** An entry wrapped in double quotes, which
+  Windows allows and some installers write, was skipped silently — and the run then failed
+  saying it had searched `PATH`.
 
-- **The prologue and the epilogue now keep the announcement later in the book**, rather
-  than the one heard latest in the run. Both are written at most once per file, and the
-  later announcement wins because front matter tends to name what is coming before the
-  narrator announces it — but the recovery passes work backwards through a book's gaps
-  after the main scan, so a stray match early in the file could displace the real mark
-  found near the end.
+- **`--verbose` names the right option when a chapter number is discarded as too high.** The
+  line credited the cap to `--chapter-count` even on a run that gave neither cap option, and
+  so pointed at the wrong switch to change.
 
-- **A detected prologue now implies that the book starts at chapter 1.** A first chapter
-  numbered above 1 is normally trusted outright, because nothing tells a legitimate
-  split-book part from a chapter the scan simply missed — but a book's prologue is in the
-  file that holds its beginning, so once one is found the chapters under the first one
-  detected really are missing, and they are searched for and reported as such.
-  `--expected-start-chapter` still wins where it is given, which is how a split part that
-  carries its own prologue says so.
+- **`--mark-before-jingle` re-checks its walk in two more places.** A non-default
+  `--mark-lead` no longer skews the decision on whether the check is worth making, and a mark
+  the refinement placed and the new speech guard then took back is now treated as unconfirmed,
+  so the walk starting from it is verified rather than trusted.
+
+- **A model download no longer scribbles over the progress bar** on a platform without
+  SHA3-256, where the note about it went straight to the console.
 
 ## [0.11.0] — 2026-08-10
 

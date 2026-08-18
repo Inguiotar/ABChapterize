@@ -101,7 +101,7 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     }
 
     /// <inheritdoc/>
-    public Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct)
+    public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         return Task.Run(() =>

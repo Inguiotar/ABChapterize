@@ -46,11 +46,11 @@ public interface ITranscriber
     /// <param name="samples">The audio samples (a short clip is enough).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detected two-letter language code and Whisper's probability for it (0-1).</returns>
-    Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct);
+    Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct);
 
     /// <summary>
     /// Switches the language used for subsequent <see cref="TranscribeAsync"/> calls. Used to
-    /// apply the outcome of <see cref="DetectLanguageWithProbability"/> (or an explicit --lang,
+    /// apply the outcome of <see cref="DetectLanguageWithProbabilityAsync"/> (or an explicit --lang,
     /// re-asserted defensively because one instance serves every file of the run).
     /// </summary>
     /// <param name="language">Two-letter language code to switch to.</param>

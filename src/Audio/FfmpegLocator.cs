@@ -65,10 +65,20 @@ public static class FfmpegLocator
             yield return ffmpegDir;
         }
 
-        // 1. PATH (';'-separated on Windows, ':'-separated on Linux).
+        // 1. PATH (';'-separated on Windows, ':'-separated on Linux). A Windows entry may legally
+        //    be wrapped in double quotes - cmd strips them, and some installers write them - so
+        //    they come off here too. Left in place they simply make File.Exists answer false for
+        //    every candidate in that directory, and the run then reports PATH as searched having
+        //    silently skipped the one entry that held ffmpeg.
         var path = Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach (var p in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            yield return p;
+        {
+            // An entry that was nothing but quotes must not fall through as "", which would search
+            // the current directory - a place PATH never asked for.
+            var unquoted = p.Trim('"');
+            if (unquoted.Length > 0)
+                yield return unquoted;
+        }
 
         // 2. An "ffmpeg" folder next to the current directory, the executable and the user
         //    profile. Windows release zips contain a "bin" subfolder, Linux static builds

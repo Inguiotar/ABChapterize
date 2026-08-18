@@ -208,7 +208,13 @@ internal sealed class MarkPlacer
                 phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ctx.AllSilences,
                 statRegion?.EndSeconds, ct);
             (time, phraseHeard, onset) = (refined.Mark, refined.PhraseHeard, refined.OnsetSeconds);
-            (time, onset) = KeepOutOfSpeech(time, defaultMark, onset, number, ctx);
+            bool reverted;
+            (time, onset, reverted) = KeepOutOfSpeech(time, defaultMark, onset, number, ctx);
+            // A reverted mark is the default-mode position again, and nothing has confirmed that
+            // one: the confirmation belonged to the refined mark this just threw away. Saying so
+            // is what lets --mark-before-jingle re-check the walk it starts from here.
+            if (reverted)
+                phraseHeard = false;
             if (chapter is { } check &&
                 RefinedNumberVote.Recount(
                     refined.PhraseReadings, check.Profile, _findMatches, check.Number, check.Bounds,
@@ -251,22 +257,28 @@ internal sealed class MarkPlacer
     /// <param name="onset">The refined onset, or null when nothing was confirmed.</param>
     /// <param name="number">The chapter number, for the log line; null for a named mark.</param>
     /// <param name="ctx">The file's mark-placement constants, for the VAD speech segments.</param>
-    /// <returns>The mark to use and the onset to judge its isolation at.</returns>
-    private (double Time, double? Onset) KeepOutOfSpeech(
+    /// <returns>The mark to use, the onset to judge its isolation at, and whether the refined mark
+    /// was actually discarded - which is what tells the caller its confirmation no longer describes
+    /// the mark being carried forward.</returns>
+    /// <remarks>Internal rather than private so the decision can be tested on its own. The geometry
+    /// it rests on has tests of its own; what has none otherwise is the rule built on top - which
+    /// of the two candidates wins, and that a reverted onset comes back as a position rather than
+    /// as null, the difference between a mark placed slightly wrong and a chapter dropped.</remarks>
+    internal (double Time, double? Onset, bool Reverted) KeepOutOfSpeech(
         double refinedMark, double defaultMark, double? onset, int? number, MarkContext ctx)
     {
         if (AnnouncementIsolation.DepthInsideSpeech(refinedMark, ctx.SpeechSegments) is not { } depth ||
             depth <= MarkInsideSpeechSeconds)
-            return (refinedMark, onset);
+            return (refinedMark, onset, false);
         if (AnnouncementIsolation.DepthInsideSpeech(defaultMark, ctx.SpeechSegments)
             is { } fallbackDepth && fallbackDepth > MarkInsideSpeechSeconds)
-            return (refinedMark, onset);
+            return (refinedMark, onset, false);
 
         var what = number is { } n ? $"chapter {n}" : "the named mark";
         _log?.Invoke(
             $"refined mark for {what} at {FormatTimestamp(refinedMark)} sits {depth:0.00} s inside " +
             $"speech - keeping the default {FormatTimestamp(defaultMark)}");
-        return (defaultMark, defaultMark + _options.MarkLeadSeconds);
+        return (defaultMark, defaultMark + _options.MarkLeadSeconds, true);
     }
 
     /// <summary>
@@ -367,11 +379,14 @@ internal sealed class MarkPlacer
     /// leaves it unchanged when VAD finds no jingle there at all, in which case the lead the
     /// default-mode mark already carries is what the mark keeps.
     /// <para>
-    /// Only when the mark the walk started from is of unknown accuracy - precise marking ran but
-    /// never actually heard the phrase, or was turned off entirely by --quick-marks - is the walked
-    /// result then double-checked against direct re-transcription by <see
+    /// Only when the mark the walk started from is of unknown accuracy - the refinement ran and
+    /// never actually heard the phrase, or heard it somewhere <see cref="KeepOutOfSpeech"/> then
+    /// refused - is the walked result double-checked against direct re-transcription by <see
     /// cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/>. Against a confirmed mark that check
     /// cannot tell a failed walk from a correct one and is skipped; see its own remarks for why.
+    /// <c>--quick-marks</c> skips it too, along with the refinement it belongs to: with nothing
+    /// re-transcribing anything, a check that costs a transcription per chapter is not what that
+    /// option was asked for.
     /// </para>
     /// <para>
     /// Either way the same backward-only quiet-point snap precise marking's own final step applies
@@ -380,9 +395,10 @@ internal sealed class MarkPlacer
     /// </para>
     /// </summary>
     /// <param name="mark">The mark to walk backward from.</param>
-    /// <param name="markConfirmed">Whether <paramref name="mark"/> is a precise-mark-confirmed
-    /// announcement onset (<see cref="PreciseMarkResult.PhraseHeard"/>); false both when precise
-    /// mark could not confirm the phrase and when --quick-marks skipped it altogether.</param>
+    /// <param name="markConfirmed">Whether <paramref name="mark"/> is a refinement-confirmed
+    /// announcement onset (<see cref="PreciseMarkResult.PhraseHeard"/>); false when the refinement
+    /// could not confirm the phrase, when <see cref="KeepOutOfSpeech"/> put the default-mode
+    /// position back, and when --quick-marks skipped the refinement altogether.</param>
     /// <param name="ctx">The file's mark-placement constants.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<double> ApplyMarkBeforeJingleAsync(

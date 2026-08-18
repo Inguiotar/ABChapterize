@@ -263,11 +263,11 @@ public sealed class ChapterDetectorTests : IDisposable
         /// <summary>Languages this transcriber was told to switch to, in call order.</summary>
         public List<string> LanguageChanges { get; } = [];
 
-        /// <summary>Number of times <see cref="DetectLanguageWithProbability"/> was called.</summary>
+        /// <summary>Number of times <see cref="DetectLanguageWithProbabilityAsync"/> was called.</summary>
         public int DetectLanguageCalls { get; private set; }
 
         /// <inheritdoc/>
-        public Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct)
+        public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct)
         {
             DetectLanguageCalls++;
             return Task.FromResult(LanguageAnswers.Count > 0 ? LanguageAnswers.Dequeue() : DetectedLanguage);

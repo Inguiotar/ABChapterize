@@ -40,7 +40,8 @@ public sealed class CliOptions
     /// <see cref="ABChapterize.Processing.CleanupRunner"/> for exactly what goes and what does not.
     /// <para>
     /// Combines with <see cref="Revert"/>, which flips the backups from "delete" to "restore" and
-    /// is the one combination needing no confirmation, nothing being thrown away. On its own it
+    /// is the one combination needing no confirmation: no backup is thrown away, and the leftovers
+    /// it still removes are none of them anything's only copy. On its own it
     /// requires <see cref="AssumeYes"/> or an interactive answer. Deliberately without a short
     /// form, as is --yes: the single letters belong to options people reach for daily, and neither
     /// of these should be quick to type.
@@ -70,7 +71,8 @@ public sealed class CliOptions
     /// in a directory given on the command line (--ignore-progress), processing every selected
     /// file again instead of resuming where that run stopped. See
     /// <see cref="ABChapterize.Processing.BatchProgress"/> for the checkpointing itself. Unrelated
-    /// to the ".missing-marks" auto-resume of an individual file, which is governed by --force.
+    /// to the ".missing-marks" auto-resume of an individual file, which --force and
+    /// --ignore-chapter-numbers govern between them.
     /// </summary>
     public bool IgnoreProgress { get; private set; }
 
@@ -200,7 +202,9 @@ public sealed class CliOptions
     /// transcribes long, naturally framed stretches of audio, where a heavier model really is the
     /// better recognizer - so it defaults to "turbo" while <see cref="Model"/> probes with "small",
     /// and that pairing is also what switches pass 2.5 on (see <see cref="Pass3ModelIsUpgrade"/>).
-    /// The pass-3 model is loaded (and downloaded) lazily, only when a file actually reaches pass 3.
+    /// The pass-3 model is loaded (and downloaded) lazily, on first use - which may well be pass 2
+    /// rather than pass 3, since <see cref="ChapterDetector"/>'s second-opinion path hands it pass
+    /// 2's unconfirmed marks and implausible chapter numbers as well.
     /// Takes a <c>custom:&lt;path&gt;</c> selector just like <see cref="Model"/>.
     /// <para>
     /// Naming --model alone re-points this at it, so <c>-m large</c> means large throughout rather
@@ -311,7 +315,8 @@ public sealed class CliOptions
     /// Does nothing when no chapter was found at all (there is no "last chapter" to scan from, and
     /// transcribing an entire book on spec is not what this is for), nor after an
     /// --early-abort or --expected-start-chapter abort, which mean the file is being given up on
-    /// rather than gap-filled. --chapter-count answers the same question far more cheaply where the
+    /// rather than gap-filled, nor under --ignore-chapter-numbers, which skips pass 3 - the scan's
+    /// own home - entirely. --chapter-count answers the same question far more cheaply where the
     /// number of chapters is known, so the two are worth reading together.
     /// </para>
     /// </summary>
@@ -491,8 +496,10 @@ public sealed class CliOptions
     /// A matter of taste rather than accuracy, which is why it is an option and not a tuning
     /// constant: the refinement pins the onset to a tenth of a second either way, but how much
     /// silence one wants to hear before the narrator starts differs from listener to listener - and
-    /// a lead too short can clip a plosive onset outright. Ignored under --mark-before-jingle,
-    /// which derives its position from the jingle rather than from a fixed offset.
+    /// a lead too short can clip a plosive onset outright. Applies under --mark-before-jingle too:
+    /// in full for a chapter whose walk finds narration where the jingle would be, and otherwise as
+    /// the back-off into the pause the walk came to rest in, clamped at that pause's own start - see
+    /// <see cref="ABChapterize.Detection.JingleGeometry.ComputeMarkBeforeJingle"/>.
     /// </remarks>
     public double MarkLeadSeconds { get; private set; } = DetectionTuning.DefaultMarkLeadSeconds;
 
@@ -805,12 +812,12 @@ public sealed class CliOptions
 
     /// <summary>
     /// The accepted --model/--pass3-model selectors, in ascending order of transcription quality -
-    /// an order <see cref="Pass3ModelIsUpgrade"/> reads directly, so keep any new entry in its
-    /// rightful place rather than appending it. "turbo" (large-v3-turbo) sits just below "large":
-    /// a distilled large that trades a little accuracy for a lot of speed, still clearly ahead of
-    /// "medium".
+    /// an order <see cref="Pass3ModelIsUpgrade"/> reads directly. Taken from
+    /// <see cref="ModelCatalog.BuiltInNames"/> rather than restated here: a name this accepts but
+    /// the catalog does not know turns a malformed command line into an operational error hours
+    /// into a run, and one the catalog knows but this rejects makes a bundled model unselectable.
     /// </summary>
-    private static readonly string[] ModelNames = ["tiny", "base", "small", "medium", "turbo", "large"];
+    private static readonly string[] ModelNames = ModelCatalog.BuiltInNames;
 
     /// <summary>Maps every short option letter to its long option name.</summary>
     private static readonly Dictionary<char, string> ShortOptions = new()
@@ -1826,7 +1833,10 @@ public sealed class CliOptions
                                     case-insensitively against the whole path of each file -
                                     or a comma-separated list of permissible file extensions,
                                     e.g. "mp3,m4b". One filter of each kind may be given;
-                                    they also select which backups --revert restores.
+                                    they also select which backups --revert restores - where
+                                    the regexp is matched against the backup's own path, the
+                                    one still ending in ".bak", so do not anchor it at the
+                                    audio extension.
           -f, --force               Discard pre-existing chapter marks. Without --force, files
                                     that already have chapter marks are skipped.
           -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter marks,
@@ -1867,8 +1877,11 @@ public sealed class CliOptions
                                     best-effort attempt at the chapters the main model missed. A
                                     bigger model than --model's also enables pass 2.5, a quick
                                     re-probe of the gap with it before pass 3 transcribes the region
-                                    in full - which the default pairing does. Loaded and downloaded
-                                    lazily, only when a file actually reaches pass 2.5 or pass 3.
+                                    in full - which the default pairing does. Downloaded and loaded
+                                    lazily, only if and when a file actually needs it - which
+                                    besides passes 2.5 and 3 includes pass 2's own second
+                                    opinions: a mark it could not pin down, a chapter number that
+                                    cannot be right, and an announcement a window lost.
           -j, --mark-before-jingle  A short jingle may precede the chapter phrase; anchor the
                                     mark to it instead of the default fixed offset. A silence
                                     scan and a
@@ -1894,8 +1907,10 @@ public sealed class CliOptions
                                     a longer run-up, lower it to land closer to the first
                                     word - though below about 0.2 the opening consonant of the
                                     announcement can be clipped. 0 marks the onset itself.
-                                    Ignored under --mark-before-jingle, which takes its
-                                    position from the jingle instead.
+                                    Applies under --mark-before-jingle too: in full where a
+                                    chapter has no jingle, and as a back-off into the pause in
+                                    front of the jingle where there is one, capped at that
+                                    pause's own length.
           -Q, --quick-marks         [EXPERIMENTAL] Skip the refinement that normally verifies
                                     every mark, and take probing's own placement as final.
                                     Normally each mark is checked by re-transcribing the audio
@@ -2085,8 +2100,11 @@ public sealed class CliOptions
                                     aborted and left unchanged; if numbered above <n>, the
                                     numbers in between are hunted via Pass 3 like any other gap,
                                     and the file is tagged with a ".missing-marks-..." suffix if
-                                    any are still unresolved afterward. Only applies to a fresh,
-                                    from-scratch detection run, same restriction as --early-abort.
+                                    any are still unresolved afterward. The abort is what only
+                                    applies to a fresh, from-scratch detection run, the same
+                                    restriction as --early-abort; the hunt for the leading
+                                    numbers is not restricted that way, so a --verify recovery
+                                    or a ".missing-marks" resume keeps looking for them.
               --no-trailing-scan    Do not transcribe the audio after the last chapter found
                                     (default: the scan runs). Pass 3 spots a missing chapter as a
                                     hole in the number sequence, which needs a known chapter on
@@ -2100,8 +2118,10 @@ public sealed class CliOptions
                                     early. Switch it off for a library you already know is sound,
                                     or use --chapter-count instead, which answers the same question
                                     for far less time. Nothing is scanned anyway when no chapter
-                                    was found at all, or after an --early-abort or
-                                    --expected-start-chapter abort.
+                                    was found at all, after an --early-abort or
+                                    --expected-start-chapter abort, or under
+                                    --ignore-chapter-numbers, which does away with pass 3
+                                    altogether.
               --no-denoise          Do not re-read a garbled announcement through the built-in
                                     speech denoiser (default: it may). On a dull-sounding
                                     recording the recognizer sometimes writes a chapter's number
@@ -2119,9 +2139,10 @@ public sealed class CliOptions
                                     numbered above <n> is discarded on the spot as a mishearing.
                                     Raise it for a book that really runs longer - everything above
                                     the cap is dropped silently. Lower it to roughly the real count
-                                    when you know it: a single "chapter 510" heard in a
-                                    twelve-chapter book otherwise becomes a mark of its own and
-                                    pushes the real chapters behind it out of the sequence. Not
+                                    when you know it: the default already throws away a misheard
+                                    "chapter 510", but a misheard "chapter 150" in a
+                                    twelve-chapter book sits under it, becomes a mark of its own
+                                    and pushes the real chapters behind it out of the sequence. Not
                                     to be confused with --max-chapters, which counts a file's
                                     pre-existing marks rather than the numbers heard in the
                                     audio.
@@ -2192,7 +2213,11 @@ public sealed class CliOptions
           -E, --export              Also write detected chapters to a sidecar file next to
                                     the audio file (<file>.chapters.ffmeta by default, or
                                     <file>.chapters.txt with --simple-metadata), for manual
-                                    review or correction. Combinable with --dry-run.
+                                    review or correction. Combinable with --dry-run. Written
+                                    for a file detection completed normally - not for one
+                                    left with an unresolved gap, a resumed ".missing-marks"
+                                    file, or a --verify --fix rewrite, all of which change
+                                    the file's name as they write it.
           -I, --import              Skip Whisper detection; write chapters from a previously
                                     exported sidecar file instead. Since nothing is detected,
                                     the detection options have no effect and are rejected:
@@ -2202,7 +2227,9 @@ public sealed class CliOptions
                                     --mark-before-jingle, --quick-marks, --mark-lead,
                                     --min-silence-length, --noise-floor, --early-abort,
                                     --expected-start-chapter, --max-chapter-number,
-                                    --chapter-count, --no-trailing-scan and --verify.
+                                    --chapter-count, --no-trailing-scan, --no-denoise, --verify,
+                                    --named-mark-distance, --chapter-title, --part-title,
+                                    --intro-title, --prologue-title and --epilogue-title.
                                     Also mutually exclusive with --export, --revert,
                                     --cleanup and --no-op.
           -S, --simple-metadata     Use a plain "H:MM:SS.fff  Title" sidecar format instead
@@ -2227,14 +2254,16 @@ public sealed class CliOptions
                                     never throw away the only copy of anything. Add --revert to
                                     restore the backups over their files instead of deleting
                                     them. Nothing is touched before you have seen the list and
-                                    confirmed it; --yes confirms in advance. Combinable with
+                                    confirmed it; --yes confirms in advance, and --revert needs
+                                    no confirmation at all, since no backup is then deleted (the
+                                    leftovers above still are). Combinable with
                                     --revert, --yes, --recurse, --filter and the output options,
                                     but nothing else.
               --yes                 Answer --cleanup's confirmation prompt with "yes" in
                                     advance, for a scripted cleanup with no console to ask at.
                                     Required there, since a cleanup that cannot ask and was not
                                     told refuses to run. Not needed with --cleanup --revert,
-                                    which throws nothing away.
+                                    which deletes no backup.
           -O, --no-op               List every file --filter (and --recurse) would select, then
                                     exit without loading a Whisper model, invoking ffmpeg or
                                     touching any file. A quick way to check that a --filter
@@ -2267,7 +2296,7 @@ public sealed class CliOptions
                                     discarded automatically, so this is only needed to redo
                                     files the very same command already finished. Unrelated to
                                     the ".missing-marks" resume of an individual file, which
-                                    --force governs.
+                                    --force and --ignore-chapter-numbers govern between them.
 
         Logging & display:
           -q, --quiet               Suppress per-file output; warnings and errors are still shown.

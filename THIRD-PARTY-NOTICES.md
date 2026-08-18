@@ -59,7 +59,8 @@ the C/C++ inference engine that actually performs the Whisper transcription.
 
 ## Microsoft.ML.OnnxRuntime
 
-Used to run the Silero VAD ONNX model for the speech/non-speech pre-pass.
+Used to run the two bundled ONNX models: Silero VAD for the speech/non-speech
+pre-pass, and the LavaSR denoiser for re-reading a garbled announcement.
 
 - Project: https://github.com/Microsoft/onnxruntime
 - License: MIT — see [`licenses/onnxruntime-LICENSE`](licenses/onnxruntime-LICENSE)

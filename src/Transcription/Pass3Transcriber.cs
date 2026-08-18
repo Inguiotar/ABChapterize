@@ -111,7 +111,7 @@ public sealed class Pass3Transcriber : ITranscriber, IAsyncDisposable
     /// </summary>
     /// <param name="samples">Unused.</param>
     /// <param name="ct">Unused.</param>
-    public Task<(string Language, float Probability)> DetectLanguageWithProbability(float[] samples, CancellationToken ct)
+    public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct)
         => throw new NotSupportedException("The pass-3 transcriber does not perform language detection.");
 
     /// <summary>Releases the underlying model if it was ever loaded.</summary>

@@ -137,6 +137,51 @@ public class CommandTemplateTests
         Assert.Equal("copy \"buch 1.m4b\" d:\\arch", template.Expand(Rooted("buch 1.m4b"), windows: true));
     }
 
+    /// <summary>
+    /// Every "$-n" ends in a separator, and Windows reads a backslash before a quote as escaping
+    /// that quote - so without the doubling the closing quote is swallowed and everything after it
+    /// joins the argument. Reproduced against a real cmd in 2026-08-18's audit; see
+    /// <see cref="CommandTemplate"/>'s remarks.
+    /// </summary>
+    [Fact]
+    public void Windows_DoublesTheSeparatorAFolderValueEndsIn_SoTheClosingQuoteSurvives()
+    {
+        var template = CommandTemplate.Parse("robocopy $-1 e:\\archive", "--run-after");
+        Assert.Equal("robocopy \"C:\\My Books\\\\\" e:\\archive",
+            template.Expand("C:\\My Books\\buch.m4b", windows: true));
+    }
+
+    /// <summary>The template's own quotes put the value in front of a closing quote just as
+    /// FlushToken's do, so the same doubling has to happen there.</summary>
+    [Fact]
+    public void Windows_DoublesTheSeparator_InsideTheTemplatesOwnQuotesToo()
+    {
+        var template = CommandTemplate.Parse("dir \"$-1\"", "--run-after");
+        Assert.Equal("dir \"C:\\My Books\\\\\"", template.Expand("C:\\My Books\\buch.m4b", windows: true));
+    }
+
+    /// <summary>Nothing is doubled where no closing quote follows, so an unquoted token still
+    /// reads exactly as the folder is spelled.</summary>
+    [Fact]
+    public void Windows_LeavesTheSeparatorAlone_WhenTheTokenNeedsNoQuotes()
+    {
+        var template = CommandTemplate.Parse("dir $-1", "--run-after");
+        Assert.Equal("dir C:\\Books\\", template.Expand("C:\\Books\\buch.m4b", windows: true));
+    }
+
+    /// <summary>A POSIX shell already has every backslash of a value escaped where it stands, so
+    /// the Windows rule must not fire there as well and escape them a second time.</summary>
+    [Fact]
+    public void Posix_DoesNotDoubleTheSeparator_TheEscapingAlreadyHandledIt()
+    {
+        var file = Rooted("My Books", "buch.m4b");
+        var folder = Path.GetDirectoryName(file)! + Path.DirectorySeparatorChar;
+        // What EscapeForShell leaves inside double quotes: a backslash escaped, a slash untouched.
+        var expected = folder.Replace("\\", "\\\\");
+        var template = CommandTemplate.Parse("ls \"$-1\"", "--run-after");
+        Assert.Equal($"ls \"{expected}\"", template.Expand(file, windows: false));
+    }
+
     // -------------------------------------------------------------------- POSIX quoting
 
     /// <summary>

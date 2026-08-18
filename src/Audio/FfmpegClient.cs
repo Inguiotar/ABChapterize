@@ -618,7 +618,25 @@ public sealed partial class FfmpegClient : IAudioSource
         return sb.ToString();
     }
 
-    /// <summary>Starts a child process with redirected streams and hidden window.</summary>
+    /// <summary>
+    /// Starts a child process with redirected streams and hidden window.
+    /// </summary>
+    /// <remarks>
+    /// Both text streams are pinned to UTF-8, which is what ffmpeg and ffprobe write whatever the
+    /// console is set to. Windows would otherwise decode them with the console output code page,
+    /// and ffprobe's stdout carries chapter titles: a Spanish book's "Capitulo 1" read back through
+    /// the wrong page and written out again by --verify --fix would corrupt the user's file
+    /// silently, the mode's whole promise being that it only moves marks. Today the pin is
+    /// belt-and-braces - measured 2026-08-18 under console code pages 850, 1252, 437 and 65001, an
+    /// unpinned read decoded correctly every time, because InvariantGlobalization leaves .NET
+    /// unable to build a legacy code page and its fallback is UTF-8 - but that makes the behaviour
+    /// hostage to a csproj switch it has nothing to do with, so it is stated here instead. Harmless
+    /// for the two callers that want bytes: DecodePcmAsync and DetectSilencesAndStreamPcmAsync read
+    /// StandardOutput.BaseStream, which never goes near the decoder.
+    /// </remarks>
+    /// <param name="exe">Executable to start.</param>
+    /// <param name="args">Arguments, passed through ArgumentList so the OS quotes them.</param>
+    /// <param name="redirectStdout">Whether stdout is wanted; stderr is always redirected.</param>
     private static Process StartProcess(string exe, IEnumerable<string> args, bool redirectStdout)
     {
         var psi = new ProcessStartInfo(exe)
@@ -627,6 +645,7 @@ public sealed partial class FfmpegClient : IAudioSource
             CreateNoWindow = true,
             RedirectStandardOutput = redirectStdout,
             RedirectStandardError = true,
+            StandardOutputEncoding = redirectStdout ? Encoding.UTF8 : null,
             StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var a in args)

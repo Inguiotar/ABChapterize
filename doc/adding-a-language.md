@@ -84,7 +84,7 @@ public sealed class CzechLanguage : ILanguage
     public string Code => "cs";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:^kapitol ()|^kapitol)/";
+    public string ChapterPhrase => "/(?:^kapitol ()|^() kapitol|^kapitol)/";
 
     /// <inheritdoc/>
     public string ChapterTitle => "Kapitola";
@@ -188,7 +188,8 @@ genuinely interchangeable as the thing narrators announce — not "one common
 one and one a publisher occasionally uses", but two you would be equally
 unsurprised to hear — then the default has to cover both, or half the
 audiobooks in that language get nothing. Write it as one alternation,
-`/(?:^(?:woord|kapittel) ()|^(?:woord|kapittel))/`, and the earlier note applies: `(?:...)`, never
+`/(?:^(?:woord|kapittel) ()|^() (?:woord|kapittel)|^(?:woord|kapittel))/`, and
+the earlier note applies: `(?:...)`, never
 `(...)`. Test it against prose before you commit to it. The bar is high on
 purpose, and no built-in language has cleared it so far: all eleven get by on
 a single word, and the only alternations among them (Swedish and Danish
@@ -224,13 +225,39 @@ phrase with a capital letter.
 
 ### `NumberParser`
 
-Point it at your parser from step 3. If you are not writing one yet, use
-English for the moment — digits and Roman numerals still work, spelled-out
-numbers just will not:
+Point it at your parser from step 3. If you are not writing one yet, borrow
+English's tables through a stub that still declares *your* code — a test
+(`EveryRegisteredLanguage_CarriesItsOwnNumberParser` in
+`NumberWordParserTests.cs`) checks that no language is reachable under another
+language's parser, so handing over `new EnglishNumberParser()` directly turns the
+suite red:
 
 ```csharp
-public INumberWordParser NumberParser { get; } = new EnglishNumberParser();
+public sealed class CzechNumberParser : INumberWordParser
+{
+    private static readonly EnglishNumberParser Borrowed = new();
+
+    /// <inheritdoc/>
+    public string LanguageCode => "cs";
+
+    /// <inheritdoc/>
+    public string DigitOrdinalSuffixPattern => Borrowed.DigitOrdinalSuffixPattern;
+
+    /// <inheritdoc/>
+    public string NumberWordPattern => Borrowed.NumberWordPattern;
+
+    /// <inheritdoc/>
+    public bool TryParse(IReadOnlyList<string> tokens, out int number, out int consumed)
+        => Borrowed.TryParse(tokens, out number, out consumed);
+}
 ```
+
+```csharp
+public INumberWordParser NumberParser { get; } = new CzechNumberParser();
+```
+
+Digits and Roman numerals still work that way; spelled-out Czech numbers will
+not, until step 3 replaces the borrowed tables.
 
 One thing you do *not* have to worry about: your language's number words are
 tried before the Roman-numeral reading, so a word that happens to be spelled
@@ -326,7 +353,8 @@ dotnet test tests\ABChapterize.Tests
 
 Some tests will already cover your work the moment you register the language:
 they walk `LanguageRegistry.Languages` and check that every language's phrases
-compile, carry no capturing group, and have non-empty titles.
+compile, that the chapter phrase carries its number group where it should while
+the prologue and epilogue phrases carry none, and that the titles are non-empty.
 
 Two you should extend by hand:
 
@@ -337,6 +365,16 @@ Two you should extend by hand:
   and an epilogue as Whisper would transcribe them. If your phrase has
   spelling variants, write the *awkward* spelling here; that is the whole
   point of the row.
+- `IntroTitle_Default_IsLocalized` in `CliOptionsTests.cs` — add a row for your
+  code and intro title. It carries a row per supported language plus one
+  *unsupported* code standing in for the English fallback; if that placeholder
+  happens to be the code you are adding, move it to another unsupported one.
+- `ExistingMarkTitleTests.cs`, which reads a written title back: add a row to
+  its `Spellings` table (your reference spellers and the highest ordinal your
+  parser covers) and an `[InlineData]` row to
+  `APartPrefixedTitle_GivesBackBothItsNumbers`. That one is what proves your
+  `PartTitle` choice survives a resumed run — the trap this guide warns about
+  under `PartTitle` is exactly what it catches.
 
 If you wrote a number parser, add it to the exhaustive round-trip tests as
 well: `ExhaustiveNumberWordTests.cs` for cardinals, `ExhaustiveOrdinalTests.cs`
@@ -360,12 +398,17 @@ repeatedly. Add `--verbose` to watch each announcement being recognized.
 
 ## 6. Step 5 — documentation
 
-Two tables in `doc\manual.md`, section 7 ("Languages and number recognition"):
+Three tables in `doc\manual.md`, section 7 ("Languages and number recognition"):
 
 - the parsed-languages table (language, code, an example cardinal and ordinal
   announcement) — only if you wrote a number parser;
-- the two defaults tables (chapter phrase / title / intro title, and the
-  prologue/epilogue phrases and titles).
+- the two defaults tables (chapter phrase / title word / part word / intro
+  title, and the prologue/epilogue phrases and titles).
+
+`README.md`'s feature list also names the supported languages and counts them
+("**Eleven languages** of number recognition out of the box …"), with one
+spelled-out example number each: bump the count, add your language, add a
+number word. It is the first thing anyone reads, and nothing generates it.
 
 If your language is the first to need some trick — a script issue, a
 transcription quirk worth warning about — say so in a sentence there.
@@ -403,17 +446,20 @@ warning, not a silent typo.
 
 ## 8. Checklist
 
-- [ ] `src\Language\Languages\XxxLanguage.cs` written, all nine members filled in
+- [ ] `src\Language\Languages\XxxLanguage.cs` written, all ten members filled in
 - [ ] Chapter phrase written as `/(?:^WORD ()|^() WORD|^WORD)/`; any other grouping
       `(?:...)`, never `(...)`
 - [ ] Titles carry their proper capitalization and accents
 - [ ] One line added to `LanguageRegistry.All`
-- [ ] `src\Language\Parsers\XxxNumberParser.cs` written (or English borrowed, temporarily)
-- [ ] `SupportedLanguages_ListsAllParsers` and
-      `DefaultPhrases_MatchTheirLanguagesAnnouncements` extended
+- [ ] `src\Language\Parsers\XxxNumberParser.cs` written (or a stub borrowing
+      English's tables under your own `LanguageCode`, temporarily)
+- [ ] `SupportedLanguages_ListsAllParsers`,
+      `DefaultPhrases_MatchTheirLanguagesAnnouncements`,
+      `IntroTitle_Default_IsLocalized` and `ExistingMarkTitleTests` extended
 - [ ] Round-trip tests, `NumberWordPattern` and reference speller added, if there is a
       number parser
 - [ ] `doc\manual.md` section 7 tables updated
+- [ ] `README.md` language count and list updated
 - [ ] `CHANGELOG.md` entry added
 - [ ] `dotnet test` green, `dotnet build` free of warnings
 - [ ] Tried against a real audiobook with `--lang xx --dry-run --verbose`

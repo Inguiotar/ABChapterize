@@ -2192,8 +2192,9 @@ internal sealed class RegionProber
     /// <summary>
     /// The isolation check for a named (prologue/epilogue/<c>--custom</c>) mark: what the wording
     /// that matched asked for with its <c>^</c> and <c>$</c>, plus
-    /// <see cref="IsolationRule.LeadIn"/> for a phrase the profile flags as a heading - the two
-    /// built-in ones, and any <c>--custom</c> mapping tagged <c>heading</c>.
+    /// <see cref="IsolationRule.LeadIn"/> for a phrase the profile flags as a heading, which is the
+    /// two built-in ones and nothing else - a <c>--custom</c> mapping asks for the pause by writing
+    /// a <c>^</c>, which arrives through the wording's own guards on the line above.
     /// <para>
     /// The phrase-level flag is a floor rather than a synonym for a written <c>^</c>, deliberately:
     /// it is what a prologue <em>is</em>, so <c>--prologue-phrase vorwort</c> keeps the guard that

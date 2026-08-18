@@ -20,7 +20,9 @@ namespace ABChapterize.Hooks;
 /// <item>Windows has no in-place escape a value can rely on, so the whole <i>token</i> a placeholder
 /// sits in is wrapped in double quotes - <c>move $1.bak $0.bak</c> becomes
 /// <c>move "buch 1.m4b.bak" "buch 1.bak"</c>, the ".bak" inside the quotes. Wrapping only the
-/// substituted value would leave cmd splitting the token at the closing quote.</item>
+/// substituted value would leave cmd splitting the token at the closing quote. A backslash run
+/// ending such a token is doubled first, or it would escape that closing quote away again - see
+/// <see cref="DoubleTrailingBackslashes"/>.</item>
 /// <item>POSIX shells take a backslash before any metacharacter, so the value alone is escaped
 /// where it stands. That keeps the rest of the token doing what it says: <c>~/archive/$1</c> still
 /// expands the tilde, which it would not inside quotes.</item>
@@ -118,10 +120,17 @@ public sealed class CommandTemplate
         // Whether a value substituted into the current token needs Windows' whole-token quoting.
         var tokenNeedsQuotes = false;
 
+        // Doubles the run of backslashes the token ends in, which is what Windows' argument
+        // convention requires immediately before a closing quote - see DoubleTrailingBackslashes'
+        // own remarks for the measurement. Only ever reached on Windows: tokenNeedsQuotes is set
+        // nowhere else, and the template's own closing quote guards on the flag explicitly.
         void FlushToken()
         {
             if (tokenNeedsQuotes && !tokenIsQuoted)
+            {
+                DoubleTrailingBackslashes(token);
                 result.Append('"').Append(token).Append('"');
+            }
             else
                 result.Append(token);
             token.Clear();
@@ -140,6 +149,12 @@ public sealed class CommandTemplate
             }
             if (c == '"' && quote != Quote.Single)
             {
+                // The template's own closing quote needs the same treatment as the one FlushToken
+                // adds: a value substituted just inside it went in raw, so its trailing separator
+                // would eat this quote. On a POSIX shell the value's backslashes were already
+                // doubled by EscapeForShell.
+                if (windows && quote == Quote.Double)
+                    DoubleTrailingBackslashes(token);
                 quote = quote == Quote.Double ? Quote.None : Quote.Double;
                 tokenIsQuoted = true;
                 token.Append(c);
@@ -192,6 +207,36 @@ public sealed class CommandTemplate
     /// <param name="value">The resolved placeholder value.</param>
     private static bool NeedsWindowsQuotes(string value)
         => value.Any(c => char.IsWhiteSpace(c) || WindowsSpecials.Contains(c));
+
+    /// <summary>
+    /// Doubles the run of backslashes a token ends in, ready for a closing double quote to be
+    /// appended.
+    /// </summary>
+    /// <remarks>
+    /// Windows' argument convention - the one the C runtime, and therefore every program started
+    /// from a command line, uses to split that line back into arguments - reads a backslash before
+    /// a quote as escaping the quote. So a token ending in a separator loses its closing quote and
+    /// swallows whatever follows. Measured 2026-08-18 with <c>cmd /d /s /c</c> exactly as
+    /// <see cref="HookRunner"/> starts it, argument list printed by the started program:
+    /// <c>prog "D:\My Books\" second</c> arrives as the single argument
+    /// <c>D:\My Books" second</c>, while <c>prog "D:\My Books\\" second</c> arrives as
+    /// <c>D:\My Books\</c> and <c>second</c>.
+    /// <para>
+    /// Not an exotic case: <see cref="PathPlaceholder"/> ends every <c>$-n</c> value with a
+    /// separator by construction, so any folder path holding a space - which is what puts the
+    /// quotes there in the first place - walks into it. cmd's own built-ins are unharmed by the
+    /// doubling, since Windows' path APIs collapse a duplicated separator (verified: <c>if exist
+    /// "C:\Windows\\"</c> answers the same as with one).
+    /// </para>
+    /// </remarks>
+    /// <param name="token">The token being built; modified in place.</param>
+    private static void DoubleTrailingBackslashes(StringBuilder token)
+    {
+        var run = 0;
+        while (run < token.Length && token[token.Length - 1 - run] == '\\')
+            run++;
+        token.Append('\\', run);
+    }
 
     /// <summary>Characters a POSIX shell acts on, which a substituted value must therefore not hand
     /// it unescaped.</summary>

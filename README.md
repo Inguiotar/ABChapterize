@@ -103,8 +103,8 @@ If you don't have it yet:
 
 - **Windows:** download a build from [ffmpeg.org](https://ffmpeg.org/download.html)
   (e.g. the gyan.dev "essentials" zip) and unpack it. ABChapterize finds it
-  automatically in `PATH`, in an `ffmpeg` folder next to the exe or in your user
-  profile, in Program Files, or wherever `FFMPEG_DIR` points — at the unpacked
+  automatically in `PATH`, in an `ffmpeg` folder in the current directory, next to
+  the exe or in your user profile, in Program Files, or wherever `FFMPEG_DIR` points — at the unpacked
   folder or at the binaries themselves, either works.
 - **Linux:** `sudo apt install ffmpeg` (or your distribution's equivalent).
 
@@ -123,7 +123,7 @@ abchapterize "My Audiobook.m4b"
 
 That's it. On the first run, the speech model is downloaded automatically
 (about 465 MB for the default model — one time only, with a progress display;
-the 1.6 GB pass-3 model follows later, and only if a chapter goes missing).
+the 1.6 GB pass-3 model follows later, and only if a file actually needs it).
 Then the audiobook is scanned and the chapter marks are written:
 
 ```
@@ -236,11 +236,11 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | --- | --- |
 | `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from short samples taken inside the book — up to five, from different places, until one is confident or they can be voted on — and used for that file, falling back to `en` only when they cannot agree. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) and Roman numerals (`XIII`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--chapter-title`, `--part-title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
 | `-m`, `--model <name>` | Whisper model used to find the chapters: `tiny`, `base`, `small` (default), `medium`, `turbo`, `large`, or `custom:<path>` for a GGML model file of your own (used as-is: not downloaded, not checksum-verified, ranked against the built-in models by file size). Bigger is not better here — this model listens to short windows a few seconds long, and the large ones are markedly worse at those (see [Tuning tips](#tuning-tips)). `tiny`/`base` are not recommended for real audiobooks either. |
-| `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model`, `custom:<path>` included (default: `turbo`, or whatever `--model` says if you set that and not this). Pass 3 transcribes long stretches of audio, where the heavier models really are the better recognizers. Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. A model heavier than `--model`'s also enables pass 2.5 — which the default pairing does. Loaded lazily, only if pass 2.5 or pass 3 runs. |
+| `-M`, `--pass3-model <name>` | Whisper model for pass 3 (gap filling) only; same choices as `--model`, `custom:<path>` included (default: `turbo`, or whatever `--model` says if you set that and not this). Pass 3 transcribes long stretches of audio, where the heavier models really are the better recognizers. Lighter to speed pass 3 up, or `large` for one last attempt at the gaps. A model heavier than `--model`'s also enables pass 2.5 — which the default pairing does. Downloaded and loaded lazily, the first time a file actually needs it — pass 2.5, pass 3, or one of the second opinions pass 2 asks a heavier recognizer for. |
 | `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Where the walk ends on a pause, the mark backs into it by `-k` seconds; a chapter with no jingle at all keeps its ordinary placement. Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |
 | `-Q`, `--quick-marks` | **Experimental.** Skip the refinement that normally re-transcribes the audio at every mark to confirm the phrase is really there (see [How it works](#how-it-works)). Faster — saves a handful of transcriptions per chapter — but marks, while usually usable, may end up after the chapter phrase rather than before it, even together with `-j`. |
 | `-k`, `--mark-lead <seconds>` | How far in front of the announcement a mark is placed (default 0.35). Purely a matter of taste — marks are located just as precisely whatever this is, it only decides how much lead-in you hear before the narrator starts. Below roughly 0.2 the announcement's opening consonant starts to get clipped; `0` marks the onset itself. Applies with `-j` too: in full where a chapter has no jingle, and as a back-off into the pause before the jingle where there is one (capped at that pause's length). |
-| `-n`, `--min-silence-length <s\|auto>` | The shortest pause probed as a potential chapter break (default: `auto`, which starts at 1.5 s). Probing only — pass 1's scan keeps shorter silences regardless, and marks are placed and refined against them. With `auto` (the default), the probing threshold retunes itself after every mark found, and where it settles *below* the 1.5 s it started at, the gaps left in the numbering are swept for the pauses in between (see [How it works](#how-it-works)); an explicit value probes every silence at or above it instead. `0` switches silence-triggered probing off altogether, leaving only the jingles the voice-activity pre-pass finds — a large saving on a book whose every chapter opens with one, and a way to miss every chapter that does not. The silence scan itself keeps running either way, so marks land exactly where they otherwise would. |
+| `-n`, `--min-silence-length <s\|auto>` | The shortest pause probed as a potential chapter break (default: `auto`, which starts at 1.5 s). Probing only — pass 1's scan keeps shorter silences regardless, and marks are placed and refined against them. With `auto` (the default), the probing threshold retunes itself as chapters are found at a pause, and any gap left in the numbering is swept for the shorter pauses in between, whether or not the threshold itself ever came down (see [How it works](#how-it-works)); an explicit value probes every silence at or above it instead. `0` switches silence-triggered probing off altogether, leaving only the jingles the voice-activity pre-pass finds — a large saving on a book whose every chapter opens with one, and a way to miss every chapter that does not. The silence scan itself keeps running either way, so marks land exactly where they otherwise would. |
 | `--noise-floor <dBFS\|auto>` | How quiet audio has to be to count as a pause — the other half of `--min-silence-length`'s question (default: `auto`). Normally −35 dBFS, which sits comfortably between the room tone and the narration of any ordinary master. `auto` samples each file first and moves the threshold only where −35 would not: a recording with audible hiss never drops below it, so no pause and no chapter is ever found, and a very quietly mastered one puts the narration itself under it, so every gap between two words looks like a chapter break. |
 
 **Phrases & titles**
@@ -279,7 +279,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | Option | What it does |
 | --- | --- |
 | `-d`, `--dry-run` | Detect chapters but write nothing; print what would be written. |
-| `-E`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. |
+| `-E`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. Written for a file detection completed normally — not for one left with an unresolved gap, a resumed `.missing-marks` file, or a `--verify --fix` rewrite. |
 | `-I`, `--import` | Skip Whisper entirely and write chapters from a previously exported sidecar file instead — for reapplying a hand-corrected result. |
 | `-S`, `--simple-metadata` | Use a plain `H:MM:SS.fff  Title` sidecar format instead of FFMETADATA for `--export`/`--import`. |
 
@@ -331,9 +331,11 @@ use `.`, whatever the machine's locale says.
 
 ## How it works
 
-1. **Pass 1 — silence scan:** ffmpeg finds every silence longer than
-   `--min-silence-length` (default, and starting point with `auto`: 1.5 s) and
-   quieter than `--noise-floor` (normally −35 dBFS) in one quick pass.
+1. **Pass 1 — silence scan:** ffmpeg finds every pause quieter than
+   `--noise-floor` (normally −35 dBFS) in one quick pass, keeping the short ones
+   as well as the long — marks are placed and refined against the whole list.
+   `--min-silence-length` (default, and starting point with `auto`: 1.5 s) then
+   decides which of them pass 2 probes.
 1b. **VAD pre-pass (always):** a bundled voice-activity model
    ([Silero VAD](https://github.com/snakers4/silero-vad)) scans the whole file
    for speech vs. non-speech. A jingle is music, which reads as non-speech to
@@ -483,8 +485,11 @@ chapter phrase must: a passing mention in the narration gets no mark.
 
 `--ignore-chapter-numbers` keeps chapter detection running but stops it
 reasoning about the numbers — no sequence, no gaps, no missing chapters, with
-whatever number was spoken still going into the title. For books that restart
-their count per part, or announce chapters without numbering them at all.
+whatever number was spoken still going into the title. For books whose numbering
+the tool cannot make sense of — an omnibus of several novels, or one that
+announces "Chapter" and simply reads on. A book that merely restarts its count in
+every part needs no option: that is recognized by itself, and its chapters are
+titled "Part 2 - Chapter 1" (see `--part-title`).
 
 Alongside the numbered chapters, a "Prologue" and an "Epilogue" mark are
 detected the same way (localized by `--lang`, renamed with `--prologue-title`
@@ -574,6 +579,10 @@ dotnet test tests/ABChapterize.Tests        # run the unit tests
 [whisper.cpp](https://github.com/ggerganov/whisper.cpp) (MIT), and the speech
 models are OpenAI's [Whisper](https://github.com/openai/whisper) models (MIT).
 The bundled jingle-detection model is [Silero VAD](https://github.com/snakers4/silero-vad)
-(MIT, Copyright (c) 2020-present Silero Team) — see
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full notice.
+(MIT, Copyright (c) 2020-present Silero Team), and the bundled speech denoiser is
+[LavaSR](https://github.com/ysharma3501/LavaSR)'s (Apache-2.0) in the ONNX
+conversion by [LavaSR-ONNX](https://github.com/Topping1/LavaSR-ONNX). Both of
+those run on [ONNX Runtime](https://github.com/microsoft/onnxruntime) (MIT,
+Copyright (c) Microsoft Corporation) — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full notices.
 ffmpeg is used as an external program and is not part of this project.

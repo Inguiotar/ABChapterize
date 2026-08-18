@@ -144,10 +144,15 @@ public static class AudioFidelity
 
     /// <summary>
     /// Plain O(n²) DFT over one frame. Deliberately not the FFT
-    /// <see cref="SpeechDenoiser"/> carries: this runs a few hundred times per file against that
-    /// one's tens of thousands, the cost is milliseconds either way, and a shared transform would
-    /// have to be lifted out of the denoiser and given a home of its own to serve a caller that
-    /// gains nothing from it.
+    /// <see cref="SpeechDenoiser"/> carries, although this is not cheap: with
+    /// <see cref="ABChapterize.Detection.DetectionTuning.FidelityExcerpts"/> excerpts of
+    /// <see cref="ABChapterize.Detection.DetectionTuning.FidelityExcerptSeconds"/> at 16 kHz it is
+    /// around 3,700 transforms per gated file - the louder half of each excerpt's 937 frames -
+    /// which is the bulk of the
+    /// ~8 s that measurement takes (build-339 corpus run, 2026-08-17). It stays here anyway because
+    /// the price is paid at most once per file, and only by a file whose transcripts already
+    /// suggest it needs denoising, while sharing the denoiser's transform would mean lifting it out
+    /// and giving it a home of its own to serve a caller that gains nothing from it.
     /// </summary>
     /// <param name="real">Real parts, overwritten with the transform's.</param>
     /// <param name="imaginary">Imaginary parts, overwritten with the transform's.</param>

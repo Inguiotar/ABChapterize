@@ -24,6 +24,17 @@ public static class ModelCatalog
     private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// Every built-in model selector, smallest first. The one list of them: <see cref="Models"/>
+    /// must hold an entry for each (pinned by the catalog's tests, since nothing in the type system
+    /// says so), and <c>CliOptions</c> validates a command line against this rather than against a
+    /// copy of its own. The order is the quality order the ranking behind <c>--pass3-model</c>
+    /// reads, so a new model belongs in its rightful place rather than appended: "turbo"
+    /// (large-v3-turbo) sits just below "large", a distilled large that trades a little accuracy
+    /// for a lot of speed and is still clearly ahead of "medium".
+    /// </summary>
+    public static readonly string[] BuiltInNames = ["tiny", "base", "small", "medium", "turbo", "large"];
+
+    /// <summary>
     /// GGML file name, exact size in bytes, approximate download size, and pinned SHA-256/SHA3-256
     /// digests for every model selector. Two independently-designed hash algorithms must both match
     /// before a download is accepted (see <see cref="VerifyHashes"/>): a compromise of the Hugging
@@ -34,8 +45,7 @@ public static class ModelCatalog
     /// and describe exactly the bytes those digests cover.
     /// <para>
     /// The sizes exist for <see cref="ApproximateSizeBytes"/>, which needs a model's weight before
-    /// the file is necessarily on disk. They ascend in the same order as
-    /// <see cref="CliOptions.ModelNames"/>, "turbo" between "medium" and "large" included, so
+    /// the file is necessarily on disk. They ascend in the order of <see cref="BuiltInNames"/>, so
     /// ranking two models by size agrees with the catalog's own quality order - which is what lets
     /// a <c>custom:</c> model be ranked against a built-in one at all.
     /// </para>
@@ -273,7 +283,7 @@ public static class ModelCatalog
                 throw new IOException($"the downloaded file is implausibly small ({done} bytes) - " +
                                       "probably an error page was served instead of the model");
 
-            VerifyHashes(sha256, sha3, expectedSha256, expectedSha3_256);
+            VerifyHashes(sha256, sha3, expectedSha256, expectedSha3_256, report);
         }
         finally
         {
@@ -290,8 +300,17 @@ public static class ModelCatalog
     /// check can (at least in theory) be satisfied by an engineered collision against one specific
     /// algorithm; doing so against two unrelated algorithms at once is not a realistic threat.
     /// </summary>
+    /// <param name="sha256">The SHA-256 accumulated over the downloaded bytes.</param>
+    /// <param name="sha3">The SHA3-256 accumulated over them, or null on a platform without it.</param>
+    /// <param name="expectedSha256">The pinned SHA-256.</param>
+    /// <param name="expectedSha3_256">The pinned SHA3-256.</param>
+    /// <param name="report">Where to write the one note this can emit, or null for the console.
+    /// Threaded through for the reason <see cref="Report"/> records: a --pass3-model download runs
+    /// hours into a run with the progress bar live, and a direct Console.WriteLine lands on the very
+    /// line the bar is redrawing.</param>
     private static void VerifyHashes(
-        IncrementalHash sha256, IncrementalHash? sha3, string expectedSha256, string expectedSha3_256)
+        IncrementalHash sha256, IncrementalHash? sha3, string expectedSha256, string expectedSha3_256,
+        Action<string>? report)
     {
         var actualSha256 = Convert.ToHexStringLower(sha256.GetHashAndReset());
         if (!actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
@@ -301,7 +320,7 @@ public static class ModelCatalog
 
         if (sha3 == null)
         {
-            Console.WriteLine("Note: this platform has no SHA3-256 support, only SHA-256 was verified.");
+            Report(report, "Note: this platform has no SHA3-256 support, only SHA-256 was verified.");
             return;
         }
 

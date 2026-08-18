@@ -214,7 +214,7 @@ internal static class DetectionTuning
     /// </summary>
     internal const double JingleLeadInSeconds = 8.0;
 
-    /// <summary>Flat margin added to --max-jingle-length so the phrase after the jingle still
+    /// <summary>Flat margin added to a measured jingle length so the phrase after the jingle still
     /// fits into the probe window.</summary>
     internal const double PhraseMarginSeconds = 5.0;
 
@@ -254,7 +254,7 @@ internal static class DetectionTuning
     /// Default for <see cref="ABChapterize.Cli.CliOptions.MarkLeadSeconds"/> (--mark-lead): without
     /// --mark-before-jingle, the mark goes this many seconds before the detected phrase, whatever
     /// precedes it - no silence/jingle anchor is consulted for the timestamp at all, only for the
-    /// --min-silence-length/--max-jingle-length auto statistics.
+    /// --min-silence-length auto threshold and the per-file jingle statistics --summary reports.
     /// </summary>
     /// <remarks>
     /// Raised from 0.25 to 0.35 on 2026-07-29 after listening to real marks: at 0.25 the mark lands
@@ -349,11 +349,10 @@ internal static class DetectionTuning
     /// (1) A VAD non-speech region whose longest contiguous run falls below it (see
     /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/> for why the longest run, not the
     /// merged span) is dropped rather than ever becoming a candidate: too short for a jingle at
-    /// any book's pacing, more likely a breath pause VAD called non-speech. (2) With
-    /// --max-jingle-length auto, an observed phrase offset below it means "this chapter had no
-    /// jingle (or an ultra-short one)" and is excluded from tightening the probe window - some
-    /// books only play the jingle for some chapters, and such a chapter says nothing about the
-    /// window a full-length jingle needs. (3) It is the floor <see cref="JingleCensus"/> counts the
+    /// any book's pacing, more likely a breath pause VAD called non-speech. (2) When a file's music
+    /// reach is measured, an observed phrase offset below it means "this chapter had no jingle (or
+    /// an ultra-short one)" and says nothing about how far the music reaches - some books only play
+    /// the jingle for some chapters. (3) It is the floor <see cref="JingleCensus"/> counts the
     /// --verbose jingle tally at, so that tally means the same thing as the two decisions above and
     /// cannot drift away from them.
     /// </summary>
@@ -392,7 +391,10 @@ internal static class DetectionTuning
     /// <summary>
     /// Non-speech an announcement must have in front of it before
     /// <see cref="AnnouncementIsolation"/> accepts it: the pause (or jingle) separating it from the
-    /// previous section's narration. Applies to a bare number and to the prologue/epilogue.
+    /// previous section's narration. Asked wherever a wording carries a <c>^</c> - which every
+    /// built-in chapter phrase now does, so this governs ordinary numbered chapters and not only the
+    /// unusual ones - and of the prologue and epilogue, which demand it whatever phrase they are
+    /// given. A bare number is held to it on both flanks.
     /// <para>
     /// Bounded by measurement 2026-08-05, replaying the guard over each run's own Pass 1 speech
     /// segments across the fourteen-book corpus. Every genuine announcement clears it with room:
@@ -409,16 +411,19 @@ internal static class DetectionTuning
     internal const double AnnouncementLeadInSeconds = 0.85;
 
     /// <summary>
-    /// Non-speech a <em>bare number</em> announcement must have after it as well
-    /// (<see cref="IsolationRule.Both"/>). Only bare numbers: the number is spoken alone, so the
+    /// Non-speech an announcement must have behind it where a wording's <c>$</c> asks for one, and
+    /// what a <em>bare number</em> is held to on top of its lead-in
+    /// (<see cref="IsolationRule.Both"/>). The bare number is what the figure was set from: the
+    /// number is spoken alone, so the
     /// pause behind it is as much a part of its shape as the one in front, and on "Corsa nello
     /// spazio" every chapter measured 1.0-2.2 s there - the tightest being chapter 20 at 0.99 s -
     /// against 0.73 s for the false epilogue. Set well below that tightest real measurement rather
     /// than just below it, for the same reason as the lead-in: one book's narrator sets the pace of
     /// these pauses, and another's need not be so generous.
     /// <para>
-    /// Deliberately <em>not</em> asked of the prologue and epilogue, and not of <c>--custom</c> at
-    /// all. A heading word is routinely run straight into the text that follows it, and the corpus
+    /// Deliberately <em>not</em> asked of the prologue, the epilogue or a <c>--custom</c> mapping of
+    /// their own accord - only where a wording writes the <c>$</c> that asks for it.
+    /// A heading word is routinely run straight into the text that follows it, and the corpus
     /// has it both ways round: Gruelfin's "Zeittafel" leaves 0.16 s behind it and "I Shall Wear
     /// Midnight"'s epilogue 0.44 s, both genuine, so at this threshold the first would still be
     /// thrown away and the second only just survives. The lead-in alone already rejects every
@@ -537,11 +542,16 @@ internal static class DetectionTuning
     /// How far behind the pre-walk mark --mark-before-jingle's backward walk must have landed
     /// before <see cref="PreciseMarkRefiner.VerifyMarkBeforeJingleAsync"/> probes the result at
     /// all. The probe decodes <see cref="PreciseMarkCheckWindowSeconds"/> forward from the walked
-    /// mark while the announcement it retreated from starts
-    /// <see cref="DefaultMarkLeadSeconds"/> after the pre-walk mark; any smaller gap puts that
-    /// announcement inside the probe's own window, where "still audible" is a foregone conclusion
-    /// that reads a short jingle, a deliberate "no jingle here" outcome and a failed walk exactly
-    /// alike. Below this gap the walk is trusted unprobed.
+    /// mark while the announcement it retreated from starts one <c>--mark-lead</c> after the
+    /// pre-walk mark; any smaller gap puts that announcement inside the probe's own window, where
+    /// "still audible" is a foregone conclusion that reads a short jingle, a deliberate "no jingle
+    /// here" outcome and a failed walk exactly alike. Below this gap the walk is trusted unprobed.
+    /// <para>
+    /// The guard evaluates that subtraction against the run's own
+    /// <see cref="CliOptions.MarkLeadSeconds"/>, so this constant is the value it takes at the
+    /// default lead and nothing more - it is what the shipped configuration measures against, and
+    /// the figure to reason about when reading a log from one.
+    /// </para>
     /// </summary>
     internal const double MarkBeforeJingleVerifyMinGapSeconds =
         PreciseMarkCheckWindowSeconds - DefaultMarkLeadSeconds;

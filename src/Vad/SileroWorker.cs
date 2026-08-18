@@ -98,23 +98,47 @@ internal sealed class SileroWorker : IDisposable
     static SileroWorker() => OnnxRuntimeNative.EnsureRegistered();
 
     /// <summary>Creates a worker with its own session over the bundled model.</summary>
+    /// <remarks>
+    /// Seven native resources are acquired here - the session, the run options and five tensors -
+    /// and a constructor that throws part-way hands the caller no object to dispose. So each is
+    /// tracked as it is taken and released again on the way out. Remote as a runtime failure (the
+    /// tensors only wrap buffers this object already owns), but the alternative is a leak nobody
+    /// can reach, and <see cref="SileroVadDetector"/> builds one of these per physical core.
+    /// </remarks>
     internal SileroWorker()
     {
         using var options = SessionOptionsForOneWorker();
         _session = new InferenceSession(LoadModelBytes(), options);
-        // "state" and "stateN" must stay distinct buffers: ORT writes the output while the input is
-        // still live, and aliasing them would feed a half-updated state back into the model.
-        _inputs =
-        [
-            OrtValue.CreateTensorValueFromMemory(_window, [1, ContextSamples + FrameSamples]),
-            OrtValue.CreateTensorValueFromMemory(_state, [StateLayers, 1, StateSize]),
-            OrtValue.CreateTensorValueFromMemory(_sampleRate, []),
-        ];
-        _outputs =
-        [
-            OrtValue.CreateTensorValueFromMemory(_output, [1, 1]),
-            OrtValue.CreateTensorValueFromMemory(_nextState, [StateLayers, 1, StateSize]),
-        ];
+        var acquired = new List<OrtValue>(5);
+        try
+        {
+            OrtValue Track(OrtValue value)
+            {
+                acquired.Add(value);
+                return value;
+            }
+            // "state" and "stateN" must stay distinct buffers: ORT writes the output while the input
+            // is still live, and aliasing them would feed a half-updated state back into the model.
+            _inputs =
+            [
+                Track(OrtValue.CreateTensorValueFromMemory(_window, [1, ContextSamples + FrameSamples])),
+                Track(OrtValue.CreateTensorValueFromMemory(_state, [StateLayers, 1, StateSize])),
+                Track(OrtValue.CreateTensorValueFromMemory(_sampleRate, [])),
+            ];
+            _outputs =
+            [
+                Track(OrtValue.CreateTensorValueFromMemory(_output, [1, 1])),
+                Track(OrtValue.CreateTensorValueFromMemory(_nextState, [StateLayers, 1, StateSize])),
+            ];
+        }
+        catch
+        {
+            foreach (var value in acquired)
+                value.Dispose();
+            _runOptions.Dispose();
+            _session.Dispose();
+            throw;
+        }
     }
 
     /// <summary>

@@ -63,11 +63,14 @@ internal static class AnnouncementIsolation
     /// under the wider <see cref="NumberWordParser.BareNumberReading.LeadingASentence"/> - both
     /// flanks regardless, because that reading admits numbers Whisper did not set off by itself.
     /// <para>
-    /// A phrase-based announcement asks for nothing by default, its phrase being its own evidence.
-    /// The built-in chapter phrases deliberately carry no <c>^</c>: turning the lead-in guard on for
-    /// every chapter was measured over sixteen books (469 marks, 2026-08-13) and would have dropped
-    /// exactly one of them, "I Shall Wear Midnight" chapter 9, whose announcement follows the
-    /// previous chapter's last words after 0.64 s against a threshold of 0.85 s.
+    /// Every built-in chapter phrase carries a <c>^</c> on all three of its wordings, so an ordinary
+    /// numbered chapter does ask for a leading pause. That is affordable only because
+    /// <see cref="WithoutSatisfiedLeadIn"/> also takes the recognizer's word for it: measured over
+    /// sixteen books (469 marks, 2026-08-13), a pause alone would have dropped exactly one of them -
+    /// "I Shall Wear Midnight" chapter 9, whose announcement follows the previous chapter's last
+    /// words after 0.64 s against a threshold of 0.85 s - and that chapter is transcribed as a
+    /// segment of its own, so it passes on the second route. A phrase that writes no <c>^</c> still
+    /// asks for nothing, its phrase being its own evidence.
     /// </para>
     /// </summary>
     /// <param name="match">The match being placed; its
@@ -241,10 +244,11 @@ internal readonly record struct IsolationCheck(IsolationRule Rule, double? Fallb
 [Flags]
 internal enum IsolationRule
 {
-    /// <summary>No check. A phrase-based chapter announcement, whose phrase is its own evidence; a
-    /// <c>--custom</c> mapping, which names a recurring structural element whose place in the book
-    /// is the user's business and not something this could second-guess; and Pass 2's first look at
-    /// a window, which is deliberately left cheap - see <see cref="AnnouncementIsolation"/>.</summary>
+    /// <summary>No check. A chapter phrase that writes neither guard, whose phrase is then its own
+    /// evidence (though every built-in one does write a <c>^</c>); an untagged <c>--custom</c>
+    /// mapping, which names a recurring structural element whose place in the book is the user's
+    /// business and not something this could second-guess; and Pass 2's first look at a window,
+    /// which is deliberately left cheap - see <see cref="AnnouncementIsolation"/>.</summary>
     None = 0,
 
     /// <summary>A leading pause. What the prologue and epilogue get, and what a phrase's <c>^</c>

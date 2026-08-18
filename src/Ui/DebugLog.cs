@@ -18,7 +18,7 @@ namespace ABChapterize.Ui;
 /// <para>
 /// The header matters more than it looks. A debug log arrives detached from the command that
 /// produced it, and nearly every "why did it do that" turns out to hinge on a setting: which model,
-/// which language, which phrase regexp, whether the VAD pre-pass ran at all. Recording the resolved
+/// which language, which phrase regexp, which silence threshold. Recording the resolved
 /// values - after <c>--lang</c>'s localized defaults have been applied, not the raw command line -
 /// is what makes the rest of the file interpretable.
 /// </para>

@@ -120,7 +120,7 @@ internal sealed class LanguageResolver
             if (samples.Length < FfmpegClient.SampleRate / 2)
                 continue;
 
-            var (detected, probability) = await _transcriber.DetectLanguageWithProbability(samples, ct);
+            var (detected, probability) = await _transcriber.DetectLanguageWithProbabilityAsync(samples, ct);
             var attempt = new Attempt(
                 position, (detected ?? "").Trim().ToLowerInvariant(), probability);
             attempts.Add(attempt);

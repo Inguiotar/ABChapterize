@@ -143,10 +143,23 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
         _blockSamples = AlignToFrames(blockSeconds);
         _warmupSamples = AlignToFrames(warmupSeconds);
         _pool = new SileroWorker[_workers];
-        for (var i = 0; i < _workers; i++)
+        // Every worker holds a native session. A constructor that throws hands the caller nothing
+        // to dispose, so whatever was built before the failure would be unreachable: on a
+        // many-core machine that is dozens of leaked sessions, and the run is aborting anyway - the
+        // one moment nobody is watching for them.
+        try
         {
-            _pool[i] = new SileroWorker();
-            _free.Add(_pool[i]);
+            for (var i = 0; i < _workers; i++)
+            {
+                _pool[i] = new SileroWorker();
+                _free.Add(_pool[i]);
+            }
+        }
+        catch
+        {
+            foreach (var built in _pool)
+                built?.Dispose();
+            throw;
         }
         _slots = new SemaphoreSlim(_workers);
     }
@@ -205,7 +218,7 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
             var frameIndex = 0L;
             var leftover = Array.Empty<float>();
 
-            await foreach (var rawChunk in pcm)
+            await foreach (var rawChunk in pcm.WithCancellation(ct))
             {
                 ct.ThrowIfCancellationRequested();
                 // The incoming chunk size is ffmpeg's, not a multiple of the frame size, so whatever

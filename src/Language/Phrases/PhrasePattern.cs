@@ -26,8 +26,11 @@ namespace ABChapterize.Language.Phrases;
 /// <param name="HasNumberGroup">Whether a <c>()</c> (or an unnamed capturing group, which means the
 /// same thing) supplies the chapter number, rather than it being read from the words around the
 /// match.</param>
-/// <param name="RequiresLeadIn">What a leading <c>^</c> asked for: the announcement must be preceded
-/// by real non-speech. The same request the <c>heading</c> hint of a <c>--custom</c> mapping makes.</param>
+/// <param name="RequiresLeadIn">What a leading <c>^</c> asked for: the announcement must be set off
+/// in front - by real non-speech, or by the recognizer writing it as a transcript segment of its own
+/// (see <see cref="ABChapterize.Detection.AnnouncementIsolation"/>). Writing the <c>^</c> is also the
+/// only way a <c>--custom</c> mapping can ask for it, the tag keyword that used to say the same
+/// thing having been removed - see <see cref="ABChapterize.Cli.SpecTag"/>.</param>
 /// <param name="RequiresLeadOut">What a trailing <c>$</c> asked for: non-speech behind the
 /// announcement as well. What a number spoken alone leans on entirely.</param>
 public sealed record PhraseAlternative(

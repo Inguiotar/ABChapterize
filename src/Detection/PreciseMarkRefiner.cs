@@ -604,8 +604,8 @@ internal sealed class PreciseMarkRefiner
     /// </summary>
     /// <param name="walked">The mark <see cref="JingleGeometry.ComputeMarkBeforeJingle"/> already
     /// computed.</param>
-    /// <param name="originalMark">The pre-walk mark the walk retreated from, for the
-    /// <see cref="MarkBeforeJingleVerifyMinGapSeconds"/> guard.</param>
+    /// <param name="originalMark">The pre-walk mark the walk retreated from, for the probe-window
+    /// guard <see cref="MarkBeforeJingleVerifyMinGapSeconds"/> documents.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="announcement">The announcement to look for: the chapter phrase for a numbered
@@ -624,8 +624,14 @@ internal sealed class PreciseMarkRefiner
     {
         // The probe window at `walked` reaches forward far enough to hear the announcement the walk
         // retreated from, so a "still audible" reading there would be structurally guaranteed
-        // rather than evidence of anything. Nothing to learn: trust the walk.
-        if (originalMark - walked < MarkBeforeJingleVerifyMinGapSeconds)
+        // rather than evidence of anything. Nothing to learn: trust the walk. Measured against the
+        // run's own --mark-lead rather than against MarkBeforeJingleVerifyMinGapSeconds, which is
+        // that same expression evaluated at the default lead: where the announcement sits ahead of
+        // the pre-walk mark is exactly what the option moves, and a lead below the default would
+        // otherwise leave a band of gaps that clear the constant while still putting the
+        // announcement inside the probe's window.
+        var minGap = PreciseMarkCheckWindowSeconds - _options.MarkLeadSeconds;
+        if (originalMark - walked < minGap)
         {
             _log?.Invoke(
                 $"--mark-before-jingle: verification skipped at {FormatTimestamp(walked)} - " +
@@ -810,8 +816,10 @@ internal sealed class PreciseMarkRefiner
     /// precisely the property the re-examination restores in the presence of holes.
     /// </para>
     /// <para>
-    /// Everything is capped at the same jingle-plus-phrase span the searches use, measured from the
-    /// position the search set out from, so neither the gallop nor any number of resumes can walk
+    /// Everything is capped at <see cref="DetectionTuning.PlateauWalkLimitSeconds"/> from the
+    /// position the search set out from - a runaway guard rather than a question about music, which
+    /// is why it is not the jingle-derived span the searches use (see
+    /// <see cref="JingleReachSeconds"/>) - so neither the gallop nor any number of resumes can walk
     /// into the next chapter; that case returns the furthest position actually confirmed, the one
     /// place the step-accuracy guarantee does not hold. It has not been observed on real audio - it
     /// needs the announcement to stay the first audible thing across an entire jingle-length span.

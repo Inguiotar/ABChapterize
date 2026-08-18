@@ -52,7 +52,8 @@ public sealed class FileProcessor
     private readonly RunStatistics _runStats = new();
 
     /// <summary>The files --summary names one by one at the end: those skipped, those detection
-    /// found nothing in, and those left with chapter marks still missing.</summary>
+    /// found nothing in, those left with chapter marks still missing, and those finished but
+    /// carrying marks the recognizer was unsure of.</summary>
     private readonly RunOutcomes _outcomes = new();
 
     /// <summary>Creates a processor for the given validated options.</summary>
@@ -318,10 +319,10 @@ public sealed class FileProcessor
     /// Records what the run was given to work with, for the log alone: a run that turns out slower
     /// than expected is usually a thread-count question, and the answer is otherwise nowhere.
     /// </summary>
-    /// <param name="vad">The run's voice-activity detector, or null when the pre-pass is off.</param>
-    private void LogThreadBudget(SileroVadDetector? vad)
+    /// <param name="vad">The run's voice-activity detector, which every run since 0.12.0 has.</param>
+    private void LogThreadBudget(SileroVadDetector vad)
         => _progress.Log($"threads: Whisper {_options.EffectiveWhisperThreads}" +
-                         (vad != null ? $", voice-activity pre-pass {vad.Workers}" : ", no voice-activity pre-pass") +
+                         $", voice-activity pre-pass {vad.Workers}" +
                          $" (cores: {ProcessorTopology.PhysicalCoreCount} physical, " +
                          $"{Environment.ProcessorCount} logical)");
 
@@ -748,8 +749,9 @@ public sealed class FileProcessor
         // are trusted as-is. --force means "redo the whole file from scratch" and takes priority,
         // falling through to the normal policy below.
         // The resume path is entirely about chapter numbers the tag names, so a run that forms no
-        // opinion about them re-detects the file from scratch instead - the tag is simply not this
-        // run's business.
+        // opinion about them ignores the tag - the file falls through to the ordinary
+        // pre-existing-mark policy below and is skipped for the partial marks it carries, unless
+        // --force asks for a detection from scratch.
         if (!_options.Force && !_options.IgnoreChapterNumbers && MissingMarksTag.IsResumable(ctx.File))
             return FilePlan.Resume;
         if (!EvaluateExistingChapters(ctx.Info).Skip)

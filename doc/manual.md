@@ -90,11 +90,13 @@ source. Only what affects using the tool is covered here.
 
 ### Pass 1 — silence scan (and VAD pre-pass)
 
-ffmpeg's `silencedetect` filter finds every silence of at least
-`--min-silence-length` seconds (default, and starting point with `auto`: 1.5)
+ffmpeg's `silencedetect` filter finds every silence of at least half a second
 below `--noise-floor` dBFS (normally −35), in one quick decode pass over the
-whole file. Chapter announcements in audiobooks practically always follow such a
-pause. If the scan ends prematurely (e.g. because of a damaged file), the file
+whole file — short ones as well as long, because mark placement and window seams
+are anchored to the whole list. Which of them are worth probing is a separate
+question, decided afterwards by `--min-silence-length` (default, and starting
+point with `auto`: 1.5 s). Chapter announcements in audiobooks practically always
+follow such a pause. If the scan ends prematurely (e.g. because of a damaged file), the file
 is aborted with an error instead of silently reporting "no chapters".
 
 Before that scan, a few short excerpts from across the file are decoded to
@@ -457,7 +459,8 @@ to another automatic attempt. See
 common cause.
 
 A later run over a *numbered* tagged file picks it up automatically (unless
-`--force` is given): the chapters already committed are trusted outright,
+`--force` or `--ignore-chapter-numbers` is given): the chapters already
+committed are trusted outright,
 and only the still-tagged gap(s) get their own pass 2 and, if needed, pass 3,
 exactly as after a failed `--verify` (see
 [`--verify`](#detection-safety-nets)). If that completes the
@@ -781,7 +784,7 @@ without `--backup`, even on a crash or power failure mid-write:
      `<name>.<ext>.bak`, then the new file takes its place (with rollback if
      that rename fails);
    - without `--backup`, and with it when a `.bak` from an earlier run is
-     already there: the original is parked as `<name>.abchapterize.orig`, the
+     already there: the original is parked as `<name>.<ext>.abchapterize.orig`, the
      new file takes its place, and only then is the parked original deleted
      (again with rollback on failure). An existing backup is never overwritten
      — see [`--backup`](#safety-and-undo).
@@ -892,7 +895,10 @@ so that logs and reports stay comparable regardless of regional settings.
     dots), e.g. `--filter mp3,m4b`. Only supported extensions are allowed.
 
   The filter also applies to `--revert` and `--cleanup` (it selects which backups are
-  restored) and to directory scans in general. A single file named directly
+  restored) and to directory scans in general. Under `--revert` the regexp form
+  is matched against the backup's own path — the name still ending in `.bak` —
+  so do not anchor it at the audio extension; `--cleanup` matches it against the
+  audio file's path instead. A single file named directly
   as the target is *also* subject to the filter.
 
 ### Detection behaviour
@@ -1150,8 +1156,8 @@ alternative ends up as one expression with nothing left to choose between:
 `/kapit(?:el|let) ()/` is two alternatives and `/(?:a|b)c(?:d|e)/` is four. That
 matters beyond tidiness — the alternative that found an announcement is the one
 its position is later confirmed against, and one still offering a choice could
-confirm itself on words it never matched. A value that would expand past 64
-alternatives is refused. The chapter number's own `()`, and any capturing group,
+confirm itself on words it never matched. A single alternative that would expand
+past 64 wordings is refused. The chapter number's own `()`, and any capturing group,
 are left whole.
 
 One more kind of group is left whole, and this one is deliberately in your
@@ -1366,8 +1372,10 @@ Two things are worth knowing before reaching for it:
   `--custom "zwischenspiel:Zwischenspiel;/zeit[- ]?tafel/:Zeittafel"`. A
   phrase is a word or a `/regexp/` and parses no number; a match anywhere in
   the file becomes a mark titled after the colon, as often as the phrase
-  occurs. Titles may reference the phrase's capturing groups as `$1`, `$2` or
-  by name. Repeat the option to add further mappings. Never localized — but a
+  occurs. Titles may write out what the phrase captured — `${name}` for a named
+  group, and the conversions listed under
+  [Titles](#titles-what-a-mark-is-called); a reference by number such as `$1` is
+  refused. Repeat the option to add further mappings. Never localized — but a
   mapping may open with a `[...]` tag holding a `xx` language code, restricting
   it to files that resolve to that language, and/or hints restricting where and
   how often it matches (`before-first-chapter`, `after-first-chapter`,
@@ -1534,8 +1542,10 @@ looking. None of these is needed for an ordinary book.
   A first chapter found *above* `<n>` is instead treated like any other gap:
   pass 3 searches for the missing numbers down to `<n>`, and if it still
   can't find all of them, the file is tagged `.missing-marks-…` exactly as
-  an unresolved gap between two detected chapters already is. Only applies
-  to a fresh, from-scratch run, the same restriction as `--early-abort`.
+  an unresolved gap between two detected chapters already is. The *abort* is
+  what only applies to a fresh, from-scratch run, the same restriction as
+  `--early-abort`; the hunt for the leading numbers is not restricted that way,
+  so a `--verify` recovery or a `.missing-marks` resume keeps looking for them.
 
 `--no-trailing-scan`
 : Skip the transcription of everything after the last chapter found (default: it
@@ -1557,7 +1567,8 @@ looking. None of these is needed for an ordinary book.
   Turn it off for a library you have already checked, or where the last chapter
   matters less than the run time. Nothing is scanned anyway when no chapter was
   found at all — there is no "last chapter" to scan from — nor after an
-  `--early-abort` or `--expected-start-chapter` abort. If you happen to know
+  `--early-abort` or `--expected-start-chapter` abort, nor under
+  `--ignore-chapter-numbers`, which does away with pass 3 altogether. If you happen to know
   how many chapters the book has, `--chapter-count` answers the same question
   for a fraction of the time, and giving it switches the blind scan off for you.
 
@@ -1624,12 +1635,13 @@ looking. None of these is needed for an ordinary book.
   longer — the default is well past the longest novels, but a collected edition
   or a serial can pass it, and every chapter above the cap is silently dropped.
   Lowering it to roughly the real count is worth it whenever you know that
-  figure: a single "chapter five hundred and ten" misheard in a
-  twelve-chapter book otherwise becomes a mark of its own, and every real
-  chapter behind it is then rejected for being numbered below it. A number that
-  wild no longer drags the rest of the run with it — nothing between it and the
-  last real chapter is reported missing, and no pass goes looking there — but
-  the mark is still written, and only the file's summary line says so. Lighter
+  figure. The default already throws away a misheard "chapter five hundred and
+  ten", but a misheard "chapter one hundred and fifty" in a twelve-chapter book
+  sits comfortably under it: that becomes a mark of its own, and every real
+  chapter behind it is then rejected for being numbered below it. Such a number
+  no longer drags the rest of the run with it — nothing between it and the last
+  real chapter is reported missing, and no pass goes looking there — but the
+  mark is still written, and only the file's summary line says so. Lighter
   Whisper models (`tiny`, `base`) are the usual source of such numbers. Not to
   be confused with
   `--max-chapters`, which counts a file's *pre-existing* marks rather than the
@@ -1806,11 +1818,13 @@ abchapterize --recurse --backup \
 **When they run — and when they do not.** The hooks belong to a file that is
 actually worked on:
 
-- A file the run **skips** runs neither hook. That includes a file that already
-  carries chapter marks (without `--force`), one whose codec cannot be decoded,
-  one `--verify` found nothing wrong with, and — under `--import` — one with no
-  sidecar next to it. Nothing was done to the file, so there is nothing to prepare
-  for and nothing to follow up on.
+- A file the run **skips before it starts work on it** runs neither hook. That
+  includes a file that already carries chapter marks (without `--force`), one
+  whose codec cannot be decoded, and — under `--import` — one with no sidecar
+  next to it. Nothing had been done to the file, so there was nothing to prepare
+  for and nothing to follow up on. A file `--verify` then leaves alone is
+  different: there the check *is* the work, so `--run-before` has already run by
+  the time it reaches a verdict, and only `--run-after` is withheld.
 - `--run-after` additionally does **not** run for a file left tagged
   `.missing-marks-...`. Such a file is unfinished and a later run is expected to
   pick it up again, so a command that archives or tidies up after a finished book
@@ -2022,8 +2036,8 @@ The details worth knowing:
   [`--summary`](#12-output-progress-and-logging) block; log lines and per-file
   result lines stay plain, and a `--log-file` receives plain text whatever the
   console gets. `auto` turns color off when the output
-  is redirected and when the `NO_COLOR` environment variable is set to
-  anything. On Unix it additionally wants `TERM` to name a 16-color terminal
+  is redirected and when the `NO_COLOR` environment variable is set to a
+  non-empty value (the no-color.org convention). On Unix it additionally wants `TERM` to name a 16-color terminal
   such as `xterm-256color`: a terminal that still calls itself plain `xterm` is
   described by its own terminfo entry as having eight colors, and everything
   the tool draws is translated through that entry, so the bar's dark grey would
@@ -2115,6 +2129,12 @@ touching Whisper at all.
   `--dry-run`, so `abchapterize --dry-run --export book.m4b` previews the
   result *and* saves it for review without touching the audio file.
 
+  The sidecar is written for a file detection completed normally. A file left
+  with an unresolved chapter-sequence gap, a `.missing-marks` file being
+  resumed, and a `--verify --fix` rewrite all write their marks into the audio
+  file as usual but no sidecar — those files change their name as they are
+  written, and a sidecar under the old one would not be found again.
+
 `-I`, `--import`
 : Skip Whisper detection entirely and write the chapters found in the
   sidecar file instead (looked up next to the audio file, same naming as
@@ -2126,11 +2146,12 @@ touching Whisper at all.
   `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
   `--min-silence-length`, `--noise-floor`,
   `--early-abort`, `--expected-start-chapter`, `--max-chapter-number`,
-  `--chapter-count`, `--no-trailing-scan`, `--verify` — nor with the title
+  `--chapter-count`, `--no-trailing-scan`, `--no-denoise`, `--verify`,
+  `--named-mark-distance` — nor with the title
   options `--chapter-title`, `--part-title`,
   `--intro-title`, `--prologue-title` and `--epilogue-title`, since an
   imported mark carries the title the sidecar gives it and no intro mark is
-  prepended — nor with `--export`, `--revert` or
+  prepended — nor with `--export`, `--revert`, `--cleanup` or
   `--no-op`. Pre-existing chapter
   handling (`--force`/`--max-chapters`), `--backup`, `--dry-run` and
   `--summary` all behave the same as in a normal run; imported chapters
@@ -2245,8 +2266,9 @@ with what the machine actually has:
 `--version`
 : Show the version number, plus the auto-incrementing build number and UTC
   build timestamp (e.g. `abchapterize 0.9.0 (build 42, built 2026-07-20
-  14:33:12 UTC)`). Not shown anywhere else - `--help`'s banner only ever
-  shows the plain version number.
+  14:33:12 UTC)`). `--help`'s banner shows the plain version number only; the
+  build number otherwise appears just in the opening line of a `--log-file` or
+  a `--debug` log, which outlives the build that wrote it.
 
 `--list-gpus`
 : List this machine's Vulkan GPUs by name, as `--use-gpu` matches them, then
@@ -2293,7 +2315,7 @@ The chapter number in an announcement is recognized in three ways:
 Cardinals are understood from 0 to 999 in every language, ordinals as far as
 the language spells them compositionally (see below), and
 the number may come **after** the phrase ("Chapter Seven") or **before** it
-("Erstes Kapitel", "2. Kapitel", "chapitre premier", "Birinci Bölüm").
+("Erstes Kapitel", "2. Kapitel", "premier chapitre", "Birinci Bölüm").
 The parsers are exhaustively unit-tested against independent reference
 spellers for every cardinal number 0–999 in every language, and for every
 word ordinal too. Word ordinals reach 999 in most languages; Spanish and
@@ -2659,10 +2681,17 @@ which supports far older hardware and is usually a perfectly good outcome.
 Just don't assume "NVIDIA card" means "CUDA backend" — check the startup
 line, which names the backend that actually loaded.
 
-`--use-gpu` and `--list-gpus` work on the Vulkan side, where multi-GPU
-machines actually cause trouble. When CUDA loads, it keeps its own device 0;
-a machine with several CUDA cards is rare enough not to have earned an option
-of its own yet.
+`--list-gpus` and `--use-gpu`'s name matching read the Vulkan device list, which
+is where multi-GPU machines actually cause trouble. The index they settle on is
+handed to whichever backend then loads, and a device is only ever pinned when
+that list holds two or more entries — so on a single-GPU machine, and on any
+machine you leave `--use-gpu` off with only one card enumerated, the backend
+keeps its own device 0. Where a CUDA card is enumerated next to an integrated
+one, however, the ordinal handed over is a Vulkan ordinal, and CUDA may well
+number its devices differently: check the startup line names the card you meant,
+and fall back to `--cpu-only` or to leaving the machine's own default alone if
+it does not. A machine with several CUDA cards is rare enough not to have earned
+an option of its own yet.
 
 The `runtimes` folder next to the executable contains these native libraries
 and must be kept — without it, nothing works.
@@ -2815,7 +2844,7 @@ name, everything the pipeline does:
   `still missing:` list of any earlier chapter numbers not detected yet,
 - every chapter number that was heard but *not* turned into a mark, with the
   reason: one that does not top the last number accepted (`skipped chapter 3 at
-  1:12:04.20 - not above the last accepted chapter 7 (in-text mention?)`), one
+  1:12:04.20 - not above last accepted 7 (in-text mention?)`), one
   above the `--max-chapter-number` cap, or one with no usable silence in front
   of it to anchor a mark to — in which case the line names the silence it did
   find and how it fell short. Usually this is the tool correctly ignoring a
@@ -2886,7 +2915,7 @@ always shown, even with `--quiet`, and never abort the rest of a batch run.
 | Code | Meaning |
 | --- | --- |
 | 0 | Success. Files skipped or finished with warnings still count as success. |
-| 1 | Fatal error (a file could not be processed; the run stops). |
+| 1 | Fatal error — a file could not be processed (the run stops), or a `--cleanup` finished with failed steps. |
 | 2 | Command line usage error. |
 | 130 | Aborted with Ctrl+C. |
 

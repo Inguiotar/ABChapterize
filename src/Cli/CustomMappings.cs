@@ -11,7 +11,9 @@ namespace ABChapterize.Cli;
 /// <see cref="CliOptions.ResolveProfile"/>, which is also where a language could still change what
 /// the surrounding options resolve to).</summary>
 /// <param name="Phrase">The raw phrase: a plain word, or "/regexp/".</param>
-/// <param name="Title">The raw title template, possibly with <c>$1</c>-style group references.</param>
+/// <param name="Title">The raw title template, possibly with <c>${name}</c>-style references to
+/// the phrase's capturing groups (see <see cref="ABChapterize.Language.Phrases.TitleTemplate"/>; a
+/// reference by number such as <c>$1</c> is refused).</param>
 /// <param name="Language">The two-letter code of the only language this mapping applies to, from a
 /// leading <c>[xx]</c> tag, or null for one that applies to every file in the run. A mixed-language
 /// batch is the whole reason for the tag: a phrase written for French narration matches nothing in
