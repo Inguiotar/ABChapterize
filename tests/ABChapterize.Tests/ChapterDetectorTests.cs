@@ -3362,7 +3362,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // anchor must fold into the threshold (0.75 x 3 = 2.25 s), so chapter 5's 2.5 s
         // silence - below chapter 2's 3.75 s but above 2.25 s - is still probed and found.
         // Chapter 5 is the last mark, so nothing could recover it if it were skipped.
-        var (result, _, audio) = await DetectFullAsync(
+        var (result, log, audio) = await DetectWithLogAsync(
             Options(),
             [new(595, 600), new(697, 700), new(895, 900), new(1197.5, 1200)],
             s =>
@@ -3378,6 +3378,11 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([1, 2, 3, 4, 5], result.Chapters.Select(c => c.Number));
         Assert.Contains(700.0, audio.DecodeStarts);
         Assert.Contains(1200.0, audio.DecodeStarts);
+        // The gate did follow this recovery down, so the withholding note must stay off - it would
+        // otherwise sit in the log directly contradicting the "threshold lowered" line beneath it,
+        // which is exactly what the first build-341 corpus run printed on "Paula Monti".
+        Assert.Contains(log, l => l.Contains("threshold lowered to 2.25"));
+        Assert.DoesNotContain(log, l => l.Contains("not applied to the forward scan"));
     }
 
     [Fact]

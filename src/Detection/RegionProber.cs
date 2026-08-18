@@ -421,6 +421,14 @@ internal sealed class RegionProber
     /// </summary>
     private double? _scanFloorSeconds;
 
+    /// <summary>What the current sequence-gap re-probe withheld from <see cref="_scanFloorSeconds"/>,
+    /// or null where it withheld nothing. Exists only so the log line at the end of
+    /// <see cref="ReprobeGapCandidatesAsync"/> can state what actually happened: the evidence
+    /// minimum moving is not the same event, since a gap recovery above the floor moves it
+    /// <em>and</em> is applied to the scan gate, and announcing that as withheld would put a line in
+    /// the debug log contradicting the "threshold lowered" one right beneath it.</summary>
+    private double? _withheldFromScanSeconds;
+
     /// <summary>
     /// What this region's marks measured this book's chapter breaks to be, or null where nothing
     /// ever qualified. Read after <see cref="RunAsync"/> by
@@ -2836,7 +2844,7 @@ internal sealed class RegionProber
             note + $"re-probing {candidates.Count} candidate(s), " +
             $"{FormatTimestamp(fromSeconds)}-{FormatTimestamp(toSeconds)}");
         var missing = Enumerable.Range(previousNumber + 1, number - previousNumber - 1).ToHashSet();
-        var measuredBefore = _adaptedThresholdSeconds;
+        _withheldFromScanSeconds = null;
         for (var si = 0; si < candidates.Count; si++)
         {
             var gapMarks = await ProbeAsync(
@@ -2867,9 +2875,9 @@ internal sealed class RegionProber
         // down (see _scanFloorSeconds), so the "threshold lowered" line this used to produce is gone,
         // and what the break was measured at would next surface only in a sub-floor sweep thousands
         // of log lines later - or, on a book that needs no sweep, nowhere at all.
-        if (_adaptedThresholdSeconds is { } measured && measured != measuredBefore)
+        if (_withheldFromScanSeconds is { } withheld)
             _env.Log?.Invoke(
-                note + $"measured a {measured:0.##} s chapter break - kept for the gap passes, " +
+                note + $"measured a {withheld:0.##} s chapter break - kept for the gap passes, " +
                 "not applied to the forward scan");
         _reprobing = false;
         _gapAbove = null;
@@ -2983,7 +2991,10 @@ internal sealed class RegionProber
         // chapter break this book demonstrably has, and the scan needs to know. The evidence above is
         // kept either way, so both gap-scoped mechanisms still act on it regardless.
         if (_reprobing && measured <= _env.Options.AdaptiveFloorSeconds)
+        {
+            _withheldFromScanSeconds = proposed;
             return;
+        }
         _scanFloorSeconds = Math.Min(_scanFloorSeconds ?? proposed, proposed);
     }
 
