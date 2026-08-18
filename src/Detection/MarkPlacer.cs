@@ -25,7 +25,7 @@ namespace ABChapterize.Detection;
 /// prologue/epilogue phrase for a named mark. Per mark rather than per file, since a run detects
 /// all three at once and a correction that re-transcribed a prologue while looking for "chapter"
 /// could only ever fail to confirm it.</param>
-/// <param name="AllSilences">Every silence Pass 1 stored, for the --mark-before-jingle walk and for
+/// <param name="AllSilences">Every silence Analyze stored, for the --mark-before-jingle walk and for
 /// precise marking's onset anchor (<see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/>).</param>
 /// <param name="SpeechSegments">Raw VAD speech segments for the whole file, for that walk and its
 /// verification search.</param>
@@ -40,7 +40,7 @@ namespace ABChapterize.Detection;
 /// this figure knows nothing about. See
 /// <see cref="PreciseMarkRefiner.LocatePhraseByShrinkingWindowAsync"/>'s ceiling, where that is
 /// resolved.</param>
-/// <param name="Language">The file's resolved language code, for the <c>--pass3-model</c> retry a
+/// <param name="Language">The file's resolved language code, for the <c>--upgrade-model</c> retry a
 /// failed refinement falls back on. Carried here rather than taken from
 /// <see cref="NumberCheck.Profile"/> because a named (prologue/epilogue/<c>--custom</c>) mark has no
 /// <see cref="NumberCheck"/> and is refined exactly like a numbered one.</param>
@@ -84,7 +84,7 @@ internal readonly record struct MarkPlacement(double TimeSeconds, int? Number);
 
 /// <summary>
 /// Turns a default-mode mark into the final one and records what the file's statistics need to
-/// know about it. Both passes that detect a chapter - Pass 2's window probing and Pass 3's gap
+/// know about it. Both passes that detect a chapter - Probe's window probing and Scan's gap
 /// transcription - compute their default-mode mark differently (a probe window has a candidate and
 /// a window start to anchor against, a gap chunk has neither), but everything from there on is
 /// identical, and lives here: the precise marking correction, the --mark-before-jingle backward
@@ -124,7 +124,7 @@ internal sealed class MarkPlacer
     /// <param name="options">Validated command line options.</param>
     /// <param name="log">This file's log sinks; default when nothing is listening.</param>
     /// <param name="transcribeCounting">The detector's statistics-counting transcribe wrapper.</param>
-    /// <param name="transcribeUpgraded">The same, through the heavier <c>--pass3-model</c>, for the
+    /// <param name="transcribeUpgraded">The same, through the heavier <c>--upgrade-model</c>, for the
     /// retry a failed refinement falls back on; null when no upgrade model was chosen.</param>
     /// <param name="findMatches">The detector's --max-chapter-number-capped phrase matcher.</param>
     internal MarkPlacer(IAudioSource audio, CliOptions options, DetectionLog log,
@@ -149,7 +149,7 @@ internal sealed class MarkPlacer
 
     /// <summary>How far back this file's music reaches (<see cref="JingleCensus.ReachSeconds"/>),
     /// passed straight through to the refiner, which is where the figure is actually needed. Set
-    /// once per file, after Pass 1 has counted the jingles.</summary>
+    /// once per file, after Analyze has counted the jingles.</summary>
     internal double JingleReachSeconds
     {
         set => _refiner.JingleReachSeconds = value;

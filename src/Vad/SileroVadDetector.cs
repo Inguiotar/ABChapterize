@@ -19,7 +19,7 @@ namespace ABChapterize.Vad;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Why blocks at all. Pass 1 is VAD-bound rather than ffmpeg-bound: measured on 2026-07-31 with
+/// Why blocks at all. Analyze is VAD-bound rather than ffmpeg-bound: measured on 2026-07-31 with
 /// <c>tools\vadbench</c>, ffmpeg's own decode plus silencedetect runs at ~1400x realtime while the
 /// same run with a single-threaded VAD attached drops to 190-280x, so the model accounts for 82-86%
 /// of the pass. The work cannot go to a GPU - DirectML measured 6.3x *slower* than the best CPU
@@ -29,7 +29,7 @@ namespace ABChapterize.Vad;
 /// </para>
 /// <para>
 /// What this implementation actually measured, against its own single-worker path over the whole of
-/// Wintersmith.m4b (8:32:52), 12 workers on a Ryzen AI 9 HX 370 (12C/24T), 2026-07-31: Pass 1 end to
+/// Wintersmith.m4b (8:32:52), 12 workers on a Ryzen AI 9 HX 370 (12C/24T), 2026-07-31: Analyze end to
 /// end 201.5 s single-stream against 49.7 s block-parallel, a 4.05x speed-up of a pass whose ffmpeg
 /// floor is 29.2 s - so of the 172 s the single-stream VAD added on top of the decode, 152 s are
 /// gone and VAD has dropped from 86% of the pass to 41%. Fidelity over those ~960000 frames: 178

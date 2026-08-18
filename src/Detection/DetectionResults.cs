@@ -29,13 +29,13 @@ namespace ABChapterize.Detection;
 /// 15 s and 45 s re-framings and by every one of the refinement's probes.
 /// <see cref="GapPlanning.Normalize"/> keeps it as well, 1..65 followed by 2179 being strictly
 /// ascending. The sequence therefore declared chapters 66 to 2178 missing, which cost some 25
-/// minutes of a 90-minute run in Pass 2.5/3/3.5 sweeps over audio holding nothing, and left the
+/// minutes of a 90-minute run in Re-probe/3/3.5 sweeps over audio holding nothing, and left the
 /// file tagged ".missing-marks" with too many numbers to name and so outside
 /// <see cref="ABChapterize.Processing.MissingMarksTag.IsResumable"/>.
 /// </para>
 /// <para>
 /// Deliberately not a reason to drop the mark. An unmendable number is also what a real chapter
-/// looks like when Pass 2 missed the several chapters before it, and dropping that would trade a
+/// looks like when Probe missed the several chapters before it, and dropping that would trade a
 /// lost chapter for saved time - the wrong way round here. Only a mark provably belonging to a
 /// named announcement's own heading is removed; see
 /// <see cref="ChapterDetector.DropNamedMarkEchoes"/>.
@@ -143,7 +143,7 @@ public readonly record struct DetectionStats(
 /// <param name="EarlyAborted">True when --early-abort cut detection short because no chapter was
 /// found within its minute threshold; <paramref name="Chapters"/> is then always empty, same as
 /// for a completed scan that genuinely found nothing.</param>
-/// <param name="BelowExpectedStartNumber">The chapter number Pass 2 found first, when
+/// <param name="BelowExpectedStartNumber">The chapter number Probe found first, when
 /// --expected-start-chapter aborted detection because it was numbered below that expectation; null
 /// otherwise. <paramref name="Chapters"/> is always empty when set, as with
 /// <paramref name="EarlyAborted"/>.</param>

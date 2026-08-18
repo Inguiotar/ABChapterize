@@ -231,7 +231,7 @@ public class NumberWordParserTests
     /// What the two strict readings refuse, and have to: a number that merely begins a sentence
     /// without ending it. All four are real lines from the same book, and the first is the one that
     /// makes the point - chapter 1's announcement reads "1. 9 febbraio 2066…", so had the "1." been
-    /// dropped the date behind it must not become chapter 9. Pass 2's forward scan sees only these
+    /// dropped the date behind it must not become chapter 9. Probe's forward scan sees only these
     /// readings, which is why it can walk a whole book unsupervised.
     /// </summary>
     [Theory]
@@ -289,7 +289,7 @@ public class NumberWordParserTests
 
     /// <summary>
     /// The two readings differ on exactly one thing: a number Whisper buried behind the tail of the
-    /// previous chapter. The narrow reading (Pass 2's forward scan) passes it over, the wide one
+    /// previous chapter. The narrow reading (Probe's forward scan) passes it over, the wide one
     /// takes it and flags that it did not open the segment - which is what makes
     /// <see cref="AnnouncementIsolation"/>'s verdict, rather than the segmentation, decisive.
     /// </summary>

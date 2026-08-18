@@ -278,21 +278,21 @@ public sealed class FileProcessor
         // Everything from here on is inside the try, so that a failure while setting the rest of the
         // run up - loading the VAD model, say - still releases the Whisper context that is already
         // holding a model in memory or in VRAM.
-        Pass3Transcriber? pass3 = null;
+        UpgradeTranscriber? upgrade = null;
         try
         {
-            // A different --pass3-model gets one lazily-loaded instance for the whole run (see
-            // Pass3Transcriber). Only gap work (pass 2.5 and 3) uses it, so a book that never opens
+            // A different --upgrade-model gets one lazily-loaded instance for the whole run (see
+            // UpgradeTranscriber). Only gap work (Re-probe and 3) uses it, so a book that never opens
             // a gap never pays for the second model at all. The same model as --model means no
             // separate instance either way - gap work reuses the run's own transcriber.
-            pass3 = _options.Pass3Model != _options.Model
-                ? new Pass3Transcriber(_options.Pass3Model, initialLanguage,
+            upgrade = _options.UpgradeModel != _options.Model
+                ? new UpgradeTranscriber(_options.UpgradeModel, initialLanguage,
                     _options.EffectiveWhisperThreads, _options.CpuOnly, gpu.Selected?.Index,
                     _progress.Announce)
                 : null;
 
             if (!_options.Quiet)
-                PrintModelBanner(transcriber.RuntimeName, files.Count, pass3 != null, gpu);
+                PrintModelBanner(transcriber.RuntimeName, files.Count, upgrade != null, gpu);
 
             // The one thing in the run that uses more than one thread of its own accord. Always
             // built since 0.12.0: a file's jingles are what its probe windows and its mark
@@ -303,7 +303,7 @@ public sealed class FileProcessor
             using var vad = new SileroVadDetector(_options.EffectiveVadThreads);
             LogThreadBudget(vad);
 
-            var detector = new ChapterDetector(_options, ffmpeg, transcriber, vad, pass3);
+            var detector = new ChapterDetector(_options, ffmpeg, transcriber, vad, upgrade);
             foreach (var file in files)
             {
                 ct.ThrowIfCancellationRequested();
@@ -313,8 +313,8 @@ public sealed class FileProcessor
         finally
         {
             await transcriber.DisposeAsync();
-            if (pass3 != null)
-                await pass3.DisposeAsync();
+            if (upgrade != null)
+                await upgrade.DisposeAsync();
         }
     }
 
@@ -382,7 +382,7 @@ public sealed class FileProcessor
     /// <summary>Prints the one-off "model loaded" line that opens a detection run.</summary>
     /// <param name="runtimeName">Native backend Whisper.net actually loaded.</param>
     /// <param name="fileCount">Number of files in the run.</param>
-    /// <param name="separatePass3Model">Whether --pass3-model asked for a second model.</param>
+    /// <param name="separateUpgradeModel">Whether --upgrade-model asked for a second model.</param>
     /// <param name="gpu">What this run decided about GPUs.</param>
     /// <remarks>
     /// The device name is printed because its absence is what made a wrong GPU invisible: a banner
@@ -390,12 +390,12 @@ public sealed class FileProcessor
     /// integrated one at a fraction of the speed, or on a software rasterizer. Only named on the
     /// Vulkan backend, since that is where the enumeration the name comes from applies.
     /// </remarks>
-    private void PrintModelBanner(string runtimeName, int fileCount, bool separatePass3Model, GpuChoice gpu)
+    private void PrintModelBanner(string runtimeName, int fileCount, bool separateUpgradeModel, GpuChoice gpu)
         => _progress.Announce($"Whisper model \"{_options.Model}\" loaded ({runtimeName} backend" +
                              DescribeGpu(runtimeName, gpu) +
                              (_options.AutoLanguage ? ", auto language detection" : "") + "), " +
-                             (separatePass3Model
-                                 ? $"pass 3 model \"{_options.Pass3Model}\" (loaded on first use), " : "") +
+                             (separateUpgradeModel
+                                 ? $"upgrade model \"{_options.UpgradeModel}\" (loaded on first use), " : "") +
                              $"{fileCount} file(s) to process.");
 
     /// <summary>
@@ -1151,8 +1151,8 @@ public sealed class FileProcessor
         }
 
         // At least one mark is trusted, and they still outnumber the failures - only the gap(s)
-        // around the unconfirmed one(s) get their own Pass 2 (and, for a still-missing trailing
-        // chapter, Pass 3); everything else in the file is left exactly as --verify found it.
+        // around the unconfirmed one(s) get their own Probe (and, for a still-missing trailing
+        // chapter, Scan); everything else in the file is left exactly as --verify found it.
         var trustedNote = $", {verify.ConfirmedChapters.Count} of {ctx.Info.ChapterCount} existing " +
                           $"mark(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
         return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct),

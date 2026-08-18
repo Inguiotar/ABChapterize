@@ -16,7 +16,7 @@ namespace ABChapterize.Detection;
 /// with it clearly enough.
 /// <para>
 /// The evidence is better than the reading it corrects, and the reason is geometric rather than
-/// statistical. A Pass 2 probe window is tens of seconds long and the announcement can sit anywhere
+/// statistical. A probe window is tens of seconds long and the announcement can sit anywhere
 /// in it, including at the very end where Whisper's segmentation is at its worst; the refinement's
 /// probes are a few seconds long and framed on the announcement itself, because that is what the
 /// onset search needs them to be. "Die Cyber-Brutzellen" (2026-08-01) is the case on record: the

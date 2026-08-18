@@ -29,7 +29,7 @@ public static partial class MissingMarksTag
     public const int MaxNamedNumbers = 10;
 
     /// <summary>
-    /// Builds the name a file is renamed to when pass 3 leaves an unresolved chapter-sequence gap:
+    /// Builds the name a file is renamed to when Scan leaves an unresolved chapter-sequence gap:
     /// the original name with a ".missing-marks-&lt;n&gt;-&lt;n&gt;-..." tag (the still-missing
     /// chapter numbers, "-"-delimited) inserted before the extension, e.g. "Book.m4b" with
     /// chapters 3 and 7 missing becomes "Book.missing-marks-3-7.m4b". Beyond
@@ -40,7 +40,7 @@ public static partial class MissingMarksTag
     /// than stacked, in either form.
     /// </summary>
     /// <param name="file">Path of the file being renamed.</param>
-    /// <param name="missingNumbers">The chapter numbers still missing after pass 3.</param>
+    /// <param name="missingNumbers">The chapter numbers still missing after Scan.</param>
     public static string PathFor(string file, IReadOnlyList<int> missingNumbers)
     {
         var tag = missingNumbers.Count is > 0 and <= MaxNamedNumbers

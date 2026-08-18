@@ -8,7 +8,7 @@ using static ABChapterize.Detection.DetectionTuning;
 namespace ABChapterize.Detection;
 
 /// <summary>
-/// Picks the level below which Pass 1's silence scan should count audio as silence, by looking at
+/// Picks the level below which Analyze's silence scan should count audio as silence, by looking at
 /// what the file actually sounds like instead of assuming <see cref="DefaultSilenceNoiseDb"/>.
 /// </summary>
 /// <remarks>
@@ -18,7 +18,7 @@ namespace ABChapterize.Detection;
 /// and a fixed -35 dBFS lands in the middle of it on every normal master. What this exists for is
 /// the master that is not normal: one recorded with audible hiss (nothing ever drops below -35, so
 /// no silence is found and no chapter is ever probed for) or mastered so quietly that the narration
-/// itself sits under -35 (every pause between words reads as silence, and Pass 1 returns thousands
+/// itself sits under -35 (every pause between words reads as silence, and Analyze returns thousands
 /// of candidates). Both used to be a manual <c>--min-silence-length</c> fight that could not
 /// actually win, the problem being the level rather than the length.
 /// </para>
@@ -163,7 +163,7 @@ internal static class SilenceThresholdProbe
         return sorted[Math.Clamp(index, 0, sorted.Count - 1)];
     }
 
-    /// <summary>The one-line note Pass 1 logs about the threshold it is scanning with.</summary>
+    /// <summary>The one-line note Analyze logs about the threshold it is scanning with.</summary>
     /// <param name="reading">What <see cref="MeasureAsync"/> concluded, or null when
     /// <c>--noise-floor</c> named a level outright.</param>
     /// <param name="thresholdDb">The threshold actually in use.</param>

@@ -14,7 +14,7 @@ namespace ABChapterize.Language;
 /// It exists because the refinement used to take a compiled expression, and a chapter announced by
 /// its number alone has none: the phrase was a deliberately never-matching expression there. Every
 /// numbered chapter of such a book therefore failed refinement by construction -
-/// twice, since a failure is retried through the <c>--pass3-model</c> recognizer - and the failure
+/// twice, since a failure is retried through the <c>--upgrade-model</c> recognizer - and the failure
 /// was silent, indistinguishable in the log from a genuinely unconfirmable announcement. Measured
 /// on "Corsa nello spazio" (build 244, 2026-08-05): 1001 of 1012 survival probes answered "no",
 /// the eleven that did not belonging to the two epilogue marks that carry a real regex, and the
@@ -78,7 +78,7 @@ public sealed class AnnouncementMatcher
     /// <see cref="ABChapterize.Detection.AnnouncementIsolation"/> vets the result, and a refinement
     /// is exactly where an over-eager matcher does its damage: in Italian "un", "una" and "uno" all
     /// parse as the number 1, so a probe window of ordinary prose can answer "found" and pull the
-    /// onset - and with it the mark - onto a word. A Pass 2 mark has no isolation check behind it,
+    /// onset - and with it the mark - onto a word. A Probe mark has no isolation check behind it,
     /// so its refinement gets the strict reading; a gap hunt's does not, so its refinement may take
     /// the permissive one.
     /// </para>

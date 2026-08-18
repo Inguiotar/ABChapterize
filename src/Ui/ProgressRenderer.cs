@@ -27,15 +27,15 @@ public sealed class WorkTracker
     /// (see <see cref="ProgressRenderer.FormatElapsedTimer"/>).</summary>
     public TimeSpan Elapsed => _stopwatch.Elapsed;
 
-    /// <summary>Short name of the current phase (e.g. "Pass 1"); shown directly after the bar.</summary>
+    /// <summary>Short name of the current phase (e.g. "Analyze"); shown directly after the bar.</summary>
     public string PhaseLabel { get; private set; } = "";
 
     /// <summary>Highest chapter number detected so far; 0 while none has been found yet
-    /// (rendered as "----", since a zero count carries no information during e.g. Pass 1).</summary>
+    /// (rendered as "----", since a zero count carries no information during e.g. Analyze).</summary>
     public int HighestChapter { get; set; }
 
     /// <summary>How many chapter numbers below <see cref="HighestChapter"/> are still
-    /// undetected (gaps that Pass 3 will chase); rendered as "(-N)" after the chapter number.</summary>
+    /// undetected (gaps that Scan will chase); rendered as "(-N)" after the chapter number.</summary>
     public int MissingChapters { get; set; }
 
     /// <summary>How many named marks of every kind - including the chapter announcements that
@@ -116,7 +116,7 @@ public sealed class ProgressRenderer : IDisposable
         /// two "what and how far" anchors, and everything else is detail hung off them.</summary>
         public const ConsoleColor Bar = ConsoleColor.White;
 
-        /// <summary>The phase label ("Pass 2"), and "Muxing..." standing in for the chapter count.</summary>
+        /// <summary>The phase label ("Probe"), and "Muxing..." standing in for the chapter count.</summary>
         public const ConsoleColor Phase = ConsoleColor.DarkCyan;
 
         /// <summary>The two numbers that only ever count upward, percentage and timer.</summary>
@@ -409,8 +409,8 @@ public sealed class ProgressRenderer : IDisposable
 
     /// <summary>
     /// Appends the bar's chapter section: "----" until anything at all is found (nothing can
-    /// change during Pass 1 anyway); then the highest detected chapter number, followed by one
-    /// bracket holding the count of still-missing earlier chapters - the ones Pass 3 would have to
+    /// change during Analyze anyway); then the highest detected chapter number, followed by one
+    /// bracket holding the count of still-missing earlier chapters - the ones Scan would have to
     /// chase - and the count of extra marks found, as e.g. "ch 6(-2+1)". Each count is split off
     /// into its own span so the numbers alone carry their colors while the brackets stay
     /// structural. An extra mark found before the first chapter shows as "ch 0(+1)": the zero is

@@ -10,8 +10,8 @@ using static ABChapterize.Detection.DetectionTuning;
 namespace ABChapterize.Detection;
 
 /// <summary>Sequence bookkeeping for chapter detection: finding gaps in a detected chapter
-/// sequence, the regions a --verify re-detection run needs to re-probe, the silence bands Pass 2.5
-/// sweeps a still-open gap with, normalizing a raw detection list, and snapping Pass 2/Pass 3
+/// sequence, the regions a --verify re-detection run needs to re-probe, the silence bands Re-probe
+/// sweeps a still-open gap with, normalizing a raw detection list, and snapping Probe/Scan
 /// window/chunk borders to word-safe seams.</summary>
 internal static class GapPlanning
 {
@@ -58,7 +58,7 @@ internal static class GapPlanning
             .OrderBy(g => g.Key)
             .Select(g => g.OrderBy(c => c.TimeSeconds).ToList())];
 
-    /// <summary>One region <see cref="ChapterDetector.DetectCoreAsync"/> runs its own, independent Pass 2 pass
+    /// <summary>One region <see cref="ChapterDetector.DetectCoreAsync"/> runs its own, independent Probe pass
     /// over - the whole file for a fresh <see cref="ChapterDetector.DetectAsync"/> run, or a single gap-scoped
     /// stretch for <see cref="ChapterDetector.DetectGapsAsync"/>. Bounds every aspect of that pass: candidates
     /// are built only from silences/VAD regions starting inside [<paramref name="FromSeconds"/>,
@@ -107,7 +107,7 @@ internal static class GapPlanning
     /// The chapter number this file's sequence is expected to start at, which is what opens a
     /// leading gap at all (see <see cref="FindGaps"/>): <c>--expected-start-chapter</c> when the
     /// user named one, else 1 once a prologue has been detected, else null - no expectation, and
-    /// whatever number Pass 2 found first is the book's start.
+    /// whatever number Probe found first is the book's start.
     /// <para>
     /// A prologue is the one piece of evidence detection can produce for itself that this file
     /// holds the beginning of a book. <see cref="FindGaps"/> refuses to assume "1" precisely because
@@ -119,7 +119,7 @@ internal static class GapPlanning
     /// <para>
     /// Not applied to <c>--expected-start-chapter</c>'s <em>abort</em> half
     /// (<see cref="RegionProber.IsBelowExpectedStart"/>, fed from
-    /// <see cref="Pass2Context.ExpectedStartChapter"/>): that gives up on a whole file, and a book
+    /// <see cref="ProbeContext.ExpectedStartChapter"/>): that gives up on a whole file, and a book
     /// numbering its opening section "chapter 0" would then be abandoned over a prologue rather than
     /// over anything the user asked for. What this value earns is the right to hunt the chapters
     /// under the first one found, never the right to stop.
@@ -139,15 +139,15 @@ internal static class GapPlanning
     /// Determines the regions to fully transcribe: between every pair of consecutive detected
     /// chapters whose numbers are not consecutive, and - only when <paramref
     /// name="expectedStartChapter"/> is given - before the first chapter when its number is
-    /// greater than that expectation. Without it, whatever number Pass 2 found first is trusted
+    /// greater than that expectation. Without it, whatever number Probe found first is trusted
     /// outright and no leading gap is ever raised, even when that number is not 1: a plain
     /// from-scratch run has no way to know whether a low first number is really the book's start
-    /// or just Pass 2 missing an earlier chapter, and guessing "1" wrongly assumed the latter for
+    /// or just Probe missing an earlier chapter, and guessing "1" wrongly assumed the latter for
     /// every book, including legitimate split-book parts. Internal for unit testing.
     /// <para>
     /// A restart is the one place where consecutive chapters may legitimately run backwards, and it
     /// is not a hole: part 2's chapter 1 follows part 1's chapter 15 with nothing missing between
-    /// them, and a gap raised there would send Pass 3 across the whole of part 1 hunting numbers
+    /// them, and a gap raised there would send Scan across the whole of part 1 hunting numbers
     /// that were never spoken. What the boundary can still hide is the <em>head</em> of the new
     /// part, so it raises a gap for exactly that - and only when the new part does not already
     /// start at 1 (see <see cref="StartOfSequence"/>).
@@ -189,7 +189,7 @@ internal static class GapPlanning
     /// detected chapters bounding it, or <paramref name="expectedStartChapter"/> (1 when null) up
     /// to the first detected number for a leading gap (whose start is 0, before any chapter). The
     /// bounding chapters are located by their exact timestamps, which <see cref="FindGaps"/>
-    /// copied verbatim into the gap, so the float match is exact. Pass 3 uses this to stop
+    /// copied verbatim into the gap, so the float match is exact. Scan uses this to stop
     /// transcribing a gap the moment all of them are found. Internal for unit testing.
     /// <para>
     /// A gap opened by a restart is bounded below by the previous part's last chapter, which says
@@ -242,16 +242,16 @@ internal static class GapPlanning
         => SubFloorSweepBudgetFraction * ChunkWindows(gapSeconds);
 
     /// <summary>
-    /// The silence-length bands Pass 2.5 sweeps a still-open gap with, longest first: one band per
+    /// The silence-length bands Re-probe sweeps a still-open gap with, longest first: one band per
     /// <see cref="DetectionTuning.SubFloorSweepBandCount"/>, each
     /// <see cref="DetectionTuning.SubFloorSweepBandSeconds"/> wide, the first ending exactly at
     /// <paramref name="floorSeconds"/> so no silence the run's own demand admitted is swept again.
     /// <para>
-    /// "The run's demand" rather than "everything Pass 2 could have reached": under
+    /// "The run's demand" rather than "everything Probe could have reached": under
     /// <c>--min-silence-length auto</c> the threshold can talk itself down to
     /// <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/>, so on a book whose breaks are
-    /// short some of these bands were within Pass 2's reach after all. Sweeping them anyway is not
-    /// waste - Pass 2.5 probes on the <c>--pass3-model</c> recognizer, so a second look at the same
+    /// short some of these bands were within Probe's reach after all. Sweeping them anyway is not
+    /// waste - Re-probe probes on the <c>--upgrade-model</c> recognizer, so a second look at the same
     /// audio is a different reading and the reason the pass exists at all.
     /// </para>
     /// <para>
@@ -262,16 +262,16 @@ internal static class GapPlanning
     /// </para>
     /// <para>
     /// Bands below <paramref name="storedFloorSeconds"/> are dropped rather than returned empty:
-    /// Pass 1 never kept silences that short, so sweeping them would report "nothing found" about
+    /// Analyze never kept silences that short, so sweeping them would report "nothing found" about
     /// audio nothing ever looked at. Internal for unit testing.
     /// </para>
     /// </summary>
     /// <param name="floorSeconds">The run's --min-silence-length, i.e. the shortest silence it
     /// opened by demanding.</param>
-    /// <param name="storedFloorSeconds">The shortest silence Pass 1 retained at all
+    /// <param name="storedFloorSeconds">The shortest silence Analyze retained at all
     /// (<see cref="DetectionTuning.MinStoredSilenceSeconds"/>, or the floor when that is lower).</param>
     /// <returns>The bands as half-open [min, max) intervals, longest first; empty when the floor
-    /// already sits at or below what Pass 1 stored.</returns>
+    /// already sits at or below what Analyze stored.</returns>
     internal static List<(double MinSeconds, double MaxSeconds)> SubFloorSweepBands(
         double floorSeconds, double storedFloorSeconds)
     {
@@ -300,7 +300,7 @@ internal static class GapPlanning
     /// the last checkable mark has no following bound; it becomes the trailing target instead
     /// of a region with a null <see cref="DetectionRegion.UpperNumber"/> precisely because there
     /// is no generic mechanism (unlike <see cref="FindGaps"/>'s interior gaps, safety-netted by
-    /// the existing Pass 3 tail regardless of how <c>chapters</c> was seeded) that would otherwise
+    /// the existing Scan tail regardless of how <c>chapters</c> was seeded) that would otherwise
     /// notice a still-missing trailing chapter - nothing bounds it from above to compare against.
     /// Internal for unit testing.
     /// </summary>
@@ -344,9 +344,9 @@ internal static class GapPlanning
             var upper = isTrailing || checkable[runEnd + 1].Sequence != sequence
                 ? (int?)null
                 : checkable[runEnd + 1].ExpectedNumber!.Value;
-            // The trailing run also gets an ordinary Pass 2 region (cheap silence/jingle probing
+            // The trailing run also gets an ordinary Probe region (cheap silence/jingle probing
             // may well find it, exactly like an interior gap); trailingFrom/trailingTargets exist
-            // purely so DetectCoreAsync can still add a Pass 3 fallback for whatever that probing
+            // purely so DetectCoreAsync can still add a Scan fallback for whatever that probing
             // does not find, since - see the remarks above - nothing else would notice.
             regions.Add(new DetectionRegion(from, to, lower, upper, sequence));
             if (isTrailing)
@@ -501,7 +501,7 @@ internal static class GapPlanning
     }
 
     /// <summary>
-    /// Finds where to cut between two adjacent Pass 2 probe windows so the seam never falls
+    /// Finds where to cut between two adjacent probe windows so the seam never falls
     /// mid-word: the mid-point of the nearest qualifying silence, falling back to a VAD
     /// non-speech region under the same rules when the VAD pre-pass ran and no silence qualifies, and
     /// finally to the border itself (no snap) when neither exists - which almost certainly
@@ -526,7 +526,7 @@ internal static class GapPlanning
     /// <param name="windowStart">Start of window 2 (the later window's candidate start).</param>
     /// <param name="border">The unsnapped border - window 1's (planned or decoded) end.</param>
     /// <param name="windowEnd">End of window 2.</param>
-    /// <param name="allSilences">Every silence Pass 1 found, down to <see
+    /// <param name="allSilences">Every silence Analyze found, down to <see
     /// cref="MinStoredSilenceSeconds"/> - not just the ones at or above --min-silence-length.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
     /// <param name="jingle">True when the VAD pre-pass ran (VAD non-speech regions are
@@ -554,9 +554,9 @@ internal static class GapPlanning
     /// neither kind of target has its mid-point in that range. No word straddles the mid-point
     /// of a silence, which is what makes it the safest place to cut audio that is transcribed
     /// in separate pieces. The single seam search behind every border decision in the
-    /// pipeline: Pass 2's shared-border and stand-alone window-end snaps
+    /// pipeline: Probe's shared-border and stand-alone window-end snaps
     /// (<see cref="PlanWindowEnd"/>), the reuse-time split (both via
-    /// <see cref="FindOverlapSplitPoint"/>), and Pass 3's chunk borders
+    /// <see cref="FindOverlapSplitPoint"/>), and Scan's chunk borders
     /// (<see cref="ChapterDetector.TranscribeRegionAsync"/>).
     /// </summary>
     /// <param name="border">The unsnapped border the seam should stay closest to.</param>
@@ -569,7 +569,7 @@ internal static class GapPlanning
     /// <param name="targetStartAtOrBefore">When set, only targets that <em>start</em> at or
     /// before this position qualify - the reuse-time restriction, where everything left of the
     /// seam must already be covered by a cached transcript.</param>
-    /// <param name="allSilences">Every silence Pass 1 stored, down to
+    /// <param name="allSilences">Every silence Analyze stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
     /// <param name="jingle">True when the VAD pre-pass ran (VAD non-speech regions are
@@ -594,7 +594,7 @@ internal static class GapPlanning
     }
 
     /// <summary>
-    /// Plans a single Pass 2 probe window's end, called right before that window is probed -
+    /// Plans a single probe window's end, called right before that window is probed -
     /// on the fly, so the end always reflects the <paramref name="probeSeconds"/> in effect at
     /// that moment - a candidate's own window length is settled when the candidate is built, and a
     /// plan computed for the whole region up front would only be a plan to go stale. The window
@@ -622,7 +622,7 @@ internal static class GapPlanning
     /// <param name="nextStart">The next candidate's start, or null for the last window.</param>
     /// <param name="probeSeconds">Current probe window length in seconds.</param>
     /// <param name="durationSeconds">Total play time; window ends are clamped to it.</param>
-    /// <param name="allSilences">Every silence Pass 1 found, down to <see
+    /// <param name="allSilences">Every silence Analyze found, down to <see
     /// cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
     /// <param name="jingle">True when the VAD pre-pass ran (VAD non-speech regions are
@@ -660,7 +660,7 @@ internal static class GapPlanning
     /// <summary>
     /// Computes the chapter numbers shown in the progress bar and in detection log lines from a
     /// detection list: the highest chapter number found so far, and which numbers below it are
-    /// still undetected (the gaps Pass 3 would have to chase). Runs the input through
+    /// still undetected (the gaps Scan would have to chase). Runs the input through
     /// <see cref="Normalize"/> first so in-text mentions of earlier chapters (regressions that
     /// Normalize drops anyway) cannot make a genuinely missing chapter look found. Mirrors
     /// <see cref="ChapterDetector.BuildDetectionResult"/>'s leading-gap rule: without
@@ -712,7 +712,7 @@ internal static class GapPlanning
         // Nothing corroborated at all leaves no span to be missing from, so nothing is: the highest
         // number is still reported, since it names a mark that really was written, but a lone
         // uncorroborated 2179 must not answer "how much of this book is still missing?" with 2114.
-        // Reachable on a clip or a short file - Pass 2 finding exactly one chapter and that one in
+        // Reachable on a clip or a short file - Probe finding exactly one chapter and that one in
         // doubt - rather than on a whole book.
         if (vouched.Count == 0)
             return numbers.Max();

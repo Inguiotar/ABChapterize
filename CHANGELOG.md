@@ -37,6 +37,34 @@ earn a round number.
   shape a file ran under, and the progress bar shows the second half as a phase of its
   own, `Pass 2b`.
 
+### Changed
+
+- **The processing passes have names instead of numbers.** They had grown into Pass 1, 2,
+  2.5, 3 and 3.5, and the fractions were a fiction: "pass 2.5" was never a step between
+  two others, it was the probing pass run again over a gap with a heavier model. Each pass
+  is now named for what it does, and that name is what the progress bar shows and what
+  `--verbose` writes at the start of a log line:
+
+  | was | is now | what it does |
+  | --- | --- | --- |
+  | Pass 1 | `Analyze` | Measures the file — silences, speech, music. Recognizes nothing. |
+  | Pass 2 | `Probe` | Transcribes a short window everywhere a chapter could start. |
+  | Pass 2.5 | `Re-probe` | Probes a gap again on the heavier model. |
+  | Pass 3 | `Scan` | Transcribes a whole stretch end to end. |
+  | Pass 3.5 | `Re-scan` | Reads that stretch once more, framed differently. |
+
+  The names run cheapest to dearest, and a `Re-` prefix means the same machinery again
+  over audio that already came back empty. A book read music-first shows `J-probe` and
+  `S-probe` in place of `Probe` for its two halves.
+
+  If you grep your own logs for a phase, this is the change to know about; logs written by
+  0.12.0 and earlier keep the old wording, since nothing rewrites them.
+
+- **`--pass3-model` is now `--upgrade-model`** (`-M` is unchanged). The old spelling keeps
+  working, silently and indefinitely, so no script needs touching. The rename fixes a name
+  that was already wrong before the passes lost their numbers: that model is consulted by
+  five different steps, only one of which was pass 3.
+
 ### Fixed
 
 - **A prologue or epilogue is now judged by where it sits, not by when it was heard.** A

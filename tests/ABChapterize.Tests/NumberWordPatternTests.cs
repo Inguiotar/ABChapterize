@@ -254,7 +254,7 @@ public class NumberWordPatternTests
     /// into pieces the word guard cannot see are pieces. "A.D." offers a "D." that is a perfectly
     /// formed 500, and the turbo model writes exactly that in "Sergeant Mandela 2007-2024 A.D."
     /// ("The Forever War", 0:25:01, 2026-08-14), where the number-first wording claimed
-    /// "D. Chapter" and cost the pass-3 re-read the announcement's real number.
+    /// "D. Chapter" and cost the Scan re-read the announcement's real number.
     /// </summary>
     [Theory]
     [InlineData("A.D.", "en")]

@@ -20,7 +20,7 @@ namespace ABChapterize.Tests;
 /// phrases are all single words and never noticed; a user's multi-word --chapter-phrase could not
 /// match across a segment boundary at all. The strings below are verbatim from the run that found
 /// it: "Paula Monti.m4b" with <c>--chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/"</c>,
-/// whose Pass 3 heard chapter 19 correctly, split it over two segments, and dropped it (2026-08-08).
+/// whose Scan heard chapter 19 correctly, split it over two segments, and dropped it (2026-08-08).
 /// The leading spaces in the fixtures are the point of the test - do not tidy them away.
 /// </remarks>
 public sealed class PhraseWhitespaceTests : IDisposable

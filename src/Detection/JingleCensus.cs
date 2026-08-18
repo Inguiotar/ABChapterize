@@ -32,7 +32,7 @@ internal readonly record struct Jingle(
 }
 
 /// <summary>
-/// Counts and measures a file's jingles from Pass 1's two raw signals, for the --verbose log and
+/// Counts and measures a file's jingles from Analyze's two raw signals, for the --verbose log and
 /// the --debug listing under it. Purely diagnostic: nothing in detection or placement reads a
 /// census back, so an entry carries more than the log prints - where the speech behind the jingle
 /// resumes, and how many VAD transients had to be bridged to see it as one stretch.
@@ -46,7 +46,7 @@ internal readonly record struct Jingle(
 /// <para>
 /// Deliberately measured from the speech segments themselves rather than from
 /// <see cref="JingleGeometry.ComputeNonSpeechRegions"/>'s output, which is not the same question:
-/// those regions are Pass 2's candidate list, merged at a wider gap and then filtered by longest
+/// those regions are Probe's candidate list, merged at a wider gap and then filtered by longest
 /// <em>contiguous</em> run, so a jingle a transient splits into two 1.5 s halves is dropped from
 /// them entirely - correct for "is this worth a probe", wrong for "how long is this book's music".
 /// Consequently the census and the region count need not agree, and neither is a subset of the
@@ -54,7 +54,7 @@ internal readonly record struct Jingle(
 /// </para>
 /// <para>
 /// <b>Why the narrower floor is also the more accurate one</b> (measured 2026-08-08 by replaying
-/// both readings over the fourteen-book corpus's own Pass 1 signals, parsed out of the 2026-08-07
+/// both readings over the fourteen-book corpus's own Analyze signals, parsed out of the 2026-08-07
 /// debug logs in <c>L:\Temp</c>). A chapter announcement is a <em>short</em> VAD segment - "Kapitel
 /// eins." runs 0.6-0.9 s - so the regions' 1.0 s merge bridges straight over it and the jingle
 /// appears to run on to the next narration, seconds past where the music stopped. Four marks pin
@@ -87,8 +87,8 @@ internal static class JingleCensus
     /// </summary>
     /// <param name="speech">The raw VAD speech segments in file order; empty when the pre-pass did
     /// not run, which yields an empty census.</param>
-    /// <param name="silences">Every silence Pass 1 stored, down to
-    /// <see cref="MinStoredSilenceSeconds"/> - the whole list, not Pass 2's --min-silence-length
+    /// <param name="silences">Every silence Analyze stored, down to
+    /// <see cref="MinStoredSilenceSeconds"/> - the whole list, not Probe's --min-silence-length
     /// subset, since a half-second hush is still not music.</param>
     internal static List<Jingle> Measure(List<SpeechSegment> speech, List<Silence> silences)
     {
@@ -111,7 +111,7 @@ internal static class JingleCensus
     /// <summary>
     /// How far back this file's music may reach from an announcement: the longest reach any jingle
     /// in the census actually showed, plus <see cref="PhraseMarginSeconds"/>. This is the figure the
-    /// two places that ask that question read - Pass 3's anchor lookback and
+    /// two places that ask that question read - Scan's anchor lookback and
     /// <see cref="PreciseMarkRefiner"/>'s --mark-before-jingle verification span - in place of the
     /// blind 50 s that --max-jingle-length used to hand them.
     /// <para>

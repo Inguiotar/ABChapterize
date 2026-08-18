@@ -24,7 +24,7 @@ namespace ABChapterize.Detection;
 /// none of them parse is skipped with "none had a checkable number".
 /// </para>
 /// <para>
-/// The fix is to anchor on the phrase rather than scan the string, which is what Pass 2 already does
+/// The fix is to anchor on the phrase rather than scan the string, which is what Probe already does
 /// with a transcript: read the number from the <em>beginning</em> of what follows the phrase, or the
 /// end of what precedes it, and both word orders ("Capitolo uno", "Fünftes Kapitel") come out along
 /// with digits, digit ordinals and Roman numerals - all of it through the same

@@ -35,7 +35,7 @@ internal static class DetectionTuning
     /// levels, spread evenly between the 5% and 95% marks of its play time - a book's opening
     /// label jingle and closing credits are not what its body sounds like. Eight 20 s excerpts cost
     /// about a second of ffmpeg seeking on a 15-hour .m4b (measured 2026-08-05), which is nothing
-    /// beside the full decode Pass 1 is about to do anyway.</summary>
+    /// beside the full decode Analyze is about to do anyway.</summary>
     internal const int NoiseProbeExcerpts = 8;
 
     /// <summary>Length of one <see cref="NoiseProbeExcerpts"/> excerpt, in seconds. Eight of these
@@ -86,18 +86,18 @@ internal static class DetectionTuning
     internal const double MaxAutoSilenceNoiseDb = -20;
 
     /// <summary>
-    /// The shortest silence Pass 1 keeps (see the <c>allSilences</c>/<c>silences</c> split in
+    /// The shortest silence Analyze keeps (see the <c>allSilences</c>/<c>silences</c> split in
     /// <see cref="ChapterDetector.DetectAsync"/>), regardless of --min-silence-length. Only
-    /// silences at or above --min-silence-length ever become Pass 2 candidates or get logged;
+    /// silences at or above --min-silence-length ever become Probe candidates or get logged;
     /// this lower floor exists purely so a window seam (see
     /// <see cref="GapPlanning.FindNearestSeam"/>) or a mark anchor can still snap to a silence
     /// mid-point when the nearest real one is shorter than the book's candidate threshold. Low
-    /// enough to catch ordinary clause pauses without noticeably growing Pass 1's list.
+    /// enough to catch ordinary clause pauses without noticeably growing Analyze's list.
     /// </summary>
     internal const double MinStoredSilenceSeconds = 0.5;
 
     /// <summary>
-    /// How far past a Pass 2 window's natural end <see cref="GapPlanning.PlanWindowEnd"/> looks
+    /// How far past a Probe window's natural end <see cref="GapPlanning.PlanWindowEnd"/> looks
     /// for a seam when that end has no next window to share a border with: the nearest silence -
     /// or VAD non-speech region, where the pre-pass ran - mid-point within this range becomes the
     /// window's end, so even a stand-alone window stops at a word-safe cut (a mid-word tail is
@@ -113,7 +113,7 @@ internal static class DetectionTuning
     internal const double PhraseLatestStartSeconds = 5.0;
 
     /// <summary>
-    /// How far past the point where Pass 2's primary scan <em>expects</em> an announcement its
+    /// How far past the point where Probe's primary scan <em>expects</em> an announcement its
     /// probe window reaches - after the silence for a plain pause, after the music for a jingle
     /// (see <see cref="RegionProber.BuildCandidates"/>). This is the whole probe window for those
     /// candidates: nothing has to cross a jingle any more, so no window needs to be as long as one.
@@ -136,10 +136,10 @@ internal static class DetectionTuning
     /// </para>
     /// <para>
     /// Calibrated 2026-08-08 by replaying the classification over the fourteen-book corpus's own
-    /// Pass 1 signals: every mark Pass 2's main scan finds today is still inside its window, and the
+    /// Analyze signals: every mark Probe's main scan finds today is still inside its window, and the
     /// tightest real announcement leaves 2.8 s of room ("Stalker"), most of them 5-8 s. Books whose
     /// announcements sit further out than this exist - all ten the replay could not cover are marks
-    /// today's Pass 2 does not find either, recovered by the gap machinery, which is unchanged.
+    /// today's Probe does not find either, recovered by the gap machinery, which is unchanged.
     /// </para>
     /// </summary>
     internal const double ExpectedAnnouncementSeconds = 22.0;
@@ -169,7 +169,7 @@ internal static class DetectionTuning
     /// been spoken - and no pass ever reads it. Two corpus cases, and they are structurally
     /// identical: "De vandrande djäknarne" chapter 2 (0.95 s pause, 2.89 s of announcement, then the
     /// 2.75 s candidate) lost the chapter outright, and "The Philosopher's Stone" chapter 11
-    /// (1.39 s, 0.98 s, then the 1.78 s candidate) cost a Pass 2.5 recovery. Both were verified with
+    /// (1.39 s, 0.98 s, then the 1.78 s candidate) cost a Re-probe recovery. Both were verified with
     /// the wprobe harness: a window opened at the earlier pause reads the announcement first try.
     /// </para>
     /// <para>
@@ -180,7 +180,7 @@ internal static class DetectionTuning
     /// </para>
     /// <para>
     /// 3.5 s rather than the 3.0 s that would just cover both cases (djäknarne's announcement runs
-    /// 2.89 s). Replaying the rule over all seventeen build-331 logs' own Pass 1 silence lists, the
+    /// 2.89 s). Replaying the rule over all seventeen build-331 logs' own Analyze silence lists, the
     /// bound decides the cost: 2.0 s misses djäknarne, 3.0 s costs 1.19x the corpus's candidates,
     /// 3.5 s costs 1.31x and 5.0 s 1.49x. The margin is worth the difference - a chapter announced
     /// with its title runs well past 3 s - and the count overstates the real cost anyway, since a
@@ -207,7 +207,7 @@ internal static class DetectionTuning
     /// <summary>
     /// The same run-up for a jingle candidate, taken from inside the music, and deliberately longer:
     /// the point it is measured back from is a VAD speech onset rather than a silencedetect edge, so
-    /// it carries the detector's own latency plus whatever timeline drift survives Pass 1's resync
+    /// it carries the detector's own latency plus whatever timeline drift survives Analyze's resync
     /// (see <see cref="Audio.FfmpegClient.PcmResyncToleranceSeconds"/> - up to 2.15 s was measured
     /// across the corpus before that fix). Generous by design: the run-up costs nothing, and the
     /// announcement landing before the window opens costs a chapter.
@@ -359,7 +359,7 @@ internal static class DetectionTuning
     internal const double MinJingleObservationSeconds = 2.0;
 
     /// <summary>
-    /// How much music a file must have, per hour of play time, before Pass 2 reads its jingles first
+    /// How much music a file must have, per hour of play time, before Probe reads its jingles first
     /// and its pauses only where the chapter sequence still wants one (see
     /// <see cref="JingleFirstScan"/>). Counted over the whole <see cref="JingleCensus"/>, so it means
     /// the same thing as the --verbose jingle tally.
@@ -412,7 +412,7 @@ internal static class DetectionTuning
     /// unusual ones - and of the prologue and epilogue, which demand it whatever phrase they are
     /// given. A bare number is held to it on both flanks.
     /// <para>
-    /// Bounded by measurement 2026-08-05, replaying the guard over each run's own Pass 1 speech
+    /// Bounded by measurement 2026-08-05, replaying the guard over each run's own Analyze speech
     /// segments across the fourteen-book corpus. Every genuine announcement clears it with room:
     /// "Corsa nello spazio"'s 65 bare numbers sit at 3.0-3.9 s, and the corpus's twelve genuine
     /// prologue/epilogue/<c>--custom</c> marks range from 1.56 s ("The Forever War"'s epilogue, the
@@ -478,7 +478,7 @@ internal static class DetectionTuning
     /// </para>
     /// <para>
     /// Calibration is unusually clean because this quantity is bimodal, not distributed. Replayed
-    /// over all seventeen build-339 logs' own Pass 1 speech segments, <b>441 of 443 marks measure
+    /// over all seventeen build-339 logs' own Analyze speech segments, <b>441 of 443 marks measure
     /// exactly zero</b> - every jingle mark included, since the jingle anchor lands them at the music
     /// edge ahead of the segment - and the only two non-zero values in the corpus are the two
     /// reported chapters, at 1.00 s and 1.42 s. So any threshold in (0, 1.00) separates them and
@@ -675,7 +675,7 @@ internal static class DetectionTuning
     /// which can move an existing mark - a walk that used to stop at the limit can now go further.
     /// </para>
     /// <para>
-    /// Capping it by the distance to the next chapter was considered and dropped: Pass 2's forward
+    /// Capping it by the distance to the next chapter was considered and dropped: Probe's forward
     /// scan has not found that chapter yet, so the constant would still be doing the work almost
     /// everywhere it matters.
     /// </para>
@@ -936,7 +936,7 @@ internal static class DetectionTuning
     internal const int SequenceRestartRunLength = 3;
 
     /// <summary>
-    /// With --min-silence-length auto, the Pass 2 probing threshold is this factor times a mark's
+    /// With --min-silence-length auto, the Probe probing threshold is this factor times a mark's
     /// anchor silence length, i.e. a 25 % margin below the shortest observed inter-chapter break.
     /// Monotonic: the first qualifying mark
     /// (the second one found) raises the threshold off the floor, every later mark can only lower
@@ -957,7 +957,7 @@ internal static class DetectionTuning
     /// 0.8 s is where the evidence sits. "Paula Monti" (2026-07-31, 4 h 34 min, French) lost five
     /// chapters to pauses of 1.39-1.49 s - that narrator's non-jingle chapter break simply sits on
     /// the 1.5 s line - and "Die Dritte Macht" (2026-07-28, 15 h 10 min) had a genuine inter-chapter
-    /// silence of 0.54 s. Below <see cref="MinStoredSilenceSeconds"/> nothing is retained by Pass 1
+    /// silence of 0.54 s. Below <see cref="MinStoredSilenceSeconds"/> nothing is retained by Analyze
     /// to sweep in the first place, so the reachable range is [0.5, 1.5); 0.8 covers the sub-floor
     /// sweep's whole span (<see cref="SubFloorSweepBandCount"/> bands reaching 1.0 s) with room to
     /// spare while leaving the very shortest stored band - ordinary clause pauses, which is what
@@ -985,7 +985,7 @@ internal static class DetectionTuning
     /// <para>
     /// Set at three because that is where the two costs cross. Gaps of one to three are the ordinary
     /// kind - a chapter with no jingle, an unreadable number, an announcement the narrator rushed -
-    /// and the re-probe plus Pass 2.5/3 close them at a cost proportional to the gap. A gap of dozens
+    /// and the re-probe plus Re-probe/3 close them at a cost proportional to the gap. A gap of dozens
     /// costs a full transcription of hours of audio, and the mark it eventually produces still carries
     /// the wrong number, so paying a handful of transcriptions to question it is a bargain that only
     /// gets better the wider the gap.
@@ -995,7 +995,7 @@ internal static class DetectionTuning
 
     /// <summary>
     /// The re-framings <see cref="SuspectNumberMender"/> tries on a suspect announcement with the
-    /// pass-2 model, as (seconds of lead before the announcement, total window length). Whisper's
+    /// probe model, as (seconds of lead before the announcement, total window length). Whisper's
     /// output for a given stretch of audio depends on the window it arrives in, so a second look at
     /// the same announcement through differently sized windows is a genuinely different reading and
     /// not a re-roll of the same dice - the same property <see cref="RegionProber"/>'s gap re-probe
@@ -1047,7 +1047,7 @@ internal static class DetectionTuning
     /// <para>
     /// Generous rather than tight, because reaching this cap means the book has more mis-numbered
     /// marks than it has chapters worth trusting, and eight re-reads (at most two decodes each) is a
-    /// rounding error next to the Pass 3 such a book is heading for anyway. Over the ten-book run of
+    /// rounding error next to the Scan such a book is heading for anyway. Over the ten-book run of
     /// 2026-08-01 exactly one file produced a single outlier.
     /// </para>
     /// </summary>
@@ -1056,7 +1056,7 @@ internal static class DetectionTuning
     /// <summary>
     /// How many unreadable-number re-reads (<see cref="SuspectNumberMender.ReadUnnumberedAsync"/>)
     /// one <see cref="RegionProber"/> region may run. The same guard
-    /// <see cref="MaxUnnumberedRetriesPerChunk"/> puts on Pass 3, for the same reason: an in-text
+    /// <see cref="MaxUnnumberedRetriesPerChunk"/> puts on Scan, for the same reason: an in-text
     /// mention reaches the re-read too, and each one costs up to three decodes.
     /// <para>
     /// Set well above what real books need rather than tightly, because the event is rare and the
@@ -1071,13 +1071,13 @@ internal static class DetectionTuning
     internal const int MaxUnnumberedMendsPerRegion = 8;
 
     /// <summary>
-    /// How many sub-floor silence bands Pass 2.5 sweeps through before giving a gap up to Pass 3,
+    /// How many sub-floor silence bands Re-probe sweeps through before giving a gap up to Scan,
     /// and how wide each band is (see <see cref="GapPlanning.SubFloorSweepBands"/>). Five bands of
     /// 0.1 s reach from just under <c>--min-silence-length</c> down to 0.5 s below it - at the
     /// default floor, [1.4, 1.5) down to [1.0, 1.1).
     /// <para>
     /// The range is measured, not guessed. On "Paula Monti" (2026-07-31, 4 h 34 min, French) every
-    /// one of the five chapters Pass 2 missed was preceded by a pause just under the floor: chapter
+    /// one of the five chapters Probe missed was preceded by a pause just under the floor: chapter
     /// 3 by 1.46 s, 12 by 1.49 s, 14 by 1.39 s, 16 by 1.41 s and 19 by 1.41 s. That narrator's
     /// non-jingle chapter break simply sits on the 1.5 s line, and a book whose breaks are that
     /// short will have all of them in the top band or two - which is why the sweeps run longest-first
@@ -1096,11 +1096,11 @@ internal static class DetectionTuning
     internal const double SubFloorSweepBandSeconds = 0.1;
 
     /// <summary>
-    /// How much of Pass 3's own cost the sub-floor sweep may spend on a gap before giving it up
+    /// How much of Scan's own cost the sub-floor sweep may spend on a gap before giving it up
     /// (<see cref="ChapterDetector.SweepSubFloorSilencesAsync"/>), measured in
     /// <see cref="WhisperChunkSeconds"/> decode windows on both sides.
     /// <para>
-    /// Below one rather than at it because the sweep does not replace Pass 3, it precedes it: a
+    /// Below one rather than at it because the sweep does not replace Scan, it precedes it: a
     /// sweep that finds nothing is spent on top of the full transcription that follows, so a budget
     /// of the whole thing would let a gap cost twice what it did before the sweeps existed. Three
     /// quarters keeps the worst case at 1.75x while still affording one probe per 80 s of gap at the
@@ -1112,42 +1112,42 @@ internal static class DetectionTuning
     internal const double SubFloorSweepBudgetFraction = 0.75;
 
     /// <summary>
-    /// How far Pass 3's shifted re-scan (<see cref="ChapterDetector.RescanShiftedAsync"/>) displaces
+    /// How far Scan's shifted re-scan (<see cref="ChapterDetector.RescanShiftedAsync"/>) displaces
     /// its decodes when a full transcription has left a gap open: half of
     /// <see cref="WhisperChunkSeconds"/>, which is the displacement that moves whatever sat on an
     /// internal decode window border as far from one as it can get. Any other value leaves some
     /// offset that was near a border still near one.
     /// </summary>
-    internal const double Pass3ShiftSeconds = WhisperChunkSeconds / 2;
+    internal const double RescanShiftSeconds = WhisperChunkSeconds / 2;
 
     /// <summary>Chunk length in seconds for full transcription of gap regions.</summary>
     internal const double GapChunkSeconds = 600;
 
     /// <summary>Overlap between gap transcription chunks so no phrase is cut in half. Only for a
     /// chunk border that could not be snapped to a word-safe seam (see
-    /// <see cref="Pass3SeamSearchSeconds"/>); snapped borders abut exactly and need no
+    /// <see cref="ScanSeamSearchSeconds"/>); snapped borders abut exactly and need no
     /// redundancy.</summary>
     internal const double GapChunkOverlapSeconds = 10;
 
     /// <summary>
-    /// How far around a Pass 3 chunk's natural border the seam search reaches in each direction:
+    /// How far around a Scan chunk's natural border the seam search reaches in each direction:
     /// the border snaps to the nearest silence - or VAD non-speech region, where the pre-pass ran -
     /// mid-point in range, and the next chunk starts exactly there, with nothing decoded twice.
     /// Bounded so a chunk grows to at most <see cref="GapChunkSeconds"/> plus this: whisper.cpp
     /// has no hard input-length cap (it decodes in internal 30 s strides), but the decoded sample
     /// buffer scales with chunk length.
     /// </summary>
-    internal const double Pass3SeamSearchSeconds = 30;
+    internal const double ScanSeamSearchSeconds = 30;
 
     /// <summary>
-    /// At a snapped (overlap-free) Pass 3 seam, segments of the previous chunk ending within this
+    /// At a snapped (overlap-free) Scan seam, segments of the previous chunk ending within this
     /// many seconds before it are carried into the next chunk's phrase matching, so an
     /// announcement straddling the seam - the narrator pausing right where the seam silence sits,
     /// e.g. between "Chapter" and its number - is still found although neither chunk alone holds
     /// the whole phrase. Comfortably longer than any spoken announcement. Irrelevant at unsnapped
     /// borders, where <see cref="GapChunkOverlapSeconds"/> provides the redundancy.
     /// </summary>
-    internal const double Pass3BridgeSeconds = 15;
+    internal const double ScanBridgeSeconds = 15;
 
     /// <summary>Whisper segment probability below which a chapter detection is flagged as
     /// low-confidence rather than silently trusted: the point below which Whisper itself is, on
@@ -1231,8 +1231,8 @@ internal static class DetectionTuning
     /// The difference from the named case is what happens next, and it is the whole reason this is
     /// a separate rule. Two named matches of the same phrase are interchangeable, so the duplicate
     /// is simply dropped. Two numbered ones disagree about something - "Paula Monti", 2026-07-31,
-    /// <c>-m turbo</c>: chapter 13's announcement was read as "chapitre 12" by Pass 2 and correctly
-    /// as 13 by Pass 3, leaving two marks a hundredth of a second apart titled Chapitre 12 and
+    /// <c>-m turbo</c>: chapter 13's announcement was read as "chapitre 12" by Probe and correctly
+    /// as 13 by Scan, leaving two marks a hundredth of a second apart titled Chapitre 12 and
     /// Chapitre 13 - and dropping either one at random would be a coin toss over which number the
     /// book carries from there on.
     /// </para>
@@ -1296,7 +1296,7 @@ internal static class DetectionTuning
     internal const double AutoLanguageExistingMarkOffsetSeconds = 20;
 
     /// <summary>
-    /// Minimum length of the leading region (file start to the first detected chapter) for pass 3
+    /// Minimum length of the leading region (file start to the first detected chapter) for Scan
     /// to transcribe it in search of earlier chapters when the first detection is not chapter 1.
     /// A first chapter within this many seconds of the start is taken as-is - the book simply
     /// begins mid-series, with no room for a missed earlier chapter, and the intro chapter covers
@@ -1333,7 +1333,7 @@ internal static class DetectionTuning
 
     /// <summary>
     /// Minimum length for a gap between transcribed segments (or before the first/after the last)
-    /// to be worth a focused re-transcription - and, for Pass 3's version of the same fallback
+    /// to be worth a focused re-transcription - and, for Scan's version of the same fallback
     /// (see <see cref="ChapterDetector.ScanGapRetriesAsync"/>), for a silence or VAD non-speech
     /// region overlapping that gap to count as "plausibly the real jingle/scene transition" rather
     /// than an in-narration pause. Whisper's single-shot decoding of a long window can silently
@@ -1348,7 +1348,7 @@ internal static class DetectionTuning
     internal const double GapRetryPaddingSeconds = 2.0;
 
     /// <summary>
-    /// How far before the phrase a Pass 3 "heard it, could not number it" retry starts its decode.
+    /// How far before the phrase a Scan "heard it, could not number it" retry starts its decode.
     /// The retry exists because the notation Whisper writes a number in follows the window framing
     /// rather than the audio: chapter 13 of "I Shall Wear Midnight" came out "CHAPTER XIII" from
     /// windows starting 0 s and 1.7 s before the phrase, and "Chapter 13" from one starting 4.8 s
@@ -1357,14 +1357,14 @@ internal static class DetectionTuning
     /// </summary>
     internal const double UnnumberedRetryLeadSeconds = 8.0;
 
-    /// <summary>Length of a Pass 3 "heard it, could not number it" retry decode, chosen to match
+    /// <summary>Length of a Scan "heard it, could not number it" retry decode, chosen to match
     /// the framing that produced a readable number in the case above (48.8 s) rather than the
     /// short sub-chunks <see cref="GapRetryChunkSeconds"/> uses - those recover audio Whisper
     /// skipped, which is the opposite problem and wants the opposite window.</summary>
     internal const double UnnumberedRetryWindowSeconds = 45.0;
 
     /// <summary>
-    /// How many unreadable-number retries one Pass 3 chunk may run. In-text mentions ("the next
+    /// How many unreadable-number retries one Scan chunk may run. In-text mentions ("the next
     /// chapter was harder") reach the retry too, and each one costs a
     /// <see cref="UnnumberedRetryWindowSeconds"/> decode, so a chunk of prose that happens to talk
     /// about chapters cannot turn into an unbounded re-transcription of itself.

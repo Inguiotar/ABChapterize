@@ -157,7 +157,7 @@ public static class NumberWordParser
     public enum BareNumberReading
     {
         /// <summary>
-        /// The segment's opening sentence must <em>be</em> the number. What Pass 2's forward scan
+        /// The segment's opening sentence must <em>be</em> the number. What Probe's forward scan
         /// uses: it walks the whole book with no upper bound on the sequence and nothing vets its
         /// finds afterwards, so a false accept there displaces real chapters.
         /// <para>
@@ -179,7 +179,7 @@ public static class NumberWordParser
         /// with a lead-in, so the transcript routinely opens with a fragment of whatever preceded
         /// the announcement and the number lands in the second sentence. Just as strict as
         /// <see cref="SpokenAloneAtSegmentStart"/> about what a number has to look like, which is
-        /// what a Pass 2 mark needs: nothing vets where that refinement puts it.
+        /// what a Probe mark needs: nothing vets where that refinement puts it.
         /// </summary>
         SpokenAloneAnywhere,
 
@@ -344,7 +344,7 @@ public static class NumberWordParser
     /// Whisper wrote the one-letter cases as "CHAPTER V. THE MOTHER OF TONGUES" and "CHAPTER X.
     /// THE MELTING GIRL" - both with the period - while the multi-letter "CHAPTER VII SONGS IN THE
     /// NIGHT" came without one. The cost of being wrong is asymmetric and points the same way: a
-    /// missed one-letter numeral is one chapter pass 3 still gets a shot at, whereas a false
+    /// missed one-letter numeral is one chapter Scan still gets a shot at, whereas a false
     /// chapter 1 read out of an English pronoun displaces a real mark.
     /// </para>
     /// </summary>

@@ -32,7 +32,7 @@ public class ProgressRendererTests
         int extraMarks = 0, int? namedMarks = null)
     {
         var t = new WorkTracker();
-        t.BeginPhase("Pass 1", total);
+        t.BeginPhase("Analyze", total);
         t.SetPhaseProgress(done);
         t.HighestChapter = highestChapter;
         t.MissingChapters = missingChapters;
@@ -58,7 +58,7 @@ public class ProgressRendererTests
     [Fact]
     public void BuildLine_ShowsPlaceholder_UntilTheFirstChapterIsFound()
     {
-        // Before the first chapter is found (all of Pass 1, the start of Pass 2) a chapter
+        // Before the first chapter is found (all of Analyze, the start of Probe) a chapter
         // count of zero carries no information, so a "----" placeholder is shown instead.
         var line = ProgressRenderer.BuildLine(Slot(50, 100));
         Assert.Contains("| ---- |", line);
@@ -80,7 +80,7 @@ public class ProgressRendererTests
     public void BuildLine_ShowsMissingChapters_AsANegativeCount()
     {
         // Chapter 6 found but two earlier chapters still undetected: "ch 6(-2)". The missing
-        // count must also take part in redraw detection (a Pass-3 gap fill changes only it).
+        // count must also take part in redraw detection (a Scan gap fill changes only it).
         var withMissing = ProgressRenderer.BuildLine(Slot(50, 100, highestChapter: 6, missingChapters: 2));
         var complete = ProgressRenderer.BuildLine(Slot(50, 100, highestChapter: 6));
 
@@ -206,7 +206,7 @@ public class ProgressRendererTests
         // The percentage leads, the phase follows it behind a pipe of its own, and the file name
         // closes the line.
         Assert.Equal(
-            "[############------------]  50% | Pass 1 | ch 6 | 0:00 | book.m4b",
+            "[############------------]  50% | Analyze | ch 6 | 0:00 | book.m4b",
             ConsoleColors.PlainText(spans));
     }
 

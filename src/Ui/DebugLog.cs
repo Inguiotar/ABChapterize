@@ -152,7 +152,7 @@ public sealed class DebugLog : IDisposable
     /// <param name="o">The run's validated options.</param>
     private static IEnumerable<string> DescribeSettings(CliOptions o)
     {
-        yield return $"model {o.Model}, pass3-model {o.Pass3Model}, lang {o.Language}";
+        yield return $"model {o.Model}, upgrade-model {o.UpgradeModel}, lang {o.Language}";
         yield return $"chapter-phrase {o.ChapterPhrase}, title \"{o.Title}\", " +
                      $"part-title \"{o.PartTitle}\", intro-title \"{o.IntroTitle}\"";
         yield return $"prologue {o.ProloguePhrase} -> \"{o.PrologueTitle}\", " +

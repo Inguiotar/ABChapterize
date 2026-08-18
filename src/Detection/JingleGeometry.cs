@@ -159,14 +159,14 @@ internal static class JingleGeometry
     /// <param name="phraseEndAbs">Absolute end of the transcript segment the phrase was found
     /// in, for the smeared-phrase rescue (see <see cref="FindSmearedJingleRegion"/>).</param>
     /// <param name="earliestAnchor">Earliest time an anchor may lie at: the probe window start
-    /// (Pass 2) or <c>phraseAbs - lookback</c> (Pass 3).</param>
-    /// <param name="silences">Every silence Pass 1 stored, down to
+    /// (Probe) or <c>phraseAbs - lookback</c> (Scan).</param>
+    /// <param name="silences">Every silence Analyze stored, down to
     /// <see cref="MinStoredSilenceSeconds"/> - even a sub-threshold silence leading the jingle
     /// is the more accurate anchor (and jingle-length reference) than the region alone.</param>
     /// <param name="nonSpeechRegions">All VAD non-speech regions (empty when VAD is off).</param>
     /// <param name="candidateVadRegion">The region a VAD candidate carries, if this probe was
     /// triggered by one; used directly instead of re-deriving it. Null for silence candidates
-    /// and for Pass 3.</param>
+    /// and for Scan.</param>
     /// <param name="speech">The raw VAD speech segments behind the regions, for the jingle edge
     /// adjustment and the leading-silence blip gate.</param>
     /// <param name="transcriptAbs">The window's transcript in absolute file time (untrimmed), so
@@ -397,7 +397,7 @@ internal static class JingleGeometry
     /// </summary>
     /// <param name="originalMark">The mark default-mode placement (optionally already corrected
     /// by precise marking) computed for this phrase.</param>
-    /// <param name="silences">Every silence Pass 1 stored, down to
+    /// <param name="silences">Every silence Analyze stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="speech">The raw VAD speech segments for the whole file, chronological.</param>
     /// <param name="transcript">The window's transcript with its decoded span, for telling
@@ -586,7 +586,7 @@ internal static class JingleGeometry
     /// </summary>
     /// <param name="from">The point to scan backward from.</param>
     /// <param name="speech">Raw VAD speech segments, chronological.</param>
-    /// <param name="silences">Every silence Pass 1 stored, down to
+    /// <param name="silences">Every silence Analyze stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="transcript">The window's transcript with its decoded span, for <see
     /// cref="IsGenuineSpeech"/>.</param>
@@ -835,7 +835,7 @@ internal static class JingleGeometry
     /// excluded. Returns null when no region qualifies within the window.
     /// </summary>
     /// <param name="windowStart">Earliest a qualifying region may end (the probe window start or
-    /// the Pass 3 lookback start); a region entirely before it is ignored.</param>
+    /// the Scan lookback start); a region entirely before it is ignored.</param>
     /// <param name="phraseAbsSeconds">Absolute phrase start in seconds.</param>
     /// <param name="regions">All VAD non-speech regions, in chronological order.</param>
     internal static NonSpeechRegion? FindJingleRegionForPhrase(
@@ -869,7 +869,7 @@ internal static class JingleGeometry
     /// absolute file time, matching the silence/region lists. Internal for unit testing.
     /// </summary>
     /// <param name="segmentsAbs">The window's transcript segments, in absolute file time.</param>
-    /// <param name="allSilences">Every silence Pass 1 stored, down to
+    /// <param name="allSilences">Every silence Analyze stored, down to
     /// <see cref="MinStoredSilenceSeconds"/>.</param>
     /// <param name="nonSpeechRegions">VAD non-speech regions; empty when the VAD pre-pass did not run.</param>
     /// <param name="jingle">True when the VAD pre-pass ran, enabling the region intervals.</param>

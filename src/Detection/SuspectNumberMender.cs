@@ -22,7 +22,7 @@ namespace ABChapterize.Detection;
 /// follow, so the only bound is that the number continues the sequence without leaving an
 /// implausible hole - more than <see cref="DetectionTuning.SuspectGapMinMissing"/> chapters
 /// unaccounted for at one step. Bounded above is much stronger and arises wherever a stretch of
-/// audio is being searched <em>between</em> two chapters already in hand: the Pass 2 sequence-gap
+/// audio is being searched <em>between</em> two chapters already in hand: the Probe sequence-gap
 /// re-probe (see <see cref="RegionProber.ReprobeGapCandidatesAsync"/>), a --verify gap region, and
 /// the post-hoc repair in <see cref="ChapterDetector.RepairSequenceOutliersAsync"/>. There the
 /// admissible numbers are exactly the open interval, which for a one-chapter hole leaves a single
@@ -95,7 +95,7 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
 /// <see cref="NumberBounds"/>). A misheard number is cheap to
 /// correct here and ruinously expensive to live with: the numbers Whisper confuses are the ones that
 /// sound alike rather than the ones that are close in value, so a single slip - "neunzehn" read as 90
-/// on BARDIOC.m4b, 2026-07-30 - declares seventy chapters missing and commits Pass 2.5 and Pass 3 to
+/// on BARDIOC.m4b, 2026-07-30 - declares seventy chapters missing and commits Re-probe and Scan to
 /// re-probing and then fully transcribing hours of audio that has nothing hidden in it, only to end up
 /// with a mark that still carries the wrong number. The mirror slip costs a chapter outright: a number
 /// misheard <em>downwards</em> reads as an in-text mention of a chapter already passed and the
@@ -103,12 +103,12 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
 /// </para>
 /// <para>
 /// Two ways to ask again, tried in that order and stopping at the first answer that helps:
-/// the heavier <c>--pass3-model</c> where one was chosen (a better recognizer on the same audio and
+/// the heavier <c>--upgrade-model</c> where one was chosen (a better recognizer on the same audio and
 /// the same framing, so the model is the only variable), and otherwise - or in addition, when the
-/// heavier model reads it the same way - the pass-2 model on differently framed windows over the
+/// heavier model reads it the same way - the probe model on differently framed windows over the
 /// same announcement (<see cref="SuspectGapReframes"/>). The second path matters because the
 /// upgrade path can be switched off and the mishearing cannot: a run that has levelled the two
-/// models (<c>-m turbo</c>, say) is exactly the run that can least afford a needless Pass 3.
+/// models (<c>-m turbo</c>, say) is exactly the run that can least afford a needless Scan.
 /// </para>
 /// <para>
 /// One rule decides both what is worth questioning (<see cref="NumberBounds.WorthQuestioning"/>)
@@ -132,14 +132,14 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
 internal sealed class SuspectNumberMender
 {
     private readonly ProbeEnvironment _env;
-    private readonly Pass2Context _ctx;
+    private readonly ProbeContext _ctx;
     private readonly DetectionRegion _region;
 
     /// <summary>Creates a mender for one region's probing.</summary>
     /// <param name="env">The file-wide probe environment (logging, transcription, phrase matching).</param>
-    /// <param name="ctx">The file-wide Pass 2 context (file, decoder, probe transcriber).</param>
+    /// <param name="ctx">The file-wide Probe context (file, decoder, probe transcriber).</param>
     /// <param name="region">The region being probed, whose bounds clip every re-framed window.</param>
-    internal SuspectNumberMender(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region)
+    internal SuspectNumberMender(ProbeEnvironment env, ProbeContext ctx, DetectionRegion region)
     {
         _env = env;
         _ctx = ctx;
@@ -185,12 +185,12 @@ internal sealed class SuspectNumberMender
     /// not make out at all - the same machinery <see cref="MendAsync"/> uses, aimed at the shape
     /// where there is no reading to disagree with rather than a wrong one.
     /// <para>
-    /// Worth the decodes for the same reason the Pass 3 counterpart
+    /// Worth the decodes for the same reason the Scan counterpart
     /// (<see cref="ChapterDetector.ScanUnnumberedRetriesAsync"/>) is: the recognizer was right there
     /// and got the words, and only the notation defeated the parser - "CHAPTER XIII" instead of
     /// "Chapter 13", "chapitre ban 5" for a slurred "vingt-cinq". Which of those a given stretch of
     /// audio comes out as follows the window framing, so re-framing it is a genuinely different
-    /// question and not a re-roll. Bringing it to Pass 2 closes the one hole the Pass 3 version
+    /// question and not a re-roll. Bringing it to Probe closes the one hole the Scan version
     /// cannot reach: an announcement past the last detected chapter is in no gap at all, so under
     /// <c>--no-trailing-scan</c> nothing ever transcribes it again. That is how the final chapter of
     /// "Paula Monti" was lost on 2026-07-31 - heard as "1ère partie, chapitre ban 5, douleur" at
@@ -230,7 +230,7 @@ internal sealed class SuspectNumberMender
     /// <summary>
     /// Which of the three ways a number can miss its bounds this one missed, for the log line. Worth
     /// spelling out rather than leaving the reader to subtract: "it would leave 88 missing" is the
-    /// figure that explains why a Pass 3 over most of the book was about to be scheduled, and the
+    /// figure that explains why a Scan over most of the book was about to be scheduled, and the
     /// three cases have quite different causes behind them.
     /// </summary>
     /// <param name="number">The number that did not fit.</param>
@@ -249,7 +249,7 @@ internal sealed class SuspectNumberMender
     /// to hand the upgrade model, since the window that produced this mark belonged to a pass that
     /// has finished. Only the re-framings run, which is no great loss - they are the half that
     /// changes the question rather than the recognizer, and by this point the announcement has
-    /// already been through the upgrade model wherever <c>--pass3-model</c> made one available.
+    /// already been through the upgrade model wherever <c>--upgrade-model</c> made one available.
     /// </para>
     /// <para>
     /// Where the announcement is, is derived rather than remembered: precise marking places a mark
@@ -304,7 +304,7 @@ internal sealed class SuspectNumberMender
     {
         if (_env.SecondOpinion != null &&
             await ReadWithUpgradeAsync(profile, start, windowEnd, phraseAbs, bounds, ct) is { } upgraded &&
-            Adopt(upgraded, bounds, suspect, "the pass 3 model") is { } fromUpgrade)
+            Adopt(upgraded, bounds, suspect, "the upgrade model") is { } fromUpgrade)
             return fromUpgrade;
 
         foreach (var (lead, length) in SuspectGapReframes)
@@ -354,9 +354,9 @@ internal sealed class SuspectNumberMender
 
     /// <summary>
     /// Re-reads the announcement from the very window the suspect number came from, using the
-    /// heavier <c>--pass3-model</c>. Deliberately the same audio and the same framing: with the
+    /// heavier <c>--upgrade-model</c>. Deliberately the same audio and the same framing: with the
     /// recognizer as the only difference, a disagreement means the better model heard it better,
-    /// which is the whole premise of choosing an upgrade for pass 3 in the first place.
+    /// which is the whole premise of choosing an upgrade for Scan in the first place.
     /// </summary>
     /// <param name="profile">The resolved language profile.</param>
     /// <param name="start">Absolute start of the probe window.</param>
@@ -375,7 +375,7 @@ internal sealed class SuspectNumberMender
     }
 
     /// <summary>
-    /// Re-reads the announcement with the pass-2 model from a window of the given shape, clipped to
+    /// Re-reads the announcement with the probe model from a window of the given shape, clipped to
     /// the region. Skips a frame that the clipping has left shorter than the announcement itself
     /// needs, which would ask the recognizer to read a number out of audio that no longer contains
     /// it.

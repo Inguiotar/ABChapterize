@@ -20,8 +20,8 @@ namespace ABChapterize.Language;
 /// silence before it, and as <c>"Chapter 13 The Shaking of the Sheets"</c> from one starting 4.8 s
 /// earlier - same audio, same model, same window length. Chapters 5, 6, 7, 10, 11 and 13 all came
 /// out Roman in at least one pass; chapter 4 came out as the word "FOUR" and was found first try.
-/// Chapter 13 was the one that drew the Roman form in every pass that saw it - pass 2's forward
-/// sweep, the skipped-candidate re-probe and pass 3's full gap transcription alike - and was the
+/// Chapter 13 was the one that drew the Roman form in every pass that saw it - Probe's forward
+/// sweep, the skipped-candidate re-probe and Scan's full gap transcription alike - and was the
 /// only chapter the run failed to mark.
 /// </remarks>
 public static class RomanNumerals

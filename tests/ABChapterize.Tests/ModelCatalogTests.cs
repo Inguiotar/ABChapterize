@@ -17,7 +17,7 @@ namespace ABChapterize.Tests;
 /// Nothing here downloads anything. What it guards is the pair of invariants the type system cannot
 /// state - that the catalogue's entries and its name list describe the same six models, and that
 /// their recorded sizes ascend in that list's order. The second is load-bearing: sizes are the whole
-/// basis on which two models are ranked, and that ranking decides whether pass 2.5 runs at all, so a
+/// basis on which two models are ranked, and that ranking decides whether Re-probe runs at all, so a
 /// new entry slipped in out of order would switch a pass off without a word.
 /// </remarks>
 public class ModelCatalogTests
@@ -53,7 +53,7 @@ public class ModelCatalogTests
     [Fact]
     public void TheRecordedSizes_AscendInTheCatalogueOrder()
     {
-        // Pass3ModelIsUpgrade reads this order directly. "turbo" between "medium" and "large" is the
+        // UpgradeModelIsBetter reads this order directly. "turbo" between "medium" and "large" is the
         // entry that makes it worth pinning: it is the one place where file size and release order
         // disagree with alphabetical or chronological intuition.
         var sizes = ModelCatalog.BuiltInNames.Select(ModelCatalog.ApproximateSizeBytes).ToList();

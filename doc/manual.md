@@ -80,17 +80,34 @@ naming one directly as the target is an error.
 
 ## 3. How detection works
 
-Detection opens with one scan of the whole file that transcribes nothing, and
-then puts as much of the file through Whisper as it has to: the probing pass
-every file pays for, and up to three further passes that run only where chapters
-are still missing. This section is an overview of what each pass does; the
+Detection opens with one pass over the whole file that transcribes nothing, and
+then puts as much of the file through Whisper as it has to: the probing every
+file pays for, and further passes that run only where chapters are still
+missing. Each pass has a name rather than a number, and that name is what the
+progress bar shows while it runs:
+
+| Pass | What it does | When it runs |
+| --- | --- | --- |
+| `Analyze` | Measures the file — silences, speech, music. Recognizes nothing. | Always |
+| `Probe` | Transcribes a short window everywhere a chapter could start. | Always |
+| `J-probe` / `S-probe` | The same probing, split into the jingles first and the pauses afterwards. | Instead of `Probe`, on a book of chapter music — see [Reading the music first](#reading-the-music-first) |
+| `Re-probe` | Probes a gap again on the heavier model. | Only with a heavier `--upgrade-model`, and only where a chapter is missing |
+| `Scan` | Transcribes a whole stretch end to end. | Only where a chapter is still missing |
+| `Re-scan` | Reads that stretch once more, framed differently. | Only where the `Scan` came back empty |
+
+The names run cheapest to dearest: `Analyze` never calls Whisper at all, `Probe`
+samples a few seconds at a time, and `Scan` reads everything. A `Re-` prefix
+means the same machinery again over audio that already came back empty, framed
+differently so the recognizer reads it afresh rather than repeating itself.
+
+This section is an overview of what each pass does; the
 machinery that keeps it accurate and fast — how probe windows are sized and
 stitched together word-safely, how each mark is pinpointed to its exact
 position, the transcript caching and the self-tuning that cut the number of
 Whisper calls — is documented in the source. Only what affects using the tool
 is covered here.
 
-### Pass 1 — silence scan (and VAD pre-pass)
+### Analyze — silences, speech and music
 
 ffmpeg's `silencedetect` filter finds every silence of at least half a second
 below `--noise-floor` dBFS (normally −35), in one quick decode pass over the
@@ -109,21 +126,21 @@ changes nothing.
 
 `silencedetect` is amplitude-only: a jingle (a short music sting) that abuts
 the narration with no detectable gap around it produces no silence at all, so
-it never gives pass 2 a candidate near that transition. By default, a
+it never gives Probe a candidate near that transition. By default, a
 voice-activity detection pre-pass runs over the same decode using a bundled
 model — [Silero VAD](https://github.com/snakers4/silero-vad), MIT-licensed,
 embedded in the executable (~2.2 MB, no separate download; see
 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)). Music reads as
 non-speech to a speech detector, the same as silence, so a jingle shows up as
 a non-speech region flanked by speech even when there is no amplitude gap
-around it, and pass 2 gets a candidate at every jingle it finds. There is no way
+around it, and Probe gets a candidate at every jingle it finds. There is no way
 to switch this off: what the pre-pass measures — where each jingle starts and
 where the speech behind it resumes — is what probe windows are cut to and what
 mark placement is measured against, so a run without it would be a different
 tool. A book with no music simply yields no jingles and costs the scan itself,
 which is a fraction of one pass over the file.
 
-### Pass 2 — probing
+### Probe — short windows where a chapter could start
 
 A short window of audio is transcribed with Whisper at the start of the file and
 at every place a chapter could plausibly be announced. What made a place a
@@ -133,7 +150,7 @@ candidate also decides where its window opens and how far it runs:
   opens a few seconds before the pause ends — enough lead-in for the recognizer
   to settle — and runs about twenty seconds past it.
 - **A jingle**, whenever the VAD pre-pass ran (the default; see
-  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)). The announcement is
+  [Analyze](#analyze--silences-speech-and-music)). The announcement is
   expected in the first speech behind the music, so the window opens shortly
   before that speech begins. Where the pre-pass heard a brief sound *inside* the
   music, the announcement may be buried in it, and the window covers the whole
@@ -145,7 +162,7 @@ candidate also decides where its window opens and how far it runs:
 No setting decides how wide any of these windows is — each is cut to its own
 candidate, so a book's jingles cost only the jingles' own probes however long
 they run. How far back the tool believes music can reach, where that question
-comes up at all (see [Pass 3](#pass-3--gap-filling-only-when-needed) and
+comes up at all (see [Scan](#scan--reading-a-gap-in-full-only-when-needed) and
 `--mark-before-jingle`), is measured from the file's own jingles rather than
 assumed.
 
@@ -171,9 +188,10 @@ looked for. A mapping restricted to `before-first-chapter` or
 `after-first-chapter`, keeps the file on the ordinary single sweep.
 `--jingle-first` asks for the shape whatever the file looks like.
 
-`--verbose` says which shape a file ran under, and the progress bar shows the
-second half as a phase of its own (`Pass 2b`) whose length is the stretches it
-has left to read, not the whole book.
+`--verbose` says which shape a file ran under, and the progress bar names the
+half that is running: `J-probe` while the music is read, then `S-probe`, whose
+length is the stretches it has left to look at rather than the whole book. An
+ordinary file walks both together and stays `Probe` throughout.
 
 Each transcript is matched against the chapter phrase (see `--chapter-phrase`),
 and the chapter number is parsed from digits, Roman numerals or number words
@@ -181,7 +199,7 @@ and the chapter number is parsed from digits, Roman numerals or number words
 
 If the phrase is heard but nothing following it can be read as a number,
 `--verbose` reports it and quotes what was transcribed there, and the spot is
-read again: with `--pass3-model` first if that names a better model than the
+read again: with `--upgrade-model` first if that names a better model than the
 probing one, then from two differently framed windows — the wording a
 recognizer produces at a given place depends on where the window around it
 begins, so a second framing often reads cleanly. A number found that way is
@@ -196,7 +214,7 @@ window covered and the transcript has no words for that spot. Whisper reads
 audio in 30-second chunks, and a lone word inside a jingle can drop out of a
 window that crosses one while being transcribed cleanly from a shorter window
 over the same audio. The spot is therefore read once more from a window short
-enough to stay inside a single chunk — through the model `--pass3-model` names
+enough to stay inside a single chunk — through the model `--upgrade-model` names
 where that is a better one than `--model`, since an announcement quiet enough to
 be dropped is also one a larger model is likelier to recover — and `--verbose`
 says so, naming the recognizer it used.
@@ -204,7 +222,7 @@ says so, naming the recognizer it used.
 A number that *is* read but cannot plausibly belong where it was heard — one
 that would leave more than three chapters missing in one go, or one below the
 chapters already found — is not taken at face value either. It is read again:
-with `--pass3-model` first if that names a better model than the probing one,
+with `--upgrade-model` first if that names a better model than the probing one,
 then from two differently framed windows around the announcement. The new
 reading is adopted only if it fits the sequence at that point, so a book that
 genuinely skips numbers keeps its own numbering; where nothing sensible can be
@@ -264,7 +282,7 @@ Hearing the phrase at the mark is not by itself taken as proof that the
 mark is right — a jingle is not transcribed at all, so a mark several seconds
 inside one hears the announcement just as clearly as a mark sitting on it. A
 mark that cannot be confirmed this way is searched for once more, in full, through
-the model `--pass3-model` names where that is a better one than `--model` — a
+the model `--upgrade-model` names where that is a better one than `--model` — a
 quietly-spoken announcement inside a jingle can be lost on the smaller model and
 plain to the larger. Only when neither hears it is the mark left as originally
 placed rather than guessed at. A corrected mark that would land in the middle of
@@ -278,8 +296,8 @@ the quietest point in that stretch, but only when doing so is a clear (at
 least 6 dB) improvement over the mark's own position; a mark is never moved
 later. This keeps a player from starting playback abruptly mid-sound (an
 audible "plop") without ever risking eating into the announcement itself.
-This costs a handful of extra Whisper transcriptions per chapter on top of pass
-2's own probe — a mark that already sits close to its announcement is the
+This costs a handful of extra Whisper transcriptions per chapter on top of the
+probe itself — a mark that already sits close to its announcement is the
 quickest case, one left seconds away from it the slowest. `--quick-marks`/`-Q`
 skips the whole layer when that time matters more than the last few tenths of a
 second of accuracy (the machinery is documented in the source).
@@ -309,12 +327,12 @@ mark also carries Whisper's own confidence, and marks below 0.5 are flagged
 for a spot-check rather than trusted silently (see
 [section 12](#12-output-progress-and-logging)).
 
-By default (`--min-silence-length auto`), pass 2 does not probe every silence
-from pass 1. As chapters are found it learns how long this book's real
+By default (`--min-silence-length auto`), Probe does not probe every silence
+from Analyze. As chapters are found it learns how long this book's real
 inter-chapter breaks are and stops probing clearly shorter in-chapter pauses,
 so far fewer Whisper probes are needed without a fixed guess; should a chapter
 later turn up out of sequence, everything skipped since the previous chapter
-is re-probed before pass 3 has to step in. Giving `--min-silence-length` an
+is re-probed before Scan has to step in. Giving `--min-silence-length` an
 explicit numeric value disables this and probes every silence at or above it.
 
 Only chapters found at a *pause* teach it. One found at a jingle is left out:
@@ -333,7 +351,7 @@ point, as low as 0.8 seconds.
 Where a chapter is missing, that shorter figure is acted on twice. A gap in the
 numbering re-reads its own stretch with the pauses down to it, so a chapter
 behind a pause the run was never willing to probe is often recovered on the spot
-and on the cheap model. And when pass 2 is done, the gaps still open are swept
+and on the cheap model. And when Probe is done, the gaps still open are swept
 for those pauses once more — a tenth of a second at a time, longest first, each
 slice taking only the time it takes, so a gap dense with short pauses still gets
 the slice most likely to hold the chapter rather than being given up as too slow
@@ -345,8 +363,8 @@ book — jingles on most chapters, a bare pause in front of the one that went
 missing — that the sweep exists for. So a gap is reason enough on its own; where
 nothing was measured, the pauses are swept down to the shortest length this run
 would ever have believed in. Only gaps, and only within a budget, so a chapter
-that would otherwise have cost a full pass 3 is usually recovered for a handful
-of probes instead. Nothing else about pass 2 changes: the pauses it was willing
+that would otherwise have cost a full Scan is usually recovered for a handful
+of probes instead. Nothing else about Probe changes: the pauses it was willing
 to probe in the first place are the same either way, and an explicit
 `--min-silence-length` value is honoured to the second — nothing below it is ever
 looked at. See the [`-n` reference](#detection-behaviour) for the knob itself.
@@ -361,9 +379,9 @@ and each is framed a little differently from the first time: the window opens la
 sooner, which is what makes the recognizer read the same audio afresh instead of
 returning the answer it already gave. The retry stops as soon as the gap is
 closed. When there is nothing to retry — no candidate at all sits between the two
-chapters — `--verbose` says so, and the gap goes straight to pass 3.
+chapters — `--verbose` says so, and the gap goes straight to Scan.
 
-When pass 2 is done, its finds are reconciled into one ascending sequence, since
+When Probe is done, its finds are reconciled into one ascending sequence, since
 chapter numbers rise through a book. Where a mark's number contradicts the marks
 around it, that mark gives way rather than the rest of the book — a single
 mishearing can cost its own mark but never the chapters behind it. And before it
@@ -371,19 +389,19 @@ is given up, the surrounding chapters get a say in what it should have been:
 between a chapter 13 and a chapter 15 there is exactly one number the mark can
 carry, so it is simply renumbered; where the neighbours leave several
 possibilities, the audio is read again and held to that range. This is why the
-step waits until pass 2 has finished — the chapters that settle the question are
+step waits until Probe has finished — the chapters that settle the question are
 often found long after the misreading. It also runs before the tool works out
 which chapters are missing, so the passes below never go hunting for a chapter
 that was never missing. `--verbose` reports each repair.
 
-### Pass 2.5 — cheap gap re-probe (only with a heavier `--pass3-model`)
+### Re-probe — a cheap second try at a gap (only with a heavier `--upgrade-model`)
 
-A gap is often not a chapter the probing missed, but a number the pass-2 model
+A gap is often not a chapter the probing missed, but a number the probe model
 misheard while probing the right spot. So when — and only when —
-`--pass3-model` names a *better* model than pass 2's, the gap's regions are
-first re-probed exactly as pass 2 probes, but with that better model. When it
-finds the missing chapters, pass 3 never has to run for them at all; anything it
-does not find falls through to pass 3 immediately afterward. The re-probe stops
+`--upgrade-model` names a *better* model than Probe's, the gap's regions are
+first re-probed exactly as probing does, but with that better model. When it
+finds the missing chapters, Scan never has to run for them at all; anything it
+does not find falls through to Scan immediately afterward. The re-probe stops
 the moment the last of the gap's missing chapters turns up: whatever is left of
 the gap behind it is a chapter's worth of audio with no announcement in it.
 
@@ -395,31 +413,31 @@ below it. So the gap is swept for the pauses just short of that setting — a te
 of a second at a time, longest first, down to half a second under it — and the
 sweep stops the moment the missing chapters are accounted for. Where the gap is
 long enough that this would end up costing more than transcribing it outright,
-the sweep is abandoned and pass 3 takes over. `--verbose` reports each band it
+the sweep is abandoned and Scan takes over. `--verbose` reports each band it
 sweeps.
 
-Whether pass 2.5 pays off depends on the gap: the re-probe's cost grows with the
+Whether Re-probe pays off depends on the gap: the re-probe's cost grows with the
 number of candidate silences inside it, not with its length, so a region dense
-in candidates can spend about as long probing as pass 3 would have spent
-transcribing it outright — and then pass 3 still follows. Expect it to help most
-where a gap is long but quiet. With an equal or lighter `--pass3-model` (the
+in candidates can spend about as long probing as Scan would have spent
+transcribing it outright — and then Scan still follows. Expect it to help most
+where a gap is long but quiet. With an equal or lighter `--upgrade-model` (the
 default is equal), this step does not run at all. Marks are placed exactly as in
-pass 2.
+Probe.
 
-### Pass 3 — gap filling (only when needed)
+### Scan — reading a gap in full (only when needed)
 
 If the detected chapter numbers have sequence gaps (…7, 9…), the regions
 where the missing chapters must be hiding are transcribed *completely*, in
 roughly 10-minute chunks. This catches announcements that were not preceded
 by a long-enough silence. Marks found here are placed the same way as in
-pass 2. If a chunk still leaves an expected chapter unaccounted for, a
+Probe. If a chunk still leaves an expected chapter unaccounted for, a
 stored silence (or, when the VAD pre-pass ran, a VAD non-speech region)
 inside it that the chunk's own transcript skipped over entirely gets a
 second, closer look before the chapter is given up as missing — documented
 in the source.
 
 A first detected chapter numbered above 1 is, by default, trusted outright:
-there is no way to tell a legitimate split-book start from a spot pass 2
+there is no way to tell a legitimate split-book start from a spot Probe
 simply missed, so guessing "1" and searching for it is never attempted (the
 intro chapter covers the leading audio either way — see below).
 `--expected-start-chapter` opts a file into that search instead, down to a
@@ -448,7 +466,7 @@ numbers are still owed, hunts only those, and does nothing at all when none are
 — so giving a count suppresses the blind scan entirely. See
 [Detection behaviour](#detection-behaviour).
 
-### Pass 3.5 — the shifted re-read
+### Re-scan — the shifted second reading
 
 A gap that survives being transcribed end to end is a different problem from a
 gap nothing ever looked at: every second of it *was* read, so what is left to
@@ -458,10 +476,10 @@ window border can drop out of the transcript altogether while the sentences on
 either side of it come through perfectly, leaving text that reads as though
 nothing were missing.
 
-So each still-open gap — or, where pass 3 closed part of one, each remaining
+So each still-open gap — or, where Scan closed part of one, each remaining
 piece of it — is read once more with every decode shifted by 15 seconds, half a
 window, which puts whatever sat on a border as far from one as it can get.
-This runs unless `--pass3-model` names a *lighter* model than `--model`: that is
+This runs unless `--upgrade-model` names a *lighter* model than `--model`: that is
 the one setting which unambiguously says the stragglers are not worth more time.
 The blind trailing scan is the exception in the other direction — it is read once
 and never twice, because it already runs on every file and reading audio nothing
@@ -469,7 +487,7 @@ suspects a second time would double that standing cost. A trailing hunt that doe
 know what it is after (`--chapter-count`) goes by the same rule the gaps do.
 
 If a gap *between* detected chapters (or, with `--expected-start-chapter`,
-before the first one) still remains after pass 3, the chapters that *were*
+before the first one) still remains after Scan, the chapters that *were*
 found are still written, but a warning is printed and the file is
 **renamed** to `<name>.missing-marks-<n>-<n>-…<ext>` — the tag listing the
 still-missing chapter numbers, `-`-delimited (e.g.
@@ -489,7 +507,7 @@ common cause.
 A later run over a *numbered* tagged file picks it up automatically (unless
 `--force` or `--ignore-chapter-numbers` is given): the chapters already
 committed are trusted outright,
-and only the still-tagged gap(s) get their own pass 2 and, if needed, pass 3,
+and only the still-tagged gap(s) get their own Probe and, if needed, Scan,
 exactly as after a failed `--verify` (see
 [`--verify`](#detection-safety-nets)). If that completes the
 sequence, the file is renamed back to its original name; if a gap is still
@@ -706,10 +724,10 @@ Whatever number was spoken still ends up in the title (`Chapter 7`), and an
 announcement with no number at all is marked too, titled with the bare word
 (`Chapter`). Nothing checks that the numbers ascend, that none is missing, or
 that the book starts at 1. Consequently no sequence gap is ever found or
-filled, so [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
-[Pass 3](#pass-3--gap-filling-only-when-needed) and
-[Pass 3.5](#pass-35--the-shifted-re-read) never run and no file is
-ever tagged `.missing-marks`. A run finishes after Pass 2, which usually makes
+filled, so [Re-probe](#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model),
+[Scan](#scan--reading-a-gap-in-full-only-when-needed) and
+[Re-scan](#re-scan--the-shifted-second-reading) never run and no file is
+ever tagged `.missing-marks`. A run finishes after Probe, which usually makes
 it a good deal quicker than a normal one.
 
 Use it for books whose numbering the tool cannot make sense of: one made of
@@ -729,7 +747,7 @@ behave as always. The per-file limit of 100 custom marks does not apply to
 chapter announcements.
 
 The options that reason in chapter numbers are rejected rather than silently
-ignored: `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
+ignored: `--upgrade-model`, `--expected-start-chapter`, `--max-chapter-number`,
 `--chapter-count` and `--verify`. `--chapter-phrase` and `--chapter-title` remain
 perfectly useful and are accepted.
 
@@ -737,7 +755,7 @@ A file another run already tagged `.missing-marks-…` is not picked up either:
 the tag is a statement about chapter numbers, which this run forms no opinion
 about, so such a file is treated like any other one already carrying marks and
 skipped unless `--force` asks for a detection from scratch. The blind scan after
-the last chapter does not run here either — it lives in pass 3, and pass 3 does
+the last chapter does not run here either — it lives in Scan, and Scan does
 not run at all.
 
 ### Books that count from one again in every part
@@ -965,26 +983,29 @@ so that logs and reports stay comparable regardless of regional settings.
   a GGML model file of your own instead — see
   [Using your own model](#using-your-own-model).
 
-`-M`, `--pass3-model <name>`
-: Whisper model to use for [pass 3](#pass-3--gap-filling-only-when-needed)
-  (gap filling) only; same choices as `--model` including `custom:<path>`.
+`-M`, `--upgrade-model <name>`
+: Whisper model for the steps worth asking a better recognizer — chiefly
+  [Scan](#scan--reading-a-gap-in-full-only-when-needed), which reads a gap in
+  full; same choices as `--model` including `custom:<path>`. Called
+  `--pass3-model` before 0.12.1, when the passes still had numbers; that
+  spelling is still accepted, so an existing script needs no change.
   Defaults to `turbo`, or to whatever `--model` says if you set that and not
   this — so `-m large` means large throughout rather than large probing and a
-  quietly lighter pass 3. Pass 3 transcribes long, naturally framed stretches of
+  quietly lighter Scan. Scan transcribes long, naturally framed stretches of
   audio, which is where the heavier models really are the better recognizers.
-  Use a lighter model to make pass 3
+  Use a lighter model to make Scan
   faster (when you expect to fix any stragglers by hand anyway), or `large` for
   one last, best-effort attempt at the chapters the main model missed. Naming a
   *bigger* model here than `--model`'s also enables
-  [pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
-  which often closes the gap far quicker than pass 3 would, and lets
-  [pass 2](#pass-2--probing) ask it for a second reading of a chapter number
+  [Re-probe](#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model),
+  which often closes the gap far quicker than Scan would, and lets
+  [Probe](#probe--short-windows-where-a-chapter-could-start) ask it for a second reading of a chapter number
   that cannot be right, for a second look at an announcement its own window
   lost, and for a second attempt at any mark it could not pin
   down. Naming a *lighter* one is read as "don't spend more time
   on the stragglers" and is the one thing that switches
-  [pass 3.5](#pass-35--the-shifted-re-read) off; leaving it alone or naming a
-  heavier model both keep it. The pass-3 model is downloaded and loaded lazily — only
+  [Re-scan](#re-scan--the-shifted-second-reading) off; leaving it alone or naming a
+  heavier model both keep it. The upgrade model is downloaded and loaded lazily — only
   if and when a file actually needs it — so naming a model here costs nothing on
   a clean run.
 
@@ -992,27 +1013,27 @@ so that logs and reports stay comparable regardless of regional settings.
 : The shortest pause probed as a potential chapter break (0, or 0.1–60,
   default: `auto`). An explicit value is used as given and nothing shorter is
   ever probed; `auto` treats 1.5 seconds as the starting point instead. Either
-  way this governs *probing* alone — pass 1's scan keeps shorter silences too,
+  way this governs *probing* alone — Analyze's scan keeps shorter silences too,
   and mark placement and refinement are anchored to them (see the note on `0`
-  below, which spells that out). By default (`auto`), pass 2
+  below, which spells that out). By default (`auto`), Probe
   self-tightens the probing threshold to 75% of the *shortest* anchor
   silence observed so far as chapters are found at a pause (set at the second
   such mark, only ever lowered after that; chapters found at a jingle teach it
-  nothing — see [Pass 2](#pass-2--probing)), re-probing everything it skipped
+  nothing — see [Probe](#probe--short-windows-where-a-chapter-could-start)), re-probing everything it skipped
   whenever a sequence gap turns up, so far fewer Whisper probes are needed
   without a fixed guess. Should that figure come out *below* the 1.5-second
   starting point — a narrator whose chapter breaks are shorter than the
-  default assumes — pass 2 sweeps the gaps in the numbering for pauses down to
+  default assumes — Probe sweeps the gaps in the numbering for pauses down to
   0.8 seconds before the later passes are called in; see
-  [Pass 2 — probing](#pass-2--probing). An explicit
+  [Probe — probing](#probe--short-windows-where-a-chapter-could-start). An explicit
   numeric value disables this and probes every silence at or above it
   instead; this is still the main manual speed knob if `auto`'s heuristic
   doesn't suit a particular audiobook: if the pauses are unusually generous
   and consistent, `-n 2.5` can cut the number of probes further still, but
   chapters go missing if it's set too high. Set it a little too high and a
-  heavier `--pass3-model` will usually rescue the run anyway: a gap it leaves
+  heavier `--upgrade-model` will usually rescue the run anyway: a gap it leaves
   behind is swept for pauses down to half a second under whatever this says
-  (see [Pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model)).
+  (see [Re-probe](#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model)).
 
   **`0` switches silence-triggered probing off entirely**, leaving only the
   jingles the voice-activity pre-pass finds. For a book whose every chapter
@@ -1023,7 +1044,7 @@ so that logs and reports stay comparable regardless of regional settings.
   candidate. For a book whose chapters do not open with a jingle it removes the
   only way of finding them, which is why it is not a default.
 
-  What `0` does **not** switch off is the silence scan itself. Pass 1 still runs
+  What `0` does **not** switch off is the silence scan itself. Analyze still runs
   and still keeps every silence it finds: window seams snap to them, transcript
   timestamps are corrected against them, and mark placement and refinement are
   anchored to them. Turning that off would make every mark worse rather than
@@ -1092,7 +1113,7 @@ so that logs and reports stay comparable regardless of regional settings.
   (seconds to tens of seconds late, on the odd chapter). The refinement that
   runs by default corrects the starting point first, which avoids this. The probe-window
   widening and VAD pre-pass this placement relies on (see
-  [Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) already run by default
+  [Analyze](#analyze--silences-speech-and-music)) already run by default
   regardless of this option. Without `--mark-before-jingle`, a mark is
   always placed `--mark-lead` seconds before the chapter phrase, no matter what
   precedes it.
@@ -1141,7 +1162,7 @@ so that logs and reports stay comparable regardless of regional settings.
   `--quick-marks` skips all of it, which is markedly faster — the checks cost
   a handful of extra Whisper transcriptions per chapter, most of all for a mark
   probing left seconds away from its announcement (see
-  [Pass 2](#pass-2--probing)) — at the price of accuracy: the marks it leaves
+  [Probe](#probe--short-windows-where-a-chapter-could-start)) — at the price of accuracy: the marks it leaves
   are usually usable for jumping to a chapter, but one can sit *after* the
   chapter phrase instead of before it, so playback starts a moment into the
   announcement. That can happen even together with `--mark-before-jingle`.
@@ -1478,7 +1499,7 @@ With `--lang auto` (the default - no `--lang` needed at all), each file's
 language is detected independently, so a directory containing audiobooks in
 several languages is processed correctly in one run without per-file options.
 
-It happens once per file, right after the silence scan (pass 1) and before
+It happens once per file, right after the silence scan (Analyze) and before
 any transcription. Short samples are taken from inside the book - never from
 its opening seconds, which on an audiobook are label music, a copyright card
 or a title read over a bed at least as often as they are narration - and each
@@ -1567,7 +1588,7 @@ looking. None of these is needed for an ordinary book.
 
 `-a`, `--early-abort <minutes>`
 : Always on by default (60 minutes; pass `0` to disable it entirely and
-  always probe the whole file). Once pass 2 has probed this many minutes
+  always probe the whole file). Once Probe has probed this many minutes
   into a file's play time without finding a single chapter, detection for
   that file is abandoned outright instead of transcribing the rest of what
   is plainly not going to yield any — a wrong `--chapter-phrase`, wrong
@@ -1580,15 +1601,15 @@ looking. None of these is needed for an ordinary book.
 `-e`, `--expected-start-chapter <n>`
 : For a split-book part that does not begin at chapter 1: the chapter number
   this file is expected to start at. Without it (the default), whatever
-  number pass 2 finds first is trusted outright and nothing below it is ever
+  number Probe finds first is trusted outright and nothing below it is ever
   searched for — unless the file's prologue is detected, which implies a
   start at chapter 1 all by itself; see
-  [Pass 3](#pass-3--gap-filling-only-when-needed). With it, a first chapter
+  [Scan](#scan--reading-a-gap-in-full-only-when-needed). With it, a first chapter
   found *below* `<n>` aborts the file outright, left unchanged and reported
   exactly like a completed scan that found nothing — almost certainly the
   wrong file, `--chapter-phrase` or `--lang`, not a genuine split-book start.
   A first chapter found *above* `<n>` is instead treated like any other gap:
-  pass 3 searches for the missing numbers down to `<n>`, and if it still
+  Scan searches for the missing numbers down to `<n>`, and if it still
   can't find all of them, the file is tagged `.missing-marks-…` exactly as
   an unresolved gap between two detected chapters already is. The *abort* is
   what only applies to a fresh, from-scratch run, the same restriction as
@@ -1597,7 +1618,7 @@ looking. None of these is needed for an ordinary book.
 
 `--no-trailing-scan`
 : Skip the transcription of everything after the last chapter found (default: it
-  runs). No short form. Pass 3 spots a missing chapter as a hole in the number
+  runs). No short form. Scan spots a missing chapter as a hole in the number
   sequence, which needs a known chapter on either side of it — so a chapter
   missing *after* the last one found is the one case nothing else can notice, and
   the file would be written out looking complete: nothing reported missing, no
@@ -1609,14 +1630,14 @@ looking. None of these is needed for an ordinary book.
   something when it fires. With no expected numbers to satisfy the scan can never
   stop early, so every file pays a final chapter's worth of transcription time
   whether or not anything was wrong. It is read once and never twice — the
-  shifted re-read of [pass 3.5](#pass-35--the-shifted-re-read) does not apply to
+  shifted re-read of [Re-scan](#re-scan--the-shifted-second-reading) does not apply to
   it — which bounds that price at one pass over the tail.
 
   Turn it off for a library you have already checked, or where the last chapter
   matters less than the run time. Nothing is scanned anyway when no chapter was
   found at all — there is no "last chapter" to scan from — nor after an
   `--early-abort` or `--expected-start-chapter` abort, nor under
-  `--ignore-chapter-numbers`, which does away with pass 3 altogether. If you happen to know
+  `--ignore-chapter-numbers`, which does away with Scan altogether. If you happen to know
   how many chapters the book has, `--chapter-count` answers the same question
   for a fraction of the time, and giving it switches the blind scan off for you.
 
@@ -1698,7 +1719,7 @@ looking. None of these is needed for an ordinary book.
 `--ignore-chapter-numbers`
 : Detect chapter announcements as usual, but form no opinion about the numbers
   in them: no sequence, no gaps, no missing chapters. The spoken number still
-  reaches the title. Cannot be combined with `--pass3-model`,
+  reaches the title. Cannot be combined with `--upgrade-model`,
   `--expected-start-chapter`, `--max-chapter-number`, `--chapter-count` or
   `--verify`. See
   [Detecting chapters without believing their numbers](#detecting-chapters-without-believing-their-numbers).
@@ -1735,7 +1756,7 @@ looking. None of these is needed for an ordinary book.
   given up as unconfirmed — documented in the source. Marks that all check
   out are left untouched, same as a skip without `--verify`. If any mark fails but at
   least one other is confirmed, the confirmed marks are trusted and kept
-  as-is, and detection - including its own proper pass 2 - runs only over
+  as-is, and detection - including its own proper Probe - runs only over
   the stretch(es) of the file around the unconfirmed mark(s), rather than
   the whole file; a still-missing mark past the last one in the file is
   covered by a further, file-end-only fallback pass, since nothing else
@@ -1784,7 +1805,7 @@ looking. None of these is needed for an ordinary book.
   One caveat worth knowing. Marks are located here by re-transcribing the
   audio at them, which is the same machinery a full run uses to pin every
   mark — but a full run then anchors the result against the silence scan of
-  [pass 1](#pass-1--silence-scan-and-vad-pre-pass), which `--verify` never
+  [Analyze](#analyze--silences-speech-and-music), which `--verify` never
   runs. A fixed mark can therefore sit a fraction of a second later than the
   same chapter would land in a from-scratch run. Against a mark that was
   seconds out that is not the problem; if a book's marks matter to the last
@@ -2117,7 +2138,7 @@ The details worth knowing:
   meaning marks whose chapter number was read at a Whisper probability below
   0.50 and which are therefore worth a look by hand. Files appear under the name
   they carry once the run is over, so a book tagged
-  [`.missing-marks-…`](#pass-35--the-shifted-re-read) is listed under its
+  [`.missing-marks-…`](#re-scan--the-shifted-second-reading) is listed under its
   tagged name and can be found in the folder as printed.
 
   Where any of the low-confidence files was read with
@@ -2190,7 +2211,7 @@ touching Whisper at all.
   message suggesting `--export`. Because there is nothing to detect,
   `--import` cannot be combined with any detection option — `--lang`,
   `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--custom`,
-  `--custom-file`, `--ignore-chapter-numbers`, `--model`, `--pass3-model`,
+  `--custom-file`, `--ignore-chapter-numbers`, `--model`, `--upgrade-model`,
   `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
   `--min-silence-length`, `--noise-floor`,
   `--early-abort`, `--expected-start-chapter`, `--max-chapter-number`,
@@ -2279,13 +2300,13 @@ or `--no-op`, which do no work to spread out.
 
 `--vad-threads <n|auto>`
 : How many stretches of the book the voice-activity pre-pass
-  ([Pass 1](#pass-1--silence-scan-and-vad-pre-pass)) classifies at once
+  ([Analyze](#analyze--silences-speech-and-music)) classifies at once
   (default: `auto`). This is the pass that benefits most from a wide machine — on
-  a 12-core one, an 8.5-hour audiobook's Pass 1 drops from 201 seconds to 50 —
+  a 12-core one, an 8.5-hour audiobook's Analyze drops from 201 seconds to 50 —
   and the speech it finds does not change with the thread count.
 
   Each thread holds about 11 minutes of decoded audio while it works, which is
-  roughly 40 MB, so this is also the knob for how much memory Pass 1 uses: about
+  roughly 40 MB, so this is also the knob for how much memory Analyze uses: about
   480 MB on a 12-core machine, and proportionally more on a wider one. Lower it
   if that matters more to you than the seconds it costs.
 
@@ -2295,7 +2316,7 @@ or `--no-op`, which do no work to spread out.
 `--whisper-threads <n|auto>`
 : CPU threads for Whisper transcription (default: `auto`). Mostly a CPU-backend
   concern: on a GPU backend the recognition itself runs on the GPU, and this
-  only covers the work around it. A second model named with `--pass3-model` gets
+  only covers the work around it. A second model named with `--upgrade-model` gets
   the same budget — the two never run at the same time, so there is nothing to
   divide between them.
 
@@ -2303,7 +2324,7 @@ Both counts are recorded in the `--verbose` log at the start of a run, together
 with what the machine actually has:
 
 ```
-[14:32:07] threads: Whisper 12, voice-activity pre-pass 12 (cores: 12 physical, 24 logical)
+[14:32:07] threads: Whisper 12, voice-activity pre-Analyze2 (cores: 12 physical, 24 logical)
 ```
 
 ### Miscellaneous
@@ -2464,7 +2485,7 @@ is a self-contained job that needs no knowledge of the rest of the codebase.
 | `base` | ggml-base.bin | ~140 MB | still error-prone; not recommended |
 | `small` | ggml-small.bin | ~465 MB | **`--model` default** — the best prober, see below |
 | `medium` | ggml-medium.bin | ~1.5 GB | |
-| `turbo` | ggml-large-v3-turbo.bin | ~1.6 GB | **`--pass3-model` default** — near-large accuracy, much faster |
+| `turbo` | ggml-large-v3-turbo.bin | ~1.6 GB | **`--upgrade-model` default** — near-large accuracy, much faster |
 | `large` | ggml-large-v3.bin | ~3.1 GB | most accurate, slowest |
 
 The two options are set to different models on purpose, and the pairing matters
@@ -2480,12 +2501,12 @@ twenty-five, lost by the larger model and found by `small` in the very same
 windows. `small` is also several times faster, so it is the default for the
 probing and there is nothing being traded away.
 
-`--pass3-model` does the reading-out-loud: long, naturally framed stretches of
+`--upgrade-model` does the reading-out-loud: long, naturally framed stretches of
 audio, where the usual ranking does hold and a heavier model genuinely hears
 more. So it defaults to `turbo`, which is loaded only if a chapter actually
 goes missing — and, being heavier than the probing model, also brings
-[pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model) and
-pass 2's second reading of an implausible chapter number into play.
+[Re-probe](#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model) and
+Probe's second reading of an implausible chapter number into play.
 
 A word of warning about the small end of the scale: chapter detection hinges
 on the recognizer catching one short, isolated phrase per chapter — there is
@@ -2499,7 +2520,7 @@ go below `small`.
 
 Raising `--model` is worth trying on a book whose narrator is genuinely hard to
 make out, but check the result rather than assuming it improved — and note that
-naming `--model` alone moves the pass-3 model with it, so `-m large` gives you
+naming `--model` alone moves the upgrade model with it, so `-m large` gives you
 large in both roles. `-M large` on its own is the safer way to spend more time:
 one last, best-effort attempt at the chapters that went missing, and nothing
 changed about the ones that did not.
@@ -2522,7 +2543,7 @@ That table has no `turbo` row — it predates the model. Expect roughly 2.2 GB
 for it, consistent with `turbo` having about as many parameters as `medium`
 (809 M against 769 M) on a larger file. Treat that one as an estimate rather than
 a published number. A default run holds `small`'s ~852 MB throughout and adds
-`turbo`'s share only once pass 2.5 or pass 3 actually runs.
+`turbo`'s share only once Re-probe or Scan actually runs.
 
 Be aware that figures quoted for Whisper elsewhere are often much higher —
 OpenAI's
@@ -2535,8 +2556,8 @@ tradeoff, not for sizing your machine.
 On a GPU backend (CUDA or Vulkan) this comes out of video memory, on a CPU
 backend out of system RAM. Either way exactly one copy is loaded, whatever the
 run's size: files are processed one at a time. Specifying a different
-`--pass3-model` adds one further copy, loaded only once something actually asks
-for it — pass 3, or one of the second opinions pass 2 asks a heavier model for.
+`--upgrade-model` adds one further copy, loaded only once something actually asks
+for it — Scan, or one of the second opinions Probe asks a heavier model for.
 
 The voice-activity pre-pass wants memory of its own on top, and unlike the model
 that amount is yours to choose: about 40 MB per `--vad-threads` thread, so around
@@ -2562,7 +2583,7 @@ the model manually.
 
 ### Using your own model
 
-`--model custom:<path>` (and `--pass3-model custom:<path>`) points at a GGML
+`--model custom:<path>` (and `--upgrade-model custom:<path>`) points at a GGML
 Whisper model file anywhere on disk instead of one from the table above — a
 fine-tune for a particular narrator or language, a quantized build, or simply
 a model kept outside the `models` folder:
@@ -2584,13 +2605,13 @@ whisper.cpp engine underneath can load; if it is not, the failure comes from
 that loader.
 
 ABChapterize forms an opinion about a custom model in exactly two places:
-[pass 2.5](#pass-25--cheap-gap-re-probe-only-with-a-heavier---pass3-model),
-which needs to know whether `--pass3-model` is an upgrade over `--model`, and
-[pass 3.5](#pass-35--the-shifted-re-read), which needs to know whether it is a
+[Re-probe](#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model),
+which needs to know whether `--upgrade-model` is an upgrade over `--model`, and
+[Re-scan](#re-scan--the-shifted-second-reading), which needs to know whether it is a
 downgrade. That comparison is made by **file size**, for custom and built-in
 models alike — within the Whisper family the bigger file has always been the
 more capable model. A custom model smaller than `--model`'s therefore behaves
-like naming a lighter built-in one: pass 2.5 and pass 3.5 stay off, pass 3
+like naming a lighter built-in one: Re-probe and Re-scan stay off, Scan
 still uses it.
 
 ### Download integrity verification
@@ -2798,12 +2819,12 @@ My Audiobook.m4b: 24 mark(s) written (23 chapter(s) 1-23, 1 named)
 ```
 
 The chapter state reads `----` until the first mark is confirmed (all
-of pass 1, where nothing can change anyway), then shows the highest
+of Analyze, where nothing can change anyway), then shows the highest
 chapter number found so far — `ch 6` — followed by a bracket holding two
 counts, either of which is left out when it is zero:
 
 - a negative count of lower chapters that are still unconfirmed (the gaps
-  pass 3 would have to chase during detection, or a mark that failed its
+  Scan would have to chase during detection, or a mark that failed its
   check during `--verify`);
 - a positive count of the extra marks found — prologue, epilogue and
   [`--custom`](#custom-marks) marks. The intro mark is not among them; it is
@@ -2815,12 +2836,12 @@ the first chapter reads `ch 0(+1)`, and under
 [`--ignore-chapter-numbers`](#detecting-chapters-without-believing-their-numbers),
 where every mark is an
 announcement without a number, the state shows the plain total instead:
-`mk 12`. Pass 2's percentage follows the probe position within the
+`mk 12`. Probe's percentage follows the probe position within the
 file's play time, so it can move nonlinearly — and, briefly, backwards,
-when a sequence gap makes the detector re-probe earlier candidates. `Pass 2b`
-is [pass 2's second half](#reading-the-music-first) on a file that read its
+when a sequence gap makes the detector re-probe earlier candidates. `S-probe`
+is [Probe's second half](#reading-the-music-first) on a file that read its
 music first; its percentage runs over the stretches that half still has to
-read rather than over the whole file. Pass 3
+read rather than over the whole file. Scan
 transcribes in chunks of several minutes each, and the bar follows the
 recognizer's own position through the chunk it is working on rather than
 jumping once per finished chunk — so a long gap keeps showing that something
@@ -2871,7 +2892,7 @@ receives plain text.
 name, everything the pipeline does:
 
 - probe result (duration, codec/profile, existing chapter marks),
-- the silence count of pass 1 and, when the VAD pre-pass ran, its non-speech
+- the silence count of Analyze and, when the VAD pre-pass ran, its non-speech
   region count followed by a jingle tally: how many stretches of at least two
   seconds the file holds that are neither speech nor silence — music, in other
   words — with the shortest, longest and average length of them. A brief vocal
@@ -2880,8 +2901,8 @@ name, everything the pipeline does:
   seconds of a run, and the longest of them is the figure everything that has to
   look back over music is measured against. The two counts
   answer different questions and need not match: the regions are the places
-  pass 2 will look, the jingles are what the audio actually holds,
-- each probe window and pass-3 chunk as a `<length>@<time>` header line,
+  Probe will look, the jingles are what the audio actually holds,
+- each probe window and Scan chunk as a `<length>@<time>` header line,
 - every accepted chapter detection with the exact mark position, confidence
   and the loudness of the audio right at that position (e.g. `-58.3 dBFS`;
   `-inf dBFS` for pure digital silence) — a figure close to silence means the
@@ -2890,7 +2911,7 @@ name, everything the pipeline does:
   candidate in the first place — `at a silence`, `at a jingle`, or `embedded in
   a jingle` for a jingle the speech detector heard something inside — since that
   is what decided where the window opened and how far it ran (see
-  [Pass 2](#pass-2--probing)); a mark found at the file's very start has no such
+  [Probe](#probe--short-windows-where-a-chapter-could-start)); a mark found at the file's very start has no such
   class and says nothing. Flagged `LOW CONFIDENCE` below 0.5, plus a
   `still missing:` list of any earlier chapter numbers not detected yet,
 - every chapter number that was heard but *not* turned into a mark, with the
@@ -2903,8 +2924,8 @@ name, everything the pipeline does:
   line tells you the recognizer *did* hear it, which is a very different
   problem from it never being heard at all. The anchor reasons in particular
   tend to point straight at `--min-silence-length`,
-- the gap re-probes and sub-floor sweeps of pass 2.5, the regions transcribed
-  in pass 3, the shifted re-reads of pass 3.5, and when each pass finishes,
+- the gap re-probes and sub-floor sweeps of Re-probe, the regions transcribed
+  in Scan, the shifted re-reads of Re-scan, and when each pass finishes,
 - once the file is done, a `stats -` line: the shortest silence and (when
   the VAD pre-pass ran, which it does by default) longest jingle found
   before a chapter — each also given as
@@ -2984,12 +3005,12 @@ agreed on the wrong language or failed to agree at all and fallen back to
 `--min-silence-length` (lower `-n`).
 
 **Chapters found but some are missing** — if the missing ones are announced
-without a preceding pause, pass 3 usually catches them automatically. If a
+without a preceding pause, Scan usually catches them automatically. If a
 gap remains, the partial marks are written and the file is renamed with a
 `.missing-marks-…` tag (see the warning); simply running the tool again over
 such a file resumes it automatically, re-probing only the still-tagged
-gap(s). If that still doesn't find them, try a heavier `--pass3-model` (e.g.
-`large`) — which also lets pass 2.5 sweep the gap for pauses shorter than
+gap(s). If that still doesn't find them, try a heavier `--upgrade-model` (e.g.
+`large`) — which also lets Re-probe sweep the gap for pauses shorter than
 `--min-silence-length` allows — a better `--model`, or a lower
 `--min-silence-length` before resuming again.
 
@@ -3022,7 +3043,7 @@ what went wrong.
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes, or
 `0` for jingles only, on a book whose every chapter opens with
 music), `--no-trailing-scan` (skips a final chapter's worth of transcription on
-every file), and a smaller `--pass3-model` if only the gap-filling pass drags.
+every file), and a smaller `--upgrade-model` if only the gap-filling pass drags.
 Check that the startup line reports a GPU backend, not CPU.
 
 **Model download fails** — the error message includes manual installation

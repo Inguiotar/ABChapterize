@@ -37,13 +37,13 @@ namespace ABChapterize.Detection;
 /// <param name="TranscribeCounting">The detector's statistics-counting transcribe wrapper.</param>
 /// <param name="LogTranscript">Logs a decoded window's transcript under --verbose.</param>
 /// <param name="FindCappedPhraseReadings">The detector's --max-chapter-number-capped phrase matcher,
-/// in its every-reading form: Pass 2 is the one caller that can act on a wording another one
+/// in its every-reading form: Probe is the one caller that can act on a wording another one
 /// superseded (see <see cref="PhraseMatching.FindPhraseReadings"/>).</param>
-/// <param name="SecondOpinion">Transcribes samples with the heavier <c>--pass3-model</c> in a given
-/// language, for the two Pass 2 steps that are worth asking a better recognizer:
+/// <param name="SecondOpinion">Transcribes samples with the heavier <c>--upgrade-model</c> in a given
+/// language, for the two Probe steps that are worth asking a better recognizer:
 /// <see cref="SuspectNumberMender"/>'s re-read of an implausible chapter number, and
 /// <see cref="RegionProber.RereadJingleSpeechAsync"/>'s second look at an announcement the first
-/// decode's framing lost. Null when no upgrade model was chosen, and null for a pass 2.5 re-probe,
+/// decode's framing lost. Null when no upgrade model was chosen, and null for a Re-probe re-probe,
 /// which already decodes every window through that model and so has no better opinion left to
 /// ask.</param>
 /// <param name="Denoiser">Asks the detector for the speech denoiser a garbled announcement may be
@@ -67,7 +67,7 @@ internal sealed record ProbeEnvironment(
     Func<CancellationToken, Task<SpeechDenoiser?>>? Denoiser = null);
 
 /// <summary>
-/// Region-loop-invariant Pass 2 inputs, gathered here instead of threading each field through
+/// Region-loop-invariant Probe inputs, gathered here instead of threading each field through
 /// <see cref="RegionProber"/>'s constructor on its own. One instance per file, shared by every
 /// region of it.
 /// </summary>
@@ -76,14 +76,14 @@ internal sealed record ProbeEnvironment(
 /// <param name="Work">Progress tracker for the phase/byte accounting.</param>
 /// <param name="BytesPerSecond">The file's average bytes per second of play time, used to
 /// convert probed play time into the byte-based progress the bar counts in.</param>
-/// <param name="AllSilences">Every silence Pass 1 retained, down to
+/// <param name="AllSilences">Every silence Analyze retained, down to
 /// <see cref="MinStoredSilenceSeconds"/> - seam snapping and mark anchoring, not candidates.</param>
 /// <param name="Silences">The silences that become probe candidates: the subset at or above
-/// --min-silence-length, or - for one of Pass 2.5's sub-floor sweeps - a single band below it
+/// --min-silence-length, or - for one of Re-probe's sub-floor sweeps - a single band below it
 /// (see <see cref="RegionProber"/>'s sweep remarks).</param>
 /// <param name="NonSpeechRegions">The VAD pre-pass's non-speech regions, empty when it did not run.</param>
 /// <param name="SpeechSegments">The VAD pre-pass's speech segments, empty when it did not run.</param>
-/// <param name="Jingles">The file's music stretches as Pass 1 measured them
+/// <param name="Jingles">The file's music stretches as Analyze measured them
 /// (<see cref="JingleCensus"/>), empty when the VAD pre-pass did not run. The primary scan's
 /// jingle candidates are built from these; the recovery passes ignore them.</param>
 /// <param name="EarlyAbortSeconds">Play time that may be probed without a single find before
@@ -94,28 +94,28 @@ internal sealed record ProbeEnvironment(
 /// - what the sub-floor sweep sweeps down to. <see cref="RegionProber.SandwichedSilences"/> holds a
 /// promoted pause to the same bar, so the two passes agree on what a chapter break can sound like
 /// rather than each carrying its own idea of it.</param>
-/// <param name="Transcriber">The recognizer this region's probes decode with - the pass-2
-/// transcriber for Pass 2 proper, the pass-3 one for a pass 2.5 re-probe (see
-/// <see cref="ChapterDetector.RunPass25Async"/>). Only the probe transcriptions follow it; mark
-/// placement keeps refining on the pass-2 model either way, exactly as Pass 3 already does.</param>
+/// <param name="Transcriber">The recognizer this region's probes decode with - the Probe
+/// transcriber for Probe proper, the upgrade one for a Re-probe (see
+/// <see cref="ChapterDetector.RunReprobeAsync"/>). Only the probe transcriptions follow it; mark
+/// placement keeps refining on the probe model either way, exactly as Scan already does.</param>
 /// <param name="SecondGuessNumbers">Whether an implausible chapter number is re-read before being
-/// acted on (<see cref="SuspectNumberMender"/>). False for a pass 2.5 re-probe: its windows already go
+/// acted on (<see cref="SuspectNumberMender"/>). False for a Re-probe re-probe: its windows already go
 /// through the heavier model, and its whole purpose is to re-read the numbers a gap is missing, so
-/// questioning its readings against the very sequence it is repairing would be circular. Pass 3 never
-/// probes and so never asks. Pass 2's own sequence-gap re-probe <em>does</em> ask, and used to be
-/// exempted alongside pass 2.5 on the reasoning that a wider window was already the remedy being
+/// questioning its readings against the very sequence it is repairing would be circular. Scan never
+/// probes and so never asks. Probe's own sequence-gap re-probe <em>does</em> ask, and used to be
+/// exempted alongside Re-probe on the reasoning that a wider window was already the remedy being
 /// applied - which "Die Cyber-Brutzellen" (2026-08-01) refuted: the wider window is what produced
 /// the mishearing, an announcement 27 s deep into a 44 s window coming back as chapter 40 instead of
 /// 14. A re-probe is now the <em>best</em> place to question a number, since it alone knows both
 /// ends of the hole it is filling (see <see cref="RegionProber.SequenceBounds"/>).</param>
-internal readonly record struct Pass2Context(
+internal readonly record struct ProbeContext(
     string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond,
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
     List<SpeechSegment> SpeechSegments, List<Jingle> Jingles, double EarlyAbortSeconds,
     int? ExpectedStartChapter, ITranscriber Transcriber, double AdaptiveFloorSeconds = 0.8,
     bool SecondGuessNumbers = true);
 
-/// <summary>One position Pass 2 may probe: the region start, a silence's end, or the start of a
+/// <summary>One position Probe may probe: the region start, a silence's end, or the start of a
 /// VAD jingle region. Exactly one of the two anchors is set, except for the region-start candidate,
 /// which has neither.</summary>
 /// <param name="Start">Absolute time the probe window starts at.</param>
@@ -154,7 +154,7 @@ internal readonly record struct ProbeCandidate(
 }
 
 /// <summary>
-/// What made a place a Pass 2 candidate. Three of the four shapes the primary scan reasons about;
+/// What made a place a Probe candidate. Three of the four shapes the primary scan reasons about;
 /// the fourth - a pause with a jingle right behind it - never becomes a candidate for it at all, so
 /// it has no value here (see <see cref="RegionProber.CandidatesIn"/>, where a recovery pass keeps
 /// exactly that shape as an ordinary silence).
@@ -177,8 +177,8 @@ internal enum CandidateClass
 }
 
 /// <summary>
-/// Which of a region's candidates one Pass 2 walk takes. <see cref="Everything"/> is the shape Pass
-/// 2 has always had; the other two are the halves the jingle-first scan splits it into (see
+/// Which of a region's candidates one probing walk takes. <see cref="Everything"/> is the shape
+/// probing has always had; the other two are the halves the jingle-first scan splits it into (see
 /// <see cref="JingleFirstScan"/>), and they exist because on a book that announces every chapter
 /// after music the pauses in between are thousands of windows that can only ever confirm what the
 /// music already said.
@@ -188,7 +188,7 @@ internal enum CandidateClass
 /// rather than a first look at a class of candidate.
 /// </para>
 /// </summary>
-internal enum ScanShape
+internal enum ProbeShape
 {
     /// <summary>The region start, its jingles and its pauses, in chronological order.</summary>
     Everything,
@@ -244,7 +244,7 @@ internal readonly record struct PendingRestart(
     List<TranscriptSegment> TranscriptAbs);
 
 /// <summary>
-/// Runs Pass 2 candidate probing for a single <see cref="DetectionRegion"/>, appending every
+/// Runs Probe candidate probing for a single <see cref="DetectionRegion"/>, appending every
 /// accepted chapter mark to the caller's accumulator in place.
 /// <para>
 /// Constructed per region, which is what makes the invariant hold that every piece of per-region
@@ -259,11 +259,11 @@ internal readonly record struct PendingRestart(
 internal sealed class RegionProber
 {
     private readonly ProbeEnvironment _env;
-    private readonly Pass2Context _ctx;
+    private readonly ProbeContext _ctx;
     private readonly DetectionRegion _region;
 
     /// <summary>Re-reads a chapter number from the audio when the one in hand cannot be used: a
-    /// number the sequence cannot continue with (gated by <see cref="Pass2Context.SecondGuessNumbers"/>
+    /// number the sequence cannot continue with (gated by <see cref="ProbeContext.SecondGuessNumbers"/>
     /// at the call site) or no readable number at all. Region-scoped like the prober itself, since the
     /// windows it re-frames are clipped to the region's bounds.</summary>
     private readonly SuspectNumberMender _mender;
@@ -273,7 +273,7 @@ internal sealed class RegionProber
     private int _unnumberedMends;
 
     /// <summary>Accumulator of confirmed chapters across all regions of the file; mutated in place
-    /// as marks are accepted, so the sequence Pass 3 later inspects is one seamless list regardless
+    /// as marks are accepted, so the sequence Scan later inspects is one seamless list regardless
     /// of which region contributed what.</summary>
     private readonly List<DetectedChapter> _found;
 
@@ -287,10 +287,10 @@ internal sealed class RegionProber
     /// Seconds added to a candidate's absolute position before it is reported as progress, i.e. the
     /// offset between this region's own time base and the one the enclosing phase counts in.
     /// <para>
-    /// Zero for a phase whose total is the whole file (Pass 2 proper, and the gap-scoped Pass 2 a
+    /// Zero for a phase whose total is the whole file (Probe proper, and the gap-scoped Probe a
     /// --verify recovery runs): there the absolute position <em>is</em> the progress. A phase whose
-    /// total covers only its regions - pass 2.5, whose budget is the summed gap length, exactly like
-    /// Pass 3's - passes the offset that maps this region onto that shorter timeline, so the bar
+    /// total covers only its regions - Re-probe, whose budget is the summed gap length, exactly like
+    /// Scan's - passes the offset that maps this region onto that shorter timeline, so the bar
     /// advances monotonically from 0 to 100 % across the whole pass instead of reporting a
     /// whole-file position against a gap-sized total.
     /// </para>
@@ -313,8 +313,8 @@ internal sealed class RegionProber
 
     /// <summary>
     /// While a sequence-gap re-probe runs and can afford it, the shortest silence its candidates are
-    /// built from - reaching under <see cref="Pass2Context.Silences"/>, which was filtered at
-    /// --min-silence-length before Pass 2 ever saw it. Null at every other time, and null for a
+    /// built from - reaching under <see cref="ProbeContext.Silences"/>, which was filtered at
+    /// --min-silence-length before Probe ever saw it. Null at every other time, and null for a
     /// re-probe that cannot afford the extra candidates.
     /// <para>
     /// The adaptive threshold can only ever restrict that pre-filtered list and can never reach
@@ -331,13 +331,13 @@ internal sealed class RegionProber
     /// While the sequence-gap recovery re-probes, the chapter number that closes the gap - the mark
     /// that revealed it. Null at every other time.
     /// <para>
-    /// It is the single most informative fact available anywhere in Pass 2 and it used to be
+    /// It is the single most informative fact available anywhere in Probe and it used to be
     /// discarded: a re-probe of the hole between chapters 13 and 15 is searching for chapter 14 and
     /// nothing else, yet an announcement read as chapter 40 was accepted there unquestioned on "Die
     /// Cyber-Brutzellen" (2026-08-01) while <see cref="ReprobeGapCandidatesAsync"/> held a
     /// <c>missing</c> set containing exactly one number. Feeding it into
     /// <see cref="SequenceBounds"/> lets both the mender and the refinement vote hold a re-read to
-    /// the hole it is filling. Pass 3 has enforced the same rule on its own gap chunks all along.
+    /// the hole it is filling. Scan has enforced the same rule on its own gap chunks all along.
     /// </para>
     /// </summary>
     private int? _gapAbove;
@@ -428,8 +428,8 @@ internal sealed class RegionProber
     /// floor - which floored the threshold at minute 11 of
     /// the run with chapters 16-29 - about 9.5 hours of audio - still to scan: 921 -> 2177 probes,
     /// 26.5 -> 55.7 minutes, Whisper audio 4:20:51 -> 12:13:36. It bought <b>nothing</b>. Build 331
-    /// is the control experiment, its Pass 2 having run at 2.5 s throughout because the identical
-    /// lowering landed in Pass 2.5 when nothing was left to scan: all 29 chapters at identical
+    /// is the control experiment, its Probe having run at 2.5 s throughout because the identical
+    /// lowering landed in Re-probe when nothing was left to scan: all 29 chapters at identical
     /// positions, and the seven that build 339 accepted "at a silence" (16, 18, 20, 21, 23, 27, 29)
     /// were accepted "at a jingle" by build 331 at the same millisecond. That book's chapters are
     /// announced after music; the extra silence candidates only won the race to the same
@@ -469,7 +469,7 @@ internal sealed class RegionProber
     /// unconditionally and this never changes, exactly as before that feature existed.</summary>
     private double _threshold;
 
-    /// <summary>The file's language resolution, settled before Pass 2 started and read-only from
+    /// <summary>The file's language resolution, settled before Probe started and read-only from
     /// here - see <see cref="LanguageResolver"/>.</summary>
     private readonly LanguageState _language;
 
@@ -531,9 +531,9 @@ internal sealed class RegionProber
             : 0;
 
     /// <summary>
-    /// Whether this prober is one of Pass 2.5's sub-floor silence sweeps
+    /// Whether this prober is one of Re-probe's sub-floor silence sweeps
     /// (<see cref="ChapterDetector.SweepSubFloorSilencesAsync"/>) rather than an ordinary region
-    /// probe. A sweep's <see cref="Pass2Context.Silences"/> is a single band of silences that all
+    /// probe. A sweep's <see cref="ProbeContext.Silences"/> is a single band of silences that all
     /// sit <em>below</em> --min-silence-length, which changes three things and nothing else: every
     /// one of them is probed (the threshold that excluded them is exactly what the sweep is
     /// suspending, so consulting it again would skip the entire band), the adaptive threshold is
@@ -547,8 +547,8 @@ internal sealed class RegionProber
     private readonly bool _sweeping;
 
     /// <summary>
-    /// Whether this prober is a recovery pass - pass 2.5, a sub-floor sweep, or (per probe, via
-    /// <see cref="_reprobing"/>) Pass 2's own sequence-gap re-probe - rather than the primary scan.
+    /// Whether this prober is a recovery pass - Re-probe, a sub-floor sweep, or (per probe, via
+    /// <see cref="_reprobing"/>) Probe's own sequence-gap re-probe - rather than the primary scan.
     /// It changes two things about the candidates and nothing else:
     /// <list type="bullet">
     /// <item><description>the candidate <em>set</em> is the union - every silence and every jingle,
@@ -568,7 +568,7 @@ internal sealed class RegionProber
     private readonly bool _recovery;
 
     /// <summary>Whether the candidates being built right now are a recovery pass's: this prober's
-    /// own kind, or - inside Pass 2's sequence-gap re-probe - the stretch that re-probe rebuilds.
+    /// own kind, or - inside Probe's sequence-gap re-probe - the stretch that re-probe rebuilds.
     /// Both want the same union set and the same trimmed framing, for the same reason.</summary>
     private bool Recovering => _recovery || _reprobing;
 
@@ -579,48 +579,48 @@ internal sealed class RegionProber
     /// <para>
     /// A recovery pass over a gap knows both its ends, so everything past the last chapter it was
     /// missing is a chapter's worth of audio with no announcement left in it - probed, refined and
-    /// discarded as a duplicate. Pass 2's own sequence-gap re-probe has always stopped there; this
+    /// discarded as a duplicate. Probe's own sequence-gap re-probe has always stopped there; this
     /// is the same stop for the passes that drive a whole region, which knew the region's number
     /// <em>bounds</em> but not which numbers they were sent for.
     /// </para>
     /// <para>
     /// Accepted cost (2026-08-08): a named mark - prologue, epilogue, --custom - sitting in the tail
-    /// is given up on. Pass 2.5 probes on the upgrade model and can hear one the primary scan
-    /// missed, but finding named marks that way is incidental, and Pass 2's re-probe has always
+    /// is given up on. Re-probe probes on the upgrade model and can hear one the primary scan
+    /// missed, but finding named marks that way is incidental, and Probe's re-probe has always
     /// accepted the same exposure.
     /// </para>
     /// </summary>
     private readonly HashSet<int>? _hunting;
 
     /// <summary>
-    /// Which of the region's candidates this walk takes; see <see cref="ScanShape"/>. Always
-    /// <see cref="ScanShape.Everything"/> for a recovery pass and for a sub-floor sweep, whose
+    /// Which of the region's candidates this walk takes; see <see cref="ProbeShape"/>. Always
+    /// <see cref="ProbeShape.Everything"/> for a recovery pass and for a sub-floor sweep, whose
     /// candidate sets are already chosen for them.
     /// </summary>
-    private readonly ScanShape _shape;
+    private readonly ProbeShape _shape;
 
     /// <summary>Creates a prober for one region.</summary>
     /// <param name="env">The detector-owned tools and callbacks to probe with.</param>
-    /// <param name="ctx">Region-loop-invariant Pass 2 inputs.</param>
+    /// <param name="ctx">Region-loop-invariant Probe inputs.</param>
     /// <param name="region">The region to probe.</param>
     /// <param name="found">Accumulator of confirmed chapters across all regions.</param>
     /// <param name="namedFound">Accumulator of the file's prologue/epilogue marks.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="progressOffsetSeconds">Offset onto the enclosing phase's time base; see
     /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
-    /// <param name="sweepingSubFloorSilences">Whether this is a Pass 2.5 sub-floor sweep; see
+    /// <param name="sweepingSubFloorSilences">Whether this is a Re-probe sub-floor sweep; see
     /// <see cref="_sweeping"/>.</param>
     /// <param name="recovery">Whether this is a recovery pass rather than the primary scan; see
     /// <see cref="_recovery"/>.</param>
     /// <param name="hunting">The chapter numbers this run was sent to find, or null for a scan with
     /// no such list; see <see cref="_hunting"/>.</param>
-    /// <param name="shape">Which of the region's candidates to walk; see <see cref="ScanShape"/>.
+    /// <param name="shape">Which of the region's candidates to walk; see <see cref="ProbeShape"/>.
     /// Defaults to all of them, which is every caller but the jingle-first scan.</param>
-    internal RegionProber(ProbeEnvironment env, Pass2Context ctx, DetectionRegion region,
+    internal RegionProber(ProbeEnvironment env, ProbeContext ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
         double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false,
         bool recovery = false, IEnumerable<int>? hunting = null,
-        ScanShape shape = ScanShape.Everything)
+        ProbeShape shape = ProbeShape.Everything)
     {
         _env = env;
         _ctx = ctx;
@@ -712,7 +712,7 @@ internal sealed class RegionProber
     /// <para>
     /// A sub-floor sweep takes the silences and nothing else - see <see cref="_sweeping"/>. So does
     /// the jingle-first scan's second half, and its first half takes the jingles and the region
-    /// start - see <see cref="ScanShape"/>. The filter sits here rather than in
+    /// start - see <see cref="ProbeShape"/>. The filter sits here rather than in
     /// <see cref="CandidatesIn"/> on purpose: this method builds the walk's own list, while that one
     /// also builds a sequence-gap re-probe's, which must keep its union set whatever shape the walk
     /// around it has.
@@ -720,7 +720,7 @@ internal sealed class RegionProber
     /// </summary>
     private List<ProbeCandidate> BuildCandidates()
     {
-        var candidates = _sweeping || _shape == ScanShape.SilencesOnly
+        var candidates = _sweeping || _shape == ProbeShape.SilencesOnly
             ? []
             : new List<ProbeCandidate> { RegionStartCandidate() };
         candidates.AddRange(CandidatesIn(_region.FromSeconds, _region.ToSeconds).Where(Walks));
@@ -728,12 +728,12 @@ internal sealed class RegionProber
         return candidates.OrderBy(c => c.Start).ToList();
     }
 
-    /// <summary>Whether this walk takes the given candidate at all; see <see cref="ScanShape"/>.</summary>
+    /// <summary>Whether this walk takes the given candidate at all; see <see cref="ProbeShape"/>.</summary>
     /// <param name="candidate">One candidate of the region.</param>
     private bool Walks(ProbeCandidate candidate) => _shape switch
     {
-        ScanShape.JinglesOnly => candidate.IsJingle,
-        ScanShape.SilencesOnly => !candidate.IsJingle,
+        ProbeShape.JinglesOnly => candidate.IsJingle,
+        ProbeShape.SilencesOnly => !candidate.IsJingle,
         _ => true,
     };
 
@@ -853,10 +853,10 @@ internal sealed class RegionProber
     /// its end. Internal and static for unit testing, exactly as
     /// <see cref="GapPlanning.PlanWindowEnd"/> is.
     /// </summary>
-    /// <param name="allSilences">Every silence Pass 1 kept, in time order.</param>
+    /// <param name="allSilences">Every silence Analyze kept, in time order.</param>
     /// <param name="probed">The pauses that already have a window of their own.</param>
     /// <param name="floorSeconds">Shortest pause that may be promoted; see
-    /// <see cref="Pass2Context.AdaptiveFloorSeconds"/>.</param>
+    /// <see cref="ProbeContext.AdaptiveFloorSeconds"/>.</param>
     /// <param name="fromSeconds">Start of the stretch being planned.</param>
     /// <param name="toSeconds">End of the stretch being planned.</param>
     internal static IEnumerable<Silence> SandwichedSilences(
@@ -890,9 +890,9 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Which silences <see cref="CandidatesIn"/> draws on: the context's own list - Pass 1's, cut at
+    /// Which silences <see cref="CandidatesIn"/> draws on: the context's own list - Analyze's, cut at
     /// --min-silence-length, or a sweep's band - unless a gap re-probe has opened the floor
-    /// (<see cref="_subFloorSeconds"/>), in which case every silence Pass 1 kept that is at least
+    /// (<see cref="_subFloorSeconds"/>), in which case every silence Analyze kept that is at least
     /// that long.
     /// </summary>
     private IEnumerable<Silence> SilenceSource
@@ -1078,7 +1078,7 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// --early-abort: once Pass 2 has probed this far into the file's play time without a single
+    /// --early-abort: once Probe has probed this far into the file's play time without a single
     /// chapter found, give up rather than transcribe the rest of a book that plainly will not yield
     /// any (wrong --chapter-phrase, wrong --lang, or one that announces chapters differently).
     /// </summary>
@@ -1095,7 +1095,7 @@ internal sealed class RegionProber
         // hour of play time" is not the evidence this check reasons about - the pauses of that hour
         // have not been looked at yet. The question is asked again by the walk that does look at
         // them, whose head stretch spans the whole region precisely when nothing was found.
-        if (_shape == ScanShape.JinglesOnly || candidate.Start < _ctx.EarlyAbortSeconds || foundSomething)
+        if (_shape == ProbeShape.JinglesOnly || candidate.Start < _ctx.EarlyAbortSeconds || foundSomething)
             return false;
         EarlyAborted = true;
         _env.Log?.Invoke($"early-abort: no chapter found within the first " +
@@ -1163,7 +1163,7 @@ internal sealed class RegionProber
         var start = candidate.Start;
         var windowEnd = plan.End;
         ct.ThrowIfCancellationRequested();
-        // Position-based Pass 2 progress (see DetectCoreAsync's BeginPhase); reported here rather
+        // Position-based Probe progress (see DetectCoreAsync's BeginPhase); reported here rather
         // than only in the candidate loop so gap re-probes show their (backwards) position too.
         ReportProgress(start);
 
@@ -1274,7 +1274,7 @@ internal sealed class RegionProber
     /// expected a word beside it - the one shape denoising is known to rescue.
     /// <para>
     /// The strict <see cref="BareNumberReading.SpokenAloneAtSegmentStart"/> reading, the same one
-    /// Pass 2's forward scan trusts, because this runs on every empty window of every file that
+    /// Probe's forward scan trusts, because this runs on every empty window of every file that
     /// passed the fidelity check and a looser reading would spend a decode on ordinary prose - in
     /// Italian "un", "una" and "uno" all parse as 1.
     /// </para>
@@ -1305,7 +1305,7 @@ internal sealed class RegionProber
     /// re-read asks for the same announcement inside a window narrow enough to end just past the
     /// blip. Confined to windows the re-read really does narrow, since re-reading the same span
     /// would be the same framing and could only produce the same answer - and, where the run has a
-    /// <c>--pass3-model</c> upgrade, put through that recognizer rather than the probing one, for the
+    /// <c>--upgrade-model</c> upgrade, put through that recognizer rather than the probing one, for the
     /// reason the decode itself documents.
     /// </para>
     /// <para>
@@ -1355,13 +1355,13 @@ internal sealed class RegionProber
         // each search read "* Musik *" on the small model and the announcement on the large one).
         // Costs nothing extra: this decode was going to happen either way, so the only difference is
         // which recognizer it goes through - unlike the mender's second opinion, which is a decode
-        // of its own. A pass 2.5 re-probe reaches this with SecondOpinion null and _ctx.Transcriber
+        // of its own. A Re-probe re-probe reaches this with SecondOpinion null and _ctx.Transcriber
         // already the heavier model, so it re-reads through that one without needing a branch here.
         var upgradeLanguage = _env.SecondOpinion != null ? _language.Profile.Language : null;
         _env.Log?.Invoke(
             $"window at {FormatTimestamp(start)} empty, VAD speech at " +
             $"{FormatTimestamp(blip.StartSeconds)} inside the jingle - re-reading shorter" +
-            (upgradeLanguage == null ? "" : ", --pass3-model"));
+            (upgradeLanguage == null ? "" : ", --upgrade-model"));
 
         var samples = await _env.Audio.DecodePcmAsync(
             _ctx.File, from, to - from, _ctx.Info.InputDecoder, ct);
@@ -1428,7 +1428,7 @@ internal sealed class RegionProber
     /// width the rest of the tool probes at, and the widest one measured to still hear this word.
     /// </para>
     /// <para>
-    /// Through the probing model, not a <c>--pass3-model</c> upgrade, unlike the blip re-read. What
+    /// Through the probing model, not a <c>--upgrade-model</c> upgrade, unlike the blip re-read. What
     /// was measured is that this model hears the announcement at this width; the failure is the
     /// framing's alone, and an upgrade would load a model the file may otherwise never need.
     /// </para>
@@ -1942,7 +1942,7 @@ internal sealed class RegionProber
     /// is expected to begin at --expected-start-chapter (or chapter 1), so the number below that
     /// expectation plays the same role. Without that, the one mishearing that costs the most - the
     /// file's <em>first</em> chapter read as some large number, which declares everything before it
-    /// missing and sends Pass 3 across the whole book - would be the one case never questioned.
+    /// missing and sends Scan across the whole book - would be the one case never questioned.
     /// </para>
     /// <para>
     /// The upper bound exists only while something is known to follow: a --verify gap region's
@@ -1960,7 +1960,7 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Whether this window is hunting known missing numbers inside a stretch the sequence closes
-    /// from above - a sequence-gap re-probe (<see cref="_gapAbove"/>), a Pass 2.5 or --verify gap
+    /// from above - a sequence-gap re-probe (<see cref="_gapAbove"/>), a Re-probe or --verify gap
     /// region (<see cref="DetectionRegion.UpperNumber"/>) - rather than scanning forward into a book
     /// whose next chapter number is whatever comes next.
     /// <para>
@@ -2176,10 +2176,10 @@ internal sealed class RegionProber
     /// </para>
     /// <para>
     /// "Later" is measured in the file, not in the order the passes happened to hear things -
-    /// <see cref="ShouldDropNamedMatch"/> holds that half. The two agreed while only Pass 2's
+    /// <see cref="ShouldDropNamedMatch"/> holds that half. The two agreed while only Probe's
     /// forward scan produced named marks, and stopped agreeing as soon as the recovery passes did:
-    /// they run after Pass 2 and work backwards through the book's gaps, so a mid-book match found
-    /// late in the run would otherwise replace the real end-of-book announcement Pass 2 had already
+    /// they run after Probe and work backwards through the book's gaps, so a mid-book match found
+    /// late in the run would otherwise replace the real end-of-book announcement Probe had already
     /// marked. That is precisely what happened to "Corsa nello spazio" (2026-08-05), where
     /// <c>/epilogo/</c> matching inside "riepilogo" at 13:35:19 displaced the genuine epilogue found
     /// at 18:18:57.
@@ -2213,7 +2213,7 @@ internal sealed class RegionProber
             _language.Profile.Language);
         // The prologue and epilogue must sit behind a real pause, in every pass rather than only in
         // the late ones a bare number's check is reserved for. They are cheap to guard - the check
-        // is Pass 1 geometry, no decoding - and they need it most: nothing bounds where they may
+        // is Analyze geometry, no decoding - and they need it most: nothing bounds where they may
         // fall the way the chapter sequence bounds a number, and at most one of each exists per
         // book, so a false match does not merely add a mark, it replaces the real one.
         if (await _env.Marks.PlaceAsync(
@@ -2634,7 +2634,7 @@ internal sealed class RegionProber
         // Through ExpectedStartFor rather than off the option, so the "still missing" note starts
         // counting the chapters under the first one found the moment a prologue says this file
         // holds the book's beginning - which the progress display would otherwise only learn of
-        // once Pass 2 was over and gap planning took the same view.
+        // once Probe was over and gap planning took the same view.
         var (highest, missingNumbers) = ChapterProgress(_found, ExpectedStartFor(_env.Options, _namedFound));
         _ctx.Work.HighestChapter = highest;
         _ctx.Work.MissingChapters = missingNumbers.Count;
@@ -2787,7 +2787,7 @@ internal sealed class RegionProber
     /// triggers the re-probe of everything skipped since the last mark, each mark's anchor silence
     /// may tighten the --min-silence-length auto threshold, and the last accepted number advances.
     /// <para>
-    /// The order matters and is the order Pass 2 resumes on: a gap re-probe runs first, so the
+    /// The order matters and is the order Probe resumes on: a gap re-probe runs first, so the
     /// threshold this mark then adopts and the jingle window the re-probe restores both already
     /// account for whatever the recovered chapters taught them. Where the candidate loop picks up
     /// afterwards needs no arranging - the re-probe walks its own copy of the sequence and leaves the
@@ -2813,7 +2813,7 @@ internal sealed class RegionProber
             // scan's own framing rather than a recovery pass's trimmed one, which is what a first
             // look at that audio is owed (see RecoveryLeadInTrimSeconds for why a second look is
             // framed differently at all).
-            if (_shape != ScanShape.JinglesOnly &&
+            if (_shape != ProbeShape.JinglesOnly &&
                 _lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
                 await HandleSequenceGapAsync(previousNumber, mark.Number, expectAt, ct);
 
@@ -2827,7 +2827,7 @@ internal sealed class RegionProber
     /// Reacts to the chapter numbers just found leaving a gap: the stretch between the two marks
     /// bracketing it gets a second, unconditional look before the region moves on. Nothing to
     /// re-probe is a routine outcome and is logged as such rather than passed over in silence - the
-    /// log then distinguishes "Pass 2 declined a candidate" from "Pass 2 never had one", which is
+    /// log then distinguishes "Probe declined a candidate" from "Probe never had one", which is
     /// the first thing worth knowing when a chapter goes missing.
     /// <para>
     /// The stretch is named by the two announcements, not by what the walk happened to look at
@@ -2855,7 +2855,7 @@ internal sealed class RegionProber
 
     /// <summary>
     /// Re-probes, unconditionally and in recovery framing, the stretch a sequence gap has put back in
-    /// question: everything Pass 2 has looked at since the last mark, rebuilt from scratch as a
+    /// question: everything Probe has looked at since the last mark, rebuilt from scratch as a
     /// recovery candidate list (see <see cref="_recovery"/>) rather than replayed from the candidates
     /// that were passed over. Rebuilding is what makes it the <em>union</em> set - the silences the
     /// primary scan suppressed inside a jingle's span are back, and every jingle's music is read
@@ -2977,9 +2977,9 @@ internal sealed class RegionProber
     /// <para>
     /// The demand the run opened at bounds it, not the adapted threshold alone: with an explicit
     /// --min-silence-length the user has said what a chapter break is on this book, and nothing in
-    /// Pass 2 goes under that. Where the threshold has adapted <em>below</em> the demand - only
+    /// Probe goes under that. Where the threshold has adapted <em>below</em> the demand - only
     /// possible under auto, and only after a mark measured a break that short - the book itself has
-    /// said so, and this is the first thing in Pass 2 able to act on it. The sub-floor sweeps still
+    /// said so, and this is the first thing in Probe able to act on it. The sub-floor sweeps still
     /// go lower afterwards, on their own budget and their own log lines.
     /// </para>
     /// <para>
@@ -3044,7 +3044,7 @@ internal sealed class RegionProber
     /// Folds one anchor silence's proposal into <see cref="_adaptedThresholdSeconds"/>, keeping the
     /// running minimum. Bounded below by <see cref="CliOptions.AdaptiveFloorSeconds"/>, not by the
     /// --min-silence-length the run opened at, so this can settle under the starting demand and
-    /// thereby say something Pass 2 could not otherwise know: that this book's chapter breaks are
+    /// thereby say something Probe could not otherwise know: that this book's chapter breaks are
     /// shorter than the default assumes. What acts on the part below the demand never does so
     /// through the candidate grid, which does not reach there and must not (see
     /// <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/> for the measurement behind that):
@@ -3085,7 +3085,7 @@ internal sealed class RegionProber
     /// hush happens to differ. Both directions cost: the running minimum lowering puts pauses back
     /// on the grid that this book never announces a chapter after, and the very first proposal (the
     /// one allowed to raise it) can put the threshold above the real breaks and skip them outright.
-    /// It also feeds <see cref="AdaptedThresholdSeconds"/>, which sizes Pass 2.5's sub-floor sweep,
+    /// It also feeds <see cref="AdaptedThresholdSeconds"/>, which sizes Re-probe's sub-floor sweep,
     /// so a wrong reading here buys wrong bands there.
     /// </para>
     /// <para>
@@ -3101,9 +3101,9 @@ internal sealed class RegionProber
     /// Applies to a recovery pass's VAD-region candidates too, although their candidate <em>lists</em>
     /// stay frozen at pre-classification behaviour: nothing there was leaning on the old proposals.
     /// The gap re-probe and the sub-floor sweep filter by no threshold at all - the one probes
-    /// unconditionally, the other short-circuits <see cref="ShouldSkipCandidate"/> - and Pass 2.5
+    /// unconditionally, the other short-circuits <see cref="ShouldSkipCandidate"/> - and Re-probe
     /// runs a fresh prober, so it starts at the run's own --min-silence-length and never sees the
-    /// value Pass 2 adapted. The only thing this changes for them is that Pass 2.5 no longer
+    /// value Probe adapted. The only thing this changes for them is that Re-probe no longer
     /// tightens its own threshold off a jingle, i.e. probes a few more of its own pauses.
     /// </para>
     /// </summary>
@@ -3133,7 +3133,7 @@ internal sealed class RegionProber
     /// continuous stretch of audio around the found transition, and a single sequence spanning two
     /// chapter transitions is highly unlikely - so they are skipped outright instead of probed. A
     /// sequence gap rebuilds the whole stretch between its two marks, so the unlikely case is
-    /// recovered after all (and Pass 3 remains the final net). A low-confidence mark settles nothing: the
+    /// recovered after all (and Scan remains the final net). A low-confidence mark settles nothing: the
     /// remaining windows keep their chance to re-detect the transition it may have gotten wrong.
     /// <para>
     /// Bounded at <see cref="DetectionTuning.MaxSettledWindowSkip"/> windows, because the premise

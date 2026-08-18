@@ -70,7 +70,7 @@ public interface ILanguage
     /// "Kapitel 5." - so what it exposes is Whisper's habit of filling a short window's opening with
     /// plausible words. Which is why a superseded wording is kept rather than discarded: the sequence
     /// turns the 1 down and the reading behind it, "Kapitel 5", is taken instead (see
-    /// <see cref="Phrases.PhrasePattern.MatchGroups"/> and Pass 2's accept loop).
+    /// <see cref="Phrases.PhrasePattern.MatchGroups"/> and Probe's accept loop).
     /// </para>
     /// </summary>
     string ChapterPhrase { get; }

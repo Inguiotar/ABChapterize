@@ -16,7 +16,7 @@ namespace ABChapterize.Tests;
 /// (<see cref="AnnouncementIsolation"/>), plus the matcher the mark refinement asks
 /// (<see cref="AnnouncementMatcher"/>).
 /// <para>
-/// The measurements in these tests are not invented. Every flank figure is taken from the Pass 1
+/// The measurements in these tests are not invented. Every flank figure is taken from the Analyze
 /// speech segments of "Corsa nello spazio" (build 244, 2026-08-05), replayed at the announcement
 /// positions its own debug log records - which is what calibrated the thresholds in the first
 /// place.
@@ -267,7 +267,7 @@ public class AnnouncementIsolationTests
     /// The pairing that keeps an over-eager matcher away from an unguarded mark. Italian "un",
     /// "una" and "uno" all parse as 1, so the permissive reading answers "found" on ordinary prose -
     /// harmless where <see cref="AnnouncementIsolation"/> vets the onset afterwards, and a way to
-    /// drag a Pass 2 mark onto a word where nothing does.
+    /// drag a Probe mark onto a word where nothing does.
     /// </summary>
     [Fact]
     public void BareNumberMatcher_OnlyGoesPermissiveForAGuardedMatch()
@@ -351,7 +351,7 @@ public class AnnouncementIsolationTests
 
     /// <summary>Asserts the matcher takes <paramref name="text"/> under those bounds.</summary>
     /// <param name="text">The probe transcript text.</param>
-    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <param name="strict">Whether this is a Probe match rather than a gap hunt's.</param>
     /// <param name="bounds">The sequence bounds the pass was holding.</param>
     /// <param name="detected">The number the detecting window read.</param>
     private static void Accept(string text, bool strict, NumberBounds bounds, int detected)
@@ -361,7 +361,7 @@ public class AnnouncementIsolationTests
     /// would have taken it unbounded - so the test fails if the text stops being a number at
     /// all.</summary>
     /// <param name="text">The probe transcript text.</param>
-    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <param name="strict">Whether this is a Probe match rather than a gap hunt's.</param>
     /// <param name="bounds">The sequence bounds the pass was holding.</param>
     /// <param name="detected">The number the detecting window read.</param>
     private static void Reject(string text, bool strict, NumberBounds bounds, int detected)
@@ -370,17 +370,17 @@ public class AnnouncementIsolationTests
         Assert.False(Matcher(strict, bounds, detected).Matches(text), text);
     }
 
-    /// <summary>A bare-number matcher for the reading a Pass 2 match respectively a gap hunt's
+    /// <summary>A bare-number matcher for the reading a Probe match respectively a gap hunt's
     /// match would have been found under, holding any number at all - which is what the readings
     /// alone are worth testing against.</summary>
-    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <param name="strict">Whether this is a Probe match rather than a gap hunt's.</param>
     private static AnnouncementMatcher Matcher(bool strict)
         => AnnouncementMatcher.ForPattern(
             Profile(bareNumbers: true).ChapterPattern, "it", Reading(strict), _ => true);
 
     /// <summary>The same matcher as the refinement actually builds it: held to what the chapter
     /// sequence can hold at this mark.</summary>
-    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <param name="strict">Whether this is a Probe match rather than a gap hunt's.</param>
     /// <param name="bounds">The sequence bounds the pass was holding.</param>
     /// <param name="detected">The number the detecting window read.</param>
     private static AnnouncementMatcher Matcher(bool strict, NumberBounds bounds, int detected)
@@ -388,8 +388,8 @@ public class AnnouncementIsolationTests
             Profile(bareNumbers: true).ChapterPattern, "it", Reading(strict),
             new NumberCheck(detected, Profile(bareNumbers: true), bounds).AdmitsAsAnnouncement);
 
-    /// <summary>Which reading a Pass 2 match respectively a gap hunt's match is refined under.</summary>
-    /// <param name="strict">Whether this is a Pass 2 match rather than a gap hunt's.</param>
+    /// <summary>Which reading a Probe match respectively a gap hunt's match is refined under.</summary>
+    /// <param name="strict">Whether this is a Probe match rather than a gap hunt's.</param>
     private static NumberWordParser.BareNumberReading Reading(bool strict)
         => strict
             ? NumberWordParser.BareNumberReading.SpokenAloneAtSegmentStart
@@ -411,7 +411,7 @@ public class AnnouncementIsolationTests
 
     /// <summary>
     /// "De vandrande djäknarne" chapter 6, the geometry the mark-inside-speech guard was built for
-    /// (build 339, 2026-08-17). Pass 1's own segments around 1:37: the LibriVox boilerplate, then the
+    /// (build 339, 2026-08-17). Analyze's own segments around 1:37: the LibriVox boilerplate, then the
     /// reader's credit "Inläsning av Lars Rolander" running 1:37:17.66-1:37:20.00, a 0.55 s pause,
     /// then "Sjätte kapitlet" at 1:37:20.41. Absolute times kept so the figures match the debug log.
     /// </summary>

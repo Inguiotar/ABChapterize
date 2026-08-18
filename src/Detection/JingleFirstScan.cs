@@ -10,9 +10,9 @@ using static ABChapterize.Detection.GapPlanning;
 namespace ABChapterize.Detection;
 
 /// <summary>
-/// Decides whether a file's Pass 2 runs jingle-first, and plans the second half of it when it does.
+/// Decides whether a file's Probe runs jingle-first, and plans the second half of it when it does.
 /// <para>
-/// The ordinary Pass 2 walks a book's pauses and its music together, in one chronological sweep. On
+/// The ordinary Probe walks a book's pauses and its music together, in one chronological sweep. On
 /// a book that announces every chapter after a music sting, that is thousands of pause windows which
 /// can only ever confirm what the music already said - and build 331 of "Die Cyber-Brutzellen" is
 /// the recorded proof that they do exactly that: the seven chapters build 339 accepted "at a
@@ -42,7 +42,7 @@ namespace ABChapterize.Detection;
 /// </summary>
 internal static class JingleFirstScan
 {
-    /// <summary>What <see cref="Decide"/> made of one file: whether Pass 2 runs jingle-first, and
+    /// <summary>What <see cref="Decide"/> made of one file: whether Probe runs jingle-first, and
     /// the sentence <c>--verbose</c> prints about it.</summary>
     /// <param name="Run">Whether to run the jingle-first shape.</param>
     /// <param name="Note">What to log, or null when there is nothing worth saying - which is the
@@ -50,7 +50,7 @@ internal static class JingleFirstScan
     internal readonly record struct Verdict(bool Run, string? Note);
 
     /// <summary>
-    /// Whether this file's Pass 2 is to run jingle-first, and why.
+    /// Whether this file's Probe is to run jingle-first, and why.
     /// <para>
     /// Answered per file rather than per run: the census belongs to the file, and so does the
     /// language whose <c>--custom</c> mappings are in play, a mixed-language batch compiling a
@@ -87,16 +87,16 @@ internal static class JingleFirstScan
         if (!freshRun || options.IgnoreChapterNumbers)
             return new Verdict(false, null);
         if (options.JingleFirst)
-            return new Verdict(true, "jingle-first Pass 2 (--jingle-first)");
+            return new Verdict(true, "reading the music first (--jingle-first)");
 
         var music = Earned(jingles, durationSeconds);
         if (music is null)
             return new Verdict(false, null);
         if (BetweenChapters(profile) is not { } mapping)
-            return new Verdict(true, $"jingle-first Pass 2: {music}");
+            return new Verdict(true, $"reading the music first: {music}");
         return new Verdict(false,
             $"{music}, but {mapping.Kind} (\"{mapping.Pattern.Source}\") may be announced between " +
-            "chapters - keeping the ordinary Pass 2 (--jingle-first overrides this)");
+            "chapters - reading the file in one sweep instead (--jingle-first overrides this)");
     }
 
     /// <summary>
@@ -144,7 +144,7 @@ internal static class JingleFirstScan
     /// the chapters below the first one would be), a hole in the numbering, and the tail (after the
     /// last chapter found, where the epilogue lives and where the book may simply run on). A file
     /// whose music yielded no chapter at all is one stretch spanning the whole region, which is the
-    /// ordinary Pass 2 in all but name: the right answer for a book whose jingles turned out to carry
+    /// ordinary Probe in all but name: the right answer for a book whose jingles turned out to carry
     /// no announcements.
     /// </para>
     /// <para>

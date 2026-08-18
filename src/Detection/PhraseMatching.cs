@@ -26,7 +26,7 @@ internal static partial class PhraseMatching
     /// matches against VAD regions.</param>
     /// <param name="Confidence">Whisper's probability for the segment the match was found in.</param>
     /// <param name="SpansMerge">True when the text actually used to find the phrase and parse its
-    /// number straddles a Pass 2 overlap's cache/fresh boundary - see <see cref="FindPhraseMatches"/>'s
+    /// number straddles a Probe overlap's cache/fresh boundary - see <see cref="FindPhraseMatches"/>'s
     /// <c>mergeBoundarySegIndex</c> parameter.</param>
     /// <param name="SpokenAlone">Whether the announcement opened the transcript segment it was
     /// found in. Only ever false under <c>--chapter-phrase none</c>'s wider reading
@@ -69,7 +69,7 @@ internal static partial class PhraseMatching
     /// Resolved here, while the <see cref="Match"/> is still around, rather than carried along as a
     /// match object nothing downstream has any other use for.</param>
     /// <param name="PhraseStartSeconds">Phrase start, in the time base <paramref name="Phrase"/> was
-    /// matched in (window-relative for a Pass 2 probe).</param>
+    /// matched in (window-relative for a probe).</param>
     /// <param name="PhraseEndSeconds">End of the transcript segment the phrase was found in, in the
     /// same time base - the smeared-segment span <see cref="JingleGeometry.ResolveJingleAnchor"/>
     /// needs, exactly as for <see cref="PhraseMatch.PhraseEndSeconds"/>.</param>
@@ -99,7 +99,7 @@ internal static partial class PhraseMatching
     /// </summary>
     /// <param name="segments">The window's transcript segments, in window-relative time.</param>
     /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
-    /// <param name="mergeBoundarySegIndex">For a window assembled by Pass 2's overlap reuse (see
+    /// <param name="mergeBoundarySegIndex">For a window assembled by Probe's overlap reuse (see
     /// ProbeAsync), the index of the first segment that came from the fresh tail decode rather
     /// than the reused cache; null for a window that is entirely one or the other (a plain probe,
     /// a fully-reused window, a gap chunk, or a --verify window). Used only to flag
@@ -231,7 +231,7 @@ internal static partial class PhraseMatching
     /// <para>
     /// <paramref name="reading"/> then decides how far into a segment to look, and the two levels
     /// buy different things at different prices.
-    /// <see cref="BareNumberReading.SpokenAloneAtSegmentStart"/> is what Pass 2's forward scan uses: it costs
+    /// <see cref="BareNumberReading.SpokenAloneAtSegmentStart"/> is what Probe's forward scan uses: it costs
     /// nothing over the old rule and recovers the glued announcements, while keeping a cheap
     /// second signal ("Whisper opened a segment here") for a scan that walks the whole book with no
     /// upper bound on the sequence. <see cref="BareNumberReading.LeadingASentence"/> drops even that and
@@ -361,7 +361,7 @@ internal static partial class PhraseMatching
     /// itself, extended backwards when a preceding slice supplied the number.</param>
     /// <param name="consumedEnd">End of that range, extended forwards when a following slice
     /// supplied it. Together the two tell <see cref="FindPhraseMatches"/> whether the detection drew
-    /// on text from both sides of a Pass 2 overlap's cache/fresh boundary.</param>
+    /// on text from both sides of a Probe overlap's cache/fresh boundary.</param>
     private static bool TryParseAnnouncedNumber(
         string text, PhraseHit hit, LanguageProfile profile,
         out int number, out int consumedStart, out int consumedEnd)
@@ -494,7 +494,7 @@ internal static partial class PhraseMatching
     /// them with a space of its own, so each join carried <em>two</em>, and any phrase containing a
     /// space - which the built-in ones never do, being single words, and a user's --chapter-phrase
     /// routinely does - could not match across a segment boundary. Found on "Paula Monti.m4b" with
-    /// <c>--chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/"</c> (2026-08-08): Pass 3 heard
+    /// <c>--chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/"</c> (2026-08-08): Scan heard
     /// chapter 19 perfectly and split it as "Première partie." + "Chapitre 19.", which joined into
     /// two spaces where the phrase writes one, and the chapter was silently lost. Normalizing per
     /// segment rather than over the finished string is what keeps <see cref="Flatten"/>'s offsets

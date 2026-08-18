@@ -20,7 +20,7 @@ internal readonly record struct AnnouncementFlanks(
 
 /// <summary>
 /// Checks that a detected announcement really is set off from the narration by pauses, from the
-/// VAD pre-pass's speech segments alone - no decoding, no recognition, just Pass 1 geometry.
+/// VAD pre-pass's speech segments alone - no decoding, no recognition, just Analyze geometry.
 /// <para>
 /// This is the check that replaces trusting Whisper's own segmentation. The old
 /// <c>--chapter-phrase none</c> rule ("the transcript segment is a number start to finish") was
@@ -31,7 +31,7 @@ internal readonly record struct AnnouncementFlanks(
 /// </para>
 /// <para>
 /// Measured on "Corsa nello spazio" (build 244, 2026-08-05), replaying the guard over that run's
-/// own Pass 1 speech segments at each announcement's true onset: every one of the 65 chapters is
+/// own Analyze speech segments at each announcement's true onset: every one of the 65 chapters is
 /// flanked by about 3.0-3.9 s before and 1.0-2.2 s after, the number's own speech running
 /// 0.3-1.3 s. The false epilogue the same run wrote - Whisper heard "riepilogo" (Italian for
 /// "summary") mid-sentence and <c>/epilogo/</c> matched inside it - measures 0.64 s before and
@@ -230,7 +230,7 @@ internal static class AnnouncementIsolation
 /// announcement is the pause around it.</param>
 internal readonly record struct IsolationCheck(IsolationRule Rule, double? FallbackPosition = null)
 {
-    /// <summary>The no-op check: what a phrase-based chapter, a <c>--custom</c> mark and Pass 2's
+    /// <summary>The no-op check: what a phrase-based chapter, a <c>--custom</c> mark and Probe's
     /// first look at a window all pass without measuring anything.</summary>
     internal static readonly IsolationCheck None = new(IsolationRule.None);
 }
@@ -247,7 +247,7 @@ internal enum IsolationRule
     /// <summary>No check. A chapter phrase that writes neither guard, whose phrase is then its own
     /// evidence (though every built-in one does write a <c>^</c>); an untagged <c>--custom</c>
     /// mapping, which names a recurring structural element whose place in the book is the user's
-    /// business and not something this could second-guess; and Pass 2's first look at a window,
+    /// business and not something this could second-guess; and Probe's first look at a window,
     /// which is deliberately left cheap - see <see cref="AnnouncementIsolation"/>.</summary>
     None = 0,
 

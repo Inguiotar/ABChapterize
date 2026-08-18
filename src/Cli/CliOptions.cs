@@ -168,7 +168,7 @@ public sealed class CliOptions
     /// Whether the chapter numbers heard in an announcement are reasoned about
     /// (<c>--ignore-chapter-numbers</c>). The announcements themselves are still detected and still
     /// become marks either way; what this drops is everything built on the numbers forming a
-    /// sequence: no gap is ever found or filled, so passes 2.5 and 3 never run, no file is ever
+    /// sequence: no gap is ever found or filled, so the Re-probe and Scan passes never run, no file is ever
     /// tagged ".missing-marks", and every option that states an expectation about the numbers is
     /// rejected outright rather than silently ignored. A parsed number still reaches the mark's
     /// title, it just no longer has to agree with its neighbours - which is the point, for a book
@@ -181,8 +181,8 @@ public sealed class CliOptions
     /// turbo or large, or <c>custom:&lt;path&gt;</c> for a GGML file of the user's own (see
     /// <see cref="ParseModelSelector"/>).
     /// <para>
-    /// "small" rather than the largest thing that will run, because Pass 2 asks a different question
-    /// from Pass 3 and the models are not ranked the same way for it. A probe is a short window - a
+    /// "small" rather than the largest thing that will run, because Probe asks a different question
+    /// from Scan and the models are not ranked the same way for it. A probe is a short window - a
     /// jingle plus an announcement, ten to twenty-five seconds - and Whisper pads anything under
     /// <see cref="ABChapterize.Detection.DetectionTuning.WhisperChunkSeconds"/> out to a full mel
     /// chunk. The large models degenerate on that padding: the window comes back as one unpunctuated
@@ -190,37 +190,37 @@ public sealed class CliOptions
     /// replaying a real run's own probe windows (2026-08-08), ggml-large-v3-turbo matched the
     /// announcement in 4 of 15 windows at 11-22 s where ggml-small matched 14 of 14. On the same book
     /// turbo-throughout lost chapters 19 and 21-25 outright while <c>-m small -M turbo</c> found all
-    /// 25. Whisper's rankings hold for a long, well-framed transcription, which is what Pass 3 does
-    /// and <see cref="Pass3Model"/> is for; they do not survive being asked five-second questions.
+    /// 25. Whisper's rankings hold for a long, well-framed transcription, which is what Scan does
+    /// and <see cref="UpgradeModel"/> is for; they do not survive being asked five-second questions.
     /// The smaller model is also several times faster, so the default is not a trade at all.
     /// </para>
     /// </summary>
     public string Model { get; private set; } = "small";
 
     /// <summary>
-    /// Whisper model selector used for pass 3 (gap filling) only (--pass3-model / -M). Pass 3
+    /// Whisper model selector used for Scan (gap filling) only (--upgrade-model / -M). Scan
     /// transcribes long, naturally framed stretches of audio, where a heavier model really is the
     /// better recognizer - so it defaults to "turbo" while <see cref="Model"/> probes with "small",
-    /// and that pairing is also what switches pass 2.5 on (see <see cref="Pass3ModelIsUpgrade"/>).
-    /// The pass-3 model is loaded (and downloaded) lazily, on first use - which may well be pass 2
-    /// rather than pass 3, since <see cref="ChapterDetector"/>'s second-opinion path hands it pass
-    /// 2's unconfirmed marks and implausible chapter numbers as well.
+    /// and that pairing is also what switches Re-probe on (see <see cref="UpgradeModelIsBetter"/>).
+    /// The upgrade model is loaded (and downloaded) lazily, on first use - which may well be Probe
+    /// rather than Scan, since <see cref="ChapterDetector"/>'s second-opinion path hands it
+    /// Probe's unconfirmed marks and implausible chapter numbers as well.
     /// Takes a <c>custom:&lt;path&gt;</c> selector just like <see cref="Model"/>.
     /// <para>
     /// Naming --model alone re-points this at it, so <c>-m large</c> means large throughout rather
-    /// than large probing and a lighter pass 3, which would silently be a downgrade and switch off
-    /// both pass 2.5 and the shifted re-read. Only the untouched default is the small/turbo pair; see
+    /// than large probing and a lighter gap read, which would silently be a downgrade and switch off
+    /// both Re-probe and the shifted re-read. Only the untouched default is the small/turbo pair; see
     /// the defaulting in <see cref="Parse"/>.
     /// </para>
     /// </summary>
-    public string Pass3Model { get; private set; } = "turbo";
+    public string UpgradeModel { get; private set; } = "turbo";
 
     /// <summary>
-    /// True when <see cref="Pass3Model"/> is strictly more capable than <see cref="Model"/> - the
-    /// "one last, best-effort attempt" direction of --pass3-model rather than the "get the
-    /// stragglers over with quickly" one. Gates pass 2.5 (see <c>ChapterDetector</c>'s
-    /// <c>RunPass25Async</c>), which is only ever worth its extra probes when the model doing them
-    /// can actually hear something the pass-2 model could not; with an equal or lighter pass-3
+    /// True when <see cref="UpgradeModel"/> is strictly more capable than <see cref="Model"/> - the
+    /// "one last, best-effort attempt" direction of --upgrade-model rather than the "get the
+    /// stragglers over with quickly" one. Gates Re-probe (see <c>ChapterDetector</c>'s
+    /// <c>RunReprobeAsync</c>), which is only ever worth its extra probes when the model doing them
+    /// can actually hear something the probe model could not; with an equal or lighter upgrade
     /// model it would just re-probe the same audio to the same conclusion, more slowly.
     /// <para>
     /// Ranking is by model size (see <see cref="ModelCatalog.ApproximateSizeBytes"/>), which
@@ -230,17 +230,17 @@ public sealed class CliOptions
     /// disk exactly once.
     /// </para>
     /// </summary>
-    public bool Pass3ModelIsUpgrade { get; private set; }
+    public bool UpgradeModelIsBetter { get; private set; }
 
     /// <summary>
-    /// True when <see cref="Pass3Model"/> is strictly <em>less</em> capable than <see cref="Model"/>,
+    /// True when <see cref="UpgradeModel"/> is strictly <em>less</em> capable than <see cref="Model"/>,
     /// i.e. the one direction that unambiguously says "get the stragglers over with quickly". Not the
-    /// negation of <see cref="Pass3ModelIsUpgrade"/>: the default, where the two are the same model,
+    /// negation of <see cref="UpgradeModelIsBetter"/>: the default, where the two are the same model,
     /// is neither, and the distinction matters because the retries that are worth their time on an
-    /// equal pass-3 model are not worth it on a deliberately lighter one. Gates Pass 3's shifted
+    /// equal upgrade model are not worth it on a deliberately lighter one. Gates Scan's shifted
     /// re-scan (see <c>ChapterDetector</c>'s <c>RescanShiftedAsync</c>).
     /// </summary>
-    public bool Pass3ModelIsDowngrade { get; private set; }
+    public bool UpgradeModelIsWorse { get; private set; }
 
     /// <summary>
     /// Forces the CPU backend for Whisper instead of the fastest available hardware
@@ -283,7 +283,7 @@ public sealed class CliOptions
     /// <see cref="DefaultChapterCount"/>. Any chapter phrase whose parsed number exceeds it is
     /// discarded the moment it is found, before it can become a mark or widen the expected
     /// chapter sequence - a Whisper mishearing turning "chapter ten" into "chapter 510" otherwise
-    /// leaves a 500-chapter "gap" for Pass 3 to hunt through and a file tagged with a
+    /// leaves a 500-chapter "gap" for Scan to hunt through and a file tagged with a
     /// ".missing-marks" suffix listing all of them. Unrelated to <see cref="MaxChapters"/>, which
     /// counts a file's <i>pre-existing marks</i> rather than the numbers detection itself reads
     /// out of the audio.
@@ -294,7 +294,7 @@ public sealed class CliOptions
     /// Transcribes everything after the last chapter found, all the way to the end of the file,
     /// looking for further chapters. On by default; --no-trailing-scan switches it off.
     /// <para>
-    /// This closes the one hole the ordinary Pass 3 tail structurally cannot:
+    /// This closes the one hole the ordinary Scan tail structurally cannot:
     /// <see cref="ABChapterize.Detection.GapPlanning.FindGaps"/> spots a missing chapter by
     /// finding a hole in the number sequence, which needs a known chapter on each side of it. A
     /// chapter missing <em>after</em> the last one found has nothing above it to compare against,
@@ -315,7 +315,7 @@ public sealed class CliOptions
     /// Does nothing when no chapter was found at all (there is no "last chapter" to scan from, and
     /// transcribing an entire book on spec is not what this is for), nor after an
     /// --early-abort or --expected-start-chapter abort, which mean the file is being given up on
-    /// rather than gap-filled, nor under --ignore-chapter-numbers, which skips pass 3 - the scan's
+    /// rather than gap-filled, nor under --ignore-chapter-numbers, which skips Scan - the scan's
     /// own home - entirely. --chapter-count answers the same question far more cheaply where the
     /// number of chapters is known, so the two are worth reading together.
     /// </para>
@@ -323,7 +323,7 @@ public sealed class CliOptions
     public bool TrailingScan { get; private set; } = true;
 
     /// <summary>
-    /// Minutes of a file's play time Pass 2 may probe without finding a single chapter before
+    /// Minutes of a file's play time Probe may probe without finding a single chapter before
     /// giving up on it outright (--early-abort / -a, default 60; 0 disables the feature
     /// entirely). Active by default - it guards against burning a whole-book transcription on a
     /// file that plainly will not yield any chapters (wrong --chapter-phrase, wrong --lang, or a
@@ -337,15 +337,15 @@ public sealed class CliOptions
     /// <summary>
     /// The chapter number this book is expected to start at (--expected-start-chapter / -e), for
     /// a split-book part that does not begin at chapter 1. Null (the default) means no
-    /// expectation: Pass 2's first find, whatever its number, is accepted outright and <see
+    /// expectation: Probe's first find, whatever its number, is accepted outright and <see
     /// cref="ABChapterize.Detection.GapPlanning.FindGaps"/> never hunts below it. When set,
     /// <see cref="ABChapterize.Detection.GapPlanning.FindGaps"/> hunts the leading gap down to this
-    /// number via Pass 3, exactly like an interior gap, regardless of which
+    /// number via Scan, exactly like an interior gap, regardless of which
     /// <see cref="ChapterDetector"/> entry point is running - so a ".missing-marks" resume of a
-    /// leading gap keeps re-deriving the gap it was tagged with. If Pass 3 cannot find them either,
+    /// leading gap keeps re-deriving the gap it was tagged with. If Scan cannot find them either,
     /// the file is tagged ".missing-marks-...", as an unresolved interior gap is. Separately, and
     /// only for a fresh run (the same restriction as <see cref="EarlyAbortMinutes"/>, for the same
-    /// reason), the file is aborted and left unchanged if the very first chapter Pass 2 finds is
+    /// reason), the file is aborted and left unchanged if the very first chapter Probe finds is
     /// numbered below this value - almost certainly the wrong file, phrase or language rather than
     /// a gap worth hunting for.
     /// <para>
@@ -489,7 +489,7 @@ public sealed class CliOptions
     public bool MarkBeforeJingle { get; private set; }
 
     /// <summary>
-    /// Forces the jingle-first shape of Pass 2 on a file that would not qualify for it by itself
+    /// Forces the jingle-first shape of Probe on a file that would not qualify for it by itself
     /// (--jingle-first): the music is read end to end first, and the pauses only where the chapter
     /// sequence still has a hole plus the head and tail of the file. See
     /// <see cref="ABChapterize.Detection.JingleFirstScan"/> for what qualifies a file automatically
@@ -586,7 +586,7 @@ public sealed class CliOptions
     public double MinSilenceSeconds { get; private set; } = 1.5;
 
     /// <summary>
-    /// Level below which Pass 1's scan counts audio as silence, in dBFS (--noise-floor). Always
+    /// Level below which Analyze's scan counts audio as silence, in dBFS (--noise-floor). Always
     /// the level actually scanned with; see <see cref="AutoNoiseFloor"/> for the default, where
     /// this holds the starting point a per-file measurement may move.
     /// </summary>
@@ -594,7 +594,7 @@ public sealed class CliOptions
 
     /// <summary>
     /// True (the default) unless --noise-floor was given an explicit level: each file's own
-    /// levels are measured before Pass 1 and <see cref="NoiseFloorDb"/> is moved only where the
+    /// levels are measured before Analyze and <see cref="NoiseFloorDb"/> is moved only where the
     /// default would fall outside that master's gap between room tone and narration - see
     /// <see cref="ABChapterize.Detection.SilenceThresholdProbe"/>, which also explains why the
     /// answer for an ordinary book is the default unchanged. "auto" can also be given explicitly
@@ -644,7 +644,7 @@ public sealed class CliOptions
     public bool ProbeSilences => MinSilenceSeconds > 0;
 
     /// <summary>
-    /// The shortest silence Pass 1 retains - normally <see cref="DetectionTuning.MinStoredSilenceSeconds"/>,
+    /// The shortest silence Analyze retains - normally <see cref="DetectionTuning.MinStoredSilenceSeconds"/>,
     /// or <see cref="MinSilenceSeconds"/> where the user asked for something shorter still. Never
     /// follows <see cref="MinSilenceSeconds"/> down to 0: a scan with no minimum length reports
     /// every sample under the threshold as its own silence, and the list this floor governs is one
@@ -828,8 +828,8 @@ public sealed class CliOptions
     public LanguageProfile DefaultProfile { get; private set; } = null!;
 
     /// <summary>
-    /// The accepted --model/--pass3-model selectors, in ascending order of transcription quality -
-    /// an order <see cref="Pass3ModelIsUpgrade"/> reads directly. Taken from
+    /// The accepted --model/--upgrade-model selectors, in ascending order of transcription quality -
+    /// an order <see cref="UpgradeModelIsBetter"/> reads directly. Taken from
     /// <see cref="ModelCatalog.BuiltInNames"/> rather than restated here: a name this accepts but
     /// the catalog does not know turns a malformed command line into an operational error hours
     /// into a run, and one the catalog knows but this rejects makes a bundled model unselectable.
@@ -842,7 +842,7 @@ public sealed class CliOptions
         ['r'] = "--recurse", ['b'] = "--backup", ['f'] = "--force", ['j'] = "--mark-before-jingle",
         ['Q'] = "--quick-marks", ['k'] = "--mark-lead",
         ['q'] = "--quiet", ['v'] = "--verbose", ['T'] = "--verbose-transcripts", ['s'] = "--summary",
-        ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--pass3-model",
+        ['l'] = "--lang", ['c'] = "--chapter-phrase", ['m'] = "--model", ['M'] = "--upgrade-model",
         ['x'] = "--max-chapters", ['N'] = "--max-chapter-number",
         // -L still maps to the removed --trailing-scan rather than to --no-trailing-scan, so a
         // script carrying it gets the migration error instead of silently doing the opposite of
@@ -861,7 +861,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _modelSet, _pass3ModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
+    private bool _langSet, _modelSet, _upgradeModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
 
     // The title options, each holding what was given for every language, per language, or nothing at
     // all when the option was not given - in which case the language's own default applies. Null
@@ -899,7 +899,7 @@ public sealed class CliOptions
            || JingleFirst
            || Export || Import || SimpleMetadata || Verify || Fix || IgnoreProgress
            || UseGpu != null || VadThreads != null || WhisperThreads != null
-           || _langSet || _modelSet || _pass3ModelSet || _maxSet || _maxChapterNumberSet
+           || _langSet || _modelSet || _upgradeModelSet || _maxSet || _maxChapterNumberSet
            || _minSilenceSet || _earlyAbortSet || _markLeadSet || _expectedStartSet
            || _chapterCountSet || _noiseFloorSet || _namedMarkDistanceSet
            || _phraseSpec != null || _titleSpec != null || _partTitleSpec != null || _introSpec != null
@@ -944,7 +944,7 @@ public sealed class CliOptions
                 $"nameddistance={NamedMarkDistanceSeconds}",
                 $"ignorenumbers={IgnoreChapterNumbers}",
                 $"custom={string.Join('|', _customMappings.Select(m => $"{m.Tag}:{m.Phrase}=>{m.Title}"))}",
-                $"model={Model}", $"pass3={Pass3Model}",
+                $"model={Model}", $"upgrade={UpgradeModel}",
                 $"maxchapters={MaxChapters}", $"maxnumber={MaxChapterNumber}",
                 $"earlyabort={EarlyAbortMinutes}", $"expectedstart={ExpectedStartChapter}",
                 $"chaptercount={ChapterCount}",
@@ -1096,10 +1096,10 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._pass3ModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.JingleFirst || o.QuickMarks || !o.TrailingScan || !o.Denoise || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._upgradeModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.JingleFirst || o.QuickMarks || !o.TrailingScan || !o.Denoise || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
             throw new CliError(
                 "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
-                "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --pass3-model, " +
+                "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --upgrade-model, " +
                 "--mark-before-jingle, --jingle-first, --quick-marks, --mark-lead, --min-silence-length, " +
                 "--noise-floor, --early-abort, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, " +
@@ -1129,10 +1129,10 @@ public sealed class CliOptions
         // an expectation about the numbers that the run cannot meet, which is what makes rejecting
         // them more useful than ignoring them; --no-trailing-scan names no expectation at all, it only
         // declines work - and declining work that was never going to happen is not a contradiction.
-        if (o.IgnoreChapterNumbers && (o._pass3ModelSet || o._expectedStartSet ||
+        if (o.IgnoreChapterNumbers && (o._upgradeModelSet || o._expectedStartSet ||
                                        o._maxChapterNumberSet || o._chapterCountSet || o.Verify))
             throw new CliError(
-                "--ignore-chapter-numbers forms no opinion about chapter numbers, so --pass3-model, " +
+                "--ignore-chapter-numbers forms no opinion about chapter numbers, so --upgrade-model, " +
                 "--expected-start-chapter, --max-chapter-number, --chapter-count and --verify " +
                 "have nothing to act on and cannot be combined with it.");
 
@@ -1140,7 +1140,7 @@ public sealed class CliOptions
         // expectation about the numbers but a dependence on there being a sequence at all: the
         // jingle-first shape skips the pauses between two chapters whose numbers are consecutive, and
         // with no numbers no two chapters ever are, so every pause in the book would be probed after
-        // the jingles had been - the ordinary Pass 2 plus a wasted pass over the music.
+        // the jingles had been - the ordinary Probe plus a wasted pass over the music.
         if (o.IgnoreChapterNumbers && o.JingleFirst)
             throw new CliError(
                 "--jingle-first defers a book's pauses to wherever its chapter sequence still has " +
@@ -1179,16 +1179,16 @@ public sealed class CliOptions
         if (o.Language != "auto" && !Regex.IsMatch(o.Language, "^[a-z]{2}$"))
             throw new CliError($"Invalid language code \"{o.Language}\": expected a two-letter code like \"en\", or \"auto\".");
 
-        // Both selectors were validated where they were parsed. Naming --model without --pass3-model
-        // re-points pass 3 at the chosen model, so `-m large` means large throughout rather than large
-        // probing and a lighter pass 3 - which would read as a deliberate downgrade and switch off both
-        // pass 2.5 and the shifted re-read. Only the untouched default keeps the small/turbo pair, and
-        // with it the upgrade that puts pass 2.5 on by default.
-        if (!o._pass3ModelSet && o._modelSet)
-            o.Pass3Model = o.Model;
-        o.Pass3ModelIsUpgrade = ModelCatalog.ApproximateSizeBytes(o.Pass3Model)
+        // Both selectors were validated where they were parsed. Naming --model without --upgrade-model
+        // re-points Scan at the chosen model, so `-m large` means large throughout rather than large
+        // probing and a lighter Scan - which would read as a deliberate downgrade and switch off both
+        // Re-probe and the shifted re-read. Only the untouched default keeps the small/turbo pair, and
+        // with it the upgrade that puts Re-probe on by default.
+        if (!o._upgradeModelSet && o._modelSet)
+            o.UpgradeModel = o.Model;
+        o.UpgradeModelIsBetter = ModelCatalog.ApproximateSizeBytes(o.UpgradeModel)
                                 > ModelCatalog.ApproximateSizeBytes(o.Model);
-        o.Pass3ModelIsDowngrade = ModelCatalog.ApproximateSizeBytes(o.Pass3Model)
+        o.UpgradeModelIsWorse = ModelCatalog.ApproximateSizeBytes(o.UpgradeModel)
                                   < ModelCatalog.ApproximateSizeBytes(o.Model);
 
         // Every language's own entry is checked rather than only the one this run resolves to: a
@@ -1364,7 +1364,14 @@ public sealed class CliOptions
                 return true;
             case "--use-gpu": UseGpu = ParseUseGpu(nextParam()); return true;
             case "--model": Model = ParseModelSelector("--model", nextParam()); _modelSet = true; return true;
-            case "--pass3-model": Pass3Model = ParseModelSelector("--pass3-model", nextParam()); _pass3ModelSet = true; return true;
+            // --pass3-model is the pre-0.12.1 spelling, still accepted silently for the same
+            // reason --title is: nothing about the option was wrong except its name. That name
+            // pointed at one of the five steps the model is actually used by - the gap scan - and
+            // stopped meaning anything at all once the passes were named rather than numbered.
+            // The spelling typed is what `name` records, so an error about a bad value still
+            // quotes whichever one the user wrote.
+            case "--upgrade-model":
+            case "--pass3-model": UpgradeModel = ParseModelSelector(name, nextParam()); _upgradeModelSet = true; return true;
             case "--max-chapters": MaxChapters = ParseNonNegativeInt("--max-chapters", nextParam()); _maxSet = true; return true;
             case "--max-chapter-number": MaxChapterNumber = ParseMaxChapterNumber(nextParam()); _maxChapterNumberSet = true; return true;
             case "--early-abort": EarlyAbortMinutes = ParseEarlyAbort(nextParam()); _earlyAbortSet = true; return true;
@@ -1517,12 +1524,12 @@ public sealed class CliOptions
     }
 
     /// <summary>
-    /// Validates a --model/--pass3-model selector: one of the catalog's names, or
+    /// Validates a --model/--upgrade-model selector: one of the catalog's names, or
     /// <c>custom:&lt;path&gt;</c> naming a GGML file of the user's own (a fine-tune, a quantized
     /// build, or a model the catalog does not carry).
     /// <para>
     /// A custom path is expanded and made absolute here, for two reasons: two spellings of the same
-    /// file must compare equal, because that string comparison is what decides whether pass 3 needs
+    /// file must compare equal, because that string comparison is what decides whether Scan needs
     /// a second model loaded at all; and a leading <c>~</c> reaches this unexpanded on Windows,
     /// where the shell does not do it - the one place the tool has to do a shell's job to make the
     /// documented syntax work as typed.
@@ -1898,23 +1905,26 @@ public sealed class CliOptions
                                     -m custom:~/models/my-finetune.bin. A custom file is used as it
                                     is: never downloaded, never checked against a known checksum,
                                     and only ranked against the built-in models by its size (which
-                                    is what decides pass 2.5, see --pass3-model). Bigger is not
+                                    is what decides Re-probe, see --upgrade-model). Bigger is not
                                     better here: this model listens to short windows a few seconds
                                     long, and the large models are markedly worse at those than
                                     "small" is - they tend to return the window as one run-on
-                                    sentence with the announcement missing from it. Pass 3 is where
-                                    a heavy model earns its keep; see --pass3-model.
-          -M, --pass3-model <name>  Whisper model for pass 3 (gap filling) only; same choices as
-                                    --model (default: turbo, or whatever --model says if you set
-                                    that and not this). Pass 3 transcribes long stretches of audio,
-                                    where the heavier models really are the better recognizers. Use
-                                    a lighter model to speed pass 3 up, or "large" for one last
+                                    sentence with the announcement missing from it. Scan is where
+                                    a heavy model earns its keep; see --upgrade-model.
+          -M, --upgrade-model <name>
+                                    Whisper model for the steps worth asking a better
+                                    recognizer; same choices as --model (default: turbo, or
+                                    whatever --model says if you set that and not this).
+                                    Chiefly the Scan pass, which transcribes long stretches of
+                                    audio, where the heavier models really are the better
+                                    recognizers. Use a lighter model to speed the scanning up,
+                                    or "large" for one last
                                     best-effort attempt at the chapters the main model missed. A
-                                    bigger model than --model's also enables pass 2.5, a quick
-                                    re-probe of the gap with it before pass 3 transcribes the region
+                                    bigger model than --model's also enables Re-probe, a quick
+                                    re-probe of the gap with it before Scan transcribes the region
                                     in full - which the default pairing does. Downloaded and loaded
                                     lazily, only if and when a file actually needs it - which
-                                    besides passes 2.5 and 3 includes pass 2's own second
+                                    besides the Re-probe and Scan passes includes Probe's own second
                                     opinions: a mark it could not pin down, a chapter number that
                                     cannot be right, and an announcement a window lost.
           -j, --mark-before-jingle  A short jingle may precede the chapter phrase; anchor the
@@ -1936,7 +1946,7 @@ public sealed class CliOptions
                                     --mark-lead seconds before the chapter phrase, no matter
                                     what precedes it.
               --jingle-first        [EXPERIMENTAL] Read this book's music first and its pauses
-                                    afterwards. Pass 2 normally walks both together, in one
+                                    afterwards. Probe normally walks both together, in one
                                     sweep through the file; with this it probes every jingle
                                     first, then looks at the pauses only where the chapter
                                     sequence still has a hole, plus before the first chapter
@@ -1981,7 +1991,7 @@ public sealed class CliOptions
           -n, --min-silence-length <seconds|auto>
                                     The shortest pause probed as a potential chapter
                                     break (default: "auto", which starts at 1.5). This
-                                    governs probing alone: pass 1's scan keeps shorter
+                                    governs probing alone: Analyze's scan keeps shorter
                                     silences regardless, and marks are placed and refined
                                     against them. With "auto" (the default), starting from
                                     the second chapter mark found (the silence before the
@@ -2146,10 +2156,10 @@ public sealed class CliOptions
           -e, --expected-start-chapter <n>
                                     The chapter number this book is expected to start at, for a
                                     split-book part that does not begin at chapter 1 (default:
-                                    none - whatever Pass 2 finds first is accepted outright). If
+                                    none - whatever Probe finds first is accepted outright). If
                                     the first chapter found is numbered below <n>, the file is
                                     aborted and left unchanged; if numbered above <n>, the
-                                    numbers in between are hunted via Pass 3 like any other gap,
+                                    numbers in between are hunted via Scan like any other gap,
                                     and the file is tagged with a ".missing-marks-..." suffix if
                                     any are still unresolved afterward. The abort is what only
                                     applies to a fresh, from-scratch detection run, the same
@@ -2157,7 +2167,7 @@ public sealed class CliOptions
                                     numbers is not restricted that way, so a --verify recovery
                                     or a ".missing-marks" resume keeps looking for them.
               --no-trailing-scan    Do not transcribe the audio after the last chapter found
-                                    (default: the scan runs). Pass 3 spots a missing chapter as a
+                                    (default: the scan runs). Scan spots a missing chapter as a
                                     hole in the number sequence, which needs a known chapter on
                                     either side of it - so a chapter missing after the last one
                                     found is the one case nothing else can notice, and the file
@@ -2171,7 +2181,7 @@ public sealed class CliOptions
                                     for far less time. Nothing is scanned anyway when no chapter
                                     was found at all, after an --early-abort or
                                     --expected-start-chapter abort, or under
-                                    --ignore-chapter-numbers, which does away with pass 3
+                                    --ignore-chapter-numbers, which does away with Scan
                                     altogether.
               --no-denoise          Do not re-read a garbled announcement through the built-in
                                     speech denoiser (default: it may). On a dull-sounding
@@ -2220,7 +2230,7 @@ public sealed class CliOptions
                                     title, and no sequence gap is ever found or filled: passes 2.5
                                     and 3 never run and no file is tagged ".missing-marks". For
                                     books that restart their count per part, or number nothing at
-                                    all. Cannot be combined with --pass3-model,
+                                    all. Cannot be combined with --upgrade-model,
                                     --expected-start-chapter, --max-chapter-number,
                                     --chapter-count or --verify.
           -V, --verify              Check pre-existing chapter marks against the audio
@@ -2274,7 +2284,7 @@ public sealed class CliOptions
                                     the detection options have no effect and are rejected:
                                     --lang, --chapter-phrase, --prologue-phrase,
                                     --epilogue-phrase, --custom, --custom-file,
-                                    --ignore-chapter-numbers, --model, --pass3-model,
+                                    --ignore-chapter-numbers, --model, --upgrade-model,
                                     --mark-before-jingle, --jingle-first, --quick-marks,
                                     --mark-lead,
                                     --min-silence-length, --noise-floor, --early-abort,
@@ -2401,7 +2411,7 @@ public sealed class CliOptions
                                     startup line either way. Vulkan only; the CUDA backend keeps
                                     its own device 0.
               --vad-threads <n|auto>
-                                    Threads for the voice-activity pre-pass of pass 1 (default:
+                                    Threads for the voice-activity pre-pass of Analyze (default:
                                     auto - one per physical CPU core). Each thread holds about
                                     11 minutes of decoded audio while it works, so more of them
                                     also means more memory. "1" runs the pre-pass as a single

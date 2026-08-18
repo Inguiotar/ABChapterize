@@ -55,7 +55,7 @@ public sealed class SilenceThresholdProbeTests
     }
 
     /// <summary>A very quietly mastered book: at the default threshold the narration itself would
-    /// read as silence and pass 1 would return a candidate for every gap between two words.</summary>
+    /// read as silence and Analyze would return a candidate for every gap between two words.</summary>
     [Fact]
     public void QuietMaster_LowersTheThresholdBelowTheNarration()
     {

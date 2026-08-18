@@ -148,7 +148,7 @@ public sealed class JingleFirstScanTests : IDisposable
         Assert.False(Decide(Options("--jingle-first"), jingles: 30, hours: 15, freshRun: false).Run);
     }
 
-    /// <summary>The whole file, when the jingles yielded nothing - which is the ordinary Pass 2 in
+    /// <summary>The whole file, when the jingles yielded nothing - which is the ordinary Probe in
     /// all but name, and the right answer for a book whose music carries no announcements.</summary>
     [Fact]
     public void WithNoChapterFound_TheWholeRegionIsUnsettled()

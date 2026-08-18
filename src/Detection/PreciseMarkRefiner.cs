@@ -54,7 +54,7 @@ internal sealed class PreciseMarkRefiner
     /// <summary>
     /// How far back this file's music reaches (<see cref="JingleCensus.ReachSeconds"/>): the span
     /// <see cref="VerifyMarkBeforeJingleAsync"/> searches back over, since what it is verifying is a
-    /// walk across that music. Set per file once Pass 1 has counted the jingles; the bare margin it
+    /// walk across that music. Set per file once Analyze has counted the jingles; the bare margin it
     /// starts at is what a book with no jingles comes to anyway.
     /// <para>
     /// Deliberately not the bound on <see cref="FindOnsetEdgeAsync"/>'s plateau walk, which is a
@@ -68,7 +68,7 @@ internal sealed class PreciseMarkRefiner
     private readonly Action<string>? _debug;
     private readonly Func<float[], CancellationToken, Task<List<TranscriptSegment>>> _transcribeCounting;
 
-    /// <summary>The same through the heavier <c>--pass3-model</c>, or null when the run has no
+    /// <summary>The same through the heavier <c>--upgrade-model</c>, or null when the run has no
     /// upgrade model to fall back on - see <see cref="RefinePreciseMarkAsync"/>'s retry.</summary>
     private readonly Func<float[], string, CancellationToken, Task<List<TranscriptSegment>>>? _transcribeUpgraded;
 
@@ -104,7 +104,7 @@ internal sealed class PreciseMarkRefiner
     /// transcribe-with-stat-counting helper, so this class's transcriptions are tallied into the
     /// same per-file Whisper audio/time statistics as every other detection-path recognition,
     /// without duplicating that accumulation logic here.</param>
-    /// <param name="transcribeUpgraded">The same through the <c>--pass3-model</c> recognizer, which
+    /// <param name="transcribeUpgraded">The same through the <c>--upgrade-model</c> recognizer, which
     /// takes the language as well since that recognizer is not the one the file's language was set
     /// on; null when no upgrade model was chosen, which is what switches the retry off.</param>
     internal PreciseMarkRefiner(
@@ -247,7 +247,7 @@ internal sealed class PreciseMarkRefiner
     /// that is the search below.
     /// </para>
     /// <para>
-    /// A search that confirms nothing is run a second time through the <c>--pass3-model</c>
+    /// A search that confirms nothing is run a second time through the <c>--upgrade-model</c>
     /// recognizer, where the run has one that outclasses the probing model - the whole procedure
     /// again, not a patch on the first attempt, since which position the search converges on depends
     /// on every answer along the way. The failure this addresses is the model, not the geometry: a
@@ -299,7 +299,7 @@ internal sealed class PreciseMarkRefiner
     /// <param name="transcriptEnd">Absolute end of the audio the phrase was detected in, tightening
     /// that bracket where it can - see <see cref="MarkContext.Transcript"/> and
     /// <see cref="LocatePhraseByShrinkingWindowAsync"/>'s ceiling for the case where it cannot.</param>
-    /// <param name="silences">Every silence Pass 1 stored, chronological, for
+    /// <param name="silences">Every silence Analyze stored, chronological, for
     /// <see cref="AnchorOnsetToSoundAsync"/>. Empty is a valid input - a file whose audio offered no
     /// silence at all, or a caller that has none to hand - and simply skips that step.</param>
     /// <param name="speechResumesAt">Where the non-speech region this announcement follows gives way
@@ -323,7 +323,7 @@ internal sealed class PreciseMarkRefiner
             if (onset == null && _transcribeUpgraded is { } upgraded)
             {
                 _log?.Invoke($"phrase not confirmed near {FormatTimestamp(mark)} - " +
-                             "retrying with --pass3-model");
+                             "retrying with --upgrade-model");
                 _transcribe = (samples, innerCt) => upgraded(samples, language, innerCt);
                 try
                 {
@@ -380,7 +380,7 @@ internal sealed class PreciseMarkRefiner
     /// reconstructs well enough that the two are up to half a second apart - which a 0.35 s
     /// <c>--mark-lead</c> cannot absorb, so the mark lands on the announcement's own first word.
     /// <para>
-    /// Two steps, and the second is what makes the first honest. The silence Pass 1 recorded gives
+    /// Two steps, and the second is what makes the first honest. The silence Analyze recorded gives
     /// a floor: nothing audible precedes the end of a silence, so the announcement cannot begin
     /// before it. But that end is only a floor. silencedetect's verdict is one
     /// fixed level (<see cref="DefaultSilenceNoiseDb"/>, or whatever <c>--noise-floor</c> resolved
@@ -420,7 +420,7 @@ internal sealed class PreciseMarkRefiner
     /// </summary>
     /// <param name="onset">The onset <see cref="FindOnsetEdgeAsync"/> converged on; also the
     /// latest position the scan may return.</param>
-    /// <param name="silences">Every silence Pass 1 stored, chronological.</param>
+    /// <param name="silences">Every silence Analyze stored, chronological.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -516,7 +516,7 @@ internal sealed class PreciseMarkRefiner
     /// jingle into its announcements.
     /// </summary>
     /// <param name="onset">The onset to look behind.</param>
-    /// <param name="silences">Every silence Pass 1 stored, chronological.</param>
+    /// <param name="silences">Every silence Analyze stored, chronological.</param>
     private static double? PrecedingSilenceEnd(double onset, IReadOnlyList<Silence> silences)
     {
         double? floor = null;
@@ -1150,8 +1150,8 @@ internal sealed class PreciseMarkRefiner
     /// </para>
     /// <para>
     /// The anchor is additionally pulled in to just past every position that fails: a failure proves
-    /// the phrase ends before that position plus a phrase's length. That matters for a Pass 3 gap
-    /// chunk, whose matched segment can be far longer than Pass 2's whole window. It cannot
+    /// the phrase ends before that position plus a phrase's length. That matters for a Scan gap
+    /// chunk, whose matched segment can be far longer than Probe's whole window. It cannot
     /// invalidate an earlier answer - each new anchor still sits a full phrase margin past the
     /// onset, so anything that survived under the old one survives under the new one too. Near the
     /// failing position itself the anchor stops being what the decode obeys, since

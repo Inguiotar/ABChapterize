@@ -16,7 +16,7 @@ public readonly record struct SpeechSegment(double StartSeconds, double EndSecon
 /// time. Implemented by <see cref="SileroVadDetector"/>; the abstraction exists so
 /// <see cref="ABChapterize.Detection.ChapterDetector"/> can be unit-tested with synthetic
 /// speech segments, without loading the ONNX model. Runs on every file, as
-/// a Pass 2 candidate source alongside silence detection: a jingle is non-speech to a speech/non-speech classifier just like
+/// a Probe candidate source alongside silence detection: a jingle is non-speech to a speech/non-speech classifier just like
 /// silence is, so it shows up as a gap between two <see cref="SpeechSegment"/>s even on
 /// audiobooks where the jingle has no detectable amplitude gap around it (silencedetect finds
 /// nothing there at all in that case).

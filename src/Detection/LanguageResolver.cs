@@ -14,7 +14,7 @@ namespace ABChapterize.Detection;
 
 /// <summary>
 /// A file's settled language resolution. Always resolved: <see cref="LanguageResolver"/> runs to a
-/// profile before Pass 2 begins, so no pass ever has to cope with "not known yet" - which is what
+/// profile before Probe begins, so no pass ever has to cope with "not known yet" - which is what
 /// the detection passes' language handling used to be threaded with, back when the first probe
 /// window doubled as the language sample.
 /// </summary>
@@ -40,8 +40,8 @@ internal readonly record struct LanguageState(
 /// audio was English while hearing German, mostly obliged with English renderings - 292
 /// "Chapter N" against 17 "Kapitel N" across the log - so 29 of 30 chapters were still found.
 /// Chapter 25 was the one whose announcement never once came back in English. It was heard,
-/// correctly, three times (pass 2.5 at p=0.81, Pass 3 at p=0.79, Pass 3.5 at p=0.80) and
-/// discarded every time, at the cost of a further 40 minutes of Pass 2.5/3/3.5 hunting a phrase
+/// correctly, three times (Re-probe at p=0.81, Scan at p=0.79, Re-scan at p=0.80) and
+/// discarded every time, at the cost of a further 40 minutes of Re-probe/3/3.5 hunting a phrase
 /// that was already sitting in their own transcripts.
 /// </para>
 /// <para>

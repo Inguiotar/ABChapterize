@@ -25,7 +25,7 @@ public class SandwichedSilenceTests
 
     /// <summary>Runs the rule over a whole file's worth of silences. The stretch is wider than any
     /// audiobook so the region bounds never decide a case these tests are making.</summary>
-    /// <param name="all">Every silence Pass 1 kept.</param>
+    /// <param name="all">Every silence Analyze kept.</param>
     /// <param name="probed">The ones that already have a window.</param>
     private static List<Silence> Promote(Silence[] all, params Silence[] probed)
         => RegionProber.SandwichedSilences(all, probed, Floor, 0, 1_000_000).ToList();

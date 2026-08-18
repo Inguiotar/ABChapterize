@@ -16,7 +16,7 @@ namespace ABChapterize.Audio;
 /// <para>
 /// What was ruled out first, all measured over the sixteen-book corpus: container bitrate and sample
 /// rate say nothing (the darkest book sits mid-pack at 67 kbps while a 51 kbps one is fine), the
-/// room-tone and speech levels Pass 1 already computes say nothing (the darkest book's -96.3/-22.1
+/// room-tone and speech levels Analyze already computes say nothing (the darkest book's -96.3/-22.1
 /// is a twin of a perfectly clean book's -96.8/-25.1), and neither does Whisper's own confidence
 /// (the corpus's lowest-confidence book is a well-behaved one). This measure does track a listener's
 /// judgement - ranked against by-ear labels over the corpus it agrees at Spearman 0.90, and

@@ -54,11 +54,11 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Equal("/(?:^chapter ()|^() chapter|^chapter)/", o.ChapterPhrase);
         Assert.Equal("Chapter", o.Title);
         Assert.Equal("Intro", o.IntroTitle);
-        // The probing model and the pass-3 model are deliberately different by default: short probe
+        // The probing model and the upgrade model are deliberately different by default: short probe
         // windows are what "small" is better at, long transcriptions what "turbo" is better at.
         Assert.Equal("small", o.Model);
-        Assert.Equal("turbo", o.Pass3Model);
-        Assert.True(o.Pass3ModelIsUpgrade);
+        Assert.Equal("turbo", o.UpgradeModel);
+        Assert.True(o.UpgradeModelIsBetter);
         // The trailing scan is on unless --no-trailing-scan says otherwise.
         Assert.True(o.TrailingScan);
         Assert.Equal(1.5, o.MinSilenceSeconds);
@@ -612,7 +612,7 @@ public sealed class CliOptionsTests : IDisposable
         => Assert.True(ParseFile("--ignore-chapter-numbers")!.IgnoreChapterNumbers);
 
     [Theory]
-    [InlineData("--pass3-model", "large")]
+    [InlineData("--upgrade-model", "large")]
     [InlineData("--expected-start-chapter", "3")]
     [InlineData("--max-chapter-number", "40")]
     public void IgnoreChapterNumbers_RejectsANumberBasedOption(string opt, string value)
@@ -765,7 +765,7 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--lang", "de")]
     [InlineData("--chapter-phrase", "part")]
     [InlineData("--model", "small")]
-    [InlineData("--pass3-model", "large")]
+    [InlineData("--upgrade-model", "large")]
     [InlineData("--mark-before-jingle")]
     [InlineData("--quick-marks")]
     [InlineData("--no-trailing-scan")]
@@ -805,28 +805,53 @@ public sealed class CliOptionsTests : IDisposable
             Assert.Contains(named.Value, CliOptions.UsageText);
     }
 
+    /// <summary>
+    /// --pass3-model was this option's name until 0.12.1, when the passes stopped being numbered
+    /// and it stopped naming anything. It is still accepted, silently and with no deprecation
+    /// notice - the same bargain --title got - so no existing script has to be touched.
+    /// </summary>
     [Fact]
-    public void Pass3Model_DefaultsToTheMainModel()
+    public void UpgradeModel_StillAcceptsTheOldPass3ModelSpelling()
     {
-        Assert.Equal("turbo", ParseFile()!.Pass3Model);
-        Assert.Equal("small", ParseFile("--model", "small")!.Pass3Model);
+        Assert.Equal("large", ParseFile("--pass3-model", "large")!.UpgradeModel);
+        Assert.Equal(
+            ParseFile("--upgrade-model", "large")!.RunFingerprint,
+            ParseFile("--pass3-model", "large")!.RunFingerprint);
+    }
+
+    /// <summary>An error about a bad value quotes whichever spelling was typed, which is the whole
+    /// reason the parse site passes `name` through rather than a literal.</summary>
+    [Fact]
+    public void UpgradeModel_NamesTheSpellingTheUserTyped_InAnError()
+    {
+        Assert.Contains("--pass3-model", Assert.Throws<CliError>(
+            () => ParseFile("--pass3-model", "enormous")).Message);
+        Assert.Contains("--upgrade-model", Assert.Throws<CliError>(
+            () => ParseFile("--upgrade-model", "enormous")).Message);
     }
 
     [Fact]
-    public void Pass3Model_IsParsed_LongShortAndCaseNormalized()
+    public void UpgradeModel_DefaultsToTheMainModel()
     {
-        Assert.Equal("large", ParseFile("--pass3-model", "large")!.Pass3Model);
-        Assert.Equal("large", ParseFile("-M", "LARGE")!.Pass3Model);
+        Assert.Equal("turbo", ParseFile()!.UpgradeModel);
+        Assert.Equal("small", ParseFile("--model", "small")!.UpgradeModel);
+    }
+
+    [Fact]
+    public void UpgradeModel_IsParsed_LongShortAndCaseNormalized()
+    {
+        Assert.Equal("large", ParseFile("--upgrade-model", "large")!.UpgradeModel);
+        Assert.Equal("large", ParseFile("-M", "LARGE")!.UpgradeModel);
         // Independent of the main model, which keeps its own value.
-        var o = ParseFile("--model", "tiny", "--pass3-model", "large")!;
+        var o = ParseFile("--model", "tiny", "--upgrade-model", "large")!;
         Assert.Equal("tiny", o.Model);
-        Assert.Equal("large", o.Pass3Model);
+        Assert.Equal("large", o.UpgradeModel);
     }
 
     [Fact]
-    public void InvalidPass3Model_IsRejected()
+    public void InvalidUpgradeModel_IsRejected()
     {
-        Assert.Throws<CliError>(() => ParseFile("--pass3-model", "gigantic"));
+        Assert.Throws<CliError>(() => ParseFile("--upgrade-model", "gigantic"));
     }
 
     /// <summary>Creates a fake GGML file of the given size in the temp directory and returns the
@@ -845,9 +870,9 @@ public sealed class CliOptionsTests : IDisposable
     public void CustomModel_IsAcceptedForBothModelOptions_AsAnAbsolutePath()
     {
         var selector = CustomModel("my-finetune.bin", 1000);
-        var o = ParseFile("--model", selector, "--pass3-model", selector)!;
+        var o = ParseFile("--model", selector, "--upgrade-model", selector)!;
         Assert.Equal(selector, o.Model);
-        Assert.Equal(selector, o.Pass3Model);
+        Assert.Equal(selector, o.UpgradeModel);
     }
 
     [Fact]
@@ -862,7 +887,7 @@ public sealed class CliOptionsTests : IDisposable
     public void CustomModel_IsResolvedToAnAbsolutePath()
     {
         // Two spellings of one file must produce one selector: that string comparison is what
-        // decides whether pass 3 loads a second model at all.
+        // decides whether Scan loads a second model at all.
         var absolute = ParseFile("-m", CustomModel("m.bin", 1000))!.Model;
         var viaDots = ParseFile("-m", $"custom:{Path.Combine(_dir, "sub", "..", "m.bin")}")!.Model;
         Assert.Equal(absolute, viaDots);
@@ -886,11 +911,11 @@ public sealed class CliOptionsTests : IDisposable
     public void CustomModel_RanksAgainstBuiltInModelsBySize()
     {
         // Bigger than "large" (3.1 GB) is not worth writing to disk, so the comparison is made in
-        // the other direction: a 1 KB file is lighter than every built-in model, and pass 2.5 is
+        // the other direction: a 1 KB file is lighter than every built-in model, and Re-probe is
         // therefore off in one direction and on in the other.
         var tinyCustom = CustomModel("small-custom.bin", 1000);
-        Assert.False(ParseFile("--model", "tiny", "--pass3-model", tinyCustom)!.Pass3ModelIsUpgrade);
-        Assert.True(ParseFile("--model", tinyCustom, "--pass3-model", "tiny")!.Pass3ModelIsUpgrade);
+        Assert.False(ParseFile("--model", "tiny", "--upgrade-model", tinyCustom)!.UpgradeModelIsBetter);
+        Assert.True(ParseFile("--model", tinyCustom, "--upgrade-model", "tiny")!.UpgradeModelIsBetter);
     }
 
     [Fact]
@@ -898,8 +923,8 @@ public sealed class CliOptionsTests : IDisposable
     {
         var smaller = CustomModel("a.bin", 1000);
         var bigger = CustomModel("b.bin", 2000);
-        Assert.True(ParseFile("-m", smaller, "-M", bigger)!.Pass3ModelIsUpgrade);
-        Assert.False(ParseFile("-m", bigger, "-M", smaller)!.Pass3ModelIsUpgrade);
+        Assert.True(ParseFile("-m", smaller, "-M", bigger)!.UpgradeModelIsBetter);
+        Assert.False(ParseFile("-m", bigger, "-M", smaller)!.UpgradeModelIsBetter);
     }
 
     [Fact]
@@ -912,7 +937,7 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Theory]
-    // Strictly better than the pass-2 model: pass 2.5's gap re-probe is worth its transcriptions.
+    // Strictly better than the probe model: Re-probe's gap re-probe is worth its transcriptions.
     [InlineData("tiny", "large", true)]
     [InlineData("base", "small", true)]
     [InlineData("medium", "turbo", true)]
@@ -922,49 +947,49 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("large", "turbo", false)]
     [InlineData("turbo", "medium", false)]
     [InlineData("small", "tiny", false)]
-    public void Pass3ModelIsUpgrade_RanksTheModelsByQuality(string model, string pass3Model, bool expected)
+    public void UpgradeModelIsBetter_RanksTheModelsByQuality(string model, string upgradeModel, bool expected)
     {
-        var o = ParseFile("--model", model, "--pass3-model", pass3Model)!;
-        Assert.Equal(expected, o.Pass3ModelIsUpgrade);
+        var o = ParseFile("--model", model, "--upgrade-model", upgradeModel)!;
+        Assert.Equal(expected, o.UpgradeModelIsBetter);
     }
 
     [Fact]
-    public void Pass3Model_FollowsTheModelChosen_UnlessNeitherWasNamed()
+    public void UpgradeModel_FollowsTheModelChosen_UnlessNeitherWasNamed()
     {
-        // Naming --model alone re-points pass 3 at it, so there is nothing to upgrade to and pass 2.5
+        // Naming --model alone re-points Scan at it, so there is nothing to upgrade to and Re-probe
         // stays off - which is what keeps "-m large" meaning large throughout rather than large
-        // probing and a quietly lighter pass 3.
+        // probing and a quietly lighter Scan.
         var picked = ParseFile("--model", "tiny")!;
-        Assert.Equal("tiny", picked.Pass3Model);
-        Assert.False(picked.Pass3ModelIsUpgrade);
-        // Naming neither keeps the small/turbo pair, and with it the upgrade that turns pass 2.5 on.
+        Assert.Equal("tiny", picked.UpgradeModel);
+        Assert.False(picked.UpgradeModelIsBetter);
+        // Naming neither keeps the small/turbo pair, and with it the upgrade that turns Re-probe on.
         var bare = ParseFile()!;
-        Assert.Equal("turbo", bare.Pass3Model);
-        Assert.True(bare.Pass3ModelIsUpgrade);
+        Assert.Equal("turbo", bare.UpgradeModel);
+        Assert.True(bare.UpgradeModelIsBetter);
     }
 
     [Theory]
-    // Strictly lighter than the pass-2 model: the one unambiguous "get the stragglers over with".
+    // Strictly lighter than the probe model: the one unambiguous "get the stragglers over with".
     [InlineData("large", "turbo", true)]
     [InlineData("small", "tiny", true)]
     // Equal or better is not a downgrade - and equal is neither direction, which is the whole
-    // reason this is not simply the negation of Pass3ModelIsUpgrade.
+    // reason this is not simply the negation of UpgradeModelIsBetter.
     [InlineData("large", "large", false)]
     [InlineData("tiny", "tiny", false)]
     [InlineData("base", "small", false)]
-    public void Pass3ModelIsDowngrade_IsOnlyTheStrictlyLighterDirection(
-        string model, string pass3Model, bool expected)
+    public void UpgradeModelIsWorse_IsOnlyTheStrictlyLighterDirection(
+        string model, string upgradeModel, bool expected)
     {
-        var o = ParseFile("--model", model, "--pass3-model", pass3Model)!;
-        Assert.Equal(expected, o.Pass3ModelIsDowngrade);
+        var o = ParseFile("--model", model, "--upgrade-model", upgradeModel)!;
+        Assert.Equal(expected, o.UpgradeModelIsWorse);
     }
 
     [Fact]
-    public void Pass3ModelIsDowngrade_IsFalse_WhenNoPass3ModelWasGivenAtAll()
+    public void UpgradeModelIsWorse_IsFalse_WhenNoUpgradeModelWasGivenAtAll()
     {
-        // The default mirrors --model, so pass 3's shifted re-read stays available.
-        Assert.False(ParseFile("--model", "large")!.Pass3ModelIsDowngrade);
-        Assert.False(ParseFile()!.Pass3ModelIsDowngrade);
+        // The default mirrors --model, so Scan's shifted re-read stays available.
+        Assert.False(ParseFile("--model", "large")!.UpgradeModelIsWorse);
+        Assert.False(ParseFile()!.UpgradeModelIsWorse);
     }
 
     [Fact]
@@ -1467,7 +1492,7 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--lang", "de"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--backup"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--verify"));
-        Assert.Throws<CliError>(() => ParseDir("--revert", "--pass3-model", "large"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--upgrade-model", "large"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--mark-before-jingle"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--quick-marks"));
         Assert.Throws<CliError>(() => ParseDir("--revert", "--no-trailing-scan"));

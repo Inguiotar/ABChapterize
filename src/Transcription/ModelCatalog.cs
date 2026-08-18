@@ -27,7 +27,7 @@ public static class ModelCatalog
     /// Every built-in model selector, smallest first. The one list of them: <see cref="Models"/>
     /// must hold an entry for each (pinned by the catalog's tests, since nothing in the type system
     /// says so), and <c>CliOptions</c> validates a command line against this rather than against a
-    /// copy of its own. The order is the quality order the ranking behind <c>--pass3-model</c>
+    /// copy of its own. The order is the quality order the ranking behind <c>--upgrade-model</c>
     /// reads, so a new model belongs in its rightful place rather than appended: "turbo"
     /// (large-v3-turbo) sits just below "large", a distilled large that trades a little accuracy
     /// for a lot of speed and is still clearly ahead of "medium".
@@ -73,7 +73,7 @@ public static class ModelCatalog
     };
 
     /// <summary>
-    /// Prefix marking a <c>--model</c>/<c>--pass3-model</c> selector as a GGML file of the user's
+    /// Prefix marking a <c>--model</c>/<c>--upgrade-model</c> selector as a GGML file of the user's
     /// own rather than one of the catalog's, e.g. <c>custom:D:\models\my-finetune.bin</c>. What
     /// follows it is a path, already resolved to an absolute one by
     /// <see cref="CliOptions.ParseModelSelector"/>, so two spellings of the same file compare equal
@@ -93,7 +93,7 @@ public static class ModelCatalog
     /// How big the model behind a selector is, in bytes: the catalog's recorded size for a built-in
     /// one - available whether or not it has been downloaded yet - and the file's real size for a
     /// <c>custom:</c> one. This is the whole basis on which two models are ranked against each
-    /// other (see <see cref="CliOptions.Pass3ModelIsUpgrade"/>): nothing about a GGML file
+    /// other (see <see cref="CliOptions.UpgradeModelIsBetter"/>): nothing about a GGML file
     /// advertises how capable it is, but within the Whisper family a larger file has always been
     /// the more capable model, and a fine-tune keeps the size of the model it was derived from.
     /// </summary>
@@ -125,7 +125,7 @@ public static class ModelCatalog
     /// <exception cref="AppError">
     /// Thrown when the download fails; the message contains step-by-step manual instructions.
     /// Also when a custom model file has disappeared since the command line was parsed - which is
-    /// worth its own check because the pass-3 model is only resolved once a file reaches pass 3,
+    /// worth its own check because the upgrade model is only resolved once a file reaches Scan,
     /// possibly hours into a run.
     /// </exception>
     public static async Task<string> EnsureModelAsync(
@@ -172,8 +172,8 @@ public static class ModelCatalog
     /// <summary>
     /// Writes one of a download's own lines to wherever it is being reported. Null means the
     /// console, which is where the run's model is fetched from - before any progress bar exists. A
-    /// <c>--pass3-model</c> is resolved hours into a run with the bar live and redrawing four times
-    /// a second, so <see cref="Pass3Transcriber"/> passes a reporter that goes through the renderer
+    /// <c>--upgrade-model</c> is resolved hours into a run with the bar live and redrawing four times
+    /// a second, so <see cref="UpgradeTranscriber"/> passes a reporter that goes through the renderer
     /// instead; two things writing to the same terminal line garble both.
     /// </summary>
     /// <param name="report">The caller's reporter, or null for the console.</param>
@@ -305,7 +305,7 @@ public static class ModelCatalog
     /// <param name="expectedSha256">The pinned SHA-256.</param>
     /// <param name="expectedSha3_256">The pinned SHA3-256.</param>
     /// <param name="report">Where to write the one note this can emit, or null for the console.
-    /// Threaded through for the reason <see cref="Report"/> records: a --pass3-model download runs
+    /// Threaded through for the reason <see cref="Report"/> records: a --upgrade-model download runs
     /// hours into a run with the progress bar live, and a direct Console.WriteLine lands on the very
     /// line the bar is redrawing.</param>
     private static void VerifyHashes(
