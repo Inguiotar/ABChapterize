@@ -705,6 +705,13 @@ ignored: `--pass3-model`, `--expected-start-chapter`, `--max-chapter-number`,
 `--chapter-count` and `--verify`. `--chapter-phrase` and `--chapter-title` remain
 perfectly useful and are accepted.
 
+A file another run already tagged `.missing-marks-…` is not picked up either:
+the tag is a statement about chapter numbers, which this run forms no opinion
+about, so such a file is treated like any other one already carrying marks and
+skipped unless `--force` asks for a detection from scratch. The blind scan after
+the last chapter does not run here either — it lives in pass 3, and pass 3 does
+not run at all.
+
 ### Books that count from one again in every part
 
 Some books are divided into parts, and each part starts its chapters over at
