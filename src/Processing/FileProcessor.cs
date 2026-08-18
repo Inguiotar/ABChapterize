@@ -10,6 +10,7 @@ using ABChapterize.Concurrency;
 using ABChapterize.Detection;
 using ABChapterize.Errors;
 using ABChapterize.Gpu;
+using ABChapterize.Hooks;
 using ABChapterize.Transcription;
 using ABChapterize.Ui;
 using ABChapterize.Vad;
@@ -653,9 +654,9 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// The per-file pipeline's opening and closing: probe, decoder resolution, the --debug log, and
-    /// - once <see cref="CommitOneAsync"/> has decided the file's fate - taking that log along when
-    /// the file loses its ".missing-marks" tag.
+    /// The per-file pipeline's opening and closing: probe, decoder resolution, the two hooks, the
+    /// --debug log, and - once <see cref="CommitOneAsync"/> has decided the file's fate - taking
+    /// that log along when the file loses its ".missing-marks" tag.
     /// </summary>
     /// <param name="file">Path of the file to process.</param>
     /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
@@ -674,37 +675,73 @@ public sealed class FileProcessor
         // The ordinary log sink; every message is prefixed with the file name.
         var log = _options.LoggingEnabled ? (Action<string>)(msg => _progress.Log($"{name}: {msg}")) : null;
         // The --debug file can only be opened once the probe has run, since its header describes
-        // what the probe found - so the probe and the decoder resolution log to the ordinary sink
-        // alone. Nothing is lost by that: the header restates everything those two lines carry.
-        var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
-        if (await ResolveXheAacDecoderAsync(
-                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), ct)
-            is not { } probed)
+        // what the probe found - so the probe, the decoder resolution and --run-before log to the
+        // ordinary sink alone. Nothing is lost by that: the header restates everything the first
+        // two carry, and a log opened before the hook would describe a file the hook then replaced.
+        if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, ct) is not { } opened)
             return null;
+        var (probed, plan) = opened;
+
+        if (_options.RunBefore is { } before)
+        {
+            if (!await RunBeforeHookAsync(before, probed, ct))
+                return null;
+            // The command may have joined a split book, re-encoded it or replaced it outright, so
+            // everything the first probe established about the file is hearsay from here on.
+            // Skipped under --dry-run, where nothing ran and so nothing can have changed.
+            if (!_options.DryRun)
+            {
+                if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, ct) is not { } reopened)
+                    return null;
+                (probed, plan) = reopened;
+            }
+        }
+
         using var debug = _options.Debug ? DebugLog.Open(file, _options, probed.Info) : null;
         var ctx = probed with { Logs = new DetectionLog(log, debug != null ? debug.Write : null) };
 
-        var renamedTo = await CommitOneAsync(ctx, detector, watch, ct);
+        // Whether the run ended up leaving the file alone is asked of RunOutcomes rather than
+        // tracked separately: every skip there is - the pre-existing marks, --verify's two refusals
+        // - is recorded there already, and a second opinion could only ever disagree with the
+        // listing --summary prints from it.
+        var skippedBefore = _outcomes.SkippedCount;
+        var renamedTo = await CommitOneAsync(ctx, detector, plan, watch, ct);
         // The debug log belongs beside the audiobook under the book's own name, so it follows the
         // file back when the tag comes off - but not when one is put on, where the untagged name it
         // already has is the right one (see DebugLog.PathFor).
         if (renamedTo != null && !MissingMarksTag.IsTagged(renamedTo))
             debug?.FollowTo(renamedTo);
+        if (_outcomes.SkippedCount == skippedBefore)
+            await RunAfterHookAsync(renamedTo ?? file, name, ct);
         return renamedTo;
     }
 
     /// <summary>
-    /// Decides and commits one file's fate: a resume of a previously tagged file, a skip, or a
-    /// detection run whose result one of the report/write stages below writes out.
+    /// What the marks a file already carries, and its own name, say is to happen to it.
     /// </summary>
-    /// <param name="ctx">The file's context.</param>
-    /// <param name="detector">The run's single detector, reused for every file: there is one
-    /// per run rather than one per file, and files are processed strictly one at a time.</param>
-    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The name the file was renamed to, or null when it kept its own.</returns>
-    private async Task<string?> CommitOneAsync(
-        FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
+    /// <remarks>
+    /// Decided once, ahead of the <c>--run-before</c> hook, because a file this run is not going to
+    /// touch must not run a hook either - and read again by <see cref="CommitOneAsync"/>, so that
+    /// the decision is reached in one place rather than in two that can drift apart.
+    /// </remarks>
+    private enum FilePlan
+    {
+        /// <summary>Re-probe only the gap(s) the file's ".missing-marks" tag names.</summary>
+        Resume,
+
+        /// <summary>Detect the whole file.</summary>
+        Detect,
+
+        /// <summary>Check the marks the file already carries before deciding (--verify).</summary>
+        Verify,
+
+        /// <summary>Leave the file alone: it is already marked and nothing says to redo it.</summary>
+        Skip,
+    }
+
+    /// <summary>Applies the "what happens to this file" policy - see <see cref="FilePlan"/>.</summary>
+    /// <param name="ctx">The file's context, carrying its probe result.</param>
+    private FilePlan PlanFor(FileContext ctx)
     {
         // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
         // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed marks
@@ -714,9 +751,61 @@ public sealed class FileProcessor
         // opinion about them re-detects the file from scratch instead - the tag is simply not this
         // run's business.
         if (!_options.Force && !_options.IgnoreChapterNumbers && MissingMarksTag.IsResumable(ctx.File))
+            return FilePlan.Resume;
+        if (!EvaluateExistingChapters(ctx.Info).Skip)
+            return FilePlan.Detect;
+        return _options.Verify ? FilePlan.Verify : FilePlan.Skip;
+    }
+
+    /// <summary>
+    /// Opens one file: probes it, settles which decoder its audio needs, and decides what is to
+    /// happen to it. A unit of its own because <c>--run-before</c> may rewrite the very file it ran
+    /// for, so the whole sequence is repeated afterwards rather than any part of it being trusted
+    /// across the hook.
+    /// </summary>
+    /// <param name="file">Path of the file to open.</param>
+    /// <param name="name">Its bare file name.</param>
+    /// <param name="work">Its progress tracker, already started.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="log">Its ordinary log sink, or null when nothing is listening.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The file's context and what is to be done with it, or null when it is not going to
+    /// be worked on at all - in which case it has already been counted and reported.</returns>
+    private async Task<(FileContext Ctx, FilePlan Plan)?> OpenAndPlanAsync(
+        string file, string name, WorkTracker work, FfmpegClient ffmpeg, Action<string>? log,
+        CancellationToken ct)
+    {
+        var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
+        if (await ResolveXheAacDecoderAsync(
+                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), ct)
+            is not { } probed)
+            return null;
+        var plan = PlanFor(probed);
+        if (plan is not FilePlan.Skip)
+            return (probed, plan);
+        ReportSkipped(work, name, $"has {info.ChapterCount} chapter mark(s)");
+        return null;
+    }
+
+    /// <summary>
+    /// Decides and commits one file's fate: a resume of a previously tagged file, a skip, or a
+    /// detection run whose result one of the report/write stages below writes out.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="detector">The run's single detector, reused for every file: there is one
+    /// per run rather than one per file, and files are processed strictly one at a time.</param>
+    /// <param name="plan">What <see cref="PlanFor"/> decided is to happen to this file, before
+    /// the <c>--run-before</c> hook was given its chance to change it.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The name the file was renamed to, or null when it kept its own.</returns>
+    private async Task<string?> CommitOneAsync(
+        FileContext ctx, ChapterDetector detector, FilePlan plan, Stopwatch watch, CancellationToken ct)
+    {
+        if (plan is FilePlan.Resume)
             return await ProcessResumeAsync(ctx, detector, watch, ct);
 
-        if (await DetectChaptersAsync(ctx, detector, ct) is not { } outcome)
+        if (await DetectChaptersAsync(ctx, detector, plan, ct) is not { } outcome)
             return null;
         var (result, dropped, note) = outcome;
 
@@ -872,29 +961,122 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Applies the pre-existing-mark policy and runs the detection it calls for: a plain
-    /// whole-file detection when nothing stands in the way, the --verify decision tree when
-    /// marks exist and are to be checked, or no detection at all when the file is simply
-    /// skipped.
+    /// Runs the detection this file's <see cref="FilePlan"/> calls for: a plain whole-file
+    /// detection, or the --verify decision tree for a file whose existing marks are to be checked
+    /// first.
     /// </summary>
+    /// <remarks>
+    /// The pre-existing marks are re-read here rather than carried over from the planning, so that
+    /// a file a <c>--run-before</c> command rewrote is described by what it holds now.
+    /// </remarks>
     /// <param name="ctx">The file's context.</param>
     /// <param name="detector">The detector borrowed for this file.</param>
+    /// <param name="plan">What is to happen to this file. Never <see cref="FilePlan.Skip"/>, which
+    /// is settled before either hook runs, nor <see cref="FilePlan.Resume"/>, which never reaches
+    /// this far.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detection result and the note describing what happened to any existing
-    /// marks, or null when the file was skipped - in which case it has already been counted
+    /// marks, or null when the file was left alone - in which case it has already been counted
     /// and reported.</returns>
     private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> DetectChaptersAsync(
-        FileContext ctx, ChapterDetector detector, CancellationToken ct)
+        FileContext ctx, ChapterDetector detector, FilePlan plan, CancellationToken ct)
     {
-        var (skip, dropped) = EvaluateExistingChapters(ctx.Info);
-        if (!skip)
-            return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), dropped, "");
-        if (_options.Verify)
+        if (plan is FilePlan.Verify)
             return await VerifyThenDetectAsync(ctx, detector, ct);
-
-        ReportSkipped(ctx.Work, ctx.Name, $"has {ctx.Info.ChapterCount} chapter mark(s)");
-        return null;
+        var (_, dropped) = EvaluateExistingChapters(ctx.Info);
+        return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), dropped, "");
     }
+
+    /// <summary>
+    /// Runs the <c>--run-before</c> command for one file.
+    /// </summary>
+    /// <param name="template">The command line to resolve and run.</param>
+    /// <param name="ctx">The file's context, as the probe left it.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True when the file may go on to be processed; false when the command failed, in
+    /// which case the file has already been counted, reported and finished. Skipping it is the
+    /// conservative reading of a failure: the preparation this option exists for did not happen,
+    /// and marking a file that is in an unknown state is worse than not marking it at all.</returns>
+    private async Task<bool> RunBeforeHookAsync(
+        CommandTemplate template, FileContext ctx, CancellationToken ct)
+    {
+        var result = await RunHookAsync(template, "--run-before", ctx.File, ctx.Name, ct);
+        if (result.ExitCode == 0)
+            return true;
+        _warnings++;
+        _outcomes.RecordSkipped(ctx.Name, $"--run-before failed (exit code {result.ExitCode})");
+        _progress.FinishWithSummary(ctx.Work,
+            $"{ctx.Name}: WARNING - --run-before exited with code {result.ExitCode}" +
+            $"{DescribeHookFailure(result)}; file skipped", important: true);
+        return false;
+    }
+
+    /// <summary>
+    /// Runs the <c>--run-after</c> command for one finished file, where there is one to run and the
+    /// file is in a state worth announcing as finished.
+    /// </summary>
+    /// <param name="file">The file's path as it stands now, which is not the one it arrived under
+    /// if this run added or dropped a ".missing-marks" tag.</param>
+    /// <param name="name">Its bare file name, for the console lines.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task RunAfterHookAsync(string file, string name, CancellationToken ct)
+    {
+        if (_options.RunAfter is not { } template)
+            return;
+        // A tagged file is coming back in a later run, so a command that archives or tidies up
+        // after a finished book must not be told this one is finished.
+        if (MissingMarksTag.IsTagged(file))
+            return;
+        var result = await RunHookAsync(template, "--run-after", file, name, ct);
+        if (result.ExitCode == 0)
+            return;
+        _warnings++;
+        // Announced rather than finishing the file's line: that line was printed the moment the
+        // file was written, and this is news about what happened to it afterwards. Nothing is
+        // withheld from the file itself - it is already written, and there is nothing left to
+        // withhold.
+        _progress.Announce(
+            $"{name}: WARNING - --run-after exited with code {result.ExitCode}" +
+            DescribeHookFailure(result));
+    }
+
+    /// <summary>
+    /// Resolves a hook's placeholders for one file and runs it - or, under --dry-run, prints the
+    /// command line it would have run and reports success, that mode's promise being that nothing
+    /// on the machine is touched.
+    /// </summary>
+    /// <param name="template">The command line to resolve and run.</param>
+    /// <param name="option">Which of the two hooks this is, for the log lines.</param>
+    /// <param name="file">The file the hook is running for.</param>
+    /// <param name="name">Its bare file name, which every line for it is prefixed with.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<HookRunner.HookResult> RunHookAsync(
+        CommandTemplate template, string option, string file, string name, CancellationToken ct)
+    {
+        var command = template.Expand(file);
+        if (_options.DryRun)
+        {
+            // The one hook line worth printing without --verbose: under --dry-run the command line
+            // is the answer the user came for, not a note about how the run got there.
+            var announcement = $"{name}: DRY RUN - {option} would run: {command}";
+            if (_options.Quiet)
+                _progress.Log(announcement);
+            else
+                _progress.Announce(announcement);
+            return new HookRunner.HookResult(0, null);
+        }
+        _progress.Log($"{name}: {option}: {command}");
+        return await HookRunner.RunAsync(command, line => _progress.Log($"{name}: {option}| {line}"), ct);
+    }
+
+    /// <summary>
+    /// The command's own last word, appended to the warning line a failure produces. Worth carrying
+    /// because the most common failure by far - a mistyped or missing program - explains itself in
+    /// one line that would otherwise only be visible under --verbose.
+    /// </summary>
+    /// <param name="result">The failed hook run.</param>
+    private static string DescribeHookFailure(HookRunner.HookResult result)
+        => result.LastOutputLine is { } line ? $" ({line})" : "";
 
     /// <summary>
     /// Lists and reports one skipped file. The reason is worded so that it can stand alone under
@@ -1442,8 +1624,14 @@ public sealed class FileProcessor
         _progress.Start(name, work);
         try
         {
+            // The hook is asked of RunOutcomes for the same reason the detection path asks it (see
+            // ProcessOneCoreAsync): both of this mode's refusals - no sidecar, marks already there
+            // - are recorded as skips, and a file the run left alone runs neither hook.
+            var skippedBefore = _outcomes.SkippedCount;
             await ImportOneCoreAsync(file, name, work, ffmpeg, ct);
             pending.Progress?.MarkDone(file, null);
+            if (_outcomes.SkippedCount == skippedBefore)
+                await RunAfterHookAsync(file, name, ct);
         }
         catch (OperationCanceledException)
         {
@@ -1484,6 +1672,27 @@ public sealed class FileProcessor
         {
             ReportSkipped(work, name, $"has {info.ChapterCount} chapter mark(s)");
             return;
+        }
+
+        if (_options.RunBefore is { } before)
+        {
+            var probed = new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg);
+            if (!await RunBeforeHookAsync(before, probed, ct))
+                return;
+            // Re-probed for the same reason the detection path re-probes: the command may have
+            // rewritten the file, and its duration is what the chapters are about to be written
+            // against. The mark policy is applied again with it, so a command that marked the file
+            // itself is not marked over.
+            if (!_options.DryRun)
+            {
+                info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
+                (skip, dropped) = EvaluateExistingChapters(info);
+                if (skip)
+                {
+                    ReportSkipped(work, name, $"has {info.ChapterCount} chapter mark(s)");
+                    return;
+                }
+            }
         }
 
         var text = await File.ReadAllTextAsync(sidecarPath, ct);

@@ -201,6 +201,14 @@ abchapterize --export "My Audiobook.m4b"
 # without re-running Whisper:
 abchapterize --import --force "My Audiobook.m4b"
 
+# Run your own commands around each file - here: normalize it first, then file
+# the backup away afterwards. "$99" is the file's whole path, "$1" its name;
+# names with spaces are quoted for the shell for you:
+abchapterize --recurse --backup \
+             --run-before "abnormalize $99" \
+             --run-after "mv $99.bak ~/archive/$1" \
+             ~/audiobooks
+
 # Files are processed one at a time, each with the whole machine. Leave a few
 # cores free for whatever else the machine is doing:
 abchapterize --recurse --vad-threads 6 --whisper-threads 6 "D:\Audiobooks"
@@ -284,6 +292,8 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `--cleanup` | Housekeeping instead of processing: undo the traces earlier runs left in the folder, printing a line per change. Leftover temporary files, `.debug.log` logs and interrupted runs' progress files are deleted, `.missing-marks-...` name tags are taken off, and `*.bak` backups are deleted — but only where the file they back up is next to them and runs the same length, so it can never throw away the only copy of anything. Add `--revert` to restore the backups instead of deleting them. Shows you the list and waits for a "yes" first. |
 | `--yes` | Answer `--cleanup`'s prompt in advance — required for a scripted cleanup, which has no console to be asked at. |
 | `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter`; combinable only with `--recurse` and the output options. |
+| `--run-before <cmd>` | Run a shell command for each file just before it is worked on — and only for a file the run actually works on, so a skipped one runs neither hook. `$1` is the file name, `$0` it without its extension, `$99` its whole path, `$-1` its folder; they are quoted for the shell as needed. A non-zero exit skips the file. Under `--dry-run` the command is printed rather than run. See [the manual](doc/manual.md#running-your-own-commands-around-each-file) for the whole placeholder syntax. |
+| `--run-after <cmd>` | Run a shell command for each file once it is finished. Same placeholders and the same rules, plus one more: it does not run for a file left tagged `.missing-marks-...`, which a later run is expected to pick up again. |
 | `--ignore-progress` | Start every listed folder over instead of resuming it. While a folder is being processed, the files finished so far are recorded in an `.abchapterize-progress` file inside it, which is deleted again as soon as that folder is done — so an interrupted run resumes by itself when the same command is run again. Progress recorded under different options is discarded automatically, so this is only needed to redo files the very same command already finished. |
 
 **Logging & display**

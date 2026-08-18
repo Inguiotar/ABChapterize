@@ -10,6 +10,7 @@ using System.Text.RegularExpressions;
 using ABChapterize.Concurrency;
 using ABChapterize.Detection;
 using ABChapterize.Errors;
+using ABChapterize.Hooks;
 using ABChapterize.Language;
 using ABChapterize.Language.Phrases;
 using ABChapterize.Transcription;
@@ -72,6 +73,34 @@ public sealed class CliOptions
     /// to the ".missing-marks" auto-resume of an individual file, which is governed by --force.
     /// </summary>
     public bool IgnoreProgress { get; private set; }
+
+    /// <summary>
+    /// Shell command run for each file just before it is worked on (--run-before), or null.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not run for a file this run then leaves alone: it fires after the file has been
+    /// probed and the pre-existing-mark policy applied, so a book skipped for already carrying marks
+    /// runs neither hook. That ordering is also why the file is probed a second time afterwards -
+    /// a command that joins a split book or re-encodes it has changed everything the first probe
+    /// established. A non-zero exit skips the file with a warning: the preparation this option
+    /// exists for did not happen, and acting on a file in an unknown state is the one thing worse
+    /// than not acting on it. See <see cref="ABChapterize.Hooks.CommandTemplate"/> for the
+    /// placeholders and their quoting.
+    /// </remarks>
+    public CommandTemplate? RunBefore { get; private set; }
+
+    /// <summary>
+    /// Shell command run for each file once it is finished (--run-after), or null.
+    /// </summary>
+    /// <remarks>
+    /// Runs only where <see cref="RunBefore"/> would have, and additionally not for a file left
+    /// carrying a ".missing-marks" tag: such a file is expected back in a later run, so an archiving
+    /// or clean-up command must not treat it as done. Its placeholders resolve against the name the
+    /// file has by then, which is not the one it arrived under if the run added or dropped a tag.
+    /// A non-zero exit is reported and nothing more - the file itself is already written, and there
+    /// is nothing left to withhold from it.
+    /// </remarks>
+    public CommandTemplate? RunAfter { get; private set; }
 
     /// <summary>
     /// Two-letter ISO 639-1 language hint for Whisper, or "auto" (--lang / -l, default "auto").
@@ -851,7 +880,8 @@ public sealed class CliOptions
            || _phraseSpec != null || _titleSpec != null || _partTitleSpec != null || _introSpec != null
            || _prologuePhraseSpec != null || _prologueTitleSpec != null
            || _epiloguePhraseSpec != null || _epilogueTitleSpec != null
-           || _customMappings.Count > 0 || IgnoreChapterNumbers;
+           || _customMappings.Count > 0 || IgnoreChapterNumbers
+           || RunBefore != null || RunAfter != null;
 
     /// <summary>
     /// Short hash of every option that changes what a run does to a file - the language and
@@ -900,6 +930,7 @@ public sealed class CliOptions
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
+                $"runbefore={RunBefore?.Raw}", $"runafter={RunAfter?.Raw}",
             ]);
             return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(relevant)))[..16];
         }
@@ -1341,6 +1372,8 @@ public sealed class CliOptions
                     "--jobs was removed: files are no longer processed several at a time, so that the " +
                     "whole machine goes into each one. Use --vad-threads and --whisper-threads to " +
                     "control how many threads that is.");
+            case "--run-before": RunBefore = CommandTemplate.Parse(nextParam(), name); return true;
+            case "--run-after": RunAfter = CommandTemplate.Parse(nextParam(), name); return true;
             case "--log-file": LogFilePath = ParseLogFilePath(nextParam()); return true;
             case "--color": Color = ParseColorMode(nextParam()); return true;
             default: return false;
@@ -2208,6 +2241,22 @@ public sealed class CliOptions
                                     regexp or extension list actually matches the intended files
                                     before a real run. Requires --filter; combinable with
                                     --recurse and the output options, but nothing else.
+              --run-before <cmd>    Run a shell command for each file just before it is worked
+                                    on, and only for a file this run actually works on: a
+                                    file skipped (e.g. for already carrying marks) runs
+                                    neither hook. The file is re-probed afterwards, so a
+                                    command that rewrites it is accounted for; a non-zero
+                                    exit skips the file with a warning.
+              --run-after <cmd>     Run a shell command for each file once it is finished.
+                                    Skipped under the same conditions as --run-before, and
+                                    additionally for a file left tagged ".missing-marks",
+                                    which a later run is expected to pick up again.
+                                    Both take "$..." placeholders naming parts of the file's
+                                    path - "$1" its name, "$0" its name without the
+                                    extension, "$99" its whole path, "$-1" its folder - and
+                                    quote them for the shell as needed. Under --dry-run the
+                                    command is printed rather than run. See doc/manual.md for
+                                    the whole placeholder syntax, with examples.
               --ignore-progress     Start every listed directory over instead of resuming it.
                                     While a directory is being processed, the files finished so
                                     far are recorded in an ".abchapterize-progress" file inside

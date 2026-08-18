@@ -1782,6 +1782,101 @@ looking. None of these is needed for an ordinary book.
   (`--quiet` suppresses the listing itself, leaving just `--summary`'s
   count), the same restriction `--revert` has.
 
+### Running your own commands around each file
+
+`--run-before <command>`
+: Run a shell command for each file, just before ABChapterize starts work on it.
+
+`--run-after <command>`
+: Run a shell command for each file, once ABChapterize has finished with it.
+
+Both take the command line you would have typed yourself, and both are handed to a
+shell — `cmd` on Windows, `/bin/sh` elsewhere — so built-ins (`move`, `copy`),
+pipes, redirection, `&&` and `~` all work as usual. The command runs in the folder
+you started ABChapterize in, not in the file's folder; use the placeholders below
+to be explicit about paths.
+
+```
+abchapterize --recurse --backup \
+             --run-before "abnormalize $99" \
+             --run-after "mv $99.bak ~/archive/$1" \
+             ~/audiobooks
+```
+
+**When they run — and when they do not.** The hooks belong to a file that is
+actually worked on:
+
+- A file the run **skips** runs neither hook. That includes a file that already
+  carries chapter marks (without `--force`), one whose codec cannot be decoded,
+  one `--verify` found nothing wrong with, and — under `--import` — one with no
+  sidecar next to it. Nothing was done to the file, so there is nothing to prepare
+  for and nothing to follow up on.
+- `--run-after` additionally does **not** run for a file left tagged
+  `.missing-marks-...`. Such a file is unfinished and a later run is expected to
+  pick it up again, so a command that archives or tidies up after a finished book
+  must not be told this one is done.
+- Under `--dry-run` neither command is run. The command line each one *would* have
+  run is printed instead, which is also the quickest way to check that your
+  placeholders and quoting come out the way you meant.
+- If `--run-before` exits with a non-zero status, the file is **skipped** with a
+  warning and `--run-after` does not run for it either: the preparation you asked
+  for did not happen, and marking a file that is in an unknown state is worse than
+  leaving it alone. The run itself carries on with the next file. A non-zero exit
+  from `--run-after` is only reported — the file is already written by then.
+
+Because `--run-before` may well change the file it just ran for (joining a split
+book, re-encoding it), the file is read again afterwards, so its duration, codec
+and existing marks are the ones it has *now*.
+
+The commands' own output goes into the log rather than to the console, so it
+cannot scribble over the progress bar: use `--verbose`, or `--log-file` to keep it.
+
+#### The placeholders
+
+Anywhere in either command, `$` followed by a number stands for a part of the
+file's path. Counting starts at the file name and works upwards, and the drive or
+root counts as one element of the path:
+
+| Placeholder | For `c:\test\buch.mp3` | What it is |
+| --- | --- | --- |
+| `$0` | `buch` | The file name without its path and without its last extension. |
+| `$1` | `buch.mp3` | The file name without its path. |
+| `$2` | `test\buch.mp3` | The file name with one parent folder; `$3` with two, and so on. |
+| `$99` | `c:\test\buch.mp3` | A number larger than the path is deep gives the whole path — so `$99` is the way to say "wherever this file is". |
+| `$-1` | `c:\test\` | The file's own folder. Always ends with a separator. |
+| `$-2` | `c:\` | One folder further up; `$-3` further still. Never goes above the drive (Windows) or `/` (Linux). |
+
+Paths are always resolved to absolute ones first, so `$99` and `$-1` name the same
+place whatever folder you started the run in.
+
+A `$` that is not followed by a number, such as `$HOME`, is left exactly as it is
+and reaches the shell untouched. To write a literal `$1` that ABChapterize must not
+replace, double the dollar: `$$1`. `$-0` is not a placeholder and is refused as a
+typo — the whole path is `$99`.
+
+#### Quoting, and why you rarely have to think about it
+
+Audiobook file names contain spaces, ampersands and brackets, all of which a shell
+would otherwise read as punctuation. Substituted values are therefore quoted for
+you, and only where they need it:
+
+```
+--run-after "move $1.bak $0.bak"      for "buch 1.m4b" runs
+move "buch 1.m4b.bak" "buch 1.bak"
+```
+
+Note that the quotes take in the `.bak` you appended, not just the placeholder —
+otherwise the shell would end the argument at the closing quote. On Linux and
+macOS the value is escaped where it stands instead (`buch\ 1.m4b.bak`), which
+leaves the rest of what you wrote working normally: `~/archive/$1` still expands
+the tilde, which it would not inside quotes. A value you have quoted yourself is
+left alone, so `copy "$1" d:\arch` does what it looks like.
+
+One case Windows cannot be protected from: `cmd` expands `%NAME%` inside quotes
+just as readily as outside, and offers no way to escape a percent sign on a command
+line. A file whose name happens to contain the name of an existing environment
+variable between percent signs will reach the command with that expanded.
+
 ### Cleaning up after a run
 
 `abchapterize --cleanup <target>` puts a folder back the way it was before this

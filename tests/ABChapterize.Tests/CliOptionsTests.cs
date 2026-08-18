@@ -1469,6 +1469,56 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--simple-metadata"));
     }
 
+    /// <summary>
+    /// The two hooks run per processed file, so every mode that processes no file rejects them
+    /// rather than accepting a command it would never run.
+    /// </summary>
+    [Fact]
+    public void RunHooks_AreRefusedByTheModesThatProcessNothing()
+    {
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--run-before", "echo $1"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--run-after", "echo $1"));
+        Assert.Throws<CliError>(() => ParseDir("--cleanup", "--yes", "--run-before", "echo $1"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--run-after", "echo $1"));
+    }
+
+    /// <summary>
+    /// --import writes marks per file exactly as detection does, so unlike the detection options it
+    /// has no reason to turn the hooks away.
+    /// </summary>
+    [Fact]
+    public void RunHooks_AreAllowedWithImport()
+    {
+        var o = ParseFile("--import", "--run-before", "echo $1", "--run-after", "echo $0")!;
+        Assert.Equal("echo $1", o.RunBefore!.Raw);
+        Assert.Equal("echo $0", o.RunAfter!.Raw);
+    }
+
+    /// <summary>
+    /// A hook changes what the run does to a file, so a batch resumed with a different one must not
+    /// count the files finished without it as done.
+    /// </summary>
+    [Fact]
+    public void RunHooks_TakePartInTheRunFingerprint()
+    {
+        Assert.NotEqual(ParseFile()!.RunFingerprint, ParseFile("--run-before", "echo $1")!.RunFingerprint);
+        Assert.NotEqual(
+            ParseFile("--run-after", "echo $1")!.RunFingerprint,
+            ParseFile("--run-after", "echo $0")!.RunFingerprint);
+        // The two are separate settings, not one: the same command in the other slot is a
+        // different run.
+        Assert.NotEqual(
+            ParseFile("--run-before", "echo $1")!.RunFingerprint,
+            ParseFile("--run-after", "echo $1")!.RunFingerprint);
+    }
+
+    [Fact]
+    public void RunHooks_RejectAnEmptyCommandAndABadPlaceholder()
+    {
+        Assert.Throws<CliError>(() => ParseFile("--run-before", ""));
+        Assert.Throws<CliError>(() => ParseFile("--run-after", "mv $-0 x"));
+    }
+
     [Fact]
     public void Revert_WithRecurseAndFilter_IsAllowed()
     {

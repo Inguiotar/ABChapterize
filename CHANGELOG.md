@@ -17,6 +17,30 @@ earn a round number.
 
 ### Added
 
+- **`--run-before` and `--run-after` run a command of your own around each file.** Both take
+  the command line you would have typed — a shell runs it, so built-ins, pipes, redirection
+  and `~` all work — and both understand placeholders for the parts of a file's path:
+
+  ```
+  abchapterize --recurse --backup \
+               --run-before "abnormalize $99" \
+               --run-after "mv $99.bak ~/archive/$1" \
+               ~/audiobooks
+  ```
+
+  `$1` is the file name, `$0` the same without its extension, `$2` adds a parent folder,
+  `$99` gives the whole path, and `$-1`, `$-2`, … name the folders above it. Names with
+  spaces, ampersands and brackets are quoted for the shell for you, including whatever you
+  appended to a placeholder: `--run-after "move $1.bak $0.bak"` really does move
+  `"buch 1.m4b.bak"` to `"buch 1.bak"`.
+
+  Neither command runs for a file the run skips — one that already carries marks, say — and
+  `--run-after` also stays out of the way of a file left tagged `.missing-marks-...`, which
+  a later run is expected to pick up again. A `--run-before` that fails skips its file with
+  a warning rather than marking a book whose preparation did not happen. Under `--dry-run`
+  the command line is printed instead of run, which is the quickest way to check that your
+  placeholders come out the way you meant. See the manual for the whole syntax.
+
 - **Books that count their chapters from one again in every part are now marked in full.**
   Until now such a file yielded chapters up to the end of its first part and then stopped,
   every later announcement being heard, understood, and dropped for not continuing the
