@@ -33,12 +33,20 @@ namespace ABChapterize.Cli;
 /// <see cref="NamedPhraseScope.Anywhere"/> unless a position keyword said otherwise.</param>
 /// <param name="Once">Whether the mapping may produce only one mark, the last match winning
 /// (<c>once</c>) - <see cref="NamedPhrase.Repeatable"/> inverted.</param>
-/// <param name="Heading">Whether a match must be preceded by a real pause to become a mark
-/// (<c>heading</c>); see <see cref="NamedPhrase.RequiresLeadIn"/>.</param>
 /// <param name="MaxMarks">What a <c>max=N</c> token asked for, or null when none was given.</param>
+/// <remarks>
+/// There is deliberately no hint for "must follow a real pause". A <c>heading</c> keyword existed
+/// during 0.12.0's development and was removed before release as an exact duplicate of the phrase
+/// syntax's own <c>^</c>: both resolve to <see cref="Detection.IsolationRule.LeadIn"/>, both are
+/// waived the same way when the recognizer opened a segment at the match, and both measure at the
+/// same fallback position (see <see cref="Detection.RegionProber.NamedIsolationFor"/>). Write
+/// <c>--custom "/^vorwort/:Vorwort"</c> instead. Do not reintroduce it: a second spelling of one
+/// rule is a second thing to keep in step, and the tag was the spelling that could not say
+/// <em>where</em> the pause is required, only that one is.
+/// </remarks>
 public readonly record struct SpecTag(
     string? Language, NamedPhraseScope Scope = NamedPhraseScope.Anywhere,
-    bool Once = false, bool Heading = false, int? MaxMarks = null)
+    bool Once = false, int? MaxMarks = null)
 {
     /// <summary>The position keywords, long form first - the long form is what the documentation
     /// uses and the short one an accepted alias, so a command line can stay readable without being
@@ -60,28 +68,29 @@ public readonly record struct SpecTag(
     /// <summary>Every keyword this tool understands, for the "expected one of" half of an error
     /// message - a typo'd hint is otherwise reported without ever saying what was expected.</summary>
     internal static string KeywordList =>
-        string.Join(", ", ScopeKeywords.Select(k => k.Long).Append("once").Append("heading"));
+        string.Join(", ", ScopeKeywords.Select(k => k.Long).Append("once"));
 
     /// <summary>Whether this tag says anything beyond which language it applies to. What the
     /// options other than <c>--custom</c> check, a hint meaning nothing to them.</summary>
     internal bool HasHints
-        => Scope != NamedPhraseScope.Anywhere || Once || Heading || MaxMarks != null;
+        => Scope != NamedPhraseScope.Anywhere || Once || MaxMarks != null;
 
     /// <summary>
     /// Builds the <see cref="NamedPhrase"/> this tag asks for. The one place the hints turn into
     /// behaviour.
     /// <para>
-    /// <see cref="Heading"/> is read straight rather than inferred from <see cref="Once"/>, which
-    /// happens to divide the same way for the two built-in phrases: see
-    /// <see cref="NamedPhrase.RequiresLeadIn"/> for why the two are separate questions.
+    /// <see cref="NamedPhrase.RequiresLeadIn"/> is deliberately left false here whatever the tag
+    /// says: a <c>--custom</c> mapping that wants a pause in front of it writes <c>^</c> into its
+    /// phrase, which arrives through the wording's own guards instead. The flag stays on
+    /// <see cref="NamedPhrase"/> for the built-in prologue and epilogue, which are not built from a
+    /// tag and must keep it whatever phrase the user gives them.
     /// </para>
     /// </summary>
     /// <param name="kind">The phrase kind, e.g. "custom 1".</param>
     /// <param name="pattern">The compiled phrase.</param>
     /// <param name="title">The parsed title template.</param>
     internal NamedPhrase ToPhrase(string kind, PhrasePattern pattern, TitleTemplate title)
-        => new(kind, pattern, title, Scope, Repeatable: !Once, RequiresLeadIn: Heading,
-            MaxMarks: MaxMarks);
+        => new(kind, pattern, title, Scope, Repeatable: !Once, MaxMarks: MaxMarks);
 
     /// <summary>
     /// Strips a leading <c>[...]</c> tag off a spec entry, returning what it said and what follows
@@ -147,7 +156,15 @@ public readonly record struct SpecTag(
             }
             else if (token.Equals("heading", StringComparison.OrdinalIgnoreCase))
             {
-                tag = tag with { Heading = true };
+                // Named rather than left to the unknown-keyword branch, which would report it
+                // alongside the list of what is accepted and leave the reader to work out that the
+                // replacement is not a keyword at all. The hint was an exact duplicate of the
+                // phrase syntax's ^ (see the remarks on SpecTag) and was removed before 0.12.0
+                // shipped, so this is guidance for a command line written during development
+                // rather than a migration path for a released spelling.
+                throw new CliError(
+                    $"{where}: \"heading\" is no longer a tag keyword - write \"^\" at the start of " +
+                    "the phrase instead, e.g. --custom \"[before-first-chapter,once]/^vorwort/:Vorwort\".");
             }
             else if (TryTakeMax(token, where, out var max))
             {

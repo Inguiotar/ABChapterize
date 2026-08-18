@@ -1660,10 +1660,11 @@ public sealed class CliOptions
     /// language the user meant them in.
     /// <para>
     /// The prologue and epilogue are the same machinery with different values, which is what the
-    /// <c>--custom</c> hints expose (see <see cref="SpecTag"/>): a mapping tagged
-    /// <c>[before-first-chapter,once,heading]</c> resolves to exactly the phrase the built-in
-    /// prologue is. Untagged mappings keep the defaults they have always had - anywhere in the
-    /// file, every occurrence marked, no pause required in front of it.
+    /// <c>--custom</c> hints expose (see <see cref="SpecTag"/>): a mapping written
+    /// <c>[before-first-chapter,once]/^vorwort/</c> resolves to exactly the phrase the built-in
+    /// prologue is - the tag supplying the scope and the single-mark rule, the phrase's own
+    /// <c>^</c> the pause in front. Untagged mappings keep the defaults they have always had -
+    /// anywhere in the file, every occurrence marked, no pause required in front of it.
     /// </para>
     /// </summary>
     /// <param name="language">The language being resolved for, which decides both which share of a
@@ -1991,9 +1992,10 @@ public sealed class CliOptions
                                       after-first-chapter   only once a chapter has been found
                                       after-last-chapter    only after the book's last chapter
                                       once                  at most one mark, the last one wins
-                                      heading               must follow a real pause
                                       max=<n>               at most <n> marks, the first ones win
-                                    e.g. --custom "[de,before-first-chapter,once]/vorwort/:Vorwort",
+                                    To require a real pause in front of a match, write "^" at the
+                                    start of the phrase rather than asking for it in the tag.
+                                    e.g. --custom "[de,before-first-chapter,once]/^vorwort/:Vorwort",
                                     which is exactly what the built-in prologue is. The three
                                     positions also have the short forms "before-first",
                                     "after-first" and "after-last". Untagged mappings apply to

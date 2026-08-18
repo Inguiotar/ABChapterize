@@ -450,16 +450,54 @@ public sealed class CliOptionsTests : IDisposable
     public void Custom_HintsResolveIntoThePhraseTheBuiltInPrologueIs()
     {
         // The point of the hints: the prologue and the epilogue were always this same machinery
-        // with different values, and a mapping can now ask for exactly those values.
-        var tagged = ParseFile("--custom", "[before-first-chapter,once,heading]/vorwort/:Vorwort")!
+        // with different values, and a mapping can now ask for exactly those values - the tag
+        // supplying the scope and the single-mark rule, the phrase's own "^" the pause in front.
+        //
+        // The two carry that pause differently: the mapping on the wording that matched, the
+        // prologue on the phrase itself, which is why the fields are asserted apart and the
+        // *rule* asserted equal. That they cannot come out differently is why the "heading" hint
+        // was removed before 0.12.0 shipped - it was a second spelling of this one demand.
+        var tagged = ParseFile("--custom", "[before-first-chapter,once]/^vorwort/:Vorwort")!
             .ResolveProfile("en").NamedPhrases.Single(p => p.IsCustom);
         var prologue = ParseFile("--custom", "x:X")!
             .ResolveProfile("en").NamedPhrases.Single(p => p.Kind == NamedPhrase.PrologueKind);
 
         Assert.Equal(prologue.Scope, tagged.Scope);
         Assert.Equal(prologue.Repeatable, tagged.Repeatable);
-        Assert.Equal(prologue.RequiresLeadIn, tagged.RequiresLeadIn);
         Assert.Null(tagged.MaxMarks);
+
+        Assert.All(tagged.Pattern.Alternatives, a => Assert.True(a.RequiresLeadIn));
+        Assert.False(tagged.RequiresLeadIn);
+        Assert.True(prologue.RequiresLeadIn);
+
+        Assert.Equal(IsolationRule.LeadIn, EffectiveRule(tagged));
+        Assert.Equal(IsolationRule.LeadIn, EffectiveRule(prologue));
+        return;
+
+        // What the placement layer actually judges the mark on, fed each route's own guards.
+        static IsolationRule EffectiveRule(NamedPhrase phrase)
+        {
+            var guards = phrase.Pattern.Alternatives[0].RequiresLeadIn
+                ? IsolationRule.LeadIn
+                : IsolationRule.None;
+            return RegionProber.NamedIsolationFor(
+                new PhraseMatching.NamedMatch(phrase, "T", 0, 1, 1.0, "", guards), 0).Rule;
+        }
+    }
+
+    /// <summary>
+    /// The removed hint names itself rather than falling into the unknown-keyword branch, which
+    /// would list what is accepted and leave the reader to work out that the replacement is not a
+    /// keyword at all.
+    /// </summary>
+    [Fact]
+    public void Custom_TheRemovedHeadingHint_PointsAtTheCaret()
+    {
+        var error = Assert.Throws<CliError>(
+            () => ParseFile("--custom", "[before-first-chapter,heading]/vorwort/:Vorwort"));
+
+        Assert.Contains("heading", error.Message);
+        Assert.Contains("^", error.Message);
     }
 
     [Fact]
@@ -1854,8 +1892,9 @@ public sealed class CliOptionsTests : IDisposable
                 Assert.False(a.RequiresLeadOut);
             });
 
-    /// <summary>A literal named phrase still asks for nothing: a prologue or a <c>--custom</c>
-    /// mapping says what it wants with a <c>[heading]</c> hint or a <c>^</c> of its own.</summary>
+    /// <summary>A literal named phrase still asks for nothing: a <c>--custom</c> mapping says it
+    /// wants a pause with a <c>^</c> of its own, and the built-in prologue and epilogue carry the
+    /// demand on the phrase whatever wording the user gives them.</summary>
     [Fact]
     public void LiteralNamedPhrase_AsksForNoPause()
         => Assert.All(ParseFile("-u", "zwischenspiel:Zwischenspiel")!

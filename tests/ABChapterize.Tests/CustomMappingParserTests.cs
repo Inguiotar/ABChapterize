@@ -97,14 +97,14 @@ public sealed class CustomMappingParserTests
     public void ParseSpec_ReadsHintsBesideTheLanguage()
     {
         var mapping = Assert.Single(
-            CustomMappingParser.ParseSpec("[de,before-first-chapter,once,heading]/vorwort/:Vorwort"));
+            CustomMappingParser.ParseSpec("[de,before-first-chapter,once]/^vorwort/:Vorwort"));
         var tag = mapping.Tag!.Value;
 
         Assert.Equal("de", tag.Language);
         Assert.Equal(NamedPhraseScope.BeforeFirstChapter, tag.Scope);
         Assert.True(tag.Once);
-        Assert.True(tag.Heading);
-        Assert.Equal("/vorwort/", mapping.Phrase);
+        // The pause in front is not a hint: it rides in the phrase, untouched by the tag parser.
+        Assert.Equal("/^vorwort/", mapping.Phrase);
     }
 
     /// <summary>The short aliases mean the same as the long forms, which are what the docs use.</summary>

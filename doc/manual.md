@@ -586,18 +586,22 @@ list, and any of these **hints** may sit in it alongside the code:
 | `after-first-chapter` | `after-first` | Matches only once a chapter has been found. |
 | `after-last-chapter` | `after-last` | Only a match after the book's *last* chapter is kept. |
 | `once` | | At most one mark for this mapping per file. |
-| `heading` | | The match must be preceded by a real pause. |
 | `max=<n>` | | At most `<n>` marks for this mapping per file. |
 
 ```
 --custom "[de,before-first-chapter,once]/vorwort/:Vorwort"
---custom "[after-last-chapter,once,heading]nachwort:Nachwort"
+--custom "[after-last-chapter,once]/^nachwort/:Nachwort"
 --custom "[max=3]/zwischenspiel/:Zwischenspiel"
 ```
 
+**To require a real pause in front of a match, write `^` at the start of the
+phrase**, as the second example does. There is no hint for it, deliberately:
+`^` already says exactly this — see "`^` and `$` — asking for the pauses" under
+The phrase syntax — and one demand with two spellings is one spelling too many.
+
 Nothing here is new machinery. The built-in prologue *is*
-`[before-first-chapter,once,heading]` and the built-in epilogue *is*
-`[after-last-chapter,once,heading]`; what the hints do is let a mapping ask for
+`[before-first-chapter,once]` with a `^`, and the built-in epilogue *is*
+`[after-last-chapter,once]` with one; what the hints do is let a mapping ask for
 the same treatment. A mapping without a tag, or with a tag naming only a
 language, keeps exactly the behaviour it had before hints existed.
 
@@ -610,11 +614,11 @@ Points worth knowing:
   only a scope that closes can. `max=<n>` works the other way round, keeping
   the first `<n>` and dropping the rest, which is why `max=1` is rejected with
   an error pointing at `once` rather than quietly meaning something else.
-- **`heading` is the check the prologue and epilogue always get**: the match
+- **A leading `^` is the check the prologue and epilogue always get**: the match
   must sit behind a real pause, which is what tells a heading read aloud from
   the same word buried in a sentence. `--custom` does not get it by default,
   because a mapping names whatever recurring element the user says it does, at
-  whatever position.
+  whatever position — write the `^` when you want it.
 - **`after-last-chapter` is applied at the end of the run**, not while probing.
   Which chapter is the last one is unknown until every pass has finished, so a
   match mid-book is heard, marked and then dropped — it buys precision, not
@@ -1200,8 +1204,8 @@ written:
   least 0.85 s of real non-speech (silence, or the jingle music a book plays
   into its chapters) **or** by the recognizer having written it as a transcript
   segment of its own. That is what a heading has and a sentence in the middle of
-  a paragraph does not, and it is the same request the `heading` hint makes for a
-  `--custom` mapping. The one exception is `none`, a number spoken alone: its
+  a paragraph does not, and it is how a `--custom` mapping asks to be treated as
+  a heading. The one exception is `none`, a number spoken alone: its
   entire claim to being an announcement is the pause around it, so there the
   pause is required outright.
 - `$` — the announcement must be followed by at least 0.3 s of non-speech.
@@ -1367,7 +1371,7 @@ Two things are worth knowing before reaching for it:
   mapping may open with a `[...]` tag holding a `xx` language code, restricting
   it to files that resolve to that language, and/or hints restricting where and
   how often it matches (`before-first-chapter`, `after-first-chapter`,
-  `after-last-chapter`, `once`, `heading`, `max=<n>`); untagged mappings apply
+  `after-last-chapter`, `once`, `max=<n>`); untagged mappings apply
   to every file, anywhere in it, as often as the phrase occurs. See
   [Custom marks](#custom-marks) for the full syntax, the hints and the per-file
   limit.

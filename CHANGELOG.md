@@ -44,11 +44,12 @@ earn a round number.
 
   `before-first-chapter`, `after-first-chapter` and `after-last-chapter` restrict where
   in the book a match counts (short forms `before-first`, `after-first`, `after-last`);
-  `once` keeps a single mark, the last match winning; `heading` requires a real pause in
-  front of the match, the check that tells a heading read aloud from the same word buried
-  in a sentence; `max=<n>` caps how many marks one mapping may produce. None of it is new
-  behaviour — the built-in prologue and epilogue have always been exactly this — and a
-  mapping without hints does what it always did.
+  `once` keeps a single mark, the last match winning; `max=<n>` caps how many marks one
+  mapping may produce. To require a real pause in front of a match — the check that tells
+  a heading read aloud from the same word buried in a sentence — write `^` at the start of
+  the phrase, as in `--custom "[after-last-chapter,once]/^nachwort/:Nachwort"`. None of it
+  is new behaviour — the built-in prologue and epilogue have always been exactly this —
+  and a mapping without hints does what it always did.
 
   A bracket run only counts as a tag when something in it is recognized, so
   `--custom "[Musik]:Zwischenmusik"` still matches those words rather than being read as
