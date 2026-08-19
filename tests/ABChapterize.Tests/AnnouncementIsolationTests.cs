@@ -467,4 +467,37 @@ public class AnnouncementIsolationTests
         Assert.Null(AnnouncementIsolation.DepthInsideSpeech(12.0, timeline));
         Assert.Null(AnnouncementIsolation.DepthInsideSpeech(29.9, timeline));
     }
+
+    [Fact]
+    public void TheOnsetAfterAMarkStuckInTheCredit_IsTheAnnouncementItself()
+    {
+        // The correction the guard applies to both chapters this fires on: chapter 6's refined mark
+        // at 1:37:18.66 resolves to the announcement at 1:37:20.41, one --mark-lead in front of
+        // which is the ear-confirmed 1:37:20.06.
+        Assert.Equal(
+            5840.41, AnnouncementIsolation.NextSpeechOnsetAfter(5838.66, ReaderCreditTimeline())!.Value, 4);
+    }
+
+    [Fact]
+    public void TheNextOnset_SkipsTheSegmentTheMarkIsInside()
+    {
+        // Strictly after, which is what makes the answer the *next* segment: a segment containing
+        // the mark begins before it, and answering with its own start would hand the guard back the
+        // credit it is trying to escape. Asked from inside 1:37:17.66-1:37:20.00 and from its exact
+        // start, the answer is the following segment either way.
+        Assert.Equal(
+            5840.41, AnnouncementIsolation.NextSpeechOnsetAfter(5839.00, ReaderCreditTimeline())!.Value, 4);
+        Assert.Equal(
+            5840.41, AnnouncementIsolation.NextSpeechOnsetAfter(5837.66, ReaderCreditTimeline())!.Value, 4);
+    }
+
+    [Fact]
+    public void PastTheLastSegment_NothingResumes()
+    {
+        // Null rather than a guessed position, so the guard falls back on the default rather than
+        // inventing an onset past the end of the book. Same contract as the rest of this file: no
+        // measurement beats a false one.
+        Assert.Null(AnnouncementIsolation.NextSpeechOnsetAfter(5843.93, ReaderCreditTimeline()));
+        Assert.Null(AnnouncementIsolation.NextSpeechOnsetAfter(5838.66, Speech()));
+    }
 }

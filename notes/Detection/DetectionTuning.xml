@@ -115,6 +115,39 @@
     <em>onset</em> rather than the mark was rejected for exactly this reason: it has a populated tail
     out to 0.15 s over 104 marks, mostly jingles, so a cut there would sit inside real data.
     </para>
+    <para>
+    <b>Why the guard moves a mark out instead of reverting to the default</b> (2026-08-20, from the
+    build-362 corpus run). Reverting was only ever as good as the default-mode position happened to
+    be, and on that run it was not good at all. The descending-silence scan
+    (<see cref="DescendingSilenceScan"/>) reframed chapter 11's window on the same Swedish book:
+    build 341 read the announcement at the <em>head</em> of a window
+    (<c>probe 23.6s@3:10:09.85 (tail, +19.4s ahead)</c>, first segment <c>"Elfte kapitlet."</c>),
+    while build 362 read it at the <em>tail</em> of <c>probe 22.9s@3:09:51.16</c>, where Whisper
+    glued word and title into one 4.0 s segment. That longer segment span overlaps the 3.36 s
+    non-speech region behind the announcement (3:10:11.71-3:10:15.07) by <b>2.15 s</b> against
+    <see cref="SmearedPhraseMinOverlapSeconds"/>'s 2.0, so
+    <see cref="JingleGeometry.FindSmearedJingleRegion"/> accepted that pause as the announcement's
+    jingle on a book with no jingles at all, and
+    <see cref="JingleGeometry.ResolveDefaultPhraseOnset"/> returned its far end. Default mark
+    3:10:14.72 - <b>4.8 s past the announcement, on the first word of the chapter body</b> - and the
+    guard duly reverted a correct refinement onto it. The deeper defect is that smeared-phrase
+    rescue keying on a transcript segment's span, which cannot tell "Whisper smeared the
+    announcement across a jingle" from "Whisper glued the chapter title onto the chapter word";
+    correcting the guard was chosen over tightening a threshold whose margin here is 0.15 s.
+    </para>
+    <para>
+    <b>What the forward correction lands on, for both firings the corpus has.</b> Chapter 6: refined
+    mark 1:37:18.66, 1.00 s inside the credit segment 1:37:17.66-1:37:20.00, next speech onset
+    1:37:20.41, mark <b>1:37:20.06</b> - identical to what reverting produced, so that chapter does
+    not move. Chapter 11: refined mark 3:10:09.12, 1.92 s inside 3:10:07.20-3:10:09.50, next speech
+    onset 3:10:10.27, mark <b>3:10:09.92</b> - the build-341 position the user confirmed by ear.
+    Both corrections also hand back exactly the <em>onset</em> the revert produced in the runs where
+    it was right (1:37:20.41 and 3:10:10.27), which is what makes the change safe for the isolation
+    check: chapter 11's lead-in there is 0.77 s, below <see cref="AnnouncementLeadInSeconds"/>, and
+    it passes only through the segment-start rescue - so an onset even slightly different could have
+    dropped the chapter rather than moved it. The guard has fired on exactly these two marks and no
+    others, in both the build-339 and build-362 corpus runs.
+    </para>
   </member>
 
   <member name="PreciseMarkPlateauProbesSeconds">

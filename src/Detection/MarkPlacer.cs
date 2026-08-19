@@ -208,12 +208,12 @@ internal sealed class MarkPlacer
                 phraseAbs, phraseEndAbs, ctx.Transcript.EndSeconds, ctx.AllSilences,
                 statRegion?.EndSeconds, ct);
             (time, phraseHeard, onset) = (refined.Mark, refined.PhraseHeard, refined.OnsetSeconds);
-            bool reverted;
-            (time, onset, reverted) = KeepOutOfSpeech(time, defaultMark, onset, number, ctx);
-            // A reverted mark is the default-mode position again, and nothing has confirmed that
-            // one: the confirmation belonged to the refined mark this just threw away. Saying so
-            // is what lets --mark-before-jingle re-check the walk it starts from here.
-            if (reverted)
+            bool displaced;
+            (time, onset, displaced) = KeepOutOfSpeech(time, defaultMark, onset, number, ctx);
+            // A displaced mark is no longer the position the refinement confirmed, whether it was
+            // moved out onto the following speech onset or handed back to the default. Saying so is
+            // what lets --mark-before-jingle re-check the walk it starts from here.
+            if (displaced)
                 phraseHeard = false;
             if (chapter is { } check &&
                 RefinedNumberVote.Recount(
@@ -231,25 +231,39 @@ internal sealed class MarkPlacer
     }
 
     /// <summary>
-    /// Refuses a refined mark that landed inside somebody else's words, falling back on the
-    /// default-mode position the pass computed. The refinement locates an announcement by walking a
+    /// Corrects a refined mark that landed inside somebody else's words, by moving it out onto the
+    /// onset of the speech that follows them. The refinement locates an announcement by walking a
     /// probe window backwards until the phrase stops surviving, and where a short pause separates the
     /// announcement from speech in front of it, that walk can step over the pause entirely: the
     /// window then opens mid-sentence, the phrase still matches inside the transcript, and the onset
     /// converges into the wrong utterance. See <see cref="MarkInsideSpeechSeconds"/> for the book
     /// that reported it and the corpus measurement behind the threshold.
     /// <para>
-    /// Declines unless the default-mode position is demonstrably better - not inside speech itself -
-    /// so a book where both candidates sit in speech keeps the refined one rather than trading a
-    /// measured position for an unmeasured one. That, and the deliberately generous threshold, are
-    /// what keep the guard from acting on a VAD segment that merely mistook music for speech.
+    /// <b>Moving forward rather than reverting to the default</b>, because the two are not equally
+    /// well founded. The refinement confirmed the phrase - it did hear the announcement - and only
+    /// its onset overshot backwards; VAD then says where the speech after the overshot pause begins,
+    /// which is the announcement's own first word. A default-mode position has nothing behind it but
+    /// the framing of whichever window the pass happened to open, and reverting onto one is only as
+    /// good as that framing happened to be. See <see cref="MarkInsideSpeechSeconds"/>'s notes for
+    /// the run where it was not good at all.
     /// </para>
     /// <para>
-    /// The onset goes back to what the default mark implies, rather than to null or to the walked
-    /// value. Null would send <see cref="IsolationHolds"/> to
-    /// <see cref="IsolationCheck.FallbackPosition"/> and could drop a bare-number match outright -
-    /// turning a slightly misplaced mark into a lost chapter - while keeping the walked onset would
-    /// have the isolation guard measure pauses at a position this method has just declared wrong.
+    /// Never past the default mark, though, which bounds how far this can carry a mark forward: the
+    /// refinement walks <em>backwards</em> from the default, so an announcement it overshot lies
+    /// between the two. A resumption beyond the default is therefore not the announcement being
+    /// recovered but the guard being handed geometry it cannot read - a jingle-anchored default in
+    /// front of the music, say - and the old fallback is taken instead. That fallback still declines
+    /// unless the default is demonstrably better (not inside speech itself), so a book where both
+    /// candidates sit in speech keeps the refined one rather than trading a measured position for an
+    /// unmeasured one. That, and the deliberately generous threshold, are what keep the guard from
+    /// acting on a VAD segment that merely mistook music for speech.
+    /// </para>
+    /// <para>
+    /// The onset is a real position either way, never null and never the walked value. Null would
+    /// send <see cref="IsolationHolds"/> to <see cref="IsolationCheck.FallbackPosition"/> and could
+    /// drop a bare-number match outright - turning a slightly misplaced mark into a lost chapter -
+    /// while keeping the walked onset would have the isolation guard measure pauses at a position
+    /// this method has just declared wrong.
     /// </para>
     /// </summary>
     /// <param name="refinedMark">What the refinement produced.</param>
@@ -258,26 +272,36 @@ internal sealed class MarkPlacer
     /// <param name="number">The chapter number, for the log line; null for a named mark.</param>
     /// <param name="ctx">The file's mark-placement constants, for the VAD speech segments.</param>
     /// <returns>The mark to use, the onset to judge its isolation at, and whether the refined mark
-    /// was actually discarded - which is what tells the caller its confirmation no longer describes
-    /// the mark being carried forward.</returns>
+    /// was displaced - which is what tells the caller its confirmation no longer describes the mark
+    /// being carried forward, whichever of the two corrections produced it.</returns>
     /// <remarks>Internal rather than private so the decision can be tested on its own. The geometry
     /// it rests on has tests of its own; what has none otherwise is the rule built on top - which
-    /// of the two candidates wins, and that a reverted onset comes back as a position rather than
-    /// as null, the difference between a mark placed slightly wrong and a chapter dropped.</remarks>
-    internal (double Time, double? Onset, bool Reverted) KeepOutOfSpeech(
+    /// correction wins, and that a displaced onset comes back as a position rather than as null,
+    /// the difference between a mark placed slightly wrong and a chapter dropped.</remarks>
+    internal (double Time, double? Onset, bool Displaced) KeepOutOfSpeech(
         double refinedMark, double defaultMark, double? onset, int? number, MarkContext ctx)
     {
         if (AnnouncementIsolation.DepthInsideSpeech(refinedMark, ctx.SpeechSegments) is not { } depth ||
             depth <= MarkInsideSpeechSeconds)
             return (refinedMark, onset, false);
+
+        var what = number is { } n ? $"chapter {n}" : "the named mark";
+        var inside = $"refined mark for {what} at {FormatTimestamp(refinedMark)} sits " +
+                     $"{depth:0.00} s inside speech";
+
+        if (AnnouncementIsolation.NextSpeechOnsetAfter(refinedMark, ctx.SpeechSegments) is { } resumed &&
+            resumed - _options.MarkLeadSeconds <= defaultMark)
+        {
+            var moved = resumed - _options.MarkLeadSeconds;
+            _log?.Invoke($"{inside} - moving it out to {FormatTimestamp(moved)}");
+            return (moved, resumed, true);
+        }
+
         if (AnnouncementIsolation.DepthInsideSpeech(defaultMark, ctx.SpeechSegments)
             is { } fallbackDepth && fallbackDepth > MarkInsideSpeechSeconds)
             return (refinedMark, onset, false);
 
-        var what = number is { } n ? $"chapter {n}" : "the named mark";
-        _log?.Invoke(
-            $"refined mark for {what} at {FormatTimestamp(refinedMark)} sits {depth:0.00} s inside " +
-            $"speech - keeping the default {FormatTimestamp(defaultMark)}");
+        _log?.Invoke($"{inside} - keeping the default {FormatTimestamp(defaultMark)}");
         return (defaultMark, defaultMark + _options.MarkLeadSeconds, true);
     }
 
@@ -397,8 +421,8 @@ internal sealed class MarkPlacer
     /// <param name="mark">The mark to walk backward from.</param>
     /// <param name="markConfirmed">Whether <paramref name="mark"/> is a refinement-confirmed
     /// announcement onset (<see cref="PreciseMarkResult.PhraseHeard"/>); false when the refinement
-    /// could not confirm the phrase, when <see cref="KeepOutOfSpeech"/> put the default-mode
-    /// position back, and when --quick-marks skipped the refinement altogether.</param>
+    /// could not confirm the phrase, when <see cref="KeepOutOfSpeech"/> displaced what it produced,
+    /// and when --quick-marks skipped the refinement altogether.</param>
     /// <param name="ctx">The file's mark-placement constants.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<double> ApplyMarkBeforeJingleAsync(

@@ -464,8 +464,8 @@ internal static class DetectionTuning
     /// marks in "Gruelfin.m4b" have it hearing speech seconds early inside a jingle (see
     /// <see cref="PreciseMarkMusicAnchorCapSeconds"/>). No corpus mark actually lands inside such a
     /// segment, but a spurious one is the only way this guard could fire on a good mark, and the
-    /// comparison in <see cref="MarkPlacer.KeepOutOfSpeech"/> - which declines unless the
-    /// default-mode position is demonstrably better - is the other half of that protection.
+    /// correction it then applies - out to the next speech onset, and never past the default-mode
+    /// position (<see cref="MarkPlacer.KeepOutOfSpeech"/>) - is the other half of that protection.
     /// </para>
     /// </summary>
     /// <remarks>Notes: the two marks written into a reader's credit, and why this quantity is bimodal rather than distributed.

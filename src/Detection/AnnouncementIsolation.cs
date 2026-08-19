@@ -180,6 +180,46 @@ internal static class AnnouncementIsolation
             : null;
     }
 
+    /// <summary>
+    /// Where speech next begins strictly after <paramref name="at"/>. The companion of
+    /// <see cref="DepthInsideSpeech"/>: that one says a mark landed in somebody else's words, this
+    /// one says where the words after them start.
+    /// <para>
+    /// The strict comparison is what makes the answer the <em>next</em> segment rather than the
+    /// containing one, since a segment holding <paramref name="at"/> begins before it. That is only
+    /// a meaningful distinction for a position already known to be inside a segment, which is the
+    /// single caller's case (<see cref="MarkPlacer.KeepOutOfSpeech"/>).
+    /// </para>
+    /// </summary>
+    /// <param name="at">The position to search forward from, normally a mark
+    /// <see cref="DepthInsideSpeech"/> has just rejected.</param>
+    /// <param name="speech">The VAD pre-pass's speech segments, chronological. Empty when the
+    /// pre-pass did not run, which yields null - no answer rather than a false one.</param>
+    /// <returns>The start of the first speech segment beginning after <paramref name="at"/>, or
+    /// null when nothing does.</returns>
+    internal static double? NextSpeechOnsetAfter(double at, IReadOnlyList<SpeechSegment> speech)
+    {
+        // Chronological and non-overlapping, so the leftmost segment starting after `at` is the one
+        // to converge on - keep going left whenever a candidate qualifies.
+        var lo = 0;
+        var hi = speech.Count - 1;
+        double? found = null;
+        while (lo <= hi)
+        {
+            var mid = lo + (hi - lo) / 2;
+            if (speech[mid].StartSeconds > at)
+            {
+                found = speech[mid].StartSeconds;
+                hi = mid - 1;
+            }
+            else
+            {
+                lo = mid + 1;
+            }
+        }
+        return found;
+    }
+
     /// <summary>Whether <paramref name="flanks"/> clear the thresholds <paramref name="rule"/>
     /// asks for.</summary>
     /// <param name="flanks">The measurement from <see cref="Measure"/>.</param>

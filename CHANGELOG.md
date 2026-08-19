@@ -119,6 +119,16 @@ earn a round number.
   that reads a book strictly forward. A prologue heard by a window that had already picked
   up the chapter behind it was refused.
 
+- **A mark that would have landed in the words before an announcement is now moved onto the
+  announcement instead of being given up on.** Where only a short pause separates a chapter
+  announcement from whatever is read just before it — a reader's credit, most often — the
+  mark can end up inside that, and the safeguard against it used to fall back on the
+  position the file had been marked at before the announcement was pinned down. That is
+  only as good as that earlier position happened to be, and on a book where it sat *after*
+  the announcement the chapter was marked several seconds late, past the very words you
+  jump to a chapter to hear. The mark now moves forward to where the announcement itself
+  begins.
+
 ## [0.12.0] — 2026-08-18
 
 ### Added
