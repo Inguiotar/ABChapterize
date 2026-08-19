@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\SuspectNumberMender.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="SuspectNumberMender">
+    <para>
+    <b>What a single slip costs.</b> "neunzehn" (19) read as 90 on BARDIOC.m4b, 2026-07-30, declared
+    seventy chapters missing and committed Re-probe and Scan to re-probing and then fully
+    transcribing hours of audio that had nothing hidden in it - ending with a mark that still carried
+    the wrong number.
+    </para>
+  </member>
+
+  <member name="WorthQuestioning">
+    <para>
+    <b>What the bound-equal readings on record turned out to be.</b> All three occurrences on
+    BARDIOC.m4b, 2026-07-30, were an overlapping probe window re-hearing an announcement already
+    marked, and none carried the "in-text mention?" note that a number genuinely below the sequence
+    gets.
+    </para>
+  </member>
+
+  <member name="ReadUnnumberedAsync">
+    <para>
+    <b>The final chapter one book lost to this hole.</b> "Paula Monti", 2026-07-31: chapter 25 was
+    heard as "1ère partie, chapitre ban 5, douleur" at 4:23:03 and never looked at again, being past
+    the last detected chapter and so in no gap at all. Re-running that file with this in place, the
+    upgrade model read the same window as chapter 25 on the first attempt, before either re-framing
+    was needed.
+    </para>
+    <para>
+    <b>The re-hearing the bounds rule refuses.</b> Observed as "CHAPTER X" over an already-found
+    chapter 10 on "I Shall Wear Midnight", 2026-07-31 - a number that cannot continue the sequence,
+    so it cannot produce a mark.
+    </para>
+  </member>
+</doc>

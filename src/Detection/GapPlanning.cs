@@ -369,13 +369,10 @@ internal static class GapPlanning
     /// <em>Largest</em> subset rather than a greedy left-to-right scan, and the difference is not
     /// academic. A greedy scan keeps whatever it meets first and measures the rest of the file
     /// against it, so one number misheard <em>upwards</em> takes the whole remainder of the book
-    /// with it. On "Die Cyber-Brutzellen" (2026-08-01) chapter 14's announcement at 7:01:30 was read
-    /// as 40, and chapters 15 through 29 - every one of them detected, refined and correctly placed
-    /// - then failed "greater than 40" one after another and were discarded: a 17 h audiobook came
-    /// out marked as far as 6:21 and no further. Fifteen mutually corroborating chapters losing to a
-    /// single outlier is the wrong way round. The longest strictly ascending subsequence drops the
-    /// outlier and keeps the fifteen, which bounds what any one mishearing can cost at its own mark
-    /// - and <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> then tries to win that back too.
+    /// with it: fifteen mutually corroborating chapters losing to a single outlier is the wrong way
+    /// round. The longest strictly ascending subsequence drops the outlier and keeps the fifteen,
+    /// which bounds what any one mishearing can cost at its own mark - and
+    /// <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> then tries to win that back too.
     /// </para>
     /// <para>
     /// Ties are settled in two steps. Between two equally long readings, the one whose last chapter
@@ -389,6 +386,8 @@ internal static class GapPlanning
     /// shown to be wrong.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the book where a greedy scan discarded fifteen correctly placed chapters.
+    /// <include file='../../notes/Detection/GapPlanning.xml' path='doc/member[@name="Normalize"]/*' /></remarks>
     /// <param name="found">The raw detections, in any order.</param>
     internal static List<DetectedChapter> Normalize(List<DetectedChapter> found)
         => NormalizeWithOutliers(found).Kept;

@@ -30,31 +30,26 @@ internal readonly record struct AnnouncementFlanks(
 /// on one book - whereas the VAD pre-pass measures the pauses directly and at frame resolution.
 /// </para>
 /// <para>
-/// Measured on "Corsa nello spazio" (build 244, 2026-08-05), replaying the guard over that run's
-/// own Analyze speech segments at each announcement's true onset: every one of the 65 chapters is
-/// flanked by about 3.0-3.9 s before and 1.0-2.2 s after, the number's own speech running
-/// 0.3-1.3 s. The false epilogue the same run wrote - Whisper heard "riepilogo" (Italian for
-/// "summary") mid-sentence and <c>/epilogo/</c> matched inside it - measures 0.64 s before and
-/// 0.73 s after, on a 3.59 s stretch of continuous speech. So the thresholds below sit in a gap
-/// with real room on both sides rather than being fitted to one number.
+/// The thresholds below sit in a gap with real room on both sides rather than being fitted to one
+/// number.
 /// </para>
 /// <para>
 /// What this cannot do is tell an announcement from the sentence after it. A chapter's first
-/// sentence is flanked by pauses too - that is what a sentence is - so a mark left one sentence
-/// late passes here honestly, and on the build-249 re-run of the same book two of them did, at
-/// -92 dBFS. That failure belongs to the refinement's own matcher and is fixed there; see
-/// <see cref="NumberCheck.AdmitsAsAnnouncement"/>. Tightening a threshold below is the wrong
-/// lever for it.
+/// sentence is flanked by pauses too - that is what a sentence is - so a mark left one sentence late
+/// passes here honestly, and real marks have. That failure belongs to the refinement's own matcher
+/// and is fixed there; see <see cref="NumberCheck.AdmitsAsAnnouncement"/>. Tightening a threshold
+/// below is the wrong lever for it.
 /// </para>
 /// <para>
-/// Deliberately measured at the <em>refined</em> onset. Five of that run's marks would have failed
-/// the check at the position they were actually written to, every one of them a mark left seconds
-/// late because refinement was broken (chapter 6 landed 2.2 s past its announcement, chapter 3
-/// by 4.4 s); at their true onsets all five pass comfortably. The guard is therefore only as good
-/// as the onset it is handed, which is why it runs after refinement and falls back to the phrase's
-/// own segment start when nothing could be confirmed.
+/// Deliberately measured at the <em>refined</em> onset, not at the position a mark is written to:
+/// marks left seconds late by a broken refinement fail the check while passing comfortably at their
+/// true onsets. The guard is therefore only as good as the onset it is handed, which is why it runs
+/// after refinement and falls back to the phrase's own segment start when nothing could be
+/// confirmed.
 /// </para>
 /// </summary>
+/// <remarks>Notes: the corpus geometry the thresholds sit in, the marks that would have failed at their written positions, and the failure this guard cannot catch.
+/// <include file='../../notes/Detection/AnnouncementIsolation.xml' path='doc/member[@name="AnnouncementIsolation"]/*' /></remarks>
 internal static class AnnouncementIsolation
 {
     /// <summary>
@@ -65,14 +60,12 @@ internal static class AnnouncementIsolation
     /// <para>
     /// Every built-in chapter phrase carries a <c>^</c> on all three of its wordings, so an ordinary
     /// numbered chapter does ask for a leading pause. That is affordable only because
-    /// <see cref="WithoutSatisfiedLeadIn"/> also takes the recognizer's word for it: measured over
-    /// sixteen books (469 marks, 2026-08-13), a pause alone would have dropped exactly one of them -
-    /// "I Shall Wear Midnight" chapter 9, whose announcement follows the previous chapter's last
-    /// words after 0.64 s against a threshold of 0.85 s - and that chapter is transcribed as a
-    /// segment of its own, so it passes on the second route. A phrase that writes no <c>^</c> still
-    /// asks for nothing, its phrase being its own evidence.
+    /// <see cref="WithoutSatisfiedLeadIn"/> also takes the recognizer's word for it. A phrase that
+    /// writes no <c>^</c> still asks for nothing, its phrase being its own evidence.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: what a pause-only reading of the built-in phrases would have cost across the corpus.
+    /// <include file='../../notes/Detection/AnnouncementIsolation.xml' path='doc/member[@name="ForChapter"]/*' /></remarks>
     /// <param name="match">The match being placed; its
     /// <see cref="PhraseMatching.PhraseMatch.SpokenAlone"/> decides whether there is anything to
     /// fall back on when the refinement confirms nothing.</param>
@@ -95,9 +88,7 @@ internal static class AnnouncementIsolation
     /// Drops the lead-in requirement where the recognizer already answered it: a match that begins
     /// exactly where its transcript segment begins is one Whisper set off by itself. That is the
     /// second way a <c>^</c> can be satisfied, and it is why a heading whose pause is a shade too
-    /// short for the threshold is not thrown away - "I Shall Wear Midnight" chapter 9, the one mark
-    /// of the sixteen-book corpus with under 0.85 s in front of it (0.64 s), is transcribed as a
-    /// segment of its own and passes on that.
+    /// short for the threshold is not thrown away.
     /// <para>
     /// Deliberately <em>not</em> extended to a number spoken alone, whose whole claim to being an
     /// announcement is the pause around it. That mode exists because Whisper's segmentation is not
@@ -108,6 +99,8 @@ internal static class AnnouncementIsolation
     /// real announcement Whisper failed to set off simply falls back on the pause test.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the one corpus mark whose pause falls short, and what it rides on instead.
+    /// <include file='../../notes/Detection/AnnouncementIsolation.xml' path='doc/member[@name="WithoutSatisfiedLeadIn"]/*' /></remarks>
     /// <param name="rule">What the wording asked for.</param>
     /// <param name="opensSegment">Whether the recognizer began a segment at the match.</param>
     private static IsolationRule WithoutSatisfiedLeadIn(IsolationRule rule, bool opensSegment)
@@ -253,18 +246,18 @@ internal enum IsolationRule
 
     /// <summary>A leading pause. What the prologue and epilogue get, and what a phrase's <c>^</c>
     /// asks for: a heading word sits at a section boundary and so always has a pause in front of it,
-    /// but the narrator may run straight on into the text after it. Measured over the fourteen-book
-    /// corpus (2026-08-05): the twelve genuine prologue/epilogue/<c>--custom</c> marks all have at
-    /// least 1.56 s in front, while two of them - Gruelfin's "Zeittafel" at 0.16 s and "I Shall Wear
-    /// Midnight"'s epilogue at 0.44 s - have almost nothing behind, so requiring a trailing pause
-    /// would throw away real marks for nothing: no false positive on record survives the lead-in
+    /// but the narrator may run straight on into the text after it, so requiring a trailing pause
+    /// would throw away real marks for nothing - no false positive on record survives the lead-in
     /// test.</summary>
+    /// <remarks>Notes: the corpus lead-ins and the two genuine marks with almost nothing behind them.
+    /// <include file='../../notes/Detection/AnnouncementIsolation.xml' path='doc/member[@name="IsolationRule.LeadIn"]/*' /></remarks>
     LeadIn = 1,
 
     /// <summary>A trailing pause, what a phrase's <c>$</c> asks for. Only ever sensible for an
-    /// announcement that is spoken alone: over the sixteen-book corpus 17 of 469 marks have under
-    /// 0.30 s behind them (2026-08-13), a narrator running from the heading straight into the
-    /// text.</summary>
+    /// announcement that is spoken alone: a narrator routinely runs from a heading straight into the
+    /// text after it.</summary>
+    /// <remarks>Notes: how many corpus marks have almost nothing behind them.
+    /// <include file='../../notes/Detection/AnnouncementIsolation.xml' path='doc/member[@name="IsolationRule.LeadOut"]/*' /></remarks>
     LeadOut = 2,
 
     /// <summary>Both flanks. What a bare number gets, and what that wording's whole premise rests

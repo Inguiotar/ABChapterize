@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\AnnouncementIsolation.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="AnnouncementIsolation">
+    <para>
+    <b>The corpus geometry the thresholds sit in.</b> Measured on "Corsa nello spazio" (build 244,
+    2026-08-05), replaying the guard over that run's own Analyze speech segments at each
+    announcement's true onset: every one of the 65 chapters is flanked by about 3.0-3.9 s before and
+    1.0-2.2 s after, the number's own speech running 0.3-1.3 s. The false epilogue the same run wrote
+    - Whisper heard "riepilogo" (Italian for "summary") mid-sentence and <c>/epilogo/</c> matched
+    inside it - measures 0.64 s before and 0.73 s after, on a 3.59 s stretch of continuous speech.
+    </para>
+    <para>
+    <b>The failure this guard cannot catch.</b> On the build-249 re-run of the same book, two marks
+    left one sentence late passed the check honestly, at -92 dBFS.
+    </para>
+    <para>
+    <b>The marks that would have failed at their written positions.</b> Five of that run's marks,
+    every one of them a mark left seconds late because refinement was broken (chapter 6 landed 2.2 s
+    past its announcement, chapter 3 by 4.4 s); at their true onsets all five pass comfortably. That
+    is why the guard is applied at the refined onset.
+    </para>
+  </member>
+
+  <member name="ForChapter">
+    <para>
+    <b>What a pause-only reading of the built-in phrases would have cost.</b> Measured over sixteen
+    books (469 marks, 2026-08-13), a pause alone would have dropped exactly one of them - "I Shall
+    Wear Midnight" chapter 9, whose announcement follows the previous chapter's last words after
+    0.64 s against a threshold of 0.85 s - and that chapter is transcribed as a segment of its own,
+    so it passes on the second route.
+    </para>
+  </member>
+
+  <member name="WithoutSatisfiedLeadIn">
+    <para>
+    <b>The one corpus mark whose pause falls short.</b> "I Shall Wear Midnight" chapter 9, the one
+    mark of the sixteen-book corpus with under 0.85 s in front of it (0.64 s), is transcribed as a
+    segment of its own and passes on that.
+    </para>
+  </member>
+
+  <member name="IsolationRule.LeadIn">
+    <para>
+    <b>The corpus lead-ins.</b> Measured over the fourteen-book corpus (2026-08-05): the twelve
+    genuine prologue/epilogue/<c>--custom</c> marks all have at least 1.56 s in front, while two of
+    them - Gruelfin's "Zeittafel" at 0.16 s and "I Shall Wear Midnight"'s epilogue at 0.44 s - have
+    almost nothing behind.
+    </para>
+  </member>
+
+  <member name="IsolationRule.LeadOut">
+    <para>
+    <b>How many corpus marks have almost nothing behind them.</b> Over the sixteen-book corpus, 17 of
+    469 marks have under 0.30 s behind them (2026-08-13) - a narrator running from the heading
+    straight into the text.
+    </para>
+  </member>
+</doc>

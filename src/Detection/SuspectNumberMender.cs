@@ -45,13 +45,14 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
     /// <summary>
     /// Whether a heard number is worth spending transcriptions on: one this stretch cannot hold,
     /// <em>except</em> a number equal to one of the bounds themselves. Those are the signature of an
-    /// overlapping probe window re-hearing an announcement already marked, not of a mishearing (all
-    /// three occurrences on BARDIOC.m4b, 2026-07-30, were of exactly this kind, and none carried the
-    /// "in-text mention?" note that a number genuinely below the sequence gets). Re-reading a
+    /// overlapping probe window re-hearing an announcement already marked, not of a mishearing.
+    /// Re-reading a
     /// duplicate has nothing to gain and one specific way to lose: the sequence prior, which
     /// everywhere else corroborates a re-read, here rewards inventing a neighbouring number for an
     /// announcement that is not it.
     /// </summary>
+    /// <remarks>Notes: what the bound-equal readings on record turned out to be.
+    /// <include file='../../notes/Detection/SuspectNumberMender.xml' path='doc/member[@name="WorthQuestioning"]/*' /></remarks>
     /// <param name="number">The chapter number in question.</param>
     internal bool WorthQuestioning(int number)
         => !Admits(number) && number != Below && number != Above;
@@ -94,9 +95,9 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
 /// The first is a number the sequence cannot hold where it was heard (see
 /// <see cref="NumberBounds"/>). A misheard number is cheap to
 /// correct here and ruinously expensive to live with: the numbers Whisper confuses are the ones that
-/// sound alike rather than the ones that are close in value, so a single slip - "neunzehn" read as 90
-/// on BARDIOC.m4b, 2026-07-30 - declares seventy chapters missing and commits Re-probe and Scan to
-/// re-probing and then fully transcribing hours of audio that has nothing hidden in it, only to end up
+/// sound alike rather than the ones that are close in value, so a single slip can declare dozens of
+/// chapters missing and commit Re-probe and Scan to re-probing and then fully transcribing hours of
+/// audio that has nothing hidden in it, only to end up
 /// with a mark that still carries the wrong number. The mirror slip costs a chapter outright: a number
 /// misheard <em>downwards</em> reads as an in-text mention of a chapter already passed and the
 /// announcement is discarded.
@@ -129,6 +130,8 @@ internal readonly record struct NumberBounds(int Below, int? Above = null)
 /// happened to time it.
 /// </para>
 /// </summary>
+/// <remarks>Notes: the mishearing that shows what a single slip costs.
+/// <include file='../../notes/Detection/SuspectNumberMender.xml' path='doc/member[@name="SuspectNumberMender"]/*' /></remarks>
 internal sealed class SuspectNumberMender
 {
     private readonly ProbeEnvironment _env;
@@ -192,19 +195,18 @@ internal sealed class SuspectNumberMender
     /// audio comes out as follows the window framing, so re-framing it is a genuinely different
     /// question and not a re-roll. Bringing it to Probe closes the one hole the Scan version
     /// cannot reach: an announcement past the last detected chapter is in no gap at all, so under
-    /// <c>--no-trailing-scan</c> nothing ever transcribes it again. That is how the final chapter of
-    /// "Paula Monti" was lost on 2026-07-31 - heard as "1ère partie, chapitre ban 5, douleur" at
-    /// 4:23:03 and never looked at again. Re-running that file with this in place, the upgrade model
-    /// read the same window as chapter 25 on the first attempt, before either re-framing was needed.
+    /// <c>--no-trailing-scan</c> nothing ever transcribes it again, which is how one book's final
+    /// chapter was lost outright.
     /// </para>
     /// <para>
     /// Adoption is the same <see cref="NumberBounds.Admits"/> rule, which is what keeps this from
     /// planting marks on prose: an in-text "the next chapter was harder" reaches here too, and so
-    /// does a window re-hearing an announcement already marked (observed as "CHAPTER X" over an
-    /// already-found chapter 10 on "I Shall Wear Midnight", 2026-07-31). Neither can produce a
-    /// number that continues the sequence, so neither can produce a mark.
+    /// does a window re-hearing an announcement already marked. Neither can produce a number that
+    /// continues the sequence, so neither can produce a mark.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the final chapter one book lost to this hole, and the re-hearing the bounds rule refuses.
+    /// <include file='../../notes/Detection/SuspectNumberMender.xml' path='doc/member[@name="ReadUnnumberedAsync"]/*' /></remarks>
     /// <param name="heard">The unreadable announcement, in window-relative time.</param>
     /// <param name="profile">The resolved language profile, for re-matching the phrase.</param>
     /// <param name="start">Absolute start of the probe window it was heard in.</param>

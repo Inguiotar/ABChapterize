@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\GapPlanning.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="Normalize">
+    <para>
+    <b>What a greedy left-to-right scan cost.</b> On "Die Cyber-Brutzellen" (2026-08-01) chapter 14's
+    announcement at 7:01:30 was read as 40, and chapters 15 through 29 - every one of them detected,
+    refined and correctly placed - then failed "greater than 40" one after another and were
+    discarded: a 17 h audiobook came out marked as far as 6:21 and no further.
+    </para>
+  </member>
+</doc>
