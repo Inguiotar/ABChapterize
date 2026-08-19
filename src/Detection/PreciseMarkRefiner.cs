@@ -355,12 +355,9 @@ internal sealed class PreciseMarkRefiner
     /// fixed level (<see cref="DefaultSilenceNoiseDb"/>, or whatever <c>--noise-floor</c> resolved
     /// to) against individual samples, so a single click - a
     /// mouth noise, a page, a chair - closes the silence while the narrator is still drawing
-    /// breath. Anchoring straight to it therefore lands early by however long that gap runs.
-    /// Measured over the fourteen-book run of 2026-08-03 (114 marks with a silence in reach, each
-    /// one's audio decoded and measured): the sound really does start within 0.1 s of the silence
-    /// end 113 times, and once - Paula Monti chapter 19, a -47 dBFS click at 3:18:50.72 with the
-    /// word "Première" not beginning until 3:18:51.13 - it starts 0.39 s later. So the scan below
-    /// walks forward from the floor to the first stretch of genuine sound, and that is the onset.
+    /// breath. Anchoring straight to it therefore lands early by however long that gap runs. So the
+    /// scan below walks forward from the floor to the first stretch of genuine sound, and that is
+    /// the onset.
     /// </para>
     /// <para>
     /// "Genuine" is <see cref="PreciseMarkOnsetSustainSeconds"/> of audio staying within
@@ -379,14 +376,16 @@ internal sealed class PreciseMarkRefiner
     /// <para>
     /// A jingle is music rather than silence and leaves no floor within
     /// <see cref="PreciseMarkSilenceAnchorSeconds"/>, so on a book that plays one into every
-    /// announcement none of the above could run and the mark kept the raw plateau edge - which is
-    /// how "Stalker.m4b" chapter 24 came to sit 0.12 s later in one build than another for no
-    /// better reason than a changed probe window. <see cref="AnchorOnsetToMusicEdge"/> covers that
-    /// case from the other side, with the region's own speech resumption standing in for the floor.
-    /// Measured over the corpus, 264 of 440 refined marks reach this branch; 60 % of a book's marks
-    /// is typical and four books reach it with every mark they have.
+    /// announcement none of the above could run and the mark kept the raw plateau edge.
+    /// <see cref="AnchorOnsetToMusicEdge"/> covers that case from the other side, with the region's
+    /// own speech resumption standing in for the floor.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Notes: how closely the sound really follows the silence end, the one book where it does not,
+    /// and how much of the corpus takes the no-floor jingle branch.
+    /// <include file='../../notes/Detection/PreciseMarkRefiner.xml' path='doc/member[@name="AnchorOnsetToSoundAsync"]/*' />
+    /// </remarks>
     /// <param name="onset">The onset <see cref="FindOnsetEdgeAsync"/> converged on; also the
     /// latest position the scan may return.</param>
     /// <param name="silences">Every silence Analyze stored, chronological.</param>
@@ -942,9 +941,7 @@ internal sealed class PreciseMarkRefiner
     /// ask whether the phrase appears anywhere between a moving start and a fixed end past the
     /// announcement, and the answer is yes for every start before the onset and no for every start
     /// after it. One step, one edge, bisectable - see
-    /// <see cref="FindPhraseSurvivalEdgeAsync"/>. Verified before it was built, on the same mark:
-    /// starts of 22.6, 30, 40, 46, 50, 51.5, 52 and 52.5 s all still found "Zeittafel" against an
-    /// end of 54 s, and 53 s did not.
+    /// <see cref="FindPhraseSurvivalEdgeAsync"/>.
     /// </para>
     /// <para>
     /// That edge is not itself the answer the caller wants - it sits at or fractionally past the
@@ -973,20 +970,14 @@ internal sealed class PreciseMarkRefiner
     /// <para>
     /// The reach that buys is one <see cref="PreciseMarkCheckWindowSeconds"/>: the foothold probe at
     /// the ceiling confirms while the announcement starts inside its own window, and fails honestly
-    /// past that. Measured against the ten-book run of 2026-08-02 (222 refinements that reported an
-    /// onset), the onset landed past the search ceiling exactly twice, by 1.4 s and 2.2 s, with a
-    /// median headroom of 6.9 s - so a check window's reach covers every case on record with room
-    /// to spare, and no wider bracket has ever been called for. Raumschiff Erde chapter 1 is the
-    /// case this was built for and the only refinement of 278 that reached this branch: its
-    /// detecting decode was a 26.7 s overlap tail from 0:04:55.38 and Whisper timestamped
-    /// "Kapitel 1." as its very first segment, 0.0-7.0, twelve seconds before the words were
-    /// spoken, so the bracket [0:04:42.38, 0:05:07.38] ended right at the announcement rather than
-    /// behind it. The words are in fact at 0:05:07.0-0:05:12.0 and the onset at 307.50 s, the
-    /// plateau's last confirming probe being 307.60 and the first failing one 307.70
-    /// (<c>tools\wprobe</c>, ggml-small, 2026-08-02); a foothold probe at the ceiling, 307.38,
-    /// confirms cleanly and the walk from it lands on exactly that onset.
+    /// past that. No wider bracket has ever been called for.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Notes: the pre-build verification of the anchored-end predicate, how much headroom the search
+    /// ceiling has across the corpus, and the one refinement that ever aimed from it.
+    /// <include file='../../notes/Detection/PreciseMarkRefiner.xml' path='doc/member[@name="LocatePhraseByShrinkingWindowAsync"]/*' />
+    /// </remarks>
     /// <param name="mark">The mark being refined; the gallop starts here, clamped into the
     /// bracket.</param>
     /// <param name="phraseAbs">Absolute start of the matched segment(s).</param>
@@ -1109,13 +1100,9 @@ internal sealed class PreciseMarkRefiner
     /// enough to span more than one re-segments differently for a shift of a few hundred
     /// milliseconds, and the phrase can drop out of the transcript for reasons having nothing to do
     /// with where the window starts. The predicate is noise at that point, and bisecting noise
-    /// converges on nonsense. Measured twice while this was built, both on Stalker.m4b's
-    /// "Zeittafel" (true onset 52.7 s, 2026-07-29): anchored 55 s out, the phrase was reported
-    /// surviving from 22.92 s but not from 23.32 s and the edge came back 29 s early; anchored at
-    /// the detecting window's end but started from the mark 30 s before it, the very first stride
-    /// straddled a chunk boundary and did it again. Bracketed to the matched segment - which
-    /// contains the announcement however badly its start timestamp is smeared - no window exceeds
-    /// that segment plus two phrase margins, and the same audio behaved perfectly monotonically.
+    /// converges on nonsense. Bracketed to the matched segment - which contains the announcement
+    /// however badly its start timestamp is smeared - no window exceeds that segment plus two
+    /// phrase margins, and the same audio behaves monotonically.
     /// </para>
     /// <para>
     /// The anchor is additionally pulled in to just past every position that fails: a failure proves
@@ -1129,6 +1116,11 @@ internal sealed class PreciseMarkRefiner
     /// real work is bounding the probes further back.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Notes: the two measurements that showed a fixed-width bracket bisecting on noise, and what
+    /// bracketing to the matched segment fixed.
+    /// <include file='../../notes/Detection/PreciseMarkRefiner.xml' path='doc/member[@name="FindPhraseSurvivalEdgeAsync"]/*' />
+    /// </remarks>
     /// <param name="origin">Position the gallop starts from; inside the bracket.</param>
     /// <param name="floor">Earliest position the onset can be at.</param>
     /// <param name="ceiling">Latest position it can be at, and the window's end anchor.</param>

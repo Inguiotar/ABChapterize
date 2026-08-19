@@ -127,21 +127,16 @@ internal static class DetectionTuning
     /// <para>
     /// This plus <see cref="JingleLeadInSeconds"/> does <em>not</em>: it is exactly
     /// <see cref="WhisperChunkSeconds"/>, the width that constant records as losing an announcement
-    /// outright, and build 280 duly lost Gruelfin.m4b's prologue to it (2026-08-09). Neither number
-    /// was moved to fix that - the lead-in is generous for its own measured reasons, and trimming
-    /// this one would have cost the two corpus marks accepted 26.2 s and 28.3 s into their windows.
+    /// outright. Neither number was moved to fix that - the lead-in is generous for its own measured
+    /// reasons, and trimming this one would have cost two corpus marks accepted deep in their
+    /// windows.
     /// The remedy sits after the fact instead, in
     /// <see cref="RegionProber.RereadInOnePassAsync"/>, which re-reads an empty jingle window at a
     /// single-pass width. Anything that changes either constant should re-read that method first.
     /// </para>
-    /// <para>
-    /// Calibrated 2026-08-08 by replaying the classification over the fourteen-book corpus's own
-    /// Analyze signals: every mark Probe's main scan finds today is still inside its window, and the
-    /// tightest real announcement leaves 2.8 s of room ("Stalker"), most of them 5-8 s. Books whose
-    /// announcements sit further out than this exist - all ten the replay could not cover are marks
-    /// today's Probe does not find either, recovered by the gap machinery, which is unchanged.
-    /// </para>
     /// </summary>
+    /// <remarks>Notes: the corpus replay that sized this reach, and the marks trimming it would have cost.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="ExpectedAnnouncementSeconds"]/*' /></remarks>
     internal const double ExpectedAnnouncementSeconds = 22.0;
 
     /// <summary>
@@ -166,11 +161,7 @@ internal static class DetectionTuning
     /// The defect it exists for: an announcement can be flanked by a pause too short to be a
     /// candidate and a pause long enough to be one, in which case the only window covering that
     /// stretch opens on the <em>second</em> pause - that is, immediately after the announcement has
-    /// been spoken - and no pass ever reads it. Two corpus cases, and they are structurally
-    /// identical: "De vandrande djäknarne" chapter 2 (0.95 s pause, 2.89 s of announcement, then the
-    /// 2.75 s candidate) lost the chapter outright, and "The Philosopher's Stone" chapter 11
-    /// (1.39 s, 0.98 s, then the 1.78 s candidate) cost a Re-probe recovery. Both were verified with
-    /// the wprobe harness: a window opened at the earlier pause reads the announcement first try.
+    /// been spoken - and no pass ever reads it.
     /// </para>
     /// <para>
     /// Promotion keeps the invariant <see cref="SilenceLeadInSeconds"/> protects, which is why it is
@@ -179,15 +170,14 @@ internal static class DetectionTuning
     /// into the narration instead would have broken it.
     /// </para>
     /// <para>
-    /// 3.5 s rather than the 3.0 s that would just cover both cases (djäknarne's announcement runs
-    /// 2.89 s). Replaying the rule over all seventeen build-331 logs' own Analyze silence lists, the
-    /// bound decides the cost: 2.0 s misses djäknarne, 3.0 s costs 1.19x the corpus's candidates,
-    /// 3.5 s costs 1.31x and 5.0 s 1.49x. The margin is worth the difference - a chapter announced
-    /// with its title runs well past 3 s - and the count overstates the real cost anyway, since a
-    /// promoted candidate sits a few seconds ahead of the one that promoted it and the overlap cache
-    /// serves most of the second window from the first.
+    /// Set with margin past the two corpus cases rather than just covering them - a chapter announced
+    /// with its title runs well past 3 s - and the extra candidates that buys cost less than their
+    /// count suggests, since a promoted candidate sits a few seconds ahead of the one that promoted
+    /// it and the overlap cache serves most of the second window from the first.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the two corpus cases it was built for, and what each candidate bound costs.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SandwichedAnnouncementSeconds"]/*' /></remarks>
     internal const double SandwichedAnnouncementSeconds = 3.5;
 
     /// <summary>
@@ -365,13 +355,12 @@ internal static class DetectionTuning
     /// the same thing as the --verbose jingle tally.
     /// <para>
     /// One per hour is a low bar and is meant to be: it separates two populations rather than
-    /// grading one. The corpus books this shape targets run 20-60 jingles over 10-18 hours, and the
-    /// books it must not fire on have no chapter music at all - their whole-file tallies are 0 or 1
-    /// (see <see cref="JingleCensus"/> for the reading that brought the spurious ones down that far).
-    /// Nothing in the corpus sits between the two, so a bar drawn anywhere in that empty band would
-    /// be a number with nothing behind it.
+    /// grading one, and the corpus leaves an empty band between them, so a bar drawn anywhere in
+    /// that band would be a number with nothing behind it.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the two populations' measured jingle tallies.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="JingleFirstMinPerHour"]/*' /></remarks>
     internal const double JingleFirstMinPerHour = 1.0;
 
     /// <summary>
@@ -388,12 +377,10 @@ internal static class DetectionTuning
     /// <summary>
     /// The speech-duration floor <see cref="JingleGeometry.AdvancePastNonSpeech"/> uses to tell a
     /// genuine spoken onset from a jingle's musical/vocal transients (or a Whisper hallucination
-    /// inside one) that VAD still calls "speech". Calibrated against real audio (see
-    /// <c>tools\vadprobe</c>'s sweep data): the shortest such transient measured 0.352 s and
-    /// survived raising <see cref="VadSegmenter.Threshold"/> as far as 0.70, while the shortest
-    /// genuine announcement word measured 0.608 s - this sits roughly midway, erring toward not
-    /// skipping real speech, since another supported language could plausibly be shorter than the
-    /// one German data point. Deliberately tighter than
+    /// inside one) that VAD still calls "speech". Calibrated to sit roughly midway between the
+    /// longest such transient and the shortest genuine announcement word measured on real audio,
+    /// erring toward not skipping real speech, since another supported language could plausibly be
+    /// shorter than the one German data point. Deliberately tighter than
     /// <see cref="MergeShortSpeechGapSeconds"/>'s cluster-grouping gap: this rejects a single
     /// too-short blip, that decides whether separate blips belong to the same cluster.
     /// <para>
@@ -402,6 +389,8 @@ internal static class DetectionTuning
     /// same stretch --mark-before-jingle's walk would cross in one go.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the transient and announcement-word durations this sits midway between.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="TransientSpeechFloorSeconds"]/*' /></remarks>
     internal const double TransientSpeechFloorSeconds = 0.4;
 
     /// <summary>
@@ -412,41 +401,36 @@ internal static class DetectionTuning
     /// unusual ones - and of the prologue and epilogue, which demand it whatever phrase they are
     /// given. A bare number is held to it on both flanks.
     /// <para>
-    /// Bounded by measurement 2026-08-05, replaying the guard over each run's own Analyze speech
-    /// segments across the fourteen-book corpus. Every genuine announcement clears it with room:
-    /// "Corsa nello spazio"'s 65 bare numbers sit at 3.0-3.9 s, and the corpus's twelve genuine
-    /// prologue/epilogue/<c>--custom</c> marks range from 1.56 s ("The Forever War"'s epilogue, the
-    /// tightest) to 36 s. The false positive this exists to stop - <c>/epilogo/</c> matching inside
-    /// Italian "riepilogo" mid-sentence - measures 0.64 s. So anything in (0.64, 1.56) is defensible
-    /// and this sits low in that window: the corpus is fourteen books, the tightest genuine mark in
-    /// it is one data point, and an announcement dropped for want of a pause is a chapter lost
-    /// outright, whereas the false positives this catches are all far below 0.64 s rather than
-    /// clustered just under the line.
+    /// Bounded by measurement across the corpus: every genuine announcement clears it with room, and
+    /// the false positive it exists to stop - <c>/epilogo/</c> matching inside Italian "riepilogo"
+    /// mid-sentence - falls well below. It sits low in the defensible window rather than midway,
+    /// because the tightest genuine mark in the corpus is a single data point, an announcement
+    /// dropped for want of a pause is a chapter lost outright, and the false positives on record are
+    /// nowhere near the line.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the corpus measurements bounding that window at both ends.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AnnouncementLeadInSeconds"]/*' /></remarks>
     internal const double AnnouncementLeadInSeconds = 0.85;
 
     /// <summary>
     /// Non-speech an announcement must have behind it where a wording's <c>$</c> asks for one, and
     /// what a <em>bare number</em> is held to on top of its lead-in
     /// (<see cref="IsolationRule.Both"/>). The bare number is what the figure was set from: the
-    /// number is spoken alone, so the
-    /// pause behind it is as much a part of its shape as the one in front, and on "Corsa nello
-    /// spazio" every chapter measured 1.0-2.2 s there - the tightest being chapter 20 at 0.99 s -
-    /// against 0.73 s for the false epilogue. Set well below that tightest real measurement rather
-    /// than just below it, for the same reason as the lead-in: one book's narrator sets the pace of
-    /// these pauses, and another's need not be so generous.
+    /// number is spoken alone, so the pause behind it is as much a part of its shape as the one in
+    /// front. Set well below the tightest real measurement rather than just below it, for the same
+    /// reason as the lead-in: one book's narrator sets the pace of these pauses, and another's need
+    /// not be so generous.
     /// <para>
     /// Deliberately <em>not</em> asked of the prologue, the epilogue or a <c>--custom</c> mapping of
-    /// their own accord - only where a wording writes the <c>$</c> that asks for it.
-    /// A heading word is routinely run straight into the text that follows it, and the corpus
-    /// has it both ways round: Gruelfin's "Zeittafel" leaves 0.16 s behind it and "I Shall Wear
-    /// Midnight"'s epilogue 0.44 s, both genuine, so at this threshold the first would still be
-    /// thrown away and the second only just survives. The lead-in alone already rejects every
-    /// mid-sentence false positive on record, so there is nothing to buy here and a real mark to
-    /// lose.
+    /// their own accord - only where a wording writes the <c>$</c> that asks for it. A heading word
+    /// is routinely run straight into the text that follows it, and the corpus has it both ways
+    /// round, so the lead-in alone already rejects every mid-sentence false positive on record and
+    /// there is nothing to buy here but a real mark to lose.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the lead-out measured on every bare-number chapter of one book, and the two genuine heading marks a stricter bar would cost.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AnnouncementLeadOutSeconds"]/*' /></remarks>
     internal const double AnnouncementLeadOutSeconds = 0.3;
 
     /// <summary>
@@ -467,27 +451,6 @@ internal static class DetectionTuning
     /// of which VAD reads as non-speech, so any real depth here means the mark landed in somebody
     /// else's words.
     /// <para>
-    /// The failure this exists to stop, reported by ear on "De vandrande djäknarne" (build 339,
-    /// 2026-08-17): that book is a LibriVox recording which announces "Inläsning av Lars Rolander"
-    /// before some chapters, and the credit-to-announcement pause is short (0.55 s at chapter 6,
-    /// 0.82 s at chapter 11). The survival walk kept retreating through it - a window opening
-    /// mid-credit still transcribes "av Lars Rolander, sjätte kapitlet, ...", the phrase matches
-    /// inside that, and the <c>^</c> guard is satisfied by the segment-start rescue because Whisper
-    /// opens a segment at the announcement - so the onset converged 1.4 s inside the credit and the
-    /// marks were written into the reader's name. Their default-mode positions were already right.
-    /// </para>
-    /// <para>
-    /// Calibration is unusually clean because this quantity is bimodal, not distributed. Replayed
-    /// over all seventeen build-339 logs' own Analyze speech segments, <b>441 of 443 marks measure
-    /// exactly zero</b> - every jingle mark included, since the jingle anchor lands them at the music
-    /// edge ahead of the segment - and the only two non-zero values in the corpus are the two
-    /// reported chapters, at 1.00 s and 1.42 s. So any threshold in (0, 1.00) separates them and
-    /// there is no distribution tail to fit; this sits halfway across that empty band. The measure on
-    /// the <em>onset</em> rather than the mark was rejected for exactly this reason: it has a
-    /// populated tail out to 0.15 s over 104 marks, mostly jingles, so a cut there would sit inside
-    /// real data.
-    /// </para>
-    /// <para>
     /// Generous rather than tight on purpose, because VAD is capable of calling music speech: two
     /// marks in "Gruelfin.m4b" have it hearing speech 2.54 s and 2.65 s early inside a jingle (see
     /// <see cref="PreciseMarkMusicAnchorCapSeconds"/>). No corpus mark actually lands inside such a
@@ -496,6 +459,8 @@ internal static class DetectionTuning
     /// default-mode position is demonstrably better - is the other half of that protection.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the two marks written into a reader's credit, and why this quantity is bimodal rather than distributed.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MarkInsideSpeechSeconds"]/*' /></remarks>
     internal const double MarkInsideSpeechSeconds = 0.5;
 
     /// <summary>
@@ -506,12 +471,12 @@ internal static class DetectionTuning
     /// times this fast, so coverage at a fraction of that pace is not continuous speech but a long
     /// near-silent stretch of music/reverb that Whisper folded into one oversized segment together
     /// with a few real words at its edges (one merged segment was observed spanning almost 30 s
-    /// while containing a couple of seconds of speech). Confirmed on real audio (Perry Rhodan
-    /// "Die Dritte Macht", chapters 8 and 10, 2026-07-26): two genuine segments measured roughly
-    /// 10-12 letters/second, two smeared ones roughly 0.4-1.0 - an order of magnitude apart. Set
-    /// well below the real-narration floor, leaving margin for slow delivery or short,
-    /// punctuation-heavy segments.
+    /// with a few real words at its edges (one merged segment was observed spanning almost 30 s
+    /// while containing a couple of seconds of speech). Set well below the real-narration floor,
+    /// leaving margin for slow delivery or short, punctuation-heavy segments.
     /// </summary>
+    /// <remarks>Notes: the measured pace of genuine segments against smeared ones.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MinPlausibleSpeechCharsPerSecond"]/*' /></remarks>
     internal const double MinPlausibleSpeechCharsPerSecond = 3.0;
 
     /// <summary>
@@ -624,36 +589,25 @@ internal static class DetectionTuning
     /// looks for the plateau resuming, and at what spacing - the guard against bisecting a
     /// predicate that turned out not to be the single clean step function it was built for.
     /// <para>
-    /// The failure this exists to catch, measured 2026-07-31 on Die Dritte Macht chapter 7
-    /// (announcement "Kapitel 7" truly at 10784.5 s, established with <c>tools\wprobe</c>: a window
-    /// ending at 10784.60 transcribes only "[Musik]", one ending at 10784.80 catches "Kapitel").
-    /// The ordinary check answered, at 0.1 s spacing with the ggml-small model:
-    /// yes at 10783.44, <em>no</em> from 10783.49 to 10784.04, yes again at 10784.24 and 10784.44,
-    /// no from 10784.54 onward. That middle "no" run is a hole in the plateau roughly 0.8 s wide
-    /// sitting 0.45-1.0 s before the true onset, not the plateau's end: the gallop struck it at
-    /// 10783.84, bisected between 10783.04 and 10783.84, and returned the hole's left edge, putting
-    /// the mark 1.16 s early. The pre-refinement heuristic mark had been 0.04 s off, so refinement
-    /// made an already-good mark worse - the only imperfect mark in a seven-book run.
+    /// The failure this exists to catch is a <em>hole</em> in the plateau: a run of "no" several
+    /// tenths of a second wide sitting well before the true onset, which a plain bisection reads as
+    /// the plateau's end and returns the hole's left edge for - putting the mark over a second early
+    /// and, in the case on record, making an already-good mark worse. The hole is a property of the
+    /// model rather than of the audio; a larger recognizer reads the same grid perfectly monotone,
+    /// overshooting slightly instead, which <see cref="PreciseMarkRefiner.OnsetOf"/>'s lead-in
+    /// subtraction absorbs. Looking for the <em>rightmost</em> plateau rather than stopping at the
+    /// first edge it meets is what makes both models land within a fifth of a second of each other.
     /// </para>
     /// <para>
-    /// The hole is a property of the model, not of the audio: the same grid run against
-    /// ggml-large-v3-turbo is perfectly monotone with no hole at all, its last yes at 10784.64 -
-    /// 0.2 s past the truth, because a bigger model reconstructs a clipped first syllable - which
-    /// <see cref="PreciseMarkRefiner.OnsetOf"/>'s lead-in subtraction absorbs. So both models land
-    /// within a fifth of a second once the search looks for the <em>rightmost</em> plateau rather
-    /// than stopping at the first edge it meets.
-    /// </para>
-    /// <para>
-    /// Spacing and reach are calibrated against that one measured hole and are deliberately coarse:
-    /// this is a "did the plateau resume?" question, and whichever probe lands, the walk restarts
-    /// from it and re-derives the edge at the usual
-    /// <see cref="PreciseMarkFixedStepSeconds"/> accuracy. 0.3 s spacing puts a probe inside a
-    /// resumed plateau as narrow as the 0.2 s one measured there (10784.24-10784.44); 1.2 s of
-    /// reach clears a hole half again as wide as the one observed. Four probes is what that costs
-    /// every refinement, holes or not - about 4 s per mark, ~1.5 minutes on a book with 30
-    /// chapters, against a mark that would otherwise be a second out.
+    /// Spacing and reach are deliberately coarse: this is a "did the plateau resume?" question, and
+    /// whichever probe lands, the walk restarts from it and re-derives the edge at the usual
+    /// <see cref="PreciseMarkFixedStepSeconds"/> accuracy. The spacing is set to put a probe inside
+    /// the narrowest resumed plateau measured, and the reach to clear a hole half again as wide as
+    /// the one observed. Four probes is what that costs every refinement, holes or not.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the Die Dritte Macht chapter 7 probe grid that measured the hole, the same grid on the upgrade model, and what four probes cost per book.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkPlateauProbesSeconds"]/*' /></remarks>
     internal static readonly double[] PreciseMarkPlateauProbesSeconds = [0.3, 0.6, 0.9, 1.2];
 
     /// <summary>
@@ -700,15 +654,6 @@ internal static class DetectionTuning
     /// confidently comes back as a coin flip, and one flip in the wrong direction moves the bisection
     /// into the half that does not hold the onset, where every further probe agrees with it.
     /// <para>
-    /// Measured on Stalker.m4b's "Zeittafel" (true onset 52.7 s, end anchor 54.19 s - the detecting
-    /// window's own end, which left barely a second of the announcement inside the bracket,
-    /// 2026-07-30): the same phrase came back at p=0.84 from a 6.15 s clip, p=0.54 from 4.55 s and
-    /// p=0.49 from 2.95 s, and it was the 2.95 s one that failed on the run's GPU and sent the edge
-    /// back 4.7 s early - past which no foothold could be confirmed and the mark was left at its
-    /// (30 s early) default position. At 6 s the whole sweep from 46 s to 53.5 s is monotone across
-    /// the onset, and BARDIOC.m4b's chapter 21 bisects to the same edge either way.
-    /// </para>
-    /// <para>
     /// Not larger, although "more audio, surer answer" is the obvious extrapolation: it is wrong on
     /// the very audio this exists for. A jingle is music, Whisper writes music off as a single
     /// "[Musik]" segment, and the more of it a window holds the likelier the announcement goes with
@@ -723,6 +668,8 @@ internal static class DetectionTuning
     /// the announcement would have to be repeated within a few seconds of itself.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the probe probabilities by clip length that put the floor at six seconds.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkMinSurvivalSeconds"]/*' /></remarks>
     internal const double PreciseMarkMinSurvivalSeconds = 6.0;
 
     /// <summary>
@@ -730,10 +677,8 @@ internal static class DetectionTuning
     /// will look for the announcement when the matched segment's own start timestamp does not reach
     /// that far back on its own. The bracket is normally drawn one
     /// <see cref="PhraseMarginSeconds"/> below that timestamp, which quietly assumes Whisper never
-    /// times a segment <em>later</em> than the words in it - and it does: chapter 21 of BARDIOC.m4b
-    /// was announced at 12:26:33.4 and its segment timestamped 12:26:38.6 (2026-07-30, a 5.2 s lag),
-    /// putting the whole bracket past the announcement so that no probe inside it could ever hear it.
-    /// The mark was left where default-mode placement had put it, 1.1 s into the spoken announcement.
+    /// times a segment <em>later</em> than the words in it - and it does, putting the whole bracket
+    /// past the announcement so that no probe inside it could ever hear it.
     /// <para>
     /// Widening the floor cannot move the answer, only find it: the survival edge is the
     /// <em>largest</em> position the phrase still survives from, which does not depend on how far
@@ -756,6 +701,8 @@ internal static class DetectionTuning
     /// that established it.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the segment Whisper timestamped later than the words in it, which is why the floor is extended at all.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkMaxBracketSeconds"]/*' /></remarks>
     internal const double PreciseMarkMaxBracketSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
 
     /// <summary>
@@ -765,25 +712,20 @@ internal static class DetectionTuning
     /// <para>
     /// This is not an implementation detail that stays inside the recognizer, which is why it has a
     /// name here: an announcement is one or two words against minutes of narration, and crossing the
-    /// boundary is enough to lose it. Gruelfin.m4b's prologue (2026-07-30) is the case on record -
-    /// the identical decode starting at 0:03:16.18 yields "Prolog. Die Jahre des Versteckspiels..."
-    /// at 17.5 s and at 23.5 s, and at 30.0 s and 50.0 s yields the narration alone with the word
-    /// gone. It was a 50 s window that probed it live, because --max-jingle-length auto had not yet
-    /// seen a jingle to narrow the window with, and the prologue was simply never heard.
+    /// boundary is enough to lose it - twice, on the same book's prologue.
     /// </para>
     /// <para>
     /// The same book lost it again in build 280 (2026-08-09), to a window one second short of a
     /// chunk's worth of narration rather than twenty: the classified jingle candidate opens
     /// <see cref="JingleLeadInSeconds"/> into the music and runs
-    /// <see cref="ExpectedAnnouncementSeconds"/> past the announcement, which is exactly 30.0 s.
-    /// Re-measured on that live decode at 0:03:20.19 with ggml-small: read at 22.0, 23.5 and 25.0 s,
-    /// gone at 27.0 and 30.0 s. Two things worth keeping from it - the cliff is between 25 and 27 s
-    /// and not at 30, so the phrase margin <see cref="JingleRereadWindowSeconds"/> keeps below a
-    /// chunk is the whole of the safety margin rather than a rounding; and this window transcribes identically on
-    /// the GTX 1070 and the Radeon 890M, word for word and timestamp for timestamp, which is rare
-    /// enough (see the project notes on cross-machine reproducibility) to be worth stating.
+    /// <see cref="ExpectedAnnouncementSeconds"/> past the announcement, which is exactly 30.0 s. The
+    /// cliff sits between 25 and 27 s rather than at 30, so the phrase margin
+    /// <see cref="JingleRereadWindowSeconds"/> keeps below a chunk is the whole of the safety margin
+    /// rather than a rounding.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the two Gruelfin prologue losses and the decode grids behind the 25-27 s cliff.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="WhisperChunkSeconds"]/*' /></remarks>
     internal const double WhisperChunkSeconds = 30.0;
 
     /// <summary>

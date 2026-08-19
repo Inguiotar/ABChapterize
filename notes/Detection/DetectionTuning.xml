@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\DetectionTuning.cs.
+     Calibration derivations, corpus measurements and the dated cases behind each
+     constant's exact value live here; what the constant is, and the reason it must
+     not casually be changed, stay in the source. -->
+<doc>
+  <member name="ExpectedAnnouncementSeconds">
+    <para>
+    <b>The replay that sized the reach.</b> Calibrated 2026-08-08 by replaying the classification
+    over the fourteen-book corpus's own Analyze signals: every mark Probe's main scan finds today is
+    still inside its window, and the tightest real announcement leaves 2.8 s of room ("Stalker"),
+    most of them 5-8 s. Books whose announcements sit further out than this exist - all ten the
+    replay could not cover are marks today's Probe does not find either, recovered by the gap
+    machinery, which is unchanged.
+    </para>
+    <para>
+    <b>What trimming it would have cost.</b> Two corpus marks are accepted 26.2 s and 28.3 s into
+    their windows ("Die Dritte Macht" 8:06:31, "Die Maahks" 10:11:27), which is why the Gruelfin
+    prologue lost by the 30 s jingle window in build 280 (2026-08-09) was answered with
+    <see cref="RegionProber.RereadInOnePassAsync"/> rather than by narrowing this.
+    </para>
+  </member>
+
+  <member name="SandwichedAnnouncementSeconds">
+    <para>
+    <b>The two corpus cases.</b> Structurally identical: "De vandrande djäknarne" chapter 2 (0.95 s
+    pause, 2.89 s of announcement, then the 2.75 s candidate) lost the chapter outright, and "The
+    Philosopher's Stone" chapter 11 (1.39 s, 0.98 s, then the 1.78 s candidate) cost a Re-probe
+    recovery. Both were verified with the wprobe harness: a window opened at the earlier pause reads
+    the announcement first try.
+    </para>
+    <para>
+    <b>What each bound costs.</b> Replaying the rule over all seventeen build-331 logs' own Analyze
+    silence lists: 2.0 s misses that book (whose announcement runs 2.89 s), 3.0 s costs 1.19x the
+    corpus's candidates, 3.5 s costs 1.31x and 5.0 s 1.49x. Measured again over the whole build-339
+    corpus run, the shipped 3.5 s came out at 1.13x rather than 1.31x - the overlap cache absorbs
+    most promoted windows.
+    </para>
+  </member>
+
+  <member name="JingleFirstMinPerHour">
+    <para>
+    <b>The two populations.</b> The corpus books this shape targets run 20-60 jingles over 10-18
+    hours; the books it must not fire on have no chapter music at all and tally 0 or 1 over the whole
+    file (see <see cref="JingleCensus"/> for the reading that brought the spurious ones down that
+    far). Nothing in the corpus sits between the two.
+    </para>
+  </member>
+
+  <member name="TransientSpeechFloorSeconds">
+    <para>
+    <b>The two durations this sits midway between.</b> Calibrated against real audio (see
+    <c>tools\vadprobe</c>'s sweep data): the shortest musical/vocal transient measured 0.352 s and
+    survived raising <see cref="VadSegmenter.Threshold"/> as far as 0.70, while the shortest genuine
+    announcement word measured 0.608 s.
+    </para>
+  </member>
+
+  <member name="AnnouncementLeadInSeconds">
+    <para>
+    <b>What bounds the window at both ends.</b> Measured 2026-08-05 by replaying the guard over each
+    run's own Analyze speech segments across the fourteen-book corpus. Every genuine announcement
+    clears it with room: "Corsa nello spazio"'s 65 bare numbers sit at 3.0-3.9 s, and the corpus's
+    twelve genuine prologue/epilogue/<c>--custom</c> marks range from 1.56 s ("The Forever War"'s
+    epilogue, the tightest) to 36 s. The false positive it exists to stop - <c>/epilogo/</c> matching
+    inside Italian "riepilogo" mid-sentence - measures 0.64 s. So anything in (0.64, 1.56) is
+    defensible, and 0.85 sits low in that window rather than midway (user's call, 2026-08-05, lowered
+    from 1.0).
+    </para>
+  </member>
+
+  <member name="AnnouncementLeadOutSeconds">
+    <para>
+    <b>The lead-out measured on a whole bare-number book.</b> On "Corsa nello spazio" every chapter
+    measured 1.0-2.2 s behind its number - the tightest being chapter 20 at 0.99 s - against 0.73 s
+    for the false epilogue. 0.30 s therefore sits well below the tightest real measurement rather
+    than just below it (user's call, 2026-08-05, lowered from 0.5).
+    </para>
+    <para>
+    <b>Why it is asked of a bare number only.</b> A heading word is routinely run straight into its
+    text: Gruelfin's "Zeittafel" leaves 0.16 s behind it and "I Shall Wear Midnight"'s epilogue
+    0.44 s, both genuine, so at this threshold the first would still be thrown away and the second
+    only just survives. Gruelfin's is a <c>--custom</c> mark and exempt from the guard anyway, so the
+    exemption now rests on the principle rather than on a surviving counter-example - do not
+    "simplify" it away on the grounds that the data no longer forces it.
+    </para>
+  </member>
+
+  <member name="MinPlausibleSpeechCharsPerSecond">
+    <para>
+    <b>Genuine pace against smeared pace.</b> Confirmed on real audio (Perry Rhodan "Die Dritte
+    Macht", chapters 8 and 10, 2026-07-26): two genuine segments measured roughly 10-12
+    letters/second, two smeared ones roughly 0.4-1.0 - an order of magnitude apart.
+    </para>
+  </member>
+
+  <member name="MarkInsideSpeechSeconds">
+    <para>
+    <b>The failure this exists to stop.</b> Reported by ear on "De vandrande djäknarne" (build 339,
+    2026-08-17): that book is a LibriVox recording which announces "Inläsning av Lars Rolander"
+    before some chapters, and the credit-to-announcement pause is short (0.55 s at chapter 6, 0.82 s
+    at chapter 11). The survival walk kept retreating through it - a window opening mid-credit still
+    transcribes "av Lars Rolander, sjätte kapitlet, ...", the phrase matches inside that, and the
+    <c>^</c> guard is satisfied by the segment-start rescue because Whisper opens a segment at the
+    announcement - so the onset converged 1.4 s inside the credit and the marks were written into the
+    reader's name. Their default-mode positions were already right.
+    </para>
+    <para>
+    <b>Why the calibration is unusually clean.</b> The quantity is bimodal, not distributed. Replayed
+    over all seventeen build-339 logs' own Analyze speech segments, <b>441 of 443 marks measure
+    exactly zero</b> - every jingle mark included, since the jingle anchor lands them at the music
+    edge ahead of the segment - and the only two non-zero values in the corpus are the two reported
+    chapters, at 1.00 s and 1.42 s. So any threshold in (0, 1.00) separates them and there is no
+    distribution tail to fit; 0.5 sits halfway across that empty band. The same measure on the
+    <em>onset</em> rather than the mark was rejected for exactly this reason: it has a populated tail
+    out to 0.15 s over 104 marks, mostly jingles, so a cut there would sit inside real data.
+    </para>
+  </member>
+
+  <member name="PreciseMarkPlateauProbesSeconds">
+    <para>
+    <b>The hole, measured.</b> 2026-07-31 on Die Dritte Macht chapter 7 (announcement "Kapitel 7"
+    truly at 10784.5 s, established with <c>tools\wprobe</c>: a window ending at 10784.60 transcribes
+    only "[Musik]", one ending at 10784.80 catches "Kapitel"). The ordinary check answered, at 0.1 s
+    spacing with the ggml-small model: yes at 10783.44, <em>no</em> from 10783.49 to 10784.04, yes
+    again at 10784.24 and 10784.44, no from 10784.54 onward. That middle "no" run is a hole roughly
+    0.8 s wide sitting 0.45-1.0 s before the true onset, not the plateau's end: the gallop struck it
+    at 10783.84, bisected between 10783.04 and 10783.84, and returned the hole's left edge, putting
+    the mark 1.16 s early. The pre-refinement heuristic mark had been 0.04 s off, so refinement made
+    an already-good mark worse - the only imperfect mark in a seven-book run.
+    </para>
+    <para>
+    <b>The same grid on the upgrade model.</b> ggml-large-v3-turbo is perfectly monotone with no hole
+    at all, its last yes at 10784.64 - 0.2 s past the truth, because a bigger model reconstructs a
+    clipped first syllable.
+    </para>
+    <para>
+    <b>What the spacing and reach are calibrated to.</b> 0.3 s spacing puts a probe inside a resumed
+    plateau as narrow as the 0.2 s one measured there (10784.24-10784.44); 1.2 s of reach clears a
+    hole half again as wide as the one observed. Four probes costs about 4 s per mark, ~1.5 minutes
+    on a book with 30 chapters, against a mark that would otherwise be a second out.
+    </para>
+  </member>
+
+  <member name="PreciseMarkMinSurvivalSeconds">
+    <para>
+    <b>The probabilities by clip length.</b> Measured on Stalker.m4b's "Zeittafel" (true onset
+    52.7 s, end anchor 54.19 s - the detecting window's own end, which left barely a second of the
+    announcement inside the bracket, 2026-07-30): the same phrase came back at p=0.84 from a 6.15 s
+    clip, p=0.54 from 4.55 s and p=0.49 from 2.95 s, and it was the 2.95 s one that failed on the
+    run's GPU and sent the edge back 4.7 s early - past which no foothold could be confirmed and the
+    mark was left at its (30 s early) default position. At 6 s the whole sweep from 46 s to 53.5 s is
+    monotone across the onset, and BARDIOC.m4b's chapter 21 bisects to the same edge either way.
+    </para>
+    <para>
+    <b>Why not larger.</b> At 8 s the same Stalker probe from 48.04 s came back "[Musik]" where the
+    unextended 6.15 s window had read "Zeittafel" cleanly.
+    </para>
+  </member>
+
+  <member name="PreciseMarkMaxBracketSeconds">
+    <para>
+    <b>The segment timestamped later than its words.</b> Chapter 21 of BARDIOC.m4b was announced at
+    12:26:33.4 and its segment timestamped 12:26:38.6 (2026-07-30, a 5.2 s lag), putting the whole
+    bracket past the announcement so that no probe inside it could ever hear it. The mark was left
+    where default-mode placement had put it, 1.1 s into the spoken announcement.
+    </para>
+  </member>
+
+  <member name="WhisperChunkSeconds">
+    <para>
+    <b>The first Gruelfin loss.</b> Its prologue (2026-07-30): the identical decode starting at
+    0:03:16.18 yields "Prolog. Die Jahre des Versteckspiels..." at 17.5 s and at 23.5 s, and at
+    30.0 s and 50.0 s yields the narration alone with the word gone. It was a 50 s window that probed
+    it live, because --max-jingle-length auto had not yet seen a jingle to narrow the window with,
+    and the prologue was simply never heard.
+    </para>
+    <para>
+    <b>The second, and where the cliff really is.</b> Re-measured on the live build-280 decode at
+    0:03:20.19 with ggml-small (2026-08-09): read at 22.0, 23.5 and 25.0 s, gone at 27.0 and 30.0 s.
+    So the cliff is between 25 and 27 s and not at 30. This window also transcribes identically on
+    the GTX 1070 and the Radeon 890M, word for word and timestamp for timestamp, which is rare enough
+    (see the project notes on cross-machine reproducibility) to be worth stating - it makes this one
+    window A/B-able across boxes.
+    </para>
+  </member>
+</doc>

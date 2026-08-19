@@ -49,4 +49,64 @@
     fallback is a fraction of a second of accuracy rather than a broken mark.
     </para>
   </member>
+  <member name="AnchorOnsetToSoundAsync">
+    <para>
+    <b>How closely sound follows the silence end.</b> Measured over the fourteen-book run of
+    2026-08-03 (114 marks with a silence in reach, each one's audio decoded and measured): the sound
+    really does start within 0.1 s of the silence end 113 times, and once - Paula Monti chapter 19, a
+    -47 dBFS click at 3:18:50.72 with the word "Première" not beginning until 3:18:51.13 - it starts
+    0.39 s later. That single case is why the silence end is treated as a floor to walk forward from
+    rather than as the onset itself.
+    </para>
+    <para>
+    <b>How often the no-floor jingle branch is taken.</b> Replaying <c>PrecedingSilenceEnd</c> over
+    the corpus's own logged silences and onsets, 264 of 440 refined marks reach it; 60 % of a book's
+    marks is typical, and BARDIOC, Das Mutantenkorps, Die Maahks and Gruelfin reach it with every
+    mark they have. Books without jingles (I Shall Wear Midnight, Paula Monti, The Forever War) never
+    do. Before <see cref="AnchorOnsetToMusicEdge"/> covered that branch such a mark kept the raw
+    plateau edge, which is how "Stalker.m4b" chapter 24 came to sit 0.12 s later in one build than
+    another for no better reason than a changed probe window.
+    </para>
+  </member>
+
+  <member name="LocatePhraseByShrinkingWindowAsync">
+    <para>
+    <b>The rejected fixed-step sweep.</b> Stepping <see cref="PreciseMarkFixedStepSeconds"/> at a
+    time across the span cost up to 2 x span / step transcriptions - 726 of them, some twenty
+    minutes, on the mark that prompted the rewrite (Stalker.m4b's "Zeittafel", 2026-07-29).
+    </para>
+    <para>
+    <b>The anchored-end predicate, verified before it was built.</b> On that same mark: starts of
+    22.6, 30, 40, 46, 50, 51.5, 52 and 52.5 s all still found "Zeittafel" against an end of 54 s, and
+    53 s did not - one edge, no island.
+    </para>
+    <para>
+    <b>How much headroom the search ceiling has.</b> Measured against the ten-book run of 2026-08-02
+    (222 refinements that reported an onset), the onset landed past the ceiling exactly twice, by
+    1.4 s and 2.2 s, with a median headroom of 6.9 s - so one
+    <see cref="PreciseMarkCheckWindowSeconds"/> of reach covers every case on record with room to
+    spare.
+    </para>
+    <para>
+    <b>The one refinement that ever aimed from the ceiling.</b> Raumschiff Erde chapter 1, the case
+    this was built for and the only one of 278 to reach the branch: its detecting decode was a 26.7 s
+    overlap tail from 0:04:55.38 and Whisper timestamped "Kapitel 1." as its very first segment,
+    0.0-7.0, twelve seconds before the words were spoken, so the bracket [0:04:42.38, 0:05:07.38]
+    ended right at the announcement rather than behind it. The words are in fact at
+    0:05:07.0-0:05:12.0 and the onset at 307.50 s, the plateau's last confirming probe being 307.60
+    and the first failing one 307.70 (<c>tools\wprobe</c>, ggml-small, 2026-08-02); a foothold probe
+    at the ceiling, 307.38, confirms cleanly and the walk from it lands on exactly that onset.
+    </para>
+  </member>
+
+  <member name="FindPhraseSurvivalEdgeAsync">
+    <para>
+    <b>What a fixed-width bracket did to the predicate.</b> Measured twice while this was built, both
+    on Stalker.m4b's "Zeittafel" (true onset 52.7 s, 2026-07-29): anchored 55 s out, the phrase was
+    reported surviving from 22.92 s but not from 23.32 s and the edge came back 29 s early; anchored
+    at the detecting window's end but started from the mark 30 s before it, the very first stride
+    straddled a chunk boundary and did it again. Bracketing to the matched segment made the same
+    audio behave perfectly monotonically.
+    </para>
+  </member>
 </doc>

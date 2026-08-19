@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\JingleGeometry.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="ComputeMarkBeforeJingle">
+    <para>
+    <b>Why a separating silence's length carries no information.</b> Real audio has a 3.28 s
+    inter-jingle gap in one chapter and a 1.70 s one in another whose pre-announcement hush is a
+    longer 2.45 s - so the hush before a single jingle and the gap between two consecutive ones
+    cannot be told apart by duration, which is why the walk deliberately does not try.
+    </para>
+  </member>
+
+  <member name="IsGenuineSpeech">
+    <para>
+    <b>What deriving the decoded span from segment timestamps cost.</b> Measured on real audio
+    2026-07-31: a 0.83 s sting 2 s into one book's jingle and a 0.61 s one 6 s into another's each
+    stopped the retreat where they sounded, leaving both marks inside the music instead of at its
+    leading edge. Both were trusted on VAD duration alone, because a probe opening on the jingle
+    yields exactly one segment which <see cref="TrimLeadingNonSpeech"/> advances to the announcement,
+    so every transient in the music looked "outside the transcript".
+    </para>
+  </member>
+
+  <member name="RetreatPastNonSpeech">
+    <para>
+    <b>What walking through an inter-jingle gap cost.</b> Confirmed against a German test audiobook
+    (2026-07-26) where the retreat previously walked past inter-jingle gaps and landed marks 9-37 s
+    early, in front of the <em>previous</em> chapter's sting, while that book's correctly-marked
+    chapters all have silence-free jingles and are untouched by stopping unconditionally.
+    </para>
+    <para>
+    <b>What an ends-before silence test cost.</b> Measured on real audio 2026-07-31: a 0.26 s sting
+    starting 0.01 s before its silence ended cost two chapters (in different books, same shape) 2.7 s
+    and 0.9 s, both marks landing at the start of the pre-jingle hush instead of at the jingle
+    itself. That is why a silence qualifies by starting before the position rather than by ending
+    before it.
+    </para>
+  </member>
+</doc>

@@ -362,9 +362,7 @@ internal static class JingleGeometry
     /// <em>separate</em> jingles - a preceding outro sting, or the book's title theme before
     /// chapter 1 - is deliberately not judged: either way the music after the silence is this
     /// chapter's jingle and its start is where the mark belongs. The distinction is futile anyway,
-    /// since the separating silence's length does not carry it: real audio has a 3.28 s
-    /// inter-jingle gap in one chapter and a 1.70 s one in another whose pre-announcement hush is
-    /// a longer 2.45 s.</item>
+    /// since the separating silence's length does not carry it.</item>
     /// <item>Real VAD speech as step 2 defines it, <em>plus</em> transcript corroboration (see
     /// <see cref="IsGenuineSpeech"/>). Corroboration matters specifically here: a musical or
     /// vocal-like transient inside the music can run well past the floor - longer than any
@@ -395,6 +393,8 @@ internal static class JingleGeometry
     /// whatever this returns; see <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/> and its
     /// caller in <see cref="ChapterDetector"/>.
     /// </summary>
+    /// <remarks>Notes: the measured inter-jingle gaps behind refusing to judge what a separating silence means.
+    /// <include file='../../notes/Detection/JingleGeometry.xml' path='doc/member[@name="ComputeMarkBeforeJingle"]/*' /></remarks>
     /// <param name="originalMark">The mark default-mode placement (optionally already corrected
     /// by precise marking) computed for this phrase.</param>
     /// <param name="silences">Every silence Analyze stored, down to
@@ -451,10 +451,7 @@ internal static class JingleGeometry
     /// the windows it matters most for: a probe opening on the jingle whose only speech is the
     /// announcement yields exactly one segment, which <see cref="TrimLeadingNonSpeech"/> then
     /// advances to the announcement itself, so every music transient in the jingle looked
-    /// "outside the transcript" and was trusted on duration alone. Measured on real audio
-    /// 2026-07-31: a 0.83 s sting 2 s into one book's jingle and a 0.61 s one 6 s into another's
-    /// each stopped the retreat where they sounded, leaving both marks inside the music instead of
-    /// at its leading edge.
+    /// "outside the transcript" and was trusted on duration alone.
     /// </para>
     /// <para>
     /// A covering segment for a <see cref="MaxPaceScrutinizedBlipSeconds"/>-or-shorter blip must
@@ -467,6 +464,8 @@ internal static class JingleGeometry
     /// <see cref="MaxPaceScrutinizedBlipSeconds"/> for why duration settles it there.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the two stings that were trusted on duration alone when the decoded span came from segment timestamps.
+    /// <include file='../../notes/Detection/JingleGeometry.xml' path='doc/member[@name="IsGenuineSpeech"]/*' /></remarks>
     /// <param name="blip">The VAD speech segment to classify.</param>
     /// <param name="transcript">The window's transcript with its decoded span.</param>
     private static bool IsGenuineSpeech(SpeechSegment blip, TranscriptWindow transcript)
@@ -545,10 +544,7 @@ internal static class JingleGeometry
     /// plays after it. No attempt is made to tell the hush before a single jingle from the gap
     /// between two consecutive ones (an outro sting followed by this chapter's jingle) - the answer
     /// is the same either way, and real audio shows the silence's length does not carry the
-    /// distinction. Confirmed against a German test audiobook (2026-07-26) where the retreat
-    /// previously walked past inter-jingle gaps and landed marks 9-37 s early, in front of the
-    /// <em>previous</em> chapter's sting, while that book's correctly-marked chapters all have
-    /// silence-free jingles and are untouched by stopping here.
+    /// distinction.
     /// </para>
     /// <para>
     /// <b>Known limitation, accepted deliberately (2026-07-26).</b> Stopping unconditionally costs
@@ -579,11 +575,10 @@ internal static class JingleGeometry
     /// this boundary: skipping a transient that VAD timed a few samples before silencedetect ended
     /// the hush leaves the position just inside the hush, and an ends-before test would then drop
     /// the very silence just skipped over and sail on into the previous chapter's narration.
-    /// Measured on real audio 2026-07-31: a 0.26 s sting starting 0.01 s before its silence ended
-    /// cost two chapters (in different books, same shape) 2.7 s and 0.9 s, both marks landing at
-    /// the start of the pre-jingle hush instead of at the jingle itself.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: what walking past an inter-jingle gap cost, and what an ends-before silence test cost.
+    /// <include file='../../notes/Detection/JingleGeometry.xml' path='doc/member[@name="RetreatPastNonSpeech"]/*' /></remarks>
     /// <param name="from">The point to scan backward from.</param>
     /// <param name="speech">Raw VAD speech segments, chronological.</param>
     /// <param name="silences">Every silence Analyze stored, down to
