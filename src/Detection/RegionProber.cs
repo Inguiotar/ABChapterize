@@ -821,7 +821,20 @@ internal sealed class RegionProber
     /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="GatherThenResolveAsync"]/*' /></remarks>
     private async Task GatherThenResolveAsync(List<ProbeCandidate> candidates, CancellationToken ct)
     {
-        var gathered = await GatherLongestPauseFirstAsync(candidates, ct);
+        List<(int Index, WindowRead Read, List<int> Numbers)> gathered;
+        // The skim's own bar shape is cleared however it ends, an abandoned one otherwise leaving
+        // the next phase counting locations it is not exploring; the phase below clears it too, and
+        // both is the same belt-and-braces the re-probe marker has.
+        try
+        {
+            _ctx.Work.LocationsExplored = 0;
+            gathered = await GatherLongestPauseFirstAsync(candidates, ct);
+        }
+        finally
+        {
+            _ctx.Work.LocationsExplored = null;
+        }
+
         foreach (var (index, read, _) in gathered)
             _gatheredReads[index] = read;
         _settledSpans = DescendingSilenceScan.SettledSpans(
@@ -830,6 +843,12 @@ internal sealed class RegionProber
             _env.Log?.Invoke(
                 $"SD-probe: {_settledSpans.Count} stretch(es) closed by consecutive chapter " +
                 "numbers - their pauses are passed over");
+
+        // The skim really is a phase of its own and ends here, so the walk gets the bar back: same
+        // total, counted from zero, and labelled for what it is. Begun from here rather than by the
+        // caller because only this method knows when the skim finished - it may stop at any of its
+        // three termination conditions or run the list out.
+        _ctx.Work.BeginPhase("Probe", _ctx.Work.PhaseTotalBytes);
         await WalkInFileOrderAsync(candidates, ct);
     }
 
@@ -893,6 +912,7 @@ internal sealed class RegionProber
             var read = await ReadWindowAsync(candidate, plan, ct);
             var (held, heardNumbers) = AnnouncementIn(read);
             gathered.Add((ci, read, heardNumbers));
+            _ctx.Work.LocationsExplored = gathered.Count;
             if (!held)
                 continue;
             // A jingle teaches nothing about how long this book's pauses run, which is the same rule

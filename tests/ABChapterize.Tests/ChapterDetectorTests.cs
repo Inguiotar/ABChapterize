@@ -8218,6 +8218,38 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     /// <summary>
+    /// The skim's bar shape, end to end. <see cref="ProgressRendererTests"/> pins what an exploring
+    /// tracker renders as; this pins that the skim actually puts the tracker into that state and
+    /// takes it out again, which nothing else can check - the bar is not drawn at all when output is
+    /// redirected, which is every test and every piped run.
+    /// </summary>
+    [Fact]
+    public async Task Descending_ReportsItsLocationsToTheProgressBar()
+    {
+        var audio = new FakeAudioSource { Silences = [new(100, 104), new(1000, 1008), new(2000, 2006.5)] };
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(101, Seg(3, " Chapter one."));
+        transcriber.Add(1005, Seg(3, " Chapter two."));
+        transcriber.Add(2003.5, Seg(3, " Chapter three."));
+        var work = new WorkTracker();
+        var seen = new List<(string Phase, int? Explored)>();
+        transcriber.OnTranscribe = () => seen.Add((work.PhaseLabel, work.LocationsExplored));
+
+        var detector = new ChapterDetector(
+            Options(), audio, transcriber, new FakeVad { Speech = [new(0, 3600)] });
+        await detector.DetectAsync(
+            _file, Info, work, new DetectionLog(_ => { }, null), CancellationToken.None);
+
+        var skim = seen.Where(s => s.Phase == "SD-probe").Select(s => s.Explored).ToList();
+        Assert.NotEmpty(skim);
+        // Counted before the window it is about is added, so the first read reports none explored
+        // yet and each one after it reports exactly the reads behind it.
+        Assert.Equal([.. Enumerable.Range(0, skim.Count).Select(i => (int?)i)], skim);
+        // And the walk behind the skim gets an ordinary bar back, under its own name.
+        Assert.Contains(seen, s => s.Phase == "Probe" && s.Explored is null);
+    }
+
+    /// <summary>
     /// The other half of that bargain: a pause too short for the descent to reach is still read by
     /// the walk itself. Only a stretch the readings closed is passed over, and chapters 1 and 3
     /// close nothing between them.

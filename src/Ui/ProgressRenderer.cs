@@ -62,6 +62,32 @@ public sealed class WorkTracker
     public bool PhaseRevisiting { get; set; }
 
     /// <summary>
+    /// How many locations the current phase has looked at, while it is one that does not work
+    /// through the file in order - or null, which is every other phase and the ordinary case.
+    /// <para>
+    /// While it holds, the bar stops being a bar: there is no "how far along" to fill it with, only
+    /// a position that jumps about the file, so it is drawn as a single marker at that position and
+    /// this count takes the percentage's place. The one phase that sets it is the descending scan's
+    /// skim (<see cref="ABChapterize.Detection.DescendingSilenceScan"/>), which reads a file's
+    /// longest pauses first and so may be at 0:03 one moment and 8:12 the next. A filling bar there
+    /// would be a lie in both directions - it would run backwards, and its percentage would say
+    /// "nearly done" about a phase that has looked at a dozen places out of thousands.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// Nullable rather than a flag plus a counter, so the two cannot disagree about whether the
+    /// phase is exploring at all. Cleared by <see cref="BeginPhase"/> like
+    /// <see cref="PhaseRevisiting"/>, so a value left behind by an abandoned skim cannot leak into
+    /// the next phase's bar.
+    /// </remarks>
+    public int? LocationsExplored { get; set; }
+
+    /// <summary>The work this phase was begun with, so a phase that turns into another one part way
+    /// through can hand the same total on - see <see cref="LocationsExplored"/> for the one that
+    /// does, the skim in front of Probe.</summary>
+    public long PhaseTotalBytes => Interlocked.Read(ref _phaseTotalBytes);
+
+    /// <summary>
     /// How far each of the file's chapter sequences has got: the highest number detected in
     /// each, one entry per part and in part order. Empty while nothing has been found yet
     /// (rendered as "----", since a zero carries no information during e.g. Analyze).
@@ -98,6 +124,7 @@ public sealed class WorkTracker
     {
         _phaseLabel = label;
         PhaseRevisiting = false;
+        LocationsExplored = null;
         Interlocked.Exchange(ref _phaseTotalBytes, Math.Max(0, totalBytes));
         Interlocked.Exchange(ref _phaseDoneBytes, 0);
         Interlocked.Exchange(ref _phaseCurrentBytes, 0);
@@ -419,7 +446,13 @@ public sealed class ProgressRenderer : IDisposable
 
         const int barWidth = 24;
         var filled = (int)Math.Round(fraction * barWidth);
-        var bar = new string('#', filled).PadRight(barWidth, '-');
+        // A phase that does not work through the file in order gets a position marker instead of a
+        // fill, and a count of what it has looked at instead of a percentage - see
+        // WorkTracker.LocationsExplored for why a bar would be a lie there.
+        var explored = slot.Tracker.LocationsExplored;
+        var bar = explored is null
+            ? new string('#', filled).PadRight(barWidth, '-')
+            : PositionMarker(filled, barWidth);
         var timer = FormatElapsedTimer(slot.Tracker.Elapsed);
 
         // The final write has no chapter count of its own to show (the chapters were already
@@ -432,7 +465,9 @@ public sealed class ProgressRenderer : IDisposable
             new("[", Palette.Structure),
             new(bar, Palette.Bar),
             new("]", Palette.Structure),
-            new($" {percent,3}%", Palette.Progress),
+            // Same width as " 100%", so a phase turning into an ordinary one does not shuffle
+            // everything to its right by a column.
+            new(explored is { } count ? $" {count,4}" : $" {percent,3}%", Palette.Progress),
         };
         if (!finishing && slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
         {
@@ -449,6 +484,20 @@ public sealed class ProgressRenderer : IDisposable
         spans.Add(Separator);
         spans.Add(new(slot.Label, Palette.Label));
         return spans;
+    }
+
+    /// <summary>
+    /// The bar of a phase that has a position but no progress: an empty track with one marker on
+    /// it, sitting where the fill would have ended so the two read the same way round.
+    /// </summary>
+    /// <param name="filled">How many cells an ordinary bar would have filled.</param>
+    /// <param name="barWidth">The bar's width in cells.</param>
+    private static string PositionMarker(int filled, int barWidth)
+    {
+        // The last filled cell, i.e. one back from the count - and cell 0 for a position at the very
+        // start of the file, where an ordinary bar would have filled nothing at all.
+        var at = Math.Clamp(filled - 1, 0, barWidth - 1);
+        return new string('-', at) + 'X' + new string('-', barWidth - at - 1);
     }
 
     /// <summary>

@@ -324,4 +324,78 @@ public class ProgressRendererTests
 
         Assert.Equal(a, b);
     }
+
+    /// <summary>
+    /// A phase with a position but no progress draws a marker rather than a fill, and counts what
+    /// it has looked at rather than claiming a percentage of the file. The marker sits where the
+    /// fill would have ended, so both read the same way round.
+    /// </summary>
+    [Fact]
+    public void BuildLine_WhileExploring_DrawsAMarkerAndACount()
+    {
+        var (tracker, label) = Slot(50, 100);
+        tracker.LocationsExplored = 17;
+
+        var line = ProgressRenderer.BuildLine((tracker, label));
+
+        // Half of a 24-cell bar is 12 filled, so the marker sits on cell 12 (one back from the
+        // count), with nothing but track either side of it.
+        Assert.Contains("[" + new string('-', 11) + "X" + new string('-', 12) + "]", line);
+        Assert.DoesNotContain("#", line);
+        Assert.DoesNotContain("%", line);
+        Assert.Contains("  17", line);
+    }
+
+    /// <summary>The count is what moves the line while exploring, the position being free to sit
+    /// still or jump backwards - so a redraw must follow it.</summary>
+    [Fact]
+    public void BuildLine_WhileExploring_ChangesWithTheCountAlone()
+    {
+        var (first, label) = Slot(50, 100);
+        first.LocationsExplored = 17;
+        var (second, _) = Slot(50, 100);
+        second.LocationsExplored = 18;
+
+        Assert.NotEqual(
+            ProgressRenderer.BuildLine((first, label)), ProgressRenderer.BuildLine((second, label)));
+    }
+
+    /// <summary>At the very start of the file an ordinary bar fills nothing at all; the marker has
+    /// to go somewhere, and cell 0 is where the track begins.</summary>
+    [Fact]
+    public void BuildLine_WhileExploringAtTheFileStart_PutsTheMarkerOnTheFirstCell()
+    {
+        var (tracker, label) = Slot(0, 100);
+        tracker.LocationsExplored = 1;
+
+        Assert.Contains("[X" + new string('-', 23) + "]", ProgressRenderer.BuildLine((tracker, label)));
+    }
+
+    /// <summary>The count takes exactly the percentage's width, so a phase that stops exploring does
+    /// not shuffle the rest of the line sideways.</summary>
+    [Fact]
+    public void BuildLine_WhileExploring_KeepsTheLineWidth()
+    {
+        var (exploring, label) = Slot(50, 100);
+        exploring.LocationsExplored = 17;
+
+        Assert.Equal(
+            ProgressRenderer.BuildLine(Slot(50, 100)).Length,
+            ProgressRenderer.BuildLine((exploring, label)).Length);
+    }
+
+    /// <summary>Beginning a phase clears the marker, so a skim abandoned part way through cannot
+    /// leave the next phase counting locations it is not exploring.</summary>
+    [Fact]
+    public void BeginPhase_ClearsTheExploringCount()
+    {
+        var (tracker, label) = Slot(50, 100);
+        tracker.LocationsExplored = 17;
+
+        tracker.BeginPhase("Probe", 100);
+        tracker.SetPhaseProgress(50);
+
+        Assert.Null(tracker.LocationsExplored);
+        Assert.Contains("50%", ProgressRenderer.BuildLine((tracker, label)));
+    }
 }

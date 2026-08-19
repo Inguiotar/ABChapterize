@@ -2892,7 +2892,13 @@ reads `Probe<<` for exactly that stretch, so a falling percentage is
 recognisable as the re-probe rather than as the bar misbehaving. `S-probe`
 is [Probe's second half](#reading-the-music-first) on a file that read its
 music first; its percentage runs over the stretches that half still has to
-read rather than over the whole file. Scan
+read rather than over the whole file. `SD-probe` — the
+[skim of a book's longest pauses](#reading-the-longest-pauses-first) — stops
+being a bar altogether, because it has a position in the file but no notion of
+how far along it is: it shows a single `X` where the fill would have ended,
+moving about the file as it reads, and counts the locations it has looked at
+in place of the percentage. An ordinary bar returns when `Probe` itself
+begins. Scan
 transcribes in chunks of several minutes each, and the bar follows the
 recognizer's own position through the chunk it is working on rather than
 jumping once per finished chunk — so a long gap keeps showing that something
