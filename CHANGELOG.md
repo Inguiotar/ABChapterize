@@ -34,8 +34,28 @@ earn a round number.
   **Experimental.** `--jingle-first` asks for the shape on any file, including one that
   qualifies for neither reason; it cannot be combined with `--ignore-chapter-numbers`,
   which leaves no chapter sequence to scope the second half by. `--verbose` says which
-  shape a file ran under, and the progress bar shows the second half as a phase of its
-  own, `Pass 2b`.
+  shape a file ran under, and the progress bar shows the two halves as phases of their
+  own, `J-probe` and `S-probe`.
+
+- **Books with no jingles now read their longest pauses first, which saves time on a long
+  file.** Chapters are announced after a book's longer pauses, and the pauses it announces
+  nothing after outnumber them by a hundred to one. Such a file is now skimmed once
+  through in descending pause length to find out roughly where its chapters are, and the
+  ordinary sweep behind it then passes over every pause lying between two chapters whose
+  numbers already run consecutively — where nothing else could be announced anyway. A
+  window read during the skim is not read a second time.
+
+  The skim stops by itself once the pauses get too short to be this book's chapter breaks,
+  and gives up early on a file that announces nothing at all, spending no more looking
+  than `--early-abort` would have. Nothing about how chapters are found, numbered or
+  placed changes, because the file is still read in order afterwards — so a book whose
+  numbering restarts for a second part is still recognised as one.
+
+  A file takes this shape by itself when it is not already being read music-first and none
+  of your own `--custom` mappings may be announced between two chapters. It is skipped
+  where `--min-silence-length` was given explicitly, that being you naming the pauses worth
+  probing. **Experimental.** `--verbose` says which shape a file ran under, and shows the
+  skim as a phase of its own, `SD-probe`.
 
 ### Changed
 

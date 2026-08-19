@@ -428,25 +428,40 @@ public sealed class ChapterDetector
         if (jingleFirst.Note is { } shapeNote)
             _log?.Invoke(shapeNote);
 
-        // The label is the shape: a jingle-first file reads its music under "J-probe" and its
-        // pauses under "S-probe", and which half is running is the one thing about this pass a
-        // watcher cannot otherwise see. An ordinary file walks both together and stays "Probe".
-        // Re-beginning resets the bar to zero, which is where it already is.
+        // A file the music-first shape turned down may still have its longest pauses read first,
+        // which is the same trade over the other candidate class - see DescendingSilenceScan.
+        var descending = DescendingSilenceScan.Decide(
+            _options, language.Profile,
+            freshRun: confirmedSeed.Count == 0 && regions.Count == 1, jingleFirst.Run);
+        if (descending.Note is { } pauseNote)
+            _log?.Invoke(pauseNote);
+
+        // The label is the shape, which is the one thing about this pass a watcher cannot
+        // otherwise see: a jingle-first file reads its music under "J-probe" and the pauses it
+        // deferred under "S-probe", a descending one skims its longest pauses under "SD-probe"
+        // before "Probe" itself. An ordinary file stays "Probe" throughout. Re-beginning resets the
+        // bar to zero, which is where it already is.
         if (jingleFirst.Run)
             work.BeginPhase("J-probe", info.SizeBytes);
+        else if (descending.Run)
+            work.BeginPhase("SD-probe", info.SizeBytes);
 
         // The shortest chapter break any region measured, which is what decides whether the sweep
         // below has anything to do. Taken across regions rather than per region: it is a statement
         // about the narrator, and a region that found only one mark measured nothing at all.
         var scan = await ProbeRegionsAsync(
             probeCtx, regions, found, namedFound, language,
-            jingleFirst.Run ? ProbeShape.JinglesOnly : ProbeShape.Everything,
+            jingleFirst.Run ? ProbeShape.JinglesOnly
+                : descending.Run ? ProbeShape.SilencesDescending
+                : ProbeShape.Everything,
             bytesPerSecond, wholeFileProgress: true, ct);
 
         // The pauses the jingle half deferred, over the stretches it left unsettled. Not run after
         // an abort: both of them mean this file is not being detected at all, and the pauses cannot
         // change that verdict - --early-abort's own is the one this half's head stretch would
-        // deliver anyway.
+        // deliver anyway. The descending shape needs none of this: it defers nothing, it only
+        // decides which candidates its own one walk bothers to read (see RegionProber's
+        // GatherThenResolveAsync, and why it is one walk rather than two).
         if (jingleFirst.Run && !scan.EarlyAborted && scan.BelowExpectedStartNumber == null)
             scan = scan.And(await ProbePausesAfterJinglesAsync(
                 probeCtx, regions[0], found, namedFound, language, bytesPerSecond, ct));
@@ -567,6 +582,11 @@ public sealed class ChapterDetector
     /// The second half of a jingle-first Probe: the pauses of every stretch the jingle half left
     /// unsettled - the head of the file, any hole in the chapter numbering, and the tail. See
     /// <see cref="JingleFirstScan"/> for why the pauses in between are the ones that can be skipped.
+    /// <para>
+    /// The descending shape has no counterpart to this and wants none: it defers no conclusions, so
+    /// there is never a stretch left unsettled by it - see
+    /// <see cref="DescendingSilenceScan"/>.
+    /// </para>
     /// <para>
     /// A phase of its own, because its budget is the summed length of those stretches rather than
     /// the whole file: reporting a whole-file position against it would send the bar back to the

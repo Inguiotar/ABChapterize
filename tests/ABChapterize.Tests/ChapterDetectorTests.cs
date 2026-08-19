@@ -323,22 +323,23 @@ public sealed class ChapterDetectorTests : IDisposable
     private CliOptions OptionsWithTrailingScan(params string[] args) => BuildOptions(args);
 
     /// <summary>
-    /// Like <see cref="Options"/>, but keeping Probe in its ordinary one-sweep shape on a fixture
-    /// whose scripted VAD happens to hold a jingle. A file with at least one jingle per hour of play
-    /// time otherwise reads its music first and its pauses afterwards (see
-    /// <see cref="JingleFirstScan"/>), and these fixtures run an hour, so a single non-speech region
-    /// is enough to trip that - which for a test about how a pause window and a jingle window share
-    /// a seam, or about which of two announcements is heard first, is the one thing that must not
-    /// happen.
+    /// Like <see cref="Options"/>, but keeping Probe in its ordinary one-sweep shape rather than
+    /// either of the two-part ones. A file with at least one jingle per hour of play time reads its
+    /// music first and its pauses afterwards (<see cref="JingleFirstScan"/>) - and these fixtures
+    /// run an hour, so a single scripted non-speech region trips it - while a file with none reads
+    /// its longest pauses first instead (<see cref="DescendingSilenceScan"/>), which is every other
+    /// fixture. Both defer candidates, and a test about how a pause window and a jingle window share
+    /// a seam, about which of two announcements is heard first, or about the in-flight recovery a
+    /// sequence gap triggers, is a test about the walk that defers nothing.
     /// <para>
     /// Pinned with a <c>--custom</c> mapping rather than an option of its own, because that is the
-    /// pin the tool has: a mapping that may be announced between two chapters is exactly what the
-    /// jingle-first gate declines to run without, the pauses between two consecutive chapters being
-    /// the one place such a mapping could be heard. The phrase is written so that nothing a fixture
-    /// scripts can ever match it.
+    /// pin the tool has, and one pin covers both: a mapping that may be announced between two
+    /// chapters is exactly what either gate declines to run without, the pauses between two
+    /// consecutive chapters being the one place such a mapping could be heard. The phrase is written
+    /// so that nothing a fixture scripts can ever match it.
     /// </para>
     /// </summary>
-    private CliOptions OptionsWithoutJingleFirst(params string[] args)
+    private CliOptions OptionsInOneSweep(params string[] args)
         => Options([.. args, "--custom", "/nothing-ever-says-this/:Marker"]);
 
     /// <summary>The shared body of the two option builders above.</summary>
@@ -871,8 +872,12 @@ public sealed class ChapterDetectorTests : IDisposable
         // The one hint that cannot be a pre-placement filter: which chapter is last is unknown
         // until every pass has finished, so the mid-book marks are placed and then dropped at the
         // end. Precision only - it saves no transcription, and the doc comment says so.
+        // Pinned to one sweep because the mid-book "Nachwort" sits between two consecutive
+        // chapters, which the descending shape passes over - so it is never placed to be dropped.
+        // That is the shape working: an after-last-chapter mark there would have been dropped
+        // anyway, and no scoped mapping that could survive can sit in such a stretch.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--custom", "[after-last-chapter]nachwort:Nachwort"),
+            OptionsInOneSweep("--custom", "[after-last-chapter]nachwort:Nachwort"),
             [new(595, 600), new(1195, 1200), new(1795, 1800), new(2395, 2400)],
             s =>
             {
@@ -1134,8 +1139,11 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         // "Chapter five hundred and ten" in a three-chapter book is a mishearing, not a chapter:
         // with --max-chapter-number it never enters the sequence, so nothing is left to hunt for.
+        // Pinned to one sweep: the window holding it sits between chapters 1 and 2, which the
+        // descending shape passes over, so the line this asserts is never reached. The cap is what
+        // is under test here, not which windows a shape reads.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--max-chapter-number", "12"),
+            OptionsInOneSweep("--max-chapter-number", "12"),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -1393,12 +1401,16 @@ public sealed class ChapterDetectorTests : IDisposable
     /// The same script with no option at all: <see cref="CliOptions.DefaultChapterCount"/> caps the
     /// run anyway, so the mishearing never becomes a chapter and the real chapter 2 behind it
     /// survives. Before the default existed this is where a 510 displaced it.
+    /// <para>
+    /// Pinned to one sweep for the same reason as the test above it: the misheard window sits
+    /// between two consecutive chapters, which the descending shape passes over.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task ChapterNumberAboveTheDefaultCap_IsDiscarded()
     {
         var (result, log, _) = await DetectWithLogAsync(
-            Options(),
+            OptionsInOneSweep(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -2141,7 +2153,7 @@ public sealed class ChapterDetectorTests : IDisposable
             ],
         };
         var (result, log, _) = await DetectWithLogAsync(
-            OptionsWithoutJingleFirst(),
+            OptionsInOneSweep(),
             [new(595, 600), new(1195, 1200)],
             s =>
             {
@@ -2498,7 +2510,7 @@ public sealed class ChapterDetectorTests : IDisposable
         transcriber.AddBeyond(16, 700, Seg(0.3, " Chapter forty."));
         transcriber.Add(1200, Seg(0.3, " Chapter four."));
         var detector = new ChapterDetector(
-            Options("--verbose", "--quick-marks"), audio, transcriber, null);
+            OptionsInOneSweep("--verbose", "--quick-marks"), audio, transcriber, null);
 
         await detector.DetectAsync(
             _file, Info, tracker,
@@ -3323,7 +3335,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The real shape is "Paula Monti" (2026-07-31), whose threshold was 1.23 s at the chapter
         // 2-5 gap and 0.8 s by the end of the book.
         var (result, log, audio) = await DetectWithLogAsync(
-            Options(),
+            OptionsInOneSweep(),
             [new(598.4, 600), new(899, 900), new(1198.5, 1200), new(1498.8, 1500),
              new(1798.5, 1800)],
             s =>
@@ -3445,7 +3457,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // silence - below chapter 2's 3.75 s but above 2.25 s - is still probed and found.
         // Chapter 5 is the last mark, so nothing could recover it if it were skipped.
         var (result, log, audio) = await DetectWithLogAsync(
-            Options(),
+            OptionsInOneSweep(),
             [new(595, 600), new(697, 700), new(895, 900), new(1197.5, 1200)],
             s =>
             {
@@ -3497,7 +3509,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // The decoy is 2 s rather than something shorter for the same reason: below 1.5 s it would
         // never be a candidate and the assertion would pass without proving anything.
         var (result, log, audio) = await DetectWithLogAsync(
-            Options(),
+            OptionsInOneSweep(),
             [new(595, 600), new(700, 701), new(702, 706), new(895, 900),
              new(1098, 1100), new(1495, 1500)],
             s =>
@@ -3528,7 +3540,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // numbers above chapter 2. Observed on real audio as four identical marks for one chapter,
         // each paying for its own mark refinement (BARDIOC.m4b, 2026-07-30).
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--verbose"),
+            OptionsInOneSweep("--verbose"),
             [new(595, 600), new(698, 700), new(703, 705), new(708, 710), new(1195, 1200)],
             s =>
             {
@@ -3583,7 +3595,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // and narrower rather than wider: a window sized to span this book's longest jingle is
         // exactly the width that loses an announcement (see WhisperChunkSeconds).
         var (result, log, audio) = await DetectWithLogAsync(
-            Options("--verbose"),
+            OptionsInOneSweep("--verbose"),
             [new(595, 600), new(895, 900), new(1195, 1200)],
             s =>
             {
@@ -3643,7 +3655,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // in the run quietly covers for the refusal: Re-probe's sweep is refused on the same
         // budget, and Scan's chunks are too wide to hear it.
         var (result, log, _) = await DetectWithLogAsync(
-            Options("--verbose", "--quick-marks"),
+            OptionsInOneSweep("--verbose", "--quick-marks"),
             [new(598.2, 600), new(608.6, 610), new(618.6, 620), new(628.6, 630),
              new(638.6, 640), new(655, 660)],
             s =>
@@ -5816,7 +5828,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // and the swallowed candidate start (640) never are. Chapter one is scripted at low
         // confidence so the overlap-sequence skip stays out of the way.
         var (_, _, audio) = await DetectFullAsync(
-            OptionsWithoutJingleFirst("--mark-before-jingle"),
+            OptionsInOneSweep("--mark-before-jingle"),
             [new(598, 600), new(638, 640)],
             s => s.Add(600, Seg(2, " Chapter one.", confidence: 0.3)),
             new FakeVad { Speech = [new(0, 648), new(655, 3600)] });
@@ -8151,10 +8163,10 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Contains(log, l => l.StartsWith("J-probe finished, "));
     }
 
-    /// <summary>A book with no music at all keeps the ordinary one-sweep shape, whatever its
-    /// pauses hold.</summary>
+    /// <summary>A book with no music at all is not read music-first; it is handed to the other
+    /// two-part shape instead, which reads its longest pauses first.</summary>
     [Fact]
-    public async Task WithoutJingles_TheOrdinaryShapeIsKept()
+    public async Task WithoutJingles_TheLongestPausesAreReadFirst()
     {
         var (_, log, _) = await DetectWithLogAsync(
             Options(),
@@ -8163,6 +8175,146 @@ public sealed class ChapterDetectorTests : IDisposable
             new FakeVad { Speech = [new(0, 3600)] });
 
         Assert.DoesNotContain(log, l => l.Contains("jingle-first"));
+        Assert.Contains(log, l => l.StartsWith("reading the longest pauses first"));
+    }
+
+    /// <summary>
+    /// The order itself, which is the one thing about this shape a fixture can show directly: the
+    /// 8 s pause in the middle of the file is read before the 2 s pause near its start, where the
+    /// walk that reads in file order would have taken them the other way round. Everything is still
+    /// found, the two pauses the descent stopped short of being read by the walk that follows.
+    /// <para>
+    /// What a fixture cannot show is the saving, which is a whole-book effect: on five of the six
+    /// pause-announced corpus books the file-order gate ends up at its 0.8 s floor and probes very
+    /// nearly every candidate there is, and the descent's own floor is what keeps it from doing the
+    /// same. See <see cref="DescendingSilenceScan"/>'s notes for those measurements.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Descending_ReadsTheLongestPauseFirstAndSkipsWhatThatSettles()
+    {
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options(),
+            [new(100, 104), new(1000, 1008), new(1500, 1503.5), new(2000, 2006.5)],
+            s =>
+            {
+                s.Add(101, Seg(3, " Chapter one."));
+                s.Add(1005, Seg(3, " Chapter two."));
+                s.Add(2003.5, Seg(3, " Chapter three."));
+            },
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        // Both indices asserted present first: IndexOf returning -1 for a window that was never
+        // decoded would make the ordering check below pass without meaning anything.
+        Assert.Contains(1005, audio.DecodeStarts);
+        Assert.Contains(101, audio.DecodeStarts);
+        Assert.True(audio.DecodeStarts.IndexOf(1005) < audio.DecodeStarts.IndexOf(101),
+            "the 8 s pause should have been read before the earlier 4 s one");
+        // Chapters 2 and 3 are consecutive, so nothing can be announced between them and the 3.5 s
+        // pause that sits there is never read - which is the whole of what the shape saves.
+        Assert.Contains(log, l => l.Contains("1 stretch(es) closed by consecutive chapter numbers"));
+        Assert.DoesNotContain(1500.5, audio.DecodeStarts);
+    }
+
+    /// <summary>
+    /// The other half of that bargain: a pause too short for the descent to reach is still read by
+    /// the walk itself. Only a stretch the readings closed is passed over, and chapters 1 and 3
+    /// close nothing between them.
+    /// </summary>
+    [Fact]
+    public async Task Descending_StillReadsAPauseTooShortForTheDescentToReach()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(100, 105), new(1000, 1002), new(2000, 2005)],
+            s =>
+            {
+                s.Add(102, Seg(3, " Chapter one."));
+                s.Add(1000, Seg(3, " Chapter two."));
+                s.Add(2002, Seg(3, " Chapter three."));
+            },
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Equal([1, 2, 3], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.StartsWith("SD-probe: down to 2 s pauses, below the 3.75 s"));
+        Assert.DoesNotContain(log, l => l.Contains("stretch(es) closed"));
+    }
+
+    /// <summary>
+    /// A window the descent read is not decoded again when the walk reaches it - the walk makes its
+    /// marks from the transcript already in hand. Without that the shape would pay twice for every
+    /// window it looked at first.
+    /// </summary>
+    [Fact]
+    public async Task Descending_DoesNotDecodeAWindowItAlreadyRead()
+    {
+        var (_, _, audio) = await DetectWithLogAsync(
+            Options(),
+            [new(100, 105), new(2000, 2005)],
+            s => s.Add(2002, Seg(3, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        // The descent read the window at 102 and found nothing there; the walk goes over it too,
+        // and between them that is one decode.
+        Assert.Equal(1, audio.DecodeWindows.Count(w => w.Start is >= 100 and < 106));
+    }
+
+    /// <summary>
+    /// A file that announces nothing gives up on --early-abort's own budget rather than reading its
+    /// whole candidate list out of order first - see <see cref="RegionProber.DryStartBudget"/>. The
+    /// verdict itself still comes from the walk that reads the file in order, which is the one that
+    /// can honestly say nothing was found in its first minutes.
+    /// </summary>
+    [Fact]
+    public async Task Descending_WithNothingAnnounced_GivesUpOnTheEarlyAbortBudget()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--early-abort", "10"),
+            [new(100, 105), new(300, 304), new(1000, 1006), new(2000, 2005)],
+            _ => { },
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Empty(result.Chapters);
+        Assert.Contains(log, l => l.StartsWith("SD-probe: nothing announced at the 3 longest"));
+        Assert.Contains(log, l => l.StartsWith("early-abort: "));
+    }
+
+    /// <summary>
+    /// The gate's other half, shared with the jingle-first shape: a <c>--custom</c> mapping that may
+    /// be announced between two chapters is the one thing that could be hiding in the pauses this
+    /// shape skips, so it keeps the file in one sweep.
+    /// </summary>
+    [Fact]
+    public async Task Descending_ACustomMappingBetweenChapters_KeepsTheOneSweepShape()
+    {
+        var (_, log, _) = await DetectWithLogAsync(
+            Options("--custom", "/interlude/:Interlude"),
+            [new(500, 503)],
+            s => s.Add(500, Seg(3.2, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Contains(log, l => l.Contains("may be announced between chapters"));
+        Assert.DoesNotContain(log, l => l.StartsWith("SD-probe"));
+    }
+
+    /// <summary>
+    /// An explicit --min-silence-length is the user naming the pauses worth probing, and it also
+    /// switches off the arithmetic the descent stops against. Reordering the list without a stop
+    /// rule is all cost and no saving, so the shape declines.
+    /// </summary>
+    [Fact]
+    public async Task Descending_IsDeclinedWhenTheSilenceLengthWasGivenExplicitly()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--min-silence-length", "1.0"),
+            [new(500, 503)],
+            s => s.Add(500, Seg(3.2, " Chapter one.")),
+            new FakeVad { Speech = [new(0, 3600)] });
+
+        Assert.Equal([1], result.Chapters.Select(c => c.Number));
+        Assert.DoesNotContain(log, l => l.StartsWith("SD-probe"));
+        Assert.DoesNotContain(log, l => l.StartsWith("reading the longest pauses first"));
     }
 
     /// <summary>

@@ -179,10 +179,11 @@ internal enum CandidateClass
 
 /// <summary>
 /// Which of a region's candidates one probing walk takes. <see cref="Everything"/> is the shape
-/// probing has always had; the other two are the halves the jingle-first scan splits it into (see
-/// <see cref="JingleFirstScan"/>), and they exist because on a book that announces every chapter
-/// after music the pauses in between are thousands of windows that can only ever confirm what the
-/// music already said.
+/// probing has always had; the rest are the halves a two-part Probe splits it into - jingles then
+/// pauses (see <see cref="JingleFirstScan"/>), or long pauses then the rest (see
+/// <see cref="DescendingSilenceScan"/>). Both exist for the same reason: most of a book's probe
+/// windows can only ever confirm what a handful of them already said, and reading the informative
+/// ones first is what makes the others skippable.
 /// <para>
 /// Only the walk's own candidate list is filtered. A sequence-gap re-probe inside either half keeps
 /// the union set it has always had, that being a second look at a stretch which has already failed
@@ -200,6 +201,21 @@ internal enum ProbeShape
     /// <summary>Its pauses only, the region start included in neither: the jingle-first scan's
     /// second half, run over the stretches the first half left unsettled.</summary>
     SilencesOnly,
+
+    /// <summary>
+    /// Every candidate, as <see cref="Everything"/> takes them - but read once through in descending
+    /// pause length first, to find out where the chapters are, before the ordinary forward walk runs
+    /// (see <see cref="DescendingSilenceScan"/>). The odd one out in this enum, which otherwise only
+    /// says which candidates a walk takes: this member says in what order they are looked at.
+    /// <para>
+    /// That first read concludes nothing, and cannot. Every mechanism that decides whether an
+    /// announcement is a chapter - the mender, the sequence check, the restart tracking, the
+    /// refinement vote - reads the chapters below it, which a walk visiting 8:12:04 before 0:03:19
+    /// does not have. So it only reads windows and notes what they say; the forward walk behind it
+    /// draws every conclusion, out of the transcripts already in hand.
+    /// </para>
+    /// </summary>
+    SilencesDescending,
 }
 
 /// <summary>
@@ -213,6 +229,26 @@ internal enum ProbeShape
 /// <param name="End">The window's planned end (see <see cref="RegionProber.WindowEndFor"/>).</param>
 internal readonly record struct WindowPlan(
     IReadOnlyList<ProbeCandidate> Candidates, int Index, double End);
+
+/// <summary>
+/// One probe window after it has been decoded and before anything has been made of it - what
+/// <see cref="RegionProber.ReadWindowAsync"/> hands <see cref="RegionProber.MarksFromWindowAsync"/>.
+/// <para>
+/// It exists so the two can happen at different times, which is the whole of what
+/// <see cref="ProbeShape.SilencesDescending"/> needs: the transcript of a window read out of file
+/// order is worth keeping, the verdict on it is not, because the verdict depends on chapters that
+/// walk has not reached yet.
+/// </para>
+/// </summary>
+/// <param name="Start">Absolute time the window starts at.</param>
+/// <param name="WindowEnd">Its planned end (see <see cref="RegionProber.WindowEndFor"/>).</param>
+/// <param name="Segments">The transcript in window-relative time, for phrase matching.</param>
+/// <param name="TrimmedAbs">The same transcript in absolute file time, for the jingle anchor.</param>
+/// <param name="MergeBoundarySegIndex">The cache/fresh boundary, if any; see
+/// <see cref="RegionProber.AssembleWindowTranscriptAsync"/>.</param>
+internal readonly record struct WindowRead(
+    double Start, double WindowEnd, List<TranscriptSegment> Segments,
+    List<TranscriptSegment> TrimmedAbs, int? MergeBoundarySegIndex);
 
 /// <summary>One chapter mark a probe window produced.</summary>
 /// <param name="Number">The detected chapter number.</param>
@@ -464,6 +500,32 @@ internal sealed class RegionProber
     private double? _withheldFromScanSeconds;
 
     /// <summary>
+    /// The descending scan's own stop rule (<see cref="GatherLongestPauseFirstAsync"/>): the pause
+    /// length below which this walk stops reading, or null while nothing has been heard yet.
+    /// <para>
+    /// Kept apart from <see cref="_adaptedThresholdSeconds"/> although both are the same arithmetic
+    /// over the same constant, because they are fed by different evidence at different times: that
+    /// one learns from a <em>placed mark</em>, which this walk has none of by design, and this one
+    /// from a window that merely held an announcement. Sharing a field would make the descending
+    /// walk teach the file-order gate from readings nothing has vouched for yet.
+    /// </para>
+    /// </summary>
+    private double? _gatherFloorSeconds;
+
+    /// <summary>What the descending first look read, by candidate index, so the file-order walk
+    /// behind it can make its marks from those transcripts instead of decoding the same windows
+    /// again. Empty for every other shape.</summary>
+    private readonly Dictionary<int, WindowRead> _gatheredReads = [];
+
+    /// <summary>
+    /// Stretches of the region the descending first look closed - see
+    /// <see cref="DescendingSilenceScan.SettledSpans"/> - whose candidates the file-order walk passes
+    /// over. Empty for every other shape, and empty
+    /// during the descent itself, which is what stops it from skipping its own candidates.
+    /// </summary>
+    private List<(double From, double To)> _settledSpans = [];
+
+    /// <summary>
     /// What this region's marks measured this book's chapter breaks to be, or null where nothing
     /// ever qualified. Read after <see cref="RunAsync"/> by
     /// <see cref="ChapterDetector.SweepAdaptiveSubFloorAsync"/>: below --min-silence-length it is
@@ -624,7 +686,7 @@ internal sealed class RegionProber
     /// <param name="hunting">The chapter numbers this run was sent to find, or null for a scan with
     /// no such list; see <see cref="_hunting"/>.</param>
     /// <param name="shape">Which of the region's candidates to walk; see <see cref="ProbeShape"/>.
-    /// Defaults to all of them, which is every caller but the jingle-first scan.</param>
+    /// Defaults to all of them, which is every caller but a two-part Probe's halves.</param>
     internal RegionProber(ProbeEnvironment env, ProbeContext ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
         double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false,
@@ -650,15 +712,37 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Probes every candidate of the region in chronological order, stopping early on an
-    /// --early-abort or --expected-start-chapter abort. Reports its outcome through
-    /// <see cref="EarlyAborted"/> and <see cref="BelowExpectedStartNumber"/>; the marks themselves
-    /// land in the accumulator this prober was constructed with.
+    /// Probes every candidate of the region, stopping early on an --early-abort or
+    /// --expected-start-chapter abort. Reports its outcome through <see cref="EarlyAborted"/> and
+    /// <see cref="BelowExpectedStartNumber"/>; the marks themselves land in the accumulator this
+    /// prober was constructed with.
+    /// <para>
+    /// In file order, except under <see cref="ProbeShape.SilencesDescending"/>, which reads the
+    /// windows longest pause first and only then reads what they say - in file order, so everything
+    /// downstream of a transcript is unaffected by the order they arrived in.
+    /// </para>
     /// </summary>
     /// <param name="ct">Cancellation token.</param>
     internal async Task RunAsync(CancellationToken ct)
     {
         var candidates = BuildCandidates();
+        if (_shape == ProbeShape.SilencesDescending)
+            await GatherThenResolveAsync(candidates, ct);
+        else
+            await WalkInFileOrderAsync(candidates, ct);
+        // A restart still being tracked when the region runs out never earned its chapters, so its
+        // announcements are booked as lost here rather than quietly forgotten.
+        AbandonPendingRestart();
+    }
+
+    /// <summary>
+    /// The walk probing has always had: every candidate in file order, each one's verdict settled
+    /// before the next one is looked at.
+    /// </summary>
+    /// <param name="candidates">The region's candidates, in file order.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task WalkInFileOrderAsync(List<ProbeCandidate> candidates, CancellationToken ct)
+    {
         for (var ci = 0; ci < candidates.Count; ci++)
         {
             var candidate = candidates[ci];
@@ -671,29 +755,246 @@ internal sealed class RegionProber
 
             var foundNoneYet = _found.Count == 0;
             var plan = new WindowPlan(candidates, ci, WindowEndFor(candidates, ci));
-            var probeMarks = await ProbeAsync(candidate, plan, ct);
+            // A window a descending first look already read is not read again - it is the same
+            // candidate planned by the same arithmetic, so the transcript is the one this decode
+            // would produce. The re-reads a window yielding nothing is entitled to still run, which
+            // is why this reuses the transcript rather than skipping the candidate.
+            var probeMarks = _gatheredReads.TryGetValue(ci, out var read)
+                ? await MarksFromWindowAsync(candidate, read, ct)
+                : await ProbeAsync(candidate, plan, ct);
 
-            if (foundNoneYet && IsBelowExpectedStart())
-                break;
-
-            await ApplyProbeMarksAsync(probeMarks, candidate.ExpectAt, ct);
-            // After the marks are applied, so a gap among them is still bounded below by the mark
-            // before this window rather than by this window's own.
-            if (probeMarks.Count > 0)
-                _lastMarkExpectAt = candidate.ExpectAt;
-            if (_hunting is { Count: 0 })
+            if (await ApplyWindowOutcomeAsync(candidate, probeMarks, foundNoneYet, ct))
             {
-                if (ci + 1 < candidates.Count)
+                if (_hunting is { Count: 0 } && ci + 1 < candidates.Count)
                     _env.Log?.Invoke($"stretch complete, nothing left missing - stopped after " +
                                      $"{ci + 1} of {candidates.Count} candidate(s)");
                 break;
             }
             ci = SkipSettledWindows(candidates, ci, plan.End, probeMarks);
         }
-        // A restart still being tracked when the region runs out never earned its chapters, so its
-        // announcements are booked as lost here rather than quietly forgotten.
-        AbandonPendingRestart();
     }
+
+    /// <summary>
+    /// Everything one probed window changes about the region's running state, and whether the walk
+    /// is to stop after it. Shared by both walks, which differ in the order they arrive here and in
+    /// nothing else.
+    /// </summary>
+    /// <param name="candidate">The candidate whose window this was.</param>
+    /// <param name="probeMarks">The marks it produced, in window order.</param>
+    /// <param name="foundNoneYet">Whether the region still had no chapter when this window was
+    /// probed - the one case --expected-start-chapter's abort asks about.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True when the walk is to stop.</returns>
+    private async Task<bool> ApplyWindowOutcomeAsync(
+        ProbeCandidate candidate, List<ProbeMark> probeMarks, bool foundNoneYet, CancellationToken ct)
+    {
+        if (foundNoneYet && IsBelowExpectedStart())
+            return true;
+
+        await ApplyProbeMarksAsync(probeMarks, candidate.ExpectAt, ct);
+        // After the marks are applied, so a gap among them is still bounded below by the mark
+        // before this window rather than by this window's own.
+        if (probeMarks.Count > 0)
+            _lastMarkExpectAt = candidate.ExpectAt;
+        return _hunting is { Count: 0 };
+    }
+
+    /// <summary>
+    /// The descending scan's walk: read this region's longest pauses first to find out where its
+    /// chapters are, then walk the region in file order as probing always has - reusing what was
+    /// already read, and passing over the stretches those readings closed.
+    /// <para>
+    /// <b>One walk, not two halves</b>, and that is the whole design. The obvious shape - resolve
+    /// the gathered windows, then hand the rest to a second walk over the unsettled stretches, the
+    /// way <see cref="JingleFirstScan"/> does - was built first and gives up something the file-order
+    /// walk owns: a part restart is recognized by seeing a chapter number drop and then climb again,
+    /// which no walk confined to one stretch can see. The Forever War's part 1 chapter 15 sits in
+    /// front of part 2's chapter 1, and split into stretches it is found, refused and dropped. Here
+    /// the descent only decides <em>which candidates are worth reading</em>; every conclusion is
+    /// still drawn by one forward walk over the whole region, so the restart tracking, the sequence
+    /// gap re-probe and <c>--early-abort</c> all work exactly as they always have.
+    /// </para>
+    /// </summary>
+    /// <param name="candidates">The region's candidates, in file order.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <remarks>Notes: the clip that proved the two-half shape loses a part restart.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="GatherThenResolveAsync"]/*' /></remarks>
+    private async Task GatherThenResolveAsync(List<ProbeCandidate> candidates, CancellationToken ct)
+    {
+        var gathered = await GatherLongestPauseFirstAsync(candidates, ct);
+        foreach (var (index, read, _) in gathered)
+            _gatheredReads[index] = read;
+        _settledSpans = DescendingSilenceScan.SettledSpans(
+            candidates, [.. gathered.Select(g => (g.Index, g.Numbers))]);
+        if (_settledSpans.Count > 0)
+            _env.Log?.Invoke(
+                $"SD-probe: {_settledSpans.Count} stretch(es) closed by consecutive chapter " +
+                "numbers - their pauses are passed over");
+        await WalkInFileOrderAsync(candidates, ct);
+    }
+
+
+    /// <summary>
+    /// Reads windows in descending pause length until the pauses stop being long enough to be this
+    /// book's chapter breaks, and hands back what was read.
+    /// <para>
+    /// <b>Three termination conditions, none of which can lose a chapter</b> - whatever this walk
+    /// leaves unsettled is walked in file order afterwards, exactly as the jingle-first shape's
+    /// second half walks what the music left open (see <see cref="DescendingSilenceScan"/> for the
+    /// argument, which is the same one):
+    /// </para>
+    /// <list type="number">
+    /// <item>the gather floor, which is the adaptive threshold's own rule read from the other end:
+    /// once a candidate is shorter than <see cref="DetectionTuning.AdaptiveTightenFactor"/> of the
+    /// shortest pause that has yielded an announcement here, every candidate left is shorter still.
+    /// Measured against the sixteen-book corpus, it is also where the descent stops paying: at
+    /// 0.6 rather than 0.75 the corpus probes far more windows and recovers two chapters the walk
+    /// that follows recovers anyway;</item>
+    /// <item>the dry-start budget, for the walk that has found nothing at all and so has no floor to
+    /// stop at - see <see cref="DryStartBudget"/>, which is <c>--early-abort</c>'s own budget;</item>
+    /// <item>a <c>--chapter-count</c> that is already accounted for, which is the same "nothing left
+    /// to look for" exit a gap hunt takes.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="candidates">The region's candidates, in file order.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <remarks>Notes: where the corpus's chapter-bearing pauses rank, and what each stop rule costs.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="GatherLongestPauseFirstAsync"]/*' /></remarks>
+    private async Task<List<(int Index, WindowRead Read, List<int> Numbers)>> GatherLongestPauseFirstAsync(
+        List<ProbeCandidate> candidates, CancellationToken ct)
+    {
+        var gathered = new List<(int Index, WindowRead Read, List<int> Numbers)>();
+        var numbers = new HashSet<int>();
+        var budget = DryStartBudget(candidates);
+        foreach (var ci in DescendingSilenceScan.LongestPauseFirst(candidates))
+        {
+            var candidate = candidates[ci];
+            if (ShouldSkipCandidate(candidate))
+                continue;
+            if (DescendingSilenceScan.PauseSecondsOf(candidate) is { } pause &&
+                _gatherFloorSeconds is { } floor &&
+                pause < floor)
+            {
+                _env.Log?.Invoke(
+                    $"SD-probe: down to {pause:0.##} s pauses, below the {floor:0.##} s this book " +
+                    $"announces its chapters after - read {gathered.Count} of {candidates.Count} " +
+                    "candidate(s)");
+                break;
+            }
+            if (_gatherFloorSeconds is null && gathered.Count >= budget)
+            {
+                _env.Log?.Invoke(
+                    $"SD-probe: nothing announced at the {budget} longest candidate(s) - reading " +
+                    "the rest of this file in order instead");
+                break;
+            }
+
+            var plan = new WindowPlan(candidates, ci, WindowEndFor(candidates, ci));
+            var read = await ReadWindowAsync(candidate, plan, ct);
+            var (held, heardNumbers) = AnnouncementIn(read);
+            gathered.Add((ci, read, heardNumbers));
+            if (!held)
+                continue;
+            // A jingle teaches nothing about how long this book's pauses run, which is the same rule
+            // ThresholdSilenceFor applies to a finished mark and for the same reason.
+            if (DescendingSilenceScan.PauseSecondsOf(candidate) is { } yielding)
+                ProposeGatherFloor(yielding);
+            numbers.UnionWith(heardNumbers);
+            if (SequenceAccountedFor(numbers))
+            {
+                _env.Log?.Invoke(
+                    $"SD-probe: all {_env.Options.ChapterCount} chapter(s) accounted for - read " +
+                    $"{gathered.Count} of {candidates.Count} candidate(s)");
+                break;
+            }
+        }
+        return gathered;
+    }
+
+    /// <summary>
+    /// How many of the longest candidates may be read before a walk that has heard nothing at all
+    /// gives up: exactly the ones <c>--early-abort</c> would have let the file-order walk read
+    /// before it gave up, since with nothing found no threshold is ever learned and nothing is
+    /// skipped. So this is not an approximation of that budget, it is that budget, spent on the
+    /// longest pauses in the file rather than on whichever ones happen to come first.
+    /// <para>
+    /// <c>--early-abort 0</c> reaches here as an infinite <see cref="ProbeContext.EarlyAbortSeconds"/>
+    /// and therefore as the whole candidate list, which is what disabling it should mean.
+    /// </para>
+    /// </summary>
+    /// <param name="candidates">The region's candidates, in file order.</param>
+    /// <remarks>Notes: the book this was verified against, probe for probe.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="DryStartBudget"]/*' /></remarks>
+    private int DryStartBudget(List<ProbeCandidate> candidates)
+        => candidates.Count(c => c.Start < _ctx.EarlyAbortSeconds);
+
+    /// <summary>
+    /// Lowers the gather floor to this pause, the walk having just heard an announcement after one.
+    /// A running minimum like <see cref="ProposeThreshold"/>'s, and floored the same way: a book
+    /// whose breaks reach <see cref="CliOptions.AdaptiveFloorSeconds"/> is one whose pauses say
+    /// nothing, and the walk should read them all rather than stop on the strength of them.
+    /// </summary>
+    /// <param name="pauseSeconds">The length of the pause that yielded the announcement.</param>
+    private void ProposeGatherFloor(double pauseSeconds)
+    {
+        var proposed = Math.Max(
+            _env.Options.AdaptiveFloorSeconds, AdaptiveTightenFactor * pauseSeconds);
+        _gatherFloorSeconds = Math.Min(_gatherFloorSeconds ?? proposed, proposed);
+    }
+
+    /// <summary>
+    /// Whether the numbers heard so far already cover a declared <c>--chapter-count</c> with no hole
+    /// in them, in which case there is nothing left for this walk to look for. Answered on the
+    /// numbers as read rather than on accepted chapters, this walk having accepted none yet; a
+    /// wrongly read number can only make this <em>less</em> likely to be true, since a hole it opens
+    /// keeps the run from closing.
+    /// </summary>
+    /// <param name="numbers">Every chapter number heard by the walk so far.</param>
+    private bool SequenceAccountedFor(HashSet<int> numbers)
+    {
+        if (_env.Options.ChapterCount is not { } count)
+            return false;
+        var first = _env.Options.ExpectedStartChapter ?? 1;
+        return Enumerable.Range(first, count).All(numbers.Contains);
+    }
+
+    /// <summary>
+    /// What one read window says, without deciding anything about it: the chapter numbers it holds,
+    /// and whether it holds an announcement of any kind at all.
+    /// <para>
+    /// A prologue, a <c>--custom</c> mapping and a chapter phrase whose number came out unreadable
+    /// all count, none of them being a chapter and all of them being this book separating one
+    /// section from the next - which is the only question the gather floor asks. The adaptive
+    /// threshold takes the same view of a named mark, and for the same reason.
+    /// </para>
+    /// <para>
+    /// The <c>--max-chapter-number</c> cap is applied here as
+    /// <see cref="ProbeEnvironment.FindCappedPhraseReadings"/> would, but without its log line: a
+    /// year read out of a front-matter timetable must not lower the floor, and this window is going
+    /// to be read again in file order, where that line belongs.
+    /// </para>
+    /// </summary>
+    /// <param name="read">The window transcript to look at.</param>
+    private (bool Held, List<int> Numbers) AnnouncementIn(WindowRead read)
+    {
+        var numbers = new List<int>();
+        foreach (var readings in FindPhraseReadings(
+                     read.Segments, _language.Profile, read.MergeBoundarySegIndex,
+                     BareNumberReadingFor(WideBareNumberReading)))
+            foreach (var match in readings)
+            {
+                if (_env.Options.EffectiveMaxChapterNumber is { } cap && match.Number > cap)
+                    continue;
+                numbers.Add(match.Number);
+                break;
+            }
+        var held = numbers.Count > 0 ||
+                   FindNamedMatches(read.Segments, _language.Profile).Any() ||
+                   FindUnnumberedAnnouncements(read.Segments, _language.Profile).Any();
+        return (held, numbers);
+    }
+
+
 
     /// <summary>Reports how far probing has got as the byte-based progress the bar counts in,
     /// translated onto the enclosing phase's time base (see <see cref="_progressOffsetSeconds"/>).
@@ -1105,6 +1406,8 @@ internal sealed class RegionProber
         // hour of play time" is not the evidence this check reasons about - the pauses of that hour
         // have not been looked at yet. The question is asked again by the walk that does look at
         // them, whose head stretch spans the whole region precisely when nothing was found.
+        // The descending shape needs no such exemption: its own walk is in file order, and the
+        // reading it does ahead of that has a budget cut from this very setting (DryStartBudget).
         if (_shape == ProbeShape.JinglesOnly || candidate.Start < _ctx.EarlyAbortSeconds || foundSomething)
             return false;
         EarlyAborted = true;
@@ -1128,6 +1431,11 @@ internal sealed class RegionProber
     {
         if (_sweeping)
             return false;
+        // Not while a sequence gap re-probes: that pass exists to look again at a stretch the walk
+        // has already been through, and a stretch the descent closed is exactly the kind a gap can
+        // reopen - a misread number is how a real chapter ends up inside one.
+        if (!_reprobing && _settledSpans.Any(s => candidate.Start > s.From && candidate.Start < s.To))
+            return true;
         return _env.Options.AutoMinSilence && candidate.Silence is { } silence &&
                silence.EndSeconds - silence.StartSeconds < _threshold;
     }
@@ -1169,9 +1477,24 @@ internal sealed class RegionProber
     /// <returns>The accepted marks in window order.</returns>
     private async Task<List<ProbeMark>> ProbeAsync(
         ProbeCandidate candidate, WindowPlan plan, CancellationToken ct)
+        => await MarksFromWindowAsync(candidate, await ReadWindowAsync(candidate, plan, ct), ct);
+
+    /// <summary>
+    /// The decoding half of a probe: everything up to and including a window transcript, with
+    /// nothing yet asked of what it says.
+    /// <para>
+    /// Split from <see cref="MarksFromWindowAsync"/> so the descending scan's first half can read a
+    /// window now and decide what it means later - see <see cref="ProbeShape.SilencesDescending"/>
+    /// for why a walk that visits candidates out of file order cannot do both at once.
+    /// </para>
+    /// </summary>
+    /// <param name="candidate">The candidate whose window to read.</param>
+    /// <param name="plan">The window to read; see <see cref="WindowEndFor"/>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<WindowRead> ReadWindowAsync(
+        ProbeCandidate candidate, WindowPlan plan, CancellationToken ct)
     {
         var start = candidate.Start;
-        var windowEnd = plan.End;
         ct.ThrowIfCancellationRequested();
         // Position-based Probe progress (see DetectCoreAsync's BeginPhase); reported here rather
         // than only in the candidate loop so gap re-probes show their (backwards) position too.
@@ -1186,8 +1509,22 @@ internal sealed class RegionProber
         // jingle edge adjustment.
         var trimmedAbs = TrimLeadingNonSpeech(
             windowSegmentsAbs, _ctx.AllSilences, _ctx.NonSpeechRegions, _env.Vad != null);
-        var segments = ShiftSegments(trimmedAbs, -start);
+        return new WindowRead(
+            start, plan.End, ShiftSegments(trimmedAbs, -start), trimmedAbs, mergeBoundarySegIndex);
+    }
 
+    /// <summary>
+    /// The deciding half of a probe: what one already-read window yields, including the re-reads a
+    /// window that yielded nothing is entitled to. See <see cref="ReadWindowAsync"/> for why the two
+    /// halves are separable at all.
+    /// </summary>
+    /// <param name="candidate">The candidate whose window this is.</param>
+    /// <param name="read">What <see cref="ReadWindowAsync"/> made of it.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<List<ProbeMark>> MarksFromWindowAsync(
+        ProbeCandidate candidate, WindowRead read, CancellationToken ct)
+    {
+        var (start, windowEnd, segments, trimmedAbs, mergeBoundarySegIndex) = read;
         var namedBefore = _namedFound.Count;
         var marks = await ScanWindowForMarksAsync(
             candidate, start, windowEnd, segments, trimmedAbs, mergeBoundarySegIndex, ct);
@@ -2796,7 +3133,9 @@ internal sealed class RegionProber
             // the walk that follows re-reads exactly those stretches, and it does so in the primary
             // scan's own framing rather than a recovery pass's trimmed one, which is what a first
             // look at that audio is owed (see RecoveryLeadInTrimSeconds for why a second look is
-            // framed differently at all).
+            // framed differently at all). The descending shape keeps it: a hole there is a genuine
+            // hole, its candidates having been passed over on a reading that said a chapter cannot
+            // be in them, and this is what re-opens the stretch when that reading was wrong.
             if (_shape != ProbeShape.JinglesOnly &&
                 _lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
                 await HandleSequenceGapAsync(previousNumber, mark.Number, expectAt, ct);

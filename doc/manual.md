@@ -91,6 +91,7 @@ progress bar shows while it runs:
 | `Analyze` | Measures the file — silences, speech, music. Recognizes nothing. | Always |
 | `Probe` | Transcribes a short window everywhere a chapter could start. | Always |
 | `J-probe` / `S-probe` | The same probing, split into the jingles first and the pauses afterwards. | Instead of `Probe`, on a book of chapter music — see [Reading the music first](#reading-the-music-first) |
+| `SD-probe` | A quick skim of the longest pauses, before `Probe` itself. | On a book with no chapter music — see [Reading the longest pauses first](#reading-the-longest-pauses-first) |
 | `Re-probe` | Probes a gap again on the heavier model. | Only with a heavier `--upgrade-model`, and only where a chapter is missing |
 | `Scan` | Transcribes a whole stretch end to end. | Only where a chapter is still missing |
 | `Re-scan` | Reads that stretch once more, framed differently. | Only where the `Scan` came back empty |
@@ -192,6 +193,31 @@ looked for. A mapping restricted to `before-first-chapter` or
 half that is running: `J-probe` while the music is read, then `S-probe`, whose
 length is the stretches it has left to look at rather than the whole book. An
 ordinary file walks both together and stays `Probe` throughout.
+
+#### Reading the longest pauses first
+
+**Experimental (0.12.1).** A book with no chapter music announces its chapters
+after its pauses — and it has a hundred pauses that announce nothing for every
+one that does. Such a file is skimmed once through before probing proper, taking
+its pauses longest first, purely to find out roughly where its chapters are.
+`Probe` then reads the file in order as it always has, but passes over every
+pause that lies between two chapters whose numbers already run consecutively:
+nothing else can be announced there, for the same reason as above. Nothing read
+during the skim is read a second time.
+
+The skim stops by itself as soon as the pauses get too short to be this book's
+chapter breaks, and on a file that announces nothing at all it gives up having
+spent no more than `--early-abort` would have. It only decides
+which pauses are worth reading; everything about how a chapter is recognised,
+numbered and placed is still decided by the ordinary pass behind it, reading the
+file in order.
+
+A file gets this shape by itself unless it is already being read music-first, or
+one of your own [`--custom`](#custom-marks) mappings may be announced between two
+chapters — the same exclusion, for the same reason. It is also skipped when you
+give `--min-silence-length` a value of your own, that being you naming the pauses
+worth probing. `--verbose` says so, and the progress bar shows the skim as
+`SD-probe`.
 
 Each transcript is matched against the chapter phrase (see `--chapter-phrase`),
 and the chapter number is parsed from digits, Roman numerals or number words

@@ -178,4 +178,75 @@
     candidates - four identical marks at 5:14:48.15, about two minutes of pure waste.
     </para>
   </member>
+  <member name="GatherLongestPauseFirstAsync">
+    <para>
+    <b>0.75 is where the descent stops paying, measured rather than inherited</b> (2026-08-19,
+    replayed over the frozen build-341 logs). Total probes for the whole shape, first half plus
+    second, at four values of the tighten factor - Forever War 260 / 448 / 769 / 769 at 0.75 / 0.60 /
+    0.50 / 0.40; I Shall Wear Midnight 118 / 161 / 222 / 373; Rendezvous With Rama 82 / 146 / 172 /
+    263; The Philosopher's Stone 94 / 94 / 95 / 97. Loosening it recovers Forever War's chapters 6
+    and 7 inside the first half at a cost of 188 probes, and the second half recovers them anyway.
+    So the constant the file-order gate already uses is also the right one here, and there is no
+    second knob to add.
+    </para>
+    <para>
+    <b>Stopping on a reading rather than on a placed mark costs nothing</b> (same replay). Simulating
+    both signals over the seven books whose logs carry enough transcripts gives identical stop ranks:
+    Corsa 71, De vandrande djaeknarne 82, I Shall Wear Midnight 33, Rama 46, Forever War 77, The
+    Philosopher's Stone 14, Wintersmith 54. The candidates that hold a reading without becoming a
+    chapter all rank below where the walk stops - Forever War's deepest such candidate is rank 589,
+    against a stop at 77. Two honest limits on that: the reading detector in the replay was a regex
+    approximation of <see cref="PhraseMatching.FindPhraseReadings"/>, not the real matcher, and the
+    logs only carry transcripts for candidates the build-341 walk actually probed, which over the top
+    ranks is 74 % to 100 % per book except Forever War at 39 %. The stop ranks are therefore a lower
+    bound.
+    </para>
+    <para>
+    <b>The pause-length distribution carries no knee, so the floor could not be derived from it</b>
+    (rejected 2026-08-19, measured first). The stored candidate list is already truncated at
+    <c>--min-silence-length</c>, so its median sits just above that floor and the spread above it is
+    narrow: Corsa's entire candidate range is 2.13 s (median) to 4.03 s (longest) across an 18-hour
+    book holding 65 chapters. A "stop below N times the median" rule stops Corsa at rank 0,
+    Wintersmith at 5 and Paula Monti at 1, and De vandrande djaeknarne's deepest chapter anchor is
+    <em>below</em> its own median. Chapter breaks are not outliers in the stored set; the stored
+    floor already cut the distribution where the interesting part begins.
+    </para>
+  </member>
+  <member name="DryStartBudget">
+    <para>
+    <b>Verified probe for probe on the one book that exercises it</b> (2026-08-19). Mort is the
+    corpus's early-abort case - a book with no chapter announcements at all - and its candidate list
+    predicts 83 candidates inside the default 60-minute <c>--early-abort</c> window. Its build-341
+    log gives up after exactly 83 probes: with nothing found, no threshold is ever learned, so the
+    file-order walk skips nothing and reads precisely that set. The budget is therefore not an
+    analogy to <c>--early-abort</c>, it is the same spend.
+    </para>
+    <para>
+    <b>It never bites a book the shape can help.</b> Seven of the eight pause-announced corpus books
+    find their first chapter anchor at rank 1 to 6, far inside budgets of 4 to 78. The one book it
+    does cut is De vandrande djaeknarne, whose first anchor sits at rank 35 against a budget of 17 -
+    and that costs 17 probes and a handover to the file-order walk, which is the shape that book
+    would have had anyway.
+    </para>
+  </member>
+  <member name="GatherThenResolveAsync">
+    <para>
+    <b>The two-half shape was built first, and a clip proved it loses a part restart</b>
+    (2026-08-19, build 359, "fw-restart" - a 53-minute clip of The Forever War, whose numbering
+    restarts). Read as a descending half followed by a pause half over the unsettled stretches, the
+    way the jingle-first shape is: the descent read 2 of 80 candidates, found part 2's chapter 1 at
+    0:25:14, and the head stretch behind it was then bounded above by chapter 1 - so part 1's
+    chapter 15 at 0:03:03 was heard and refused with "skipped chapter 15 - at or above 1, this gap's
+    upper bound". Lifting that bound made it heard and accepted, and it was then dropped anyway by
+    the sequence repair ("contradicts its neighbours"), because a restart is recognized by watching
+    the numbering fall and climb again and no walk confined to one stretch can watch that. The
+    one-sweep control run over the same clip on the same binary writes 5 chapters in 2 parts
+    (15, 1-4); the two-half descending run writes 4.
+    </para>
+    <para>
+    Reading the descent as a plan rather than as a first half fixes it outright, and costs nothing:
+    the saving was never in deferring the conclusions, only in not reading the windows, and one
+    forward walk still reads no more windows than the two halves did.
+    </para>
+  </member>
 </doc>

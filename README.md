@@ -406,6 +406,18 @@ use `.`, whatever the machine's locale says.
    takes this shape by itself with at least one jingle per hour, unless a
    `--custom` mapping of yours may fall between two chapters; `--jingle-first`
    asks for it regardless.
+- **`SD-probe` (experimental)** — a book with *no* chapter music has the same
+   problem from the other side: it announces its chapters after its pauses, and
+   it has a hundred pauses that announce nothing for every one that does. So its
+   pauses are skimmed once through longest first, purely to find out roughly
+   where the chapters are, and `Probe` behind it then reads the file in order as
+   always but passes over every pause lying between two chapters whose numbers
+   already run consecutively. Nothing read during the skim is read again. The
+   skim stops as soon as the pauses get too short to be this book's chapter
+   breaks, and on a file that announces nothing it gives up having spent no more
+   than `--early-abort` would have. It decides only which pauses are worth
+   reading — every chapter is still recognised, numbered and placed by the pass
+   behind it, reading the file in order.
 - **Mark refinement** (skip with `--quick-marks`/`-Q`) — for
    the mark that still lands on the wrong spot — usually a jingle whose
    music briefly fools the voice-activity detector into sounding like speech —

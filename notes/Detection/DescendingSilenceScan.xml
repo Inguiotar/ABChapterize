@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\DescendingSilenceScan.cs. -->
+<doc>
+  <member name="DescendingSilenceScan">
+    <para>
+    <b>Where a book's chapter-bearing pauses actually rank</b> (2026-08-19, replayed over the frozen
+    build-341 logs in <c>reference-marks/logs/</c>). Sort a book's stored probe
+    candidates by pause length, longest first, and find the deepest rank a chapter's own anchoring
+    pause sits at. Over the eight pause-announced books of the seventeen: Rendezvous With Rama rank
+    45 of 514 (8.8 %), I Shall Wear Midnight 18 of 330 (5.5 %), Wintersmith 23 of 310 (7.4 %), The
+    Forever War 98 of 686 (14.3 %), The Philosopher's Stone 51 of 223 (22.9 %), Corsa nello spazio
+    68 of 180 (37.8 %), Paula Monti 19 of 19, De vandrande djaeknarne 77 of 82. The precision at the
+    top of the ranking is what makes the shape worth having: 65 of Corsa's top 68 candidates are
+    chapters, and The Philosopher's Stone's top 14 are 14 chapters with nothing interleaved.
+    </para>
+    <para>
+    <b>Seven of eight books have their first chapter anchor at rank 1 to 6</b> - the longest pause in
+    a book is essentially always a chapter break. That is what makes
+    <see cref="RegionProber.DryStartBudget"/> dead weight on any book this shape can help, and
+    therefore what makes deriving it better than calibrating it.
+    </para>
+    <para>
+    <b>Total probes against the plain sweep's candidate count</b>, simulated as "read down to the
+    stop rule, then walk the file passing over what consecutive readings closed": Rama 15 %, I Shall
+    Wear Midnight 33 %, The Forever War 35 %, The Philosopher's Stone 41 %, Corsa 43 %, Wintersmith
+    67 %, and Paula Monti and De vandrande djaeknarne 100 %. The last two are the shape's own worst
+    case and they are exactly the plain sweep's cost, not double it, because a window read by the
+    descent is not decoded again when the walk reaches it. What remains on such a book is decode
+    locality rather than probe count - today's Probe serves 27 % to 55 % of its window seconds from
+    the overlap cache (De vandrande djaeknarne 4 %), and a read that jumps around the file forfeits
+    most of that.
+    </para>
+    <para>
+    <b>What the saving really comes from</b>, which was nearly mis-modelled: the file-order gate is a
+    running minimum over the anchors of accepted marks, and on five of the six pause-announced corpus
+    books it ends up at its 0.8 s floor and probes very nearly the whole candidate list - Rama 428
+    probes for 514 candidates, I Shall Wear Midnight 220 for 330, Wintersmith 356 for 310. It is that
+    collapse the descending stop rule avoids, not some margin above the gate.
+    </para>
+    <para>
+    <b>Paula Monti is the book with nothing to sort</b>: 19 stored pauses in 4.6 hours, 19 of its 25
+    marks sitting on them. Nothing was added to the gate for it (the user's call, 2026-08-19, "keep
+    it simple") - the shape reads all 19 longest-first and the second half adds six, which costs the
+    cache and nothing else.
+    </para>
+    <para>
+    <b>Not yet measured on the corpus.</b> The replay above says where chapter pauses rank in a
+    ranking; it does not say what a window framed by a different neighbour turns out to read, and the
+    second half plans its windows inside a stretch rather than across the file. The next corpus run is
+    the real test, and the blast-radius grep in the VAD-drift note bounds what can move on the
+    placement side but not what a differently framed window may say.
+    </para>
+  </member>
+</doc>
