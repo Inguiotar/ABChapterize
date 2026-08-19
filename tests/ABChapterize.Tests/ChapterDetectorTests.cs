@@ -5344,7 +5344,7 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertChapters(
             [new(1, 0.25, 0.95), new(2, 600.05, 0.2)],
             result.Chapters);
-        Assert.Equal([2], result.LowConfidenceNumbers);
+        Assert.Equal([2], result.LowConfidenceChapters.Select(c => c.Number));
     }
 
     [Fact]
@@ -5359,7 +5359,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(600, Seg(0.3, " Chapter two."));
             });
 
-        Assert.Empty(result.LowConfidenceNumbers);
+        Assert.Empty(result.LowConfidenceChapters);
     }
 
     [Fact]

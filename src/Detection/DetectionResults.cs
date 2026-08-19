@@ -13,7 +13,7 @@ namespace ABChapterize.Detection;
 /// <param name="TimeSeconds">Position of the chapter mark in seconds.</param>
 /// <param name="Confidence">Whisper's probability for the segment the chapter number was parsed
 /// from (0-1); 1.0 when unknown. Below <see cref="DetectionTuning.LowConfidenceThreshold"/> the
-/// number surfaces in <see cref="DetectionResult.LowConfidenceNumbers"/>.</param>
+/// number surfaces in <see cref="DetectionResult.LowConfidenceChapters"/>.</param>
 /// <param name="NumberUnverified">True when <see cref="SuspectNumberMender"/> was asked about this
 /// number - it leaves an implausible hole below it (see <see cref="NumberBounds.Admits"/>) - and
 /// nothing could corroborate or correct it. Such a mark keeps its number and its position; what it
@@ -126,8 +126,11 @@ public readonly record struct DetectionStats(
 /// be left unchanged.</param>
 /// <param name="MissingNumbers">The chapter numbers that could not be located (only when
 /// <paramref name="GapRemains"/>).</param>
-/// <param name="LowConfidenceNumbers">Chapter numbers whose Whisper probability fell below
-/// <see cref="DetectionTuning.LowConfidenceThreshold"/> - worth a manual spot-check.</param>
+/// <param name="LowConfidenceChapters">The chapters whose Whisper probability fell below
+/// <see cref="DetectionTuning.LowConfidenceThreshold"/> - worth a manual spot-check. The
+/// chapters rather than their numbers alone, because on a file whose numbering restarts a bare
+/// "chapter 4" does not say which part's chapter 4 is meant, and every listing that names them
+/// has to.</param>
 /// <param name="Profile">The language profile actually used for this file - the resolved per-file
 /// profile with <c>--lang auto</c>, else the run's fixed <see cref="CliOptions.DefaultProfile"/>.</param>
 /// <param name="DetectedLanguage">Whisper's raw language guess with <c>--lang auto</c> - the sample
@@ -178,7 +181,7 @@ public readonly record struct DetectionStats(
 public readonly record struct DetectionResult(
     IReadOnlyList<DetectedChapter> Chapters, IReadOnlyList<DetectedMark> NamedMarks,
     bool GapRemains, IReadOnlyList<int> MissingNumbers,
-    IReadOnlyList<int> LowConfidenceNumbers, LanguageProfile Profile,
+    IReadOnlyList<DetectedChapter> LowConfidenceChapters, LanguageProfile Profile,
     string? DetectedLanguage, double DetectedProbability, DetectionStats Stats, bool EarlyAborted = false,
     int? BelowExpectedStartNumber = null, bool LeadInHasSpeech = true, bool CustomMarkLimitHit = false,
     int SequenceRestartSkips = 0, IReadOnlyList<int>? UnverifiedNumbers = null,

@@ -1894,10 +1894,9 @@ public sealed class ChapterDetector
         // no chapters rather than as missing all of them.
         missing.AddRange(DeclaredTrailingNumbers(chapters));
 
-        var lowConfidence = chapters
-            .Where(c => c.Confidence < LowConfidenceThreshold)
-            .Select(c => c.Number)
-            .ToList();
+        // Kept whole rather than reduced to numbers: a listing that names these has to say which
+        // part each one belongs to on a file whose numbering restarts.
+        var lowConfidence = chapters.Where(c => c.Confidence < LowConfidenceThreshold).ToList();
 
         var unverified = chapters.Where(c => c.NumberUnverified).Select(c => c.Number).ToList();
 

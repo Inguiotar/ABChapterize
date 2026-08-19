@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using Xunit;
+using ABChapterize.Detection;
 using ABChapterize.Processing;
 using ABChapterize.Ui;
 
@@ -98,12 +99,18 @@ public class RunOutcomesTests
             Lines(outcomes)[1]);
     }
 
+    /// <summary>Low-confidence chapters of a single-part book, which is the ordinary case:
+    /// the listing reads their numbers and their part, and an ordinary book has one part.</summary>
+    /// <param name="numbers">The chapter numbers, in file order.</param>
+    private static DetectedChapter[] Ch(params int[] numbers)
+        => [.. numbers.Select(n => new DetectedChapter(n, 0))];
+
     [Fact]
     public void FormatListings_OrdersTheBlocksByHowFarEachFileGot()
     {
         // Recorded back to front, printed not-started / empty-handed / incomplete / worth a look.
         var outcomes = new RunOutcomes();
-        outcomes.RecordLowConfidence("Third.m4b", [9], bareNumbers: false);
+        outcomes.RecordLowConfidence("Third.m4b", Ch([9]), sequenceCount: 1, bareNumbers: false);
         outcomes.RecordMissingMarks("Book.missing-marks-5.m4b", [5]);
         outcomes.RecordNoChapters("Interview.mp3", "no chapter phrases found");
         outcomes.RecordSkipped("Other.m4b", "has 3 chapter mark(s)");
@@ -124,8 +131,8 @@ public class RunOutcomesTests
     public void FormatListings_CountsAndNamesTheLowConfidenceChapters()
     {
         var outcomes = new RunOutcomes();
-        outcomes.RecordLowConfidence("Stalker.m4b", [4, 17], bareNumbers: false);
-        outcomes.RecordLowConfidence("Wintersmith.m4b", [2], bareNumbers: false);
+        outcomes.RecordLowConfidence("Stalker.m4b", Ch([4, 17]), sequenceCount: 1, bareNumbers: false);
+        outcomes.RecordLowConfidence("Wintersmith.m4b", Ch([2]), sequenceCount: 1, bareNumbers: false);
 
         Assert.Equal(
             ["Low-confidence chapter marks in 2 file(s) (below p=0.50, worth a manual check):",
@@ -135,12 +142,67 @@ public class RunOutcomesTests
     }
 
     [Fact]
+    public void FormatListings_NamesThePart_WhenTheBooksNumberingRestarts()
+    {
+        // "The Forever War" and its like: every part counts from one again, so a bare "chapter 4"
+        // does not say which chapter 4 to go and listen to. Parts are numbered from one, matching
+        // the mark titles this listing sends the reader to.
+        var outcomes = new RunOutcomes();
+        outcomes.RecordLowConfidence(
+            "The Forever War.m4b",
+            [new DetectedChapter(4, 100), new DetectedChapter(9, 200),
+             new DetectedChapter(3, 300, Sequence: 1),
+             new DetectedChapter(2, 400, Sequence: 2)],
+            sequenceCount: 3, bareNumbers: false);
+
+        Assert.Equal(
+            ["Low-confidence chapter marks in 1 file(s) (below p=0.50, worth a manual check):",
+             "  The Forever War.m4b: 4 mark(s) " +
+             "(part 1 chapter 4, 9; part 2 chapter 3; part 3 chapter 2)"],
+            Lines(outcomes));
+    }
+
+    [Fact]
+    public void FormatListings_AppliesTheCutOffAcrossEveryPart_NotOncePerPart()
+    {
+        // Otherwise a book in five parts could name five times as many chapters as an ordinary
+        // one and the cut-off would stop meaning anything.
+        var outcomes = new RunOutcomes();
+        outcomes.RecordLowConfidence(
+            "Omnibus.m4b",
+            [.. Enumerable.Range(1, 7).Select(n => new DetectedChapter(n, n)),
+             .. Enumerable.Range(1, 7).Select(n => new DetectedChapter(n, 100 + n, Sequence: 1))],
+            sequenceCount: 2, bareNumbers: false);
+
+        Assert.Equal(
+            ["Low-confidence chapter marks in 1 file(s) (below p=0.50, worth a manual check):",
+             "  Omnibus.m4b: 14 mark(s) " +
+             "(part 1 chapter 1, 2, 3, 4, 5, 6, 7; part 2 chapter 1, 2, 3 and 4 more)"],
+            Lines(outcomes));
+    }
+
+    [Fact]
+    public void FormatListings_StillNamesThePart_WhenEveryMarkFellInTheSameOne()
+    {
+        // The trigger is the book, not the marks that made the list: on a three-part file a bare
+        // "chapter 3" is ambiguous however few parts the low-confidence marks happen to span.
+        var outcomes = new RunOutcomes();
+        outcomes.RecordLowConfidence(
+            "The Forever War.m4b", [new DetectedChapter(3, 300, Sequence: 1)],
+            sequenceCount: 3, bareNumbers: false);
+
+        Assert.Equal(
+            "  The Forever War.m4b: 1 mark(s) (part 2 chapter 3)",
+            Lines(outcomes)[1]);
+    }
+
+    [Fact]
     public void FormatListings_SummarizesAVeryLongLowConfidenceList()
     {
         // Same cut-off the missing-marks note uses: a book unsure about forty chapters takes one
         // line, not forty numbers.
         var outcomes = new RunOutcomes();
-        outcomes.RecordLowConfidence("Omnibus.m4b", [.. Enumerable.Range(1, 14)], bareNumbers: false);
+        outcomes.RecordLowConfidence("Omnibus.m4b", Ch([.. Enumerable.Range(1, 14)]), sequenceCount: 1, bareNumbers: false);
 
         Assert.Equal(
             "  Omnibus.m4b: 14 mark(s) (chapter 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 and 4 more)",
@@ -155,8 +217,8 @@ public class RunOutcomesTests
         // comparable. Earned by one file in the block, not by all of them: a mixed batch still
         // needs telling.
         var outcomes = new RunOutcomes();
-        outcomes.RecordLowConfidence("Ordinary.m4b", [3], bareNumbers: false);
-        outcomes.RecordLowConfidence("Corsa.m4b", [44, 55, 58], bareNumbers: true);
+        outcomes.RecordLowConfidence("Ordinary.m4b", Ch([3]), sequenceCount: 1, bareNumbers: false);
+        outcomes.RecordLowConfidence("Corsa.m4b", Ch([44, 55, 58]), sequenceCount: 1, bareNumbers: true);
 
         Assert.Equal(
             ["Low-confidence chapter marks in 2 file(s) (below p=0.50, worth a manual check):",
@@ -171,7 +233,7 @@ public class RunOutcomesTests
     public void FormatListings_LeavesTheFootnoteOut_WithoutABareNumberFile()
     {
         var outcomes = new RunOutcomes();
-        outcomes.RecordLowConfidence("Ordinary.m4b", [3], bareNumbers: false);
+        outcomes.RecordLowConfidence("Ordinary.m4b", Ch([3]), sequenceCount: 1, bareNumbers: false);
 
         Assert.DoesNotContain(Lines(outcomes), l => l.Contains("bare number"));
     }
@@ -180,7 +242,7 @@ public class RunOutcomesTests
     public void FormatListings_MarksALowConfidenceFileNameAsATitle()
     {
         var outcomes = new RunOutcomes();
-        outcomes.RecordLowConfidence("Der Fall (Teil 2).m4b", [3], bareNumbers: true);
+        outcomes.RecordLowConfidence("Der Fall (Teil 2).m4b", Ch([3]), sequenceCount: 1, bareNumbers: true);
 
         var entry = outcomes.FormatListings()[1];
         Assert.Contains(entry, s => s == SummarySegment.Title("Der Fall (Teil 2).m4b"));

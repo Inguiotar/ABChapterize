@@ -2159,9 +2159,15 @@ The details worth knowing:
     Interview.mp3: no chapter phrases found
   Still missing chapter marks in 1 file(s):
     Die Dritte Macht.missing-marks-3-7.m4b: 2 mark(s) missing (chapter 3, 7)
-  Low-confidence chapter marks in 1 file(s) (below p=0.50, worth a manual check):
+  Low-confidence chapter marks in 2 file(s) (below p=0.50, worth a manual check):
     Raumschiff Erde.m4b: 2 mark(s) (chapter 12, 31)
+    The Forever War.m4b: 3 mark(s) (part 1 chapter 4, 9; part 2 chapter 3)
   ```
+
+  A book whose numbering restarts names the part alongside the chapter, as the
+  second entry above does: every part counts from one again, so "chapter 4" on
+  its own would not say which one to go and listen to. Parts are numbered from
+  one, matching the titles the marks were written under.
 
 `-d`, `--dry-run`
 : Run full detection but write nothing. Instead of the usual "N chapter(s)

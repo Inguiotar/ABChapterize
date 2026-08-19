@@ -40,7 +40,8 @@ internal sealed class RunOutcomes
     /// <summary>Files carrying at least one mark whose chapter number was read from a transcript
     /// segment Whisper scored below <see cref="DetectionTuning.LowConfidenceThreshold"/>, each with
     /// those numbers and whether the file was read in <c>--chapter-phrase none</c> mode.</summary>
-    private readonly List<(string Name, IReadOnlyList<int> Numbers, bool BareNumbers)> _lowConfidence = [];
+    private readonly List<(string Name, IReadOnlyList<DetectedChapter> Chapters, int SequenceCount,
+        bool BareNumbers)> _lowConfidence = [];
 
     /// <summary>How many files the run skipped. Taken from the listing itself rather than from a
     /// counter of its own, so the number <c>--summary</c>'s first line quotes and the entries
@@ -79,11 +80,14 @@ internal sealed class RunOutcomes
     /// number.</summary>
     /// <param name="name">The bare name the file carries once the run is done, for the same reason
     /// <see cref="RecordMissingMarks"/> takes that one.</param>
-    /// <param name="numbers">The chapter numbers read below the threshold.</param>
+    /// <param name="chapters">The chapters read below the threshold, in file order.</param>
+    /// <param name="sequenceCount">How many chapter sequences the file holds, which is what
+    /// decides whether the listing has to name parts - see <see cref="NameChapters"/>.</param>
     /// <param name="bareNumbers">Whether this file was read in <c>--chapter-phrase none</c> mode,
     /// which is what earns the block its footnote.</param>
-    internal void RecordLowConfidence(string name, IReadOnlyList<int> numbers, bool bareNumbers)
-        => _lowConfidence.Add((name, numbers, bareNumbers));
+    internal void RecordLowConfidence(
+        string name, IReadOnlyList<DetectedChapter> chapters, int sequenceCount, bool bareNumbers)
+        => _lowConfidence.Add((name, chapters, sequenceCount, bareNumbers));
 
     /// <summary>
     /// Builds the closing listings, in order of how much of the file's work got done - not started,
@@ -101,7 +105,7 @@ internal sealed class RunOutcomes
         AppendBlock(lines,
             $"Low-confidence chapter marks in {_lowConfidence.Count} file(s) " +
             $"(below p={LowConfidenceThreshold:0.00}, worth a manual check):",
-            [.. _lowConfidence.Select(f => (f.Name, DescribeLowConfidence(f.Numbers)))],
+            [.. _lowConfidence.Select(f => (f.Name, DescribeLowConfidence(f.Chapters, f.SequenceCount)))],
             BareNumberFootnote());
         return lines;
     }
@@ -142,9 +146,41 @@ internal sealed class RunOutcomes
     /// which chapters. Through <see cref="MissingMarksTag.FormatList"/> like the missing-marks note,
     /// so a book that came back unsure about forty of its chapters takes one line rather than
     /// forty numbers.</summary>
-    /// <param name="numbers">The chapter numbers read below the threshold.</param>
-    private static string DescribeLowConfidence(IReadOnlyList<int> numbers)
-        => $"{numbers.Count} mark(s) (chapter {MissingMarksTag.FormatList(numbers)})";
+    /// <param name="chapters">The chapters read below the threshold.</param>
+    /// <param name="sequenceCount">How many chapter sequences the file holds.</param>
+    private static string DescribeLowConfidence(IReadOnlyList<DetectedChapter> chapters, int sequenceCount)
+        => $"{chapters.Count} mark(s) ({NameChapters(chapters, sequenceCount)})";
+
+    /// <summary>
+    /// Names a set of chapter marks for a listing: "chapter 4, 9, 17" for an ordinary book, and
+    /// "part 1 chapter 4, 9; part 2 chapter 3" for one whose numbering restarts, where a bare
+    /// number would not say which part's chapter 4 was meant.
+    /// </summary>
+    /// <remarks>
+    /// The <see cref="MissingMarksTag.MaxNamedNumbers"/> cut-off is applied to the whole set
+    /// before the grouping rather than per part, so a book in five parts cannot name five times as
+    /// many chapters as an ordinary one and defeat the point of having a cut-off. Parts are
+    /// numbered from one, as they are in the mark titles this listing sends a reader to look at.
+    /// The word is English like the rest of the summary prose, not the localized
+    /// <c>--part-title</c> that goes into the file itself.
+    /// </remarks>
+    /// <param name="chapters">The chapters to name, in file order.</param>
+    /// <param name="sequenceCount">How many chapter sequences the file holds. The trigger is the
+    /// book rather than the listed chapters: marks that all happen to fall in one part of a
+    /// three-part book still need saying which part, and asking the subset would not.</param>
+    internal static string NameChapters(IReadOnlyList<DetectedChapter> chapters, int sequenceCount)
+    {
+        var shown = chapters.Count <= MissingMarksTag.MaxNamedNumbers
+            ? chapters
+            : [.. chapters.Take(MissingMarksTag.MaxNamedNumbers)];
+        var more = chapters.Count - shown.Count;
+        var tail = more > 0 ? $" and {more} more" : "";
+        if (sequenceCount <= 1)
+            return $"chapter {string.Join(", ", shown.Select(c => c.Number))}{tail}";
+        var parts = shown.GroupBy(c => c.Sequence).OrderBy(g => g.Key);
+        return string.Join("; ", parts.Select(g =>
+            $"part {g.Key + 1} chapter {string.Join(", ", g.Select(c => c.Number))}")) + tail;
+    }
 
     /// <summary>
     /// The line closing the low-confidence block when any of the files in it were read in

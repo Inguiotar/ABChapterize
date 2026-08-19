@@ -1304,14 +1304,14 @@ public sealed class FileProcessor
     /// <param name="finalPath">The path the file ends the run under, or null where it keeps its own.</param>
     private void RecordLowConfidence(FileContext ctx, DetectionResult result, string? finalPath)
     {
-        if (result.LowConfidenceNumbers.Count == 0)
+        if (result.LowConfidenceChapters.Count == 0)
             return;
         // The profile is the one this file actually resolved to, which with --lang auto is a
         // per-file answer - so a batch mixing a bare-number book with ordinary ones earns the
         // block's footnote from the one book it applies to.
         _outcomes.RecordLowConfidence(
             _options.DryRun || finalPath == null ? ctx.Name : Path.GetFileName(finalPath),
-            result.LowConfidenceNumbers, result.Profile.BareNumberAnnouncements);
+            result.LowConfidenceChapters, result.SequenceCount, result.Profile.BareNumberAnnouncements);
     }
 
     /// <summary>Reports a detection that produced no chapters at all - the file is left
@@ -1373,7 +1373,7 @@ public sealed class FileProcessor
         // ends early; so is a number nothing could corroborate, whose whole point is that the output
         // looks clean; and so is a file that turned out to hold several parts, since that is what
         // decides whether its marks are titled "Chapter 1" or "Part 2 - Chapter 1".
-        var important = result.LowConfidenceNumbers.Count > 0 || result.SequenceRestartSkips > 0 ||
+        var important = result.LowConfidenceChapters.Count > 0 || result.SequenceRestartSkips > 0 ||
                         result.UnverifiedNumbers is { Count: > 0 } || result.SequenceCount > 1;
         // The tag is a to-do note left on the file name, and a run that reached here left nothing
         // to do: every chapter of the sequence is present. So the file gets its own name back.
@@ -1476,9 +1476,10 @@ public sealed class FileProcessor
     /// empty when every mark was confident.</summary>
     /// <param name="result">The file's detection result.</param>
     private static string FormatLowConfidenceNote(DetectionResult result)
-        => result.LowConfidenceNumbers.Count > 0
-            ? $", {result.LowConfidenceNumbers.Count} low-confidence mark(s) " +
-              $"(chapter {string.Join(", ", result.LowConfidenceNumbers)}; see --verbose)"
+        => result.LowConfidenceChapters.Count > 0
+            ? $", {result.LowConfidenceChapters.Count} low-confidence mark(s) " +
+              $"({RunOutcomes.NameChapters(result.LowConfidenceChapters, result.SequenceCount)}; " +
+              "see --verbose)"
             : "";
 
     /// <summary>Note naming the chapter numbers that were heard, marked, and never corroborated

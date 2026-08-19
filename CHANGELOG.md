@@ -39,6 +39,12 @@ earn a round number.
 
 ### Changed
 
+- **Chapter marks worth a second listen now name their part.** On a book whose numbering
+  restarts, `--summary`'s low-confidence list and the file's own result line read e.g.
+  `part 1 chapter 4, 9; part 2 chapter 3` — "chapter 4" alone did not say which one to go
+  and listen to. Books with a single sequence are unchanged, except that the result line now
+  names at most ten chapters and counts the rest, as the summary listing already did.
+
 - **The progress bar shows every part of a book that restarts its numbering.** Instead of
   one chapter number it now reads e.g. `ch 11,15,4(+1)` — one per part, in order — so a run
   on part 3's chapter 4 no longer looks as though it had gone backwards from part 1's
