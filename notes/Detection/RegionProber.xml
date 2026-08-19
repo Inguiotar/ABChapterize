@@ -119,4 +119,63 @@
     blip <see cref="RereadJingleSpeechAsync"/> could have found either.
     </para>
   </member>
+
+  <member name="ProbeContext.SecondGuessNumbers">
+    <para>
+    <b>The mishearing that refuted "a wider window is already the remedy".</b> "Die
+    Cyber-Brutzellen" (2026-08-01): an announcement 27 s deep into a 44 s window came back as chapter
+    40 instead of 14. The wider window is what produced the mishearing, so Probe's own sequence-gap
+    re-probe is no longer exempted from questioning its numbers.
+    </para>
+  </member>
+
+  <member name="_subFloorSeconds">
+    <para>
+    <b>The worked example.</b> "Paula Monti": its threshold came down to 0.8 s, its chapter breaks
+    measure 1.39-1.49 s, and not one of them was ever a candidate - its five gaps each re-probed one
+    or two candidates to no effect and were all closed later by a sub-floor sweep.
+    </para>
+  </member>
+
+  <member name="_gapAbove">
+    <para>
+    <b>The announcement accepted unquestioned.</b> On "Die Cyber-Brutzellen" (2026-08-01) an
+    announcement read as chapter 40 was accepted inside a gap re-probe while
+    <see cref="ReprobeGapCandidatesAsync"/> held a <c>missing</c> set containing exactly one number.
+    </para>
+  </member>
+
+  <member name="FindUnheardJingleSpeech">
+    <para>
+    <b>The stretched segment timestamp that vetoed a re-read.</b> Observed on a BARDIOC.m4b clip
+    around chapter 21 (2026-07-30), where a 56 s window lost "Kapitel 21" exactly as Gruelfin's did
+    while a 25 s one read it cleanly - but a segment reading "können." claimed 41.08-54.76 and so
+    covered the jingle it had no words for.
+    </para>
+  </member>
+
+  <member name="RecoverUnnumberedAnnouncementsAsync">
+    <para>
+    <b>The chapter that read differently from two window widths.</b> Chapter 13 of "I Shall Wear
+    Midnight" was read as "CHAPTER XIII" from the 16.1 s window it was probed with and as "Chapter
+    13" from a 48.8 s one over the same announcement (2026-07-30).
+    </para>
+  </member>
+
+  <member name="AcceptNamedMatchAsync">
+    <para>
+    <b>The mid-book false match that displaced a real epilogue.</b> "Corsa nello spazio"
+    (2026-08-05), where <c>/epilogo/</c> matching inside "riepilogo" at 13:35:19 displaced the
+    genuine epilogue found at 18:18:57 - which is why "later" is measured in the file rather than in
+    the order the passes happened to hear things.
+    </para>
+  </member>
+
+  <member name="ReprobeGapCandidatesAsync">
+    <para>
+    <b>The duplicate marks that made stopping worth doing.</b> Confirmed on BARDIOC.m4b 2026-07-30,
+    where the chapter 10 that closed the gap was re-found and re-refined by the three following
+    candidates - four identical marks at 5:14:48.15, about two minutes of pure waste.
+    </para>
+  </member>
 </doc>

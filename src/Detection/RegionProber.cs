@@ -102,12 +102,13 @@ internal sealed record ProbeEnvironment(
 /// acted on (<see cref="SuspectNumberMender"/>). False for a Re-probe re-probe: its windows already go
 /// through the heavier model, and its whole purpose is to re-read the numbers a gap is missing, so
 /// questioning its readings against the very sequence it is repairing would be circular. Scan never
-/// probes and so never asks. Probe's own sequence-gap re-probe <em>does</em> ask, and used to be
-/// exempted alongside Re-probe on the reasoning that a wider window was already the remedy being
-/// applied - which "Die Cyber-Brutzellen" (2026-08-01) refuted: the wider window is what produced
-/// the mishearing, an announcement 27 s deep into a 44 s window coming back as chapter 40 instead of
-/// 14. A re-probe is now the <em>best</em> place to question a number, since it alone knows both
+    /// probes and so never asks. Probe's own sequence-gap re-probe <em>does</em> ask, and used to be
+    /// exempted alongside Re-probe on the reasoning that a wider window was already the remedy being
+    /// applied - which a real book refuted: the wider window is what produced the mishearing. A
+    /// re-probe is now the <em>best</em> place to question a number, since it alone knows both
 /// ends of the hole it is filling (see <see cref="RegionProber.SequenceBounds"/>).</param>
+/// <remarks>Notes: the mishearing that refuted "a wider window is already the remedy".
+/// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="ProbeContext.SecondGuessNumbers"]/*' /></remarks>
 internal readonly record struct ProbeContext(
     string File, MediaInfo Info, WorkTracker Work, double BytesPerSecond,
     List<Silence> AllSilences, List<Silence> Silences, List<NonSpeechRegion> NonSpeechRegions,
@@ -320,11 +321,10 @@ internal sealed class RegionProber
     /// The adaptive threshold can only ever restrict that pre-filtered list and can never reach
     /// under the demand the run opened at, however far it adapts, so a book whose breaks are shorter
     /// than the default assumes had no way to act on its own measurement until the sweeps ran.
-    /// "Paula Monti" is the worked example: its threshold came down to 0.8 s, its chapter breaks
-    /// measure 1.39-1.49 s, and not one of them was ever a candidate - its five gaps each re-probed
-    /// one or two candidates to no effect and were all closed later by a sub-floor sweep.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the worked example of a book whose breaks were never candidates.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="_subFloorSeconds"]/*' /></remarks>
     private double? _subFloorSeconds;
 
     /// <summary>
@@ -333,13 +333,15 @@ internal sealed class RegionProber
     /// <para>
     /// It is the single most informative fact available anywhere in Probe and it used to be
     /// discarded: a re-probe of the hole between chapters 13 and 15 is searching for chapter 14 and
-    /// nothing else, yet an announcement read as chapter 40 was accepted there unquestioned on "Die
-    /// Cyber-Brutzellen" (2026-08-01) while <see cref="ReprobeGapCandidatesAsync"/> held a
-    /// <c>missing</c> set containing exactly one number. Feeding it into
+    /// nothing else, yet an announcement carrying quite another number could be accepted there
+    /// unquestioned while <see cref="ReprobeGapCandidatesAsync"/> held a <c>missing</c> set
+    /// containing exactly one number. Feeding it into
     /// <see cref="SequenceBounds"/> lets both the mender and the refinement vote hold a re-read to
     /// the hole it is filling. Scan has enforced the same rule on its own gap chunks all along.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the announcement accepted unquestioned while the gap named exactly one number.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="_gapAbove"]/*' /></remarks>
     private int? _gapAbove;
 
     /// <summary>The last chapter number accepted in this region, seeded from
@@ -1366,17 +1368,17 @@ internal sealed class RegionProber
     /// <para>
     /// Known limit of "no segment covers it", accepted rather than fixed: Whisper routinely stretches
     /// a window's last segment's end timestamp far past the words in it, and such a segment then
-    /// covers a jingle it has no words for. Observed on a BARDIOC.m4b clip around chapter 21
-    /// (2026-07-30), where a 56 s window lost "Kapitel 21" exactly as Gruelfin's did while a 25 s one
-    /// read it cleanly, but a segment reading "können." claimed 41.08-54.76 and so vetoed the
-    /// re-read. Loosening this to "no segment <em>starts</em> inside the region" would catch it, at
-    /// the price of firing on most empty long windows in the file - the stretch is that common - so
-    /// the cheap, strict test stays until something measures that trade honestly.
+    /// covers a jingle it has no words for, vetoing the re-read. Loosening this to "no segment
+    /// <em>starts</em> inside the region" would catch it, at the price of firing on most empty long
+    /// windows in the file - the stretch is that common - so the cheap, strict test stays until
+    /// something measures that trade honestly.
     /// </para>
     /// </summary>
     /// <param name="start">Absolute start of the probe window.</param>
     /// <param name="windowEnd">Absolute planned end of the probe window.</param>
-    /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
+    /// <param name="trimmedAbs">The window's transcript in absolute time, already trimmed.</param>
+    /// <remarks>Notes: the observed case where a stretched segment timestamp vetoed a re-read.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="FindUnheardJingleSpeech"]/*' /></remarks>
     private SpeechSegment? FindUnheardJingleSpeech(
         double start, double windowEnd, List<TranscriptSegment> trimmedAbs)
         => _ctx.SpeechSegments
@@ -1953,9 +1955,8 @@ internal sealed class RegionProber
     /// exactly the ones where knowing the phrase was heard and discarded saves the next
     /// investigation. A sequence gap re-frames this window again later (see
     /// <see cref="ReprobeGapCandidatesAsync"/>), so the two recoveries overlap without duplicating:
-    /// chapter 13 of "I Shall Wear Midnight" was read as
-    /// "CHAPTER XIII" from the 16.1 s window it was probed with and as "Chapter 13" from a 48.8 s one
-    /// over the same announcement (2026-07-30), and either route reaches that.
+    /// chapter 13 of "I Shall Wear Midnight" is read one way from the window it was probed with and
+    /// another from a wider one over the same announcement, and either route reaches that.
     /// </para>
     /// <para>
     /// A mark the re-read produces goes through <see cref="AcceptMatchAsync"/> like any other, at the
@@ -1972,6 +1973,8 @@ internal sealed class RegionProber
     /// <param name="trimmedAbs">The same transcript in absolute file time, for the jingle anchor.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The marks the re-reads produced, empty when none did.</returns>
+    /// <remarks>Notes: the chapter that read Roman from one window width and digits from another.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="RecoverUnnumberedAnnouncementsAsync"]/*' /></remarks>
     private async Task<List<ProbeMark>> RecoverUnnumberedAnnouncementsAsync(
         ProbeCandidate candidate, double start, double windowEnd, List<TranscriptSegment> segments,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
@@ -2140,9 +2143,7 @@ internal sealed class RegionProber
     /// forward scan produced named marks, and stopped agreeing as soon as the recovery passes did:
     /// they run after Probe and work backwards through the book's gaps, so a mid-book match found
     /// late in the run would otherwise replace the real end-of-book announcement Probe had already
-    /// marked. That is precisely what happened to "Corsa nello spazio" (2026-08-05), where
-    /// <c>/epilogo/</c> matching inside "riepilogo" at 13:35:19 displaced the genuine epilogue found
-    /// at 18:18:57.
+    /// marked, which is precisely what happened on one real book.
     /// </para>
     /// </summary>
     /// <param name="match">The named match, in window-relative time.</param>
@@ -2152,6 +2153,8 @@ internal sealed class RegionProber
     /// anchors its search against (see <see cref="MarkContext.Transcript"/>).</param>
     /// <param name="trimmedAbs">The window's transcript in absolute file time.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <remarks>Notes: the mid-book false match that displaced a real epilogue.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="AcceptNamedMatchAsync"]/*' /></remarks>
     private async Task AcceptNamedMatchAsync(
         NamedMatch match, ProbeCandidate candidate, double start, double windowEnd,
         List<TranscriptSegment> trimmedAbs, CancellationToken ct)
@@ -2827,9 +2830,7 @@ internal sealed class RegionProber
     /// Stops the moment the gap is closed rather than walking the rest of the sequence: the
     /// candidates behind the recovered chapter cover the same audio and have nothing left to find,
     /// and each of them would pay for a full mark placement (the refinement alone costs tens of
-    /// seconds) to arrive at a mark that is then dropped as a duplicate. Confirmed on BARDIOC.m4b
-    /// 2026-07-30, where the chapter 10 that closed the gap was re-found and re-refined by the three
-    /// following candidates - four identical marks at 5:14:48.15, about two minutes of pure waste.
+    /// seconds) to arrive at a mark that is then dropped as a duplicate.
     /// </para>
     /// <para>
     /// Every accepted gap mark advances <see cref="_lastNumber"/>, which is what makes that
@@ -2846,7 +2847,9 @@ internal sealed class RegionProber
     /// <param name="note">The log line's opening, naming the gap that triggered this.</param>
     /// <param name="previousNumber">The chapter number below the gap.</param>
     /// <param name="number">The chapter number above it, i.e. the mark that revealed the gap.</param>
-    /// <param name="ct">Cancellation token.</param>
+/// <param name="ct">Cancellation token.</param>
+/// <remarks>Notes: the duplicate marks that made stopping at the closed gap worth doing.
+/// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="ReprobeGapCandidatesAsync"]/*' /></remarks>
     private async Task ReprobeGapCandidatesAsync(
         double fromSeconds, double toSeconds, string note, int previousNumber, int number,
         CancellationToken ct)
