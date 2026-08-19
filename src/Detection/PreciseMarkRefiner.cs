@@ -767,9 +767,8 @@ internal sealed class PreciseMarkRefiner
     /// position confirms and the position one step later does not, so the true onset lies within
     /// that step after it, never before - while costing a logarithmic number of transcriptions
     /// instead of one per step. A mark that was already right pays two extra checks; a mark 3.5 s
-    /// into a jingle pays about twelve, where walking the whole plateau at a fixed 0.1 s cost
-    /// thirty-five (measured on Stalker.m4b, 0:00:49.42 to 0:00:52.92, 2026-07-28, ~95 s for that
-    /// single mark).
+    /// into a jingle pays about twelve, where walking the whole plateau at a fixed step cost
+    /// thirty-five.
     /// </para>
     /// <para>
     /// The plateau is <em>not</em> guaranteed to be unbroken, which is why the walk above is only
@@ -793,6 +792,8 @@ internal sealed class PreciseMarkRefiner
     /// needs the announcement to stay the first audible thing across an entire jingle-length span.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: what walking the whole plateau at a fixed step actually cost on one mark.
+    /// <include file='../../notes/Detection/PreciseMarkRefiner.xml' path='doc/member[@name="FindOnsetEdgeAsync"]/*' /></remarks>
     /// <param name="confirmed">A position the phrase was already heard at; the search starts here
     /// and only ever moves later, since the plateau extends forward to the onset.</param>
     /// <param name="file">Path of the audio file.</param>
@@ -933,8 +934,8 @@ internal sealed class PreciseMarkRefiner
     /// answers "yes" only on the stretch that both reaches the announcement and has nothing else
     /// transcribable in front of it, an <em>island</em> somewhere in the span, and no comparison of
     /// two "no"s tells you which side of it you are on. Sweeping the island out one step at a time
-    /// was therefore the only option, at up to 2 x span / step transcriptions - 726 of them, some
-    /// twenty minutes, on the mark that prompted this (Stalker.m4b's "Zeittafel", 2026-07-29).
+    /// was therefore the only option, at up to 2 x span / step transcriptions - hundreds of them,
+    /// some twenty minutes, on the mark that prompted this.
     /// </para>
     /// <para>
     /// Anchoring the window's <em>end</em> instead removes the island (the insight is the user's):

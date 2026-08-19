@@ -657,14 +657,11 @@ internal static class JingleGeometry
     /// multi-word announcement ("Kapitel 35") ends with its trailing word closest to the region's
     /// end. That holds when the announcement produces exactly one swallowed blip (an earlier,
     /// unrelated vocal transient a second or more away is then correctly ignored) but breaks when
-    /// its several words are each swallowed individually: on real audio, chapter 31's "Kapitel 31"
-    /// was split into a 0.67 s "Kapitel" blip and a 0.9 s "31" blip 0.26 s apart, and taking only
-    /// the last landed the mark after "Kapitel" was already spoken (verified by a 5.25 s
-    /// re-transcription from that mark, which started mid-narration rather than on the phrase). The
-    /// fix: cluster the swallowed blips by the same short-gap threshold that put them into one
-    /// merged region, and take the first blip of the <em>last</em> cluster - the announcement's
-    /// leading edge, one blip or several, while still skipping an earlier separately-clustered
-    /// transient.
+    /// its several words are each swallowed individually, taking only the last one landing the mark
+    /// after the chapter word was already spoken. The fix: cluster the swallowed blips by the same
+    /// short-gap threshold that put them into one merged region, and take the first blip of the
+    /// <em>last</em> cluster - the announcement's leading edge, one blip or several, while still
+    /// skipping an earlier separately-clustered transient.
     /// </para>
     /// <para>
     /// The invariant holds only for blips inside the jingle's <em>music</em>, so a blip at or before
@@ -679,14 +676,13 @@ internal static class JingleGeometry
     /// this far" trap on the other side of the walk).
     /// </para>
     /// <para>
-    /// Measured on the two marks that forced this (2026-08-02, chapters 6 and 14 of one German
-    /// audiobook): both regions began where the previous chapter's narration stopped, both had a
-    /// single swallowed blip 0.7-0.9 s later carrying its last two words, and in both the region's
-    /// leading silence ended within 3 ms of that blip's own start - the signature of speech resuming
-    /// after a pause rather than of a voice inside music, since silencedetect does not read jingle
-    /// music as silence (the same reasoning <see cref="RetreatPastNonSpeech"/> stops at a silence
-    /// for). Taken as the announcement, each put its mark some twelve to eighteen seconds early, on
-    /// the previous chapter's closing sentence.
+    /// The two marks that forced this both had their region begin where the previous chapter's
+    /// narration stopped, with a single swallowed blip under a second later carrying its last two
+    /// words, and in both the region's leading silence ended within milliseconds of that blip's own
+    /// start - the signature of speech resuming after a pause rather than of a voice inside music,
+    /// since silencedetect does not read jingle music as silence (the same reasoning
+    /// <see cref="RetreatPastNonSpeech"/> stops at a silence for). Taken as the announcement, each
+    /// put its mark seconds early, on the previous chapter's closing sentence.
     /// </para>
     /// <para>
     /// Without any usable swallowed blip there is nothing more precise than
@@ -698,6 +694,8 @@ internal static class JingleGeometry
     /// <see cref="RefineDefaultMark"/> still advances it onto the next genuine VAD speech onset.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the split announcement that broke the last-blip rule, and the two marks that forced the leading-silence exclusion.
+    /// <include file='../../notes/Detection/JingleGeometry.xml' path='doc/member[@name="ResolveDefaultPhraseOnset"]/*' /></remarks>
     /// <param name="phraseAbs">The (TrimLeadingNonSpeech-corrected) phrase onset estimate.</param>
     /// <param name="jingleRegion">The jingle region <see cref="ResolveJingleAnchor"/> resolved for
     /// this phrase, or null when none was found.</param>

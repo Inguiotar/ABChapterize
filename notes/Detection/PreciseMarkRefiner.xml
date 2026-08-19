@@ -109,4 +109,12 @@
     audio behave perfectly monotonically.
     </para>
   </member>
+
+  <member name="FindOnsetEdgeAsync">
+    <para>
+    <b>What walking the whole plateau at a fixed step cost.</b> Thirty-five transcriptions against
+    the gallop-and-bisect's twelve, measured on Stalker.m4b, 0:00:49.42 to 0:00:52.92, 2026-07-28 -
+    about 95 s for that single mark.
+    </para>
+  </member>
 </doc>

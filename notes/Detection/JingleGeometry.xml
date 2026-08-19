@@ -38,4 +38,21 @@
     before it.
     </para>
   </member>
+
+  <member name="ResolveDefaultPhraseOnset">
+    <para>
+    <b>The split announcement that broke the last-blip rule.</b> On real audio, chapter 31's "Kapitel
+    31" was split into a 0.67 s "Kapitel" blip and a 0.9 s "31" blip 0.26 s apart, and taking only
+    the last landed the mark after "Kapitel" was already spoken - verified by a 5.25 s
+    re-transcription from that mark, which started mid-narration rather than on the phrase.
+    </para>
+    <para>
+    <b>The two marks that forced the leading-silence exclusion.</b> Measured 2026-08-02, chapters 6
+    and 14 of one German audiobook: both regions began where the previous chapter's narration
+    stopped, both had a single swallowed blip 0.7-0.9 s later carrying its last two words, and in
+    both the region's leading silence ended within 3 ms of that blip's own start. Taken as the
+    announcement, each put its mark some twelve to eighteen seconds early, on the previous chapter's
+    closing sentence.
+    </para>
+  </member>
 </doc>
