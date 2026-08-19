@@ -190,16 +190,12 @@ internal sealed class PreciseMarkRefiner
     /// into stopping short of the true announcement; this asks Whisper instead, at the cost of one
     /// or more extra transcriptions per chapter.
     /// <para>
-    /// It is worth being clear about what that does and does not buy, because the name invites the
-    /// opposite reading: this is not ground truth replacing a heuristic, it is one heuristic's
-    /// assumptions swapped for another's. The searches below are exact, but every one of them rests
-    /// on an empirical claim about how a neural net behaves - that the phrase stays audible right up
-    /// to the onset and not past it. When that claim fails, an exact search over it fails
-    /// confidently. Die Dritte Macht chapter 7 is the case on record (2026-07-31, see
-    /// <see cref="PreciseMarkPlateauProbesSeconds"/>): the heuristic mark this method exists to
-    /// correct was 0.04 s off, and the correction moved it 1.16 s early. So a disagreement between
-    /// the two is not evidence that this one is right, and the fallback when nothing confirms -
-    /// keeping the heuristic mark - is a sound outcome rather than a failure.
+    /// This is not ground truth replacing a heuristic, it is one heuristic's assumptions swapped for
+    /// another's: the searches below are exact, but every one of them rests on an empirical claim
+    /// about how a neural net behaves - that the phrase stays audible right up to the onset and not
+    /// past it - and when that claim fails, an exact search over it fails confidently. So a
+    /// disagreement between the two is not evidence that this one is right, and the fallback when
+    /// nothing confirms - keeping the heuristic mark - is a sound outcome rather than a failure.
     /// </para>
     /// <para>
     /// Every path here ends in <see cref="FindOnsetEdgeAsync"/>, which is what actually pins the
@@ -226,27 +222,6 @@ internal sealed class PreciseMarkRefiner
     /// alone is what makes quick marks usable for jumping to a chapter.
     /// </para>
     /// <para>
-    /// There used to be a cheap first round ahead of it, sampling
-    /// <see cref="PreciseMarkPhraseFoundAsync"/> at VAD speech-segment starts within a
-    /// jingle-plus-phrase span of the mark, from the days when the search below was a fixed-step
-    /// sweep costing hundreds of transcriptions. Removed 2026-07-30 after the BARDIOC.m4b log
-    /// settled it: over 26 refinements it confirmed 3 times, spent 606 checks and 8.1 minutes doing
-    /// it, and the search below then closed all 23 of the remaining marks in 3.8 minutes. It could
-    /// not be repaired either, for a structural reason worth recording. Its window was fixed-width,
-    /// so shifting it moved both ends and "is the phrase heard here" was not a step function - it
-    /// could only ever be sampled at guessed positions, never searched. The one guess that mattered,
-    /// the announcement's own VAD speech start, lands <em>past</em> the onset by VAD's onset lag
-    /// (0.60 s measured on Perry Rhodan "Die Dritte Macht" chapter 4, true onset 4142.572 s vs. a
-    /// VAD start of 4143.168 s, 2026-07-30; ~0.4 s recorded earlier by <c>tools\vadprobe</c>'s
-    /// <c>precise</c> prototype), i.e. on the far side of the plateau edge where confirmation
-    /// depends on Whisper recovering a clipped first syllable. Nothing inside the plateau was ever a
-    /// candidate, because only segment starts were collected and never the pauses between them.
-    /// Widening its window would not have helped: the wider it got, the less "the phrase is the
-    /// first thing heard" implied "the phrase starts near here". Anchoring the window's <em>end</em>
-    /// instead, which is what makes the search below monotone and bisectable, is the only fix - and
-    /// that is the search below.
-    /// </para>
-    /// <para>
     /// A search that confirms nothing is run a second time through the <c>--upgrade-model</c>
     /// recognizer, where the run has one that outclasses the probing model - the whole procedure
     /// again, not a patch on the first attempt, since which position the search converges on depends
@@ -254,25 +229,13 @@ internal sealed class PreciseMarkRefiner
     /// quietly-spoken announcement inside a jingle drops out of a smaller model's reading of a long
     /// window as plain "[Musik]", which is indistinguishable from "the announcement is not here" and
     /// sends the survival edge (<see cref="FindPhraseSurvivalEdgeAsync"/>) back to well before the
-    /// onset, where no foothold can then be confirmed. Measured on the two marks that prompted this
-    /// (2026-08-02, chapters 6 and 14 of one German audiobook, <c>-m small -M turbo</c>): the single
-    /// probe that broke each search read "* Musik *" on the small model and "Kapitel 6 Fernweh 3"
-    /// respectively "Kapitel 14 Srimavo" on the upgrade one, and every foothold the corrected edge
-    /// would then have offered confirms on it.
-    /// </para>
-    /// <para>
-    /// Affordable because it is rare and small: over a ten-book run only five marks of 271 reached
-    /// the failure branch at all, and a refinement is a handful of short decodes. The heavier model
-    /// is loaded lazily, so a run that never needed it still never loads it - the same trade
-    /// <see cref="ChapterDetector"/>'s suspect-number re-read already makes.
+    /// onset, where no foothold can then be confirmed. The heavier model is loaded lazily, so a run
+    /// that never needed it still never loads it - the same trade <see cref="ChapterDetector"/>'s
+    /// suspect-number re-read already makes.
     /// </para>
     /// <para>
     /// When neither model can confirm, <paramref name="mark"/> itself carries forward into the final
-    /// step below rather than guessing - validated against a real audiobook's full set of known good
-    /// and previously-broken marks (see <c>tools\vadprobe</c>'s <c>precise</c> prototype) before
-    /// this was ported here. The default-mode heuristic it falls back to measured within 0.05-0.35 s
-    /// of the true onset for 25 of BARDIOC.m4b's 26 marks, so the fallback is a fraction of a second
-    /// of accuracy rather than a broken mark.
+    /// step below rather than guessing.
     /// </para>
     /// <para>
     /// Two cleanup steps then run on whatever the above produced. First,
@@ -286,6 +249,12 @@ internal sealed class PreciseMarkRefiner
     /// in near-silence rather than with an audible "plop" mid-waveform.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Notes: why this correction is not ground truth (Die Dritte Macht ch 7), the removed cheap
+    /// first round and why it could not be repaired, what the upgrade-model retry and the fallback
+    /// measured, and how rarely the failure branch is reached.
+    /// <include file='../../notes/Detection/PreciseMarkRefiner.xml' path='doc/member[@name="RefinePreciseMarkAsync"]/*' />
+    /// </remarks>
     /// <param name="mark">The mark <see cref="JingleGeometry.RefineDefaultMark"/> already computed.</param>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>

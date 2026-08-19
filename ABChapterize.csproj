@@ -95,6 +95,22 @@
     </ItemGroup>
   </Target>
 
+  <!-- The externalized doc-comment notes under notes\ are wired into the source with <include>
+       directives (see notes\README.md). Roslyn warns when the notes *file* is missing (CS1589),
+       but a directive whose XPath matches nothing fails silently: the compiler leaves the literal
+       <include> element standing in the generated documentation and carries on. That is the rot
+       actually worth guarding against - an anchor renamed on one side only - so it is checked here
+       rather than trusted. A directive that did resolve is always replaced by the fragment it
+       pulled in, so any surviving <include> element means a dead link. -->
+  <Target Name="VerifyDocNoteIncludes" AfterTargets="Build"
+          Condition="'$(TargetFramework)' != '' and '$(DocumentationFile)' != '' and Exists('$(DocumentationFile)')">
+    <XmlPeek XmlInputPath="$(DocumentationFile)" Query="//include">
+      <Output TaskParameter="Result" ItemName="_UnresolvedDocNoteInclude" />
+    </XmlPeek>
+    <Error Condition="'@(_UnresolvedDocNoteInclude)' != ''"
+           Text="Unresolved doc-note include(s) in $(DocumentationFile) - a notes%5C anchor does not match its XPath: @(_UnresolvedDocNoteInclude, '%3B ')" />
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
