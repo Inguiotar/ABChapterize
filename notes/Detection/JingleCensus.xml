@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\JingleCensus.cs. -->
+<doc>
+  <member name="JingleCensus">
+    <para>
+    <b>Why the narrower floor reads a jingle's end more accurately.</b> Measured 2026-08-08 by
+    replaying both readings over the fourteen-book corpus's own Analyze signals, parsed out of the
+    2026-08-07 debug logs in <c>L:\Temp</c>. A chapter announcement is a short VAD segment - "Kapitel
+    eins." runs 0.6-0.9 s - so the regions' 1.0 s merge bridges straight over it. Four marks pin this
+    down: Raumschiff Erde's chapter 1 (mark 0:05:07.28, announcement 307.48-308.41), chapter 2
+    (2355.07, 2355.48-2356.32) and chapter 4 (5551.38, 5551.58-5552.25), and Die Maahks' chapter 5
+    (6305.40, 6305.56-6306.20) - in every one the census ends the jingle within 0.2 s of the mark,
+    where the region-based reading ran 0.6-2.3 s past it.
+    </para>
+    <para>
+    <b>How the corpus tally moves with it.</b> Both ways on the books with music (BARDIOC 29 to 32,
+    Das Mutantenkorps 50 to 62, Die Cyber-Brutzellen 39 to 37, Wintersmith 16 to 14), and downwards
+    on the five books with no chapter music at all - The Forever War and I Shall Wear Midnight from 1
+    to 0, Mort and Paula Monti from 3 to 1.
+    </para>
+  </member>
+
+  <member name="ReachSeconds">
+    <para>
+    <b>The measured longest jingle per book.</b> 6.5 s (Rendezvous With Rama) to 33.7 s (BARDIOC),
+    all tighter than the blind 50 s that <c>--max-jingle-length</c> used to hand its callers.
+    </para>
+    <para>
+    <b>The one exception.</b> "Paula Monti" at 67.5 s, a book with a single census entry which is
+    almost certainly a musical intro rather than a chapter jingle.
+    </para>
+  </member>
+</doc>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\RefinedNumberVote.cs. -->
+<doc>
+  <member name="RefinedNumberVote">
+    <para>
+    <b>The case on record.</b> "Die Cyber-Brutzellen" (2026-08-01): the announcement at 7:01:30 fell
+    27.3 to 43.0 s into a 44.2 s window and came out as a single two-word segment reading "Kapitel
+    40" at p=0.59, while all ten refinement probes over the same audio read "Kapitel 14", one of them
+    at p=0.99.
+    </para>
+  </member>
+</doc>

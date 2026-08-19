@@ -19,11 +19,8 @@ namespace ABChapterize.Detection;
 /// statistical. A probe window is tens of seconds long and the announcement can sit anywhere
 /// in it, including at the very end where Whisper's segmentation is at its worst; the refinement's
 /// probes are a few seconds long and framed on the announcement itself, because that is what the
-/// onset search needs them to be. "Die Cyber-Brutzellen" (2026-08-01) is the case on record: the
-/// announcement at 7:01:30 fell 27.3 to 43.0 s into a 44.2 s window and came out as a single
-/// two-word segment reading "Kapitel 40" at p=0.59, while all ten refinement probes over the same
-/// audio read "Kapitel 14", one of them at p=0.99. Nothing was re-decoded to learn that - the
-/// probes had already run and their transcripts were being thrown away.
+/// onset search needs them to be. Nothing is re-decoded to learn this - the probes have already run
+/// and their transcripts were being thrown away.
 /// </para>
 /// <para>
 /// Two guards keep a free second opinion from becoming a free second chance to be wrong. The
@@ -39,6 +36,8 @@ namespace ABChapterize.Detection;
 /// already settled by the time this runs.
 /// </para>
 /// </summary>
+/// <remarks>Notes: the window framing that read one number and the ten refinement probes that read another.
+/// <include file='../../notes/Detection/RefinedNumberVote.xml' path='doc/member[@name="RefinedNumberVote"]/*' /></remarks>
 internal static class RefinedNumberVote
 {
     /// <summary>

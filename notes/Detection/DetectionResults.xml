@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\DetectionResults.cs. -->
+<doc>
+  <member name="DetectedChapter.NumberUnverified">
+    <para>
+    <b>The epilogue year that became a chapter number.</b> "Corsa nello spazio" (Italian, 18 h,
+    <c>--chapter-phrase none</c>, build 251, 2026-08-06) heads its epilogue "Epilogo / 2179 / Spazio
+    profondo", and 2179 is the year: spoken alone, flanked by real pauses so
+    <see cref="AnnouncementIsolation"/> passed it, and read as 2179 by the mender's 15 s and 45 s
+    re-framings and by every one of the refinement's probes. <see cref="GapPlanning.Normalize"/> kept
+    it too, 1..65 followed by 2179 being strictly ascending.
+    </para>
+    <para>
+    <b>What the phantom gap cost.</b> The sequence declared chapters 66 to 2178 missing, which cost
+    some 25 minutes of a 90-minute run in Re-probe, Scan and Re-scan sweeps over audio holding
+    nothing.
+    </para>
+  </member>
+</doc>

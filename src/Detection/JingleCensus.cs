@@ -53,20 +53,15 @@ internal readonly record struct Jingle(
 /// other.
 /// </para>
 /// <para>
-/// <b>Why the narrower floor is also the more accurate one</b> (measured 2026-08-08 by replaying
-/// both readings over the fourteen-book corpus's own Analyze signals, parsed out of the 2026-08-07
-/// debug logs in <c>L:\Temp</c>). A chapter announcement is a <em>short</em> VAD segment - "Kapitel
-/// eins." runs 0.6-0.9 s - so the regions' 1.0 s merge bridges straight over it and the jingle
-/// appears to run on to the next narration, seconds past where the music stopped. Four marks pin
-/// this down: Raumschiff Erde's chapter 1 (mark 0:05:07.28, announcement 307.48-308.41), chapter 2
-/// (2355.07, 2355.48-2356.32) and chapter 4 (5551.38, 5551.58-5552.25), and Die Maahks' chapter 5
-/// (6305.40, 6305.56-6306.20) - in every one the census ends the jingle within 0.2 s of the mark,
-/// where the region-based reading ran 0.6-2.3 s past it. The corpus-wide count moves both ways
-/// (BARDIOC 29 to 32, Das Mutantenkorps 50 to 62, Die Cyber-Brutzellen 39 to 37, Wintersmith 16 to
-/// 14), and on the five books with no chapter music at all the spurious tally drops - The Forever
-/// War and I Shall Wear Midnight from 1 to 0, Mort and Paula Monti from 3 to 1.
+/// <b>Why the narrower floor is also the more accurate one.</b> A chapter announcement is a
+/// <em>short</em> VAD segment, so the regions' wider merge bridges straight over it and the jingle
+/// appears to run on to the next narration, seconds past where the music stopped. The census ends a
+/// jingle within a fifth of a second of the mark where the region-based reading ran seconds past it,
+/// and on the books with no chapter music at all the spurious tally drops.
 /// </para>
 /// </summary>
+/// <remarks>Notes: the four marks that pin down why the narrower floor reads a jingle's end more accurately, and how the corpus tally moves with it.
+/// <include file='../../notes/Detection/JingleCensus.xml' path='doc/member[@name="JingleCensus"]/*' /></remarks>
 internal static class JingleCensus
 {
     /// <summary>
@@ -115,17 +110,18 @@ internal static class JingleCensus
     /// <see cref="PreciseMarkRefiner"/>'s --mark-before-jingle verification span - in place of the
     /// blind 50 s that --max-jingle-length used to hand them.
     /// <para>
-    /// Measured rather than assumed, so it is tighter than that on every book of the corpus bar one:
-    /// the longest jingles run 6.5 s (Rendezvous With Rama) to 33.7 s (BARDIOC). The exception is
-    /// "Paula Monti" at 67.5 s, a book with a single census entry which is almost certainly a
-    /// musical intro rather than a chapter jingle - if a mark there ever moves for want of a shorter
-    /// lookback, that entry is the first thing to look at.
+    /// Measured rather than assumed, so it is tighter than the old blind figure on every book of the
+    /// corpus bar one - and that exception is a book with a single census entry which is almost
+    /// certainly a musical intro rather than a chapter jingle. If a mark there ever moves for want of
+    /// a shorter lookback, that entry is the first thing to look at.
     /// </para>
     /// <para>
     /// On a book with no jingles at all this collapses to the margin, which is correct: there is no
     /// music to look back over, and every consumer of it is asking about music.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the measured longest jingle per book, and the one entry that is probably an intro tune.
+    /// <include file='../../notes/Detection/JingleCensus.xml' path='doc/member[@name="ReachSeconds"]/*' /></remarks>
     /// <param name="jingles">The file's census, empty where VAD found no jingles.</param>
     internal static double ReachSeconds(IReadOnlyList<Jingle> jingles)
         => (jingles.Count == 0 ? 0 : jingles.Max(j => j.ReachSeconds)) + PhraseMarginSeconds;

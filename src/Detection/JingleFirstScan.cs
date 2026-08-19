@@ -12,15 +12,12 @@ namespace ABChapterize.Detection;
 /// <summary>
 /// Decides whether a file's Probe runs jingle-first, and plans the second half of it when it does.
 /// <para>
-/// The ordinary Probe walks a book's pauses and its music together, in one chronological sweep. On
-/// a book that announces every chapter after a music sting, that is thousands of pause windows which
-/// can only ever confirm what the music already said - and build 331 of "Die Cyber-Brutzellen" is
-/// the recorded proof that they do exactly that: the seven chapters build 339 accepted "at a
-/// silence" were accepted "at a jingle" by build 331 at the same millisecond, and the 1256 extra
-/// probes between the two runs bought no mark at all. So the jingle-first shape reads the music
-/// first, end to end, and only then looks at the pauses - and only where the chapter sequence still
-/// has a hole for one to fill, plus the head and the tail of the file, which are where a prologue
-/// and an epilogue live.
+/// The ordinary Probe walks a book's pauses and its music together, in one chronological sweep. On a
+/// book that announces every chapter after a music sting, that is thousands of pause windows which
+/// can only ever confirm what the music already said, and a corpus run is on record proving they do
+/// exactly that. So the jingle-first shape reads the music first, end to end, and only then looks at
+/// the pauses - and only where the chapter sequence still has a hole for one to fill, plus the head
+/// and the tail of the file, which are where a prologue and an epilogue live.
 /// </para>
 /// <para>
 /// <b>What the gate is really protecting.</b> Skipping the pauses between two consecutive chapters
@@ -40,6 +37,8 @@ namespace ABChapterize.Detection;
 /// forces the shape on so a book outside the gate can be measured without rebuilding the tool.
 /// </para>
 /// </summary>
+/// <remarks>Notes: the two builds that proved the skipped pause windows bought nothing.
+/// <include file='../../notes/Detection/JingleFirstScan.xml' path='doc/member[@name="JingleFirstScan"]/*' /></remarks>
 internal static class JingleFirstScan
 {
     /// <summary>What <see cref="Decide"/> made of one file: whether Probe runs jingle-first, and
@@ -103,11 +102,11 @@ internal static class JingleFirstScan
     /// The automatic half of the gate: enough music that the census describes this book's chapter
     /// structure rather than an intro tune somebody left in. Null when it does not.
     /// <para>
-    /// One jingle per hour is a low bar and is meant to be. The books this targets run 20-60 of them
-    /// over 10-18 hours, and the books it must not fire on have none at all - the corpus's spurious
-    /// tallies are 0 to 1 for a whole file, the measurement that brought them down that far being
-    /// recorded on <see cref="JingleCensus"/>. There is no populated band in between to calibrate
-    /// against, so a bar drawn anywhere inside it would be a number with nothing behind it.
+    /// One jingle per hour is a low bar and is meant to be: the books this targets run tens of them
+    /// over a whole book, and the books it must not fire on have none at all - their spurious tallies
+    /// are 0 to 1 for a whole file, the measurement that brought them down that far being recorded on
+    /// <see cref="JingleCensus"/>. There is no populated band in between to calibrate against, so a
+    /// bar drawn anywhere inside it would be a number with nothing behind it.
     /// </para>
     /// </summary>
     /// <param name="jingles">The file's census.</param>

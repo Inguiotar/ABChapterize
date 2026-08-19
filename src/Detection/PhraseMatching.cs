@@ -294,8 +294,7 @@ internal static partial class PhraseMatching
     /// <para>
     /// This is a genuinely different situation from a mishearing, and one worth reporting: the
     /// recognizer was right there and got the words, and only the notation defeated the parser.
-    /// It found chapter 13 of "I Shall Wear Midnight" transcribed as "CHAPTER XIII" (2026-07-30),
-    /// and it still covers what Roman-numeral support does not - a word ordinal past the range a
+    /// It still covers what Roman-numeral support does not - a word ordinal past the range a
     /// language's parser covers ("capítulo vigésimo quinto"), a number above 999, or an unsupported
     /// language reached through a hand-written --chapter-phrase.
     /// </para>
@@ -304,6 +303,8 @@ internal static partial class PhraseMatching
     /// only when the transcript yielded no numbered mark at all - see the call sites.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the chapter this found that Roman-numeral support would not have.
+    /// <include file='../../notes/Detection/PhraseMatching.xml' path='doc/member[@name="FindUnnumberedAnnouncements"]/*' /></remarks>
     /// <param name="segments">The window's transcript segments, in the caller's time base.</param>
     /// <param name="profile">Language profile supplying the chapter phrase and number parsing.</param>
     internal static IEnumerable<UnnumberedAnnouncement> FindUnnumberedAnnouncements(
@@ -493,12 +494,10 @@ internal static partial class PhraseMatching
     /// Whisper prefixes a space to every segment it returns. <see cref="Flatten"/> then separated
     /// them with a space of its own, so each join carried <em>two</em>, and any phrase containing a
     /// space - which the built-in ones never do, being single words, and a user's --chapter-phrase
-    /// routinely does - could not match across a segment boundary. Found on "Paula Monti.m4b" with
-    /// <c>--chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/"</c> (2026-08-08): Scan heard
-    /// chapter 19 perfectly and split it as "Première partie." + "Chapitre 19.", which joined into
-    /// two spaces where the phrase writes one, and the chapter was silently lost. Normalizing per
-    /// segment rather than over the finished string is what keeps <see cref="Flatten"/>'s offsets
-    /// pointing at the right segment.
+    /// routinely does - could not match across a segment boundary, silently losing the chapter.
+    /// Normalizing per segment rather than over the finished string is what keeps
+    /// <see cref="Flatten"/>'s offsets pointing at the right segment.
+    /// <include file='../../notes/Detection/PhraseMatching.xml' path='doc/member[@name="NormalizeWhitespace"]/*' />
     /// </remarks>
     /// <param name="text">One transcript segment's text, as the recognizer wrote it.</param>
     internal static string NormalizeWhitespace(string? text)

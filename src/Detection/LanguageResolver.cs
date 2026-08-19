@@ -33,16 +33,10 @@ internal readonly record struct LanguageState(
 /// <para>
 /// The stakes are higher than "a title comes out in the wrong language": the resolved profile
 /// supplies the chapter phrase every pass matches against, so a German book resolved as English
-/// looks for <c>/chapter/</c> and cannot see "Kapitel 25" at all. That is not hypothetical - it
-/// is what this class was written for. "Das Mutantenkorps" (15:35:42, 2026-08-03, build 233):
-/// detection sampled the file's first probe window, which is 47 s of label music, got
-/// <c>en p=0.36</c>, fell back to English, and ran the whole book that way. Whisper, told the
-/// audio was English while hearing German, mostly obliged with English renderings - 292
-/// "Chapter N" against 17 "Kapitel N" across the log - so 29 of 30 chapters were still found.
-/// Chapter 25 was the one whose announcement never once came back in English. It was heard,
-/// correctly, three times (Re-probe at p=0.81, Scan at p=0.79, Re-scan at p=0.80) and
-/// discarded every time, at the cost of a further 40 minutes of Re-probe/3/3.5 hunting a phrase
-/// that was already sitting in their own transcripts.
+/// looks for <c>/chapter/</c> and cannot see "Kapitel 25" at all. That is not hypothetical - it is
+/// what this class was written for, and on the book that prompted it the misresolution cost one
+/// chapter outright plus a further 40 minutes of Re-probe/Scan/Re-scan hunting a phrase that was
+/// already sitting in their own transcripts.
 /// </para>
 /// <para>
 /// Two defences follow from that, and they address different halves of the failure. Sampling
@@ -59,6 +53,8 @@ internal readonly record struct LanguageState(
 /// nothing about it looks wrong in a log.
 /// </para>
 /// </summary>
+/// <remarks>Notes: the book that ran as English while being German, and the one chapter it cost.
+/// <include file='../../notes/Detection/LanguageResolver.xml' path='doc/member[@name="LanguageResolver"]/*' /></remarks>
 internal sealed class LanguageResolver
 {
     private readonly CliOptions _options;

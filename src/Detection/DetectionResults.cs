@@ -23,15 +23,12 @@ namespace ABChapterize.Detection;
 /// <para>
 /// The shape this exists for is a number heard perfectly that belongs to something other than a
 /// chapter, which every other defence is blind to because they all reason about mishearing.
-/// "Corsa nello spazio" (Italian, 18 h, <c>--chapter-phrase none</c>, build 251, 2026-08-06) heads
-/// its epilogue "Epilogo / 2179 / Spazio profondo", and 2179 is the year: spoken alone, flanked by
-/// real pauses so <see cref="AnnouncementIsolation"/> passes it, and read as 2179 by the mender's
-/// 15 s and 45 s re-framings and by every one of the refinement's probes.
-/// <see cref="GapPlanning.Normalize"/> keeps it as well, 1..65 followed by 2179 being strictly
-/// ascending. The sequence therefore declared chapters 66 to 2178 missing, which cost some 25
-/// minutes of a 90-minute run in Re-probe/3/3.5 sweeps over audio holding nothing, and left the
-/// file tagged ".missing-marks" with too many numbers to name and so outside
-/// <see cref="ABChapterize.Processing.MissingMarksTag.IsResumable"/>.
+/// A year or a date spoken alone as part of a heading is the case on record: it is flanked by real
+/// pauses so <see cref="AnnouncementIsolation"/> passes it, the mender's re-framings all read it the
+/// same way, and <see cref="GapPlanning.Normalize"/> keeps it because it ascends. The sequence then
+/// declares every number between the last real chapter and it missing, which costs a long hunt over
+/// audio holding nothing and leaves the file tagged ".missing-marks" with too many numbers to name -
+/// so outside <see cref="ABChapterize.Processing.MissingMarksTag.IsResumable"/>.
 /// </para>
 /// <para>
 /// Deliberately not a reason to drop the mark. An unmendable number is also what a real chapter
@@ -69,6 +66,8 @@ public readonly record struct DetectedChapter(
 /// <see cref="FileProcessor.BuildChapters"/>, which merges them by time into the chapter list
 /// actually written.
 /// </summary>
+/// <remarks>Notes: the epilogue year that became a chapter number, and what the phantom gap beneath it cost.
+/// <include file='../../notes/Detection/DetectionResults.xml' path='doc/member[@name="DetectedChapter.NumberUnverified"]/*' /></remarks>
 /// <param name="Kind">The phrase kind that produced it ("prologue", "epilogue", "custom 1", ...),
 /// for log lines and as the key a mark is replaced or deduplicated under.</param>
 /// <param name="Title">The title to write - <see cref="ABChapterize.Language.NamedPhrase.Title"/>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\LanguageResolver.cs. -->
+<doc>
+  <member name="LanguageResolver">
+    <para>
+    <b>The book that ran as English while being German.</b> "Das Mutantenkorps" (15:35:42,
+    2026-08-03, build 233): detection sampled the file's first probe window, which is 47 s of label
+    music, got <c>en p=0.36</c>, fell back to English, and ran the whole book that way. Whisper, told
+    the audio was English while hearing German, mostly obliged with English renderings - 292 "Chapter
+    N" against 17 "Kapitel N" across the log - so 29 of 30 chapters were still found.
+    </para>
+    <para>
+    <b>The one chapter it cost.</b> Chapter 25, whose announcement never once came back in English.
+    It was heard, correctly, three times (Re-probe at p=0.81, Scan at p=0.79, Re-scan at p=0.80) and
+    discarded every time, at the cost of a further 40 minutes of hunting a phrase that was already
+    sitting in those passes' own transcripts.
+    </para>
+  </member>
+</doc>

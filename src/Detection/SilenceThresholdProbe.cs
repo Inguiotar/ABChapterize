@@ -24,10 +24,11 @@ namespace ABChapterize.Detection;
 /// </para>
 /// <para>
 /// So this does not re-derive the threshold from scratch - it keeps the default and only moves it
-/// when the default would fall outside the file's own gap. On the fourteen-book reference corpus
-/// (2026-08-05) that means every one of them keeps exactly -35 dBFS and the automatic mode changes
-/// nothing at all, which is the property that made it safe to turn on by default. See
-/// <see cref="DefaultSilenceNoiseDb"/> for the measurements and the two headroom constants.
+/// when the default would fall outside the file's own gap. On the reference corpus that means every
+/// book keeps exactly the default and the automatic mode changes nothing at all, which is the
+/// property that made it safe to turn on by default. See <see cref="DefaultSilenceNoiseDb"/> for the
+/// measurements and the two headroom constants.
+/// <include file='../../notes/Detection/SilenceThresholdProbe.xml' path='doc/member[@name="SilenceThresholdProbe"]/*' />
 /// </para>
 /// </remarks>
 internal static class SilenceThresholdProbe

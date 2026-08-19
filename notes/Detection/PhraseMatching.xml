@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\PhraseMatching.cs. -->
+<doc>
+  <member name="FindUnnumberedAnnouncements">
+    <para>
+    <b>The chapter this found.</b> Chapter 13 of "I Shall Wear Midnight", transcribed as "CHAPTER
+    XIII" (2026-07-30).
+    </para>
+  </member>
+
+  <member name="NormalizeWhitespace">
+    <para>
+    <b>The chapter the double space cost.</b> Found on "Paula Monti.m4b" with
+    <c>--chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/"</c> (2026-08-08): Scan heard chapter
+    19 perfectly and split it as "Première partie." + "Chapitre 19.", which joined into two spaces
+    where the phrase writes one, and the chapter was silently lost.
+    </para>
+  </member>
+</doc>

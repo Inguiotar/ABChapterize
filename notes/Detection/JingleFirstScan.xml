@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\JingleFirstScan.cs. -->
+<doc>
+  <member name="JingleFirstScan">
+    <para>
+    <b>The recorded proof that the skipped pause windows buy nothing.</b> Build 331 of "Die
+    Cyber-Brutzellen": the seven chapters build 339 accepted "at a silence" were accepted "at a
+    jingle" by build 331 at the same millisecond, and the 1256 extra probes between the two runs
+    bought no mark at all.
+    </para>
+    <para>
+    <b>Experimental (0.12.1).</b> The corpus evidence for the shape is strong on the books it targets
+    and there is none at all for the books it does not, which is what <c>--jingle-first</c> is for -
+    it forces the shape on so a book outside the gate can be measured without rebuilding the tool.
+    </para>
+  </member>
+</doc>

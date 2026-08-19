@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\SilenceThresholdProbe.cs. -->
+<doc>
+  <member name="SilenceThresholdProbe">
+    <para>
+    <b>What the automatic mode changes on the reference corpus.</b> Nothing: on the fourteen-book
+    corpus (2026-08-05), every one of them keeps exactly -35 dBFS. That is the property that made it
+    safe to turn on by default.
+    </para>
+  </member>
+</doc>
