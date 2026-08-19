@@ -216,11 +216,8 @@ public sealed class CommandTemplate
     /// Windows' argument convention - the one the C runtime, and therefore every program started
     /// from a command line, uses to split that line back into arguments - reads a backslash before
     /// a quote as escaping the quote. So a token ending in a separator loses its closing quote and
-    /// swallows whatever follows. Measured 2026-08-18 with <c>cmd /d /s /c</c> exactly as
-    /// <see cref="HookRunner"/> starts it, argument list printed by the started program:
-    /// <c>prog "D:\My Books\" second</c> arrives as the single argument
-    /// <c>D:\My Books" second</c>, while <c>prog "D:\My Books\\" second</c> arrives as
-    /// <c>D:\My Books\</c> and <c>second</c>.
+    /// swallows whatever follows.
+    /// <include file='../../notes/Hooks/CommandTemplate.xml' path='doc/member[@name="DoubleTrailingBackslashes"]/*' />
     /// <para>
     /// Not an exotic case: <see cref="PathPlaceholder"/> ends every <c>$-n</c> value with a
     /// separator by construction, so any folder path holding a space - which is what puts the

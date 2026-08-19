@@ -15,14 +15,11 @@ namespace ABChapterize.Language;
 /// needs its own version of it.
 /// </summary>
 /// <remarks>
-/// Found the hard way on "I Shall Wear Midnight" (2026-07-30). Whisper transcribed the same
-/// announcement as <c>"CHAPTER XIII. THE SHAKING OF THE SHEETS"</c> from a window starting at the
-/// silence before it, and as <c>"Chapter 13 The Shaking of the Sheets"</c> from one starting 4.8 s
-/// earlier - same audio, same model, same window length. Chapters 5, 6, 7, 10, 11 and 13 all came
-/// out Roman in at least one pass; chapter 4 came out as the word "FOUR" and was found first try.
-/// Chapter 13 was the one that drew the Roman form in every pass that saw it - Probe's forward
-/// sweep, the skipped-candidate re-probe and Scan's full gap transcription alike - and was the
-/// only chapter the run failed to mark.
+/// Which form comes out was found the hard way: the same announcement transcribed as an all-caps
+/// Roman heading from a window starting at the silence before it, and with a digit from one
+/// starting a few seconds earlier - same audio, same model, same window length. A book can draw the
+/// Roman form in every pass that sees a given chapter, which is one chapter unmarked without this.
+/// <include file='../../notes/Language/RomanNumerals.xml' path='doc/member[@name="RomanNumerals"]/*' />
 /// </remarks>
 public static class RomanNumerals
 {

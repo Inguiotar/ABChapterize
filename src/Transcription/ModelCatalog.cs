@@ -41,8 +41,8 @@ public static class ModelCatalog
     /// Face repository that swapped a model file for something else would have to defeat both
     /// digests at once, not just one, to go undetected. The digests were captured directly from the
     /// repository's Git LFS metadata (SHA-256) and by hashing the downloaded bytes (SHA3-256) at
-    /// the time this list was written; the byte sizes were measured on the same files (2026-07-28)
-    /// and describe exactly the bytes those digests cover.
+    /// the time this list was written; the byte sizes were measured on the same files and describe
+    /// exactly the bytes those digests cover.
     /// <para>
     /// The sizes exist for <see cref="ApproximateSizeBytes"/>, which needs a model's weight before
     /// the file is necessarily on disk. They ascend in the order of <see cref="BuiltInNames"/>, so
@@ -50,6 +50,8 @@ public static class ModelCatalog
     /// a <c>custom:</c> model be ranked against a built-in one at all.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: when the digests and sizes were captured.
+    /// <include file='../../notes/Transcription/ModelCatalog.xml' path='doc/member[@name="Models"]/*' /></remarks>
     private static readonly Dictionary<string, (string FileName, long Bytes, string ApproxSize, string Sha256, string Sha3_256)> Models = new()
     {
         ["tiny"] = ("ggml-tiny.bin", 77_691_713, "75 MB",

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Gpu\GpuDevice.cs. -->
+<doc>
+  <member name="Index">
+    <para>
+    <b>The verification.</b> On the project's two-GPU test box (GeForce GTX 1070 + Intel UHD 630),
+    2026-07-28, from both ends: by GPU load and memory monitoring in the desktop session, and over
+    SSH by watching the GTX's VRAM go from its 1225 MiB idle baseline to 3208 MiB at 100%
+    utilization for index 1 while index 0 left it untouched - and ran 8.6x slower, 130.1 s against
+    15.1 s.
+    </para>
+  </member>
+</doc>

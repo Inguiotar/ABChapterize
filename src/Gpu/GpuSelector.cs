@@ -64,12 +64,11 @@ public static class GpuSelector
     /// enumeration order differing between session types (see <see cref="GpuDevice"/>), because both
     /// the variable and this lookup are resolved inside the session the backend runs in.
     /// <para>
-    /// Confirmed against the project's two-GPU test box on 2026-07-28: over SSH our enumeration
-    /// reported 0 = Intel UHD 630, 1 = NVIDIA GTX 1070, and <c>GGML_VK_VISIBLE_DEVICES=1</c> was the
-    /// run that put the GTX at ~60% load in nvidia-smi while <c>=0</c> left it at its idle baseline.
-    /// ggml says as much itself: on a single-GPU machine, <c>=7</c> aborts the run with
-    /// <c>ggml_vulkan: Invalid device index 7 in GGML_VK_VISIBLE_DEVICES</c> (2026-07-29), so the
-    /// value is bounds-checked against the same physical-device list, not a free-form filter.
+    /// Confirmed on a two-GPU box against per-GPU load rather than the wall clock, and ggml says as
+    /// much itself: an out-of-range index aborts the run with
+    /// <c>ggml_vulkan: Invalid device index N in GGML_VK_VISIBLE_DEVICES</c>, so the value is
+    /// bounds-checked against the same physical-device list, not a free-form filter.
+    /// <include file='../../notes/Gpu/GpuSelector.xml' path='doc/member[@name="ResolveVisibleDevices"]/*' />
     /// </para>
     /// <para>
     /// Anything unparseable or out of range yields null rather than a guess. This is a variable

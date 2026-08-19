@@ -46,8 +46,10 @@ internal static class NumberPattern
     /// "Kaska<b>l.</b>" as 50, "A<b>D</b>" as 500, "Part<b>i</b>" as 1. Harmless where the phrase
     /// puts something in front of the group (<c>/chapter ()/</c> starts it after a space), and not
     /// harmless at all where the number opens the wording, which is exactly what a phrase written
-    /// <c>/() chapter/</c> does. Found replaying the corpus transcripts, 2026-08-14.
+    /// <c>/() chapter/</c> does.
     /// </summary>
+    /// <remarks>Notes: how the word-tail readings were found.
+    /// <include file='../../../notes/Language/Phrases/NumberPattern.xml' path='doc/member[@name="StartOfNumber"]/*' /></remarks>
     private const string StartOfNumber = @"(?<![\p{L}\p{N}])";
 
     /// <summary>Roman numerals, validated afterwards by <see cref="RomanNumerals"/> - the pattern
@@ -59,11 +61,12 @@ internal static class NumberPattern
     /// What a Roman numeral additionally may not follow: a period. <see cref="StartOfNumber"/> keeps
     /// one out of the middle of a word, but an abbreviation written with internal periods breaks
     /// <em>into</em> pieces that read as numerals - "A.D." offers a "D." that is a perfectly formed
-    /// 500, and the turbo model writes exactly that in "Sergeant Mandela 2007-2024 A.D." ("The
-    /// Forever War", 0:25:01, 2026-08-14), where a <c>/() chapter/</c> wording then claimed
-    /// "D. Chapter" and took the announcement's number with it. Only the Roman branch needs this:
-    /// digits and spoken words cannot be produced by chopping an abbreviation up.
+    /// 500, and a recognizer does write exactly that, after which a <c>/() chapter/</c> wording
+    /// claims "D. Chapter" and takes the announcement's number with it. Only the Roman branch needs
+    /// this: digits and spoken words cannot be produced by chopping an abbreviation up.
     /// </summary>
+    /// <remarks>Notes: the transcript the abbreviation case was caught on.
+    /// <include file='../../../notes/Language/Phrases/NumberPattern.xml' path='doc/member[@name="NotAfterAnAbbreviation"]/*' /></remarks>
     private const string NotAfterAnAbbreviation = @"(?<!\.)";
 
     /// <summary>One to four digits: enough for any chapter number a book has ever had, and short

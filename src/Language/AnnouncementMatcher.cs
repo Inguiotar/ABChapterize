@@ -15,13 +15,11 @@ namespace ABChapterize.Language;
 /// its number alone has none: the phrase was a deliberately never-matching expression there. Every
 /// numbered chapter of such a book therefore failed refinement by construction -
 /// twice, since a failure is retried through the <c>--upgrade-model</c> recognizer - and the failure
-/// was silent, indistinguishable in the log from a genuinely unconfirmable announcement. Measured
-/// on "Corsa nello spazio" (build 244, 2026-08-05): 1001 of 1012 survival probes answered "no",
-/// the eleven that did not belonging to the two epilogue marks that carry a real regex, and the
-/// doomed searches took 27 minutes of a 2 h 40 m run. Nothing was refined, and
-/// <see cref="ABChapterize.Detection.RefinedNumberVote"/> - which feeds on the transcripts a
-/// successful probe produces - never fired either, leaving the strongest of the four
-/// misheard-number defences dead in exactly the mode that leans hardest on chapter numbering.
+/// was silent, indistinguishable in the log from a genuinely unconfirmable announcement. Nothing
+/// was refined, and <see cref="ABChapterize.Detection.RefinedNumberVote"/> - which feeds on the
+/// transcripts a successful probe produces - never fired either, leaving the strongest of the
+/// four misheard-number defences dead in exactly the mode that leans hardest on chapter
+/// numbering.
 /// </para>
 /// <para>
 /// The bare-number matcher accepts any number <em>the chapter sequence can hold at that point</em>
@@ -38,6 +36,8 @@ namespace ABChapterize.Language;
 /// actually spoken, exactly as it does for a phrase-based book.
 /// </para>
 /// </summary>
+/// <remarks>Notes: what refinement-by-construction-failure cost on a bare-number book.
+/// <include file='../../notes/Language/AnnouncementMatcher.xml' path='doc/member[@name="AnnouncementMatcher"]/*' /></remarks>
 public sealed class AnnouncementMatcher
 {
     private readonly Func<string, bool> _matches;
@@ -102,10 +102,7 @@ public sealed class AnnouncementMatcher
     /// The difference is not academic. A phrase holding both an expression and a number spoken alone
     /// gives the whole-phrase matcher two ways to answer yes, and the loose one wins wherever the
     /// probe window has already walked past the chapter word: the onset search then keeps going and
-    /// the mark lands inside the announcement. Measured on the build-328 corpus run, which had
-    /// <c>--chapter-phrase default;none</c> on every book - Stalker's chapter 3 answered "phrase" to
-    /// a probe reading "3. Fernweh 2.", with no chapter word in it at all, and the mark moved
-    /// 0.647 s late; 39 marks over four books moved the same way, every one of them later.
+    /// the mark lands inside the announcement.
     /// <see cref="ABChapterize.Detection.NumberCheck"/> cannot catch it, because the number read is
     /// the right number - what is missing is the word.
     /// </para>
@@ -114,6 +111,8 @@ public sealed class AnnouncementMatcher
     /// wording: a leaf that still offered a choice would reintroduce the same problem one level down.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the corpus run where a loose wording confirmed a phrase-found mark and moved 39 of them later.
+    /// <include file='../../notes/Language/AnnouncementMatcher.xml' path='doc/member[@name="ForWording"]/*' /></remarks>
     /// <param name="wording">The alternative that matched; see
     /// <see cref="ABChapterize.Detection.PhraseMatching.PhraseMatch.Wording"/>.</param>
     /// <param name="language">Two-letter language code steering number-word parsing.</param>

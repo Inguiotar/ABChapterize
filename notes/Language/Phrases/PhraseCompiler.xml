@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Language\Phrases\PhraseCompiler.cs. -->
+<doc>
+  <member name="Distribute">
+    <para>
+    <b>The spelling wobble that made an unquantified alternation cost six marks.</b> On "Paula Monti"
+    (build 331, 2026-08-16) Whisper wrote one announcement as "Première partie, chapitre 2" and as
+    "1ère partie, chapitre 2" at probe positions 0.05 s apart, so the user's
+    <c>/(?:premi|1).re partie.? chapitre/</c> became two wordings that each refused to confirm the
+    other's spelling. The onset walk stopped where the spelling flipped rather than where the
+    announcement was clipped, costing chapter 2 a mark 1.114 s early and moving five more.
+    </para>
+  </member>
+</doc>

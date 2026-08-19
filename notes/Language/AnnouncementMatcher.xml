@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Language\AnnouncementMatcher.cs. -->
+<doc>
+  <member name="AnnouncementMatcher">
+    <para>
+    <b>What refinement failing by construction cost.</b> Measured on "Corsa nello spazio" (build 244,
+    2026-08-05): 1001 of 1012 survival probes answered "no", the eleven that did not belonging to the
+    two epilogue marks that carry a real regex, and the doomed searches took 27 minutes of a
+    2 h 40 m run.
+    </para>
+  </member>
+
+  <member name="ForWording">
+    <para>
+    <b>The marks a loose wording moved.</b> Measured on the build-328 corpus run, which had
+    <c>--chapter-phrase default;none</c> on every book: Stalker's chapter 3 answered "phrase" to a
+    probe reading "3. Fernweh 2.", with no chapter word in it at all, and the mark moved 0.647 s
+    late; 39 marks over four books moved the same way, every one of them later.
+    </para>
+  </member>
+</doc>

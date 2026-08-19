@@ -57,16 +57,16 @@ public readonly record struct ColoredSpan(string Text, ConsoleColor? Color);
 /// <para>
 /// The last Unix rule - requiring evidence of a 16-color terminfo entry - is the one that is not
 /// standard practice elsewhere, and it exists because of a measured failure rather than a
-/// theoretical one. .NET clamps a color into the range the terminfo entry advertises, and the
-/// stock <c>xterm</c> entry still advertises <c>colors#8</c> (verified 2026-07-29 on Debian under
-/// WSL2, against <c>xterm-256color</c>'s <c>colors#0x100</c>). Under it the whole upper half of
+/// theoretical one. .NET clamps a color into the range the terminfo entry advertises, and the stock
+/// <c>xterm</c> entry still advertises only eight. Under it the whole upper half of
 /// <see cref="ConsoleColor"/> folds down: <see cref="ConsoleColor.DarkGray"/> - the progress bar's
-/// brackets and separators - emits <c>SGR 30</c>, plain black, and disappears on the black
-/// background such a terminal almost always has, while <see cref="ConsoleColor.Cyan"/> and
+/// brackets and separators - emits plain black and disappears on the black background such a
+/// terminal almost always has, while <see cref="ConsoleColor.Cyan"/> and
 /// <see cref="ConsoleColor.DarkCyan"/> collapse onto each other. Drawing no color at all is the
-/// better of those two outcomes. Most such terminals would in fact render <c>SGR 90</c> correctly
+/// better of those two outcomes. Most such terminals would in fact render the bright codes correctly
 /// and only their terminfo entry is behind - but the entry is what .NET translates through, so
 /// their capability does not help; <c>--color always</c> is what those get.
+/// <include file='../../notes/Ui/ConsoleColors.xml' path='doc/member[@name="ConsoleColors"]/*' />
 /// </para>
 /// <para>
 /// The known false negative is Git Bash/MSYS on Windows: a native console app's stdout there
@@ -110,11 +110,10 @@ public static class ConsoleColors
     /// <remarks>
     /// <c>$COLORTERM</c> is pointedly *not* consulted, though most CLIs do trust it. It describes
     /// the terminal, and the terminal is not the constraint: .NET translates a color through the
-    /// terminfo entry <c>$TERM</c> names and clamps it there. Measured 2026-07-29,
-    /// <c>COLORTERM=truecolor TERM=xterm</c> renders the bar's dark grey as <c>SGR 30</c>, plain
-    /// black - i.e. honoring <c>$COLORTERM</c> produces exactly the unreadable output this check
-    /// exists to prevent, on a terminal that is genuinely capable but described by an entry that
-    /// is not.
+    /// terminfo entry <c>$TERM</c> names and clamps it there, so honoring <c>$COLORTERM</c> produces
+    /// exactly the unreadable output this check exists to prevent, on a terminal that is genuinely
+    /// capable but described by an entry that is not.
+    /// <include file='../../notes/Ui/ConsoleColors.xml' path='doc/member[@name="TerminalNamesColorSupport"]/*' />
     /// </remarks>
     internal static bool TerminalNamesColorSupport()
     {

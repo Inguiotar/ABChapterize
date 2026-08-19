@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Gpu\GpuSelector.cs. -->
+<doc>
+  <member name="ResolveVisibleDevices">
+    <para>
+    <b>The confirmation.</b> Against the project's two-GPU test box on 2026-07-28: over SSH our
+    enumeration reported 0 = Intel UHD 630, 1 = NVIDIA GTX 1070, and
+    <c>GGML_VK_VISIBLE_DEVICES=1</c> was the run that put the GTX at ~60% load in nvidia-smi while
+    <c>=0</c> left it at its idle baseline. On a single-GPU machine, <c>=7</c> aborts the run with
+    <c>ggml_vulkan: Invalid device index 7 in GGML_VK_VISIBLE_DEVICES</c> (2026-07-29).
+    </para>
+    <para>
+    <b>Why an unparseable value yields null rather than a guess.</b> The silent fallback it replaced
+    (2026-07-29) already cost one confused test run on the remote machine, where a bare "Vulkan
+    backend" was indistinguishable from GPU naming being broken.
+    </para>
+  </member>
+</doc>

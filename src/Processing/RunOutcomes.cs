@@ -153,13 +153,10 @@ internal sealed class RunOutcomes
     /// <remarks>
     /// The confidence is Whisper's mean token probability for the segment the number was read from,
     /// and in bare-number mode that segment is frequently the number and nothing else - a single
-    /// token, whose probability is far more volatile than a phrase's whole sentence. Measured on
-    /// "Corsa nello spazio" (Italian, 65 chapters, 2026-08-08): its marks have the highest median
-    /// confidence of the fourteen-book corpus at 0.89, and simultaneously the only three marks below
-    /// 0.5 anywhere in it - 0.44, 0.42 and 0.29, each from a segment reading exactly "44", "55" and
-    /// "58" while the prose either side of them scored 0.81 to 0.94. All three were correctly placed,
-    /// landing in -91 to -95 dBFS silence. So the tail is fatter without the marks being worse, which
-    /// is precisely what a reader deciding where to spend an evening needs told.
+    /// token, whose probability is far more volatile than a phrase's whole sentence. So the tail is
+    /// fatter without the marks being worse, which is precisely what a reader deciding where to
+    /// spend an evening needs told.
+    /// <include file='../../notes/Processing/RunOutcomes.xml' path='doc/member[@name="BareNumberFootnote"]/*' />
     /// </remarks>
     private string? BareNumberFootnote()
         => _lowConfidence.Any(f => f.BareNumbers)

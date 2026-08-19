@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Language\Parsers\SwedishNumberParser.cs. -->
+<doc>
+  <member name="OrdinalBase">
+    <para>
+    <b>The transcripts these three spellings come from.</b> On "De vandrande djäknarne" (LibriVox,
+    ggml-small, 2026-08-14) Whisper wrote <b>"Älfte kapitlet"</b> at 3:10:09 and <b>"tolvte och
+    sista kapitlet"</b> at 4:31:22, and both announcements were logged as "no readable number" - the
+    second cost the book its last chapter outright.
+    </para>
+  </member>
+</doc>

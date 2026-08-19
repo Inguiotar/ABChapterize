@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Hooks\CommandTemplate.cs. -->
+<doc>
+  <member name="DoubleTrailingBackslashes">
+    <para>
+    <b>The measurement.</b> 2026-08-18 with <c>cmd /d /s /c</c> exactly as <see cref="HookRunner"/>
+    starts it, argument list printed by the started program: <c>prog "D:\My Books\" second</c>
+    arrives as the single argument <c>D:\My Books" second</c>, while
+    <c>prog "D:\My Books\\" second</c> arrives as <c>D:\My Books\</c> and <c>second</c>.
+    </para>
+  </member>
+</doc>

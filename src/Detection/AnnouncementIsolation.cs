@@ -92,8 +92,9 @@ internal static class AnnouncementIsolation
     /// <para>
     /// Deliberately <em>not</em> extended to a number spoken alone, whose whole claim to being an
     /// announcement is the pause around it. That mode exists because Whisper's segmentation is not
-    /// dependable - it glued ten of one book's announcements onto the following sentence
-    /// (2026-08-05) - so re-admitting that signal there would undo the measurement the mode is
+    /// dependable - it routinely glues an announcement onto the following sentence (see
+    /// <see cref="NumberWordParser.FindBareNumberAnnouncement"/>) - so re-admitting that signal
+    /// there would undo the measurement the mode is
     /// built on. A phrase carries its own evidence and can afford the second reading; a bare number
     /// cannot. Note the segmentation's <em>unreliable</em> direction is the harmless one here: a
     /// real announcement Whisper failed to set off simply falls back on the pause test.

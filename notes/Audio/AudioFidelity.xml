@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Audio\AudioFidelity.cs. -->
+<doc>
+  <member name="Dft">
+    <para>
+    <b>What the measurement costs.</b> With eight excerpts of 30 s at 16 kHz it is around 3,700
+    transforms per gated file - the louder half of each excerpt's 937 frames - which is the bulk of
+    the ~8 s the whole measurement takes (build-339 corpus run, 2026-08-17).
+    </para>
+  </member>
+</doc>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Processing\RunOutcomes.cs. -->
+<doc>
+  <member name="BareNumberFootnote">
+    <para>
+    <b>The measurement behind the footnote.</b> "Corsa nello spazio" (Italian, 65 chapters,
+    2026-08-08): its marks have the highest median confidence of the fourteen-book corpus at 0.89,
+    and simultaneously the only three marks below 0.5 anywhere in it - 0.44, 0.42 and 0.29, each from
+    a segment reading exactly "44", "55" and "58" while the prose either side of them scored 0.81 to
+    0.94. All three were correctly placed, landing in -91 to -95 dBFS silence.
+    </para>
+  </member>
+</doc>

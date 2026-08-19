@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Audio\SpeechDenoiser.cs. -->
+<doc>
+  <member name="SpeechDenoiser">
+    <para>
+    <b>What it is for, measured.</b> On "De vandrande djäknarne" the chapter 1 announcement is a coin
+    flip for ggml-small, recovered by only <b>10 of 22</b> window framings 20 ms apart - the same
+    audio coming back as "1. Kapitlet – Gjäknupptåg", "1. KAPITLET", "1. KAPITLÄT", "1. KJÄKNUGTÅG"
+    or "1. Jäknuktåg" depending on where the window opened, at p=0.45-0.65 throughout. Denoised
+    first, every one of the 22 reads "1. Kapitlet". The alternative that works equally well is a
+    bigger model (medium and large-v3-turbo), at 2-3x the decode cost of a denoise plus a re-read.
+    </para>
+    <para>
+    <b>Why only the denoiser is bundled.</b> LavaSR's bandwidth extension reconstructs content above
+    the merge cutoff, Whisper resamples to 16 kHz and hears nothing above 8 kHz, and denoise-only was
+    measured to give the identical 22 of 22 at better than twice the speed.
+    </para>
+  </member>
+</doc>

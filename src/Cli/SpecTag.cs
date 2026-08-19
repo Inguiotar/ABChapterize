@@ -99,8 +99,7 @@ public readonly record struct SpecTag(
     /// A bracket run counts as a tag only when at least one of its comma-separated tokens is
     /// recognized; otherwise the brackets are ordinary phrase text. That rule is not pedantry.
     /// Whisper writes bracketed non-speech tags into its transcripts, inherited from the subtitle
-    /// corpora it was trained on, and 14 of the 16 books in one test corpus carry them - [Musik]
-    /// 259 times, [Abspann] 130, [BLANK_AUDIO] 103 (measured 2026-08-09). So
+    /// corpora it was trained on, and most books in a real corpus carry them. So
     /// <c>--custom "[Musik]:Zwischenmusik"</c> is a mapping somebody will plausibly write to catch
     /// the jingles, and it has to go on matching those words rather than being read as a tag for a
     /// language called "Musik". A keyword typo beside a good one (<c>[once,headnig]</c>) is still
@@ -117,6 +116,8 @@ public readonly record struct SpecTag(
     /// bracket; that is also how anyone would write it anyway.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: how often Whisper writes bracketed tags into a real corpus.
+    /// <include file='../../notes/Cli/SpecTag.xml' path='doc/member[@name="Split"]/*' /></remarks>
     /// <param name="entry">One entry of a spec, already trimmed.</param>
     /// <param name="rest">The entry with any tag removed, trimmed.</param>
     /// <param name="where">How to name this entry in an error message.</param>

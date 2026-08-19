@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Language\ILanguage.cs. -->
+<doc>
+  <member name="ChapterPhrase">
+    <para>
+    <b>The one corpus mark a pause-only guard would have cost.</b> "I Shall Wear Midnight" chapter 9,
+    whose announcement follows the previous chapter's last words after 0.64 s against a threshold of
+    0.85 s, its mark otherwise perfect at -105.6 dBFS. It is the one mark of the sixteen-book corpus
+    with under 0.85 s in front of it; the next-lowest has 0.99 s. It is affordable because that
+    chapter is transcribed as a segment of its own, so the segment-start route satisfies its
+    <c>^</c>.
+    </para>
+    <para>
+    <b>The three transcripts that read a word the narrator never said.</b> Three of the corpus's
+    12,916 probe transcripts read "Der erste Kapitel 5" (BARDIOC, Die Maahks and Gruelfin,
+    2026-08-14). "Der erste" is not even grammatical, and the neighbouring probes of the same
+    announcement transcribe it plainly as "Kapitel 5." - so what it exposes is Whisper filling a
+    short window's opening with plausible words.
+    </para>
+  </member>
+</doc>

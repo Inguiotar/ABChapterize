@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Language\Phrases\NumberPattern.cs. -->
+<doc>
+  <member name="StartOfNumber">
+    <para>
+    <b>How the word-tail readings were found.</b> Replaying the corpus transcripts, 2026-08-14.
+    </para>
+  </member>
+
+  <member name="NotAfterAnAbbreviation">
+    <para>
+    <b>The transcript the abbreviation case was caught on.</b> The turbo model writes "Sergeant
+    Mandela 2007-2024 A.D." at 0:25:01 of "The Forever War" (2026-08-14), where a
+    <c>/() chapter/</c> wording then claimed "D. Chapter" and the match anchored to the earlier
+    segment - 17 s from the announcement, far enough that the mender's distance filter dropped its
+    re-read entirely.
+    </para>
+  </member>
+</doc>

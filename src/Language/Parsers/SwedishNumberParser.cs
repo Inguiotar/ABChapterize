@@ -52,13 +52,13 @@ public sealed class SwedishNumberParser : INumberWordParser
     /// <para>
     /// The last three are not Swedish. They are what Whisper writes for the two ordinals whose
     /// spelling does not follow their own cardinal: "elfte" (11) beside "elva", "tolfte" (12)
-    /// beside "tolv". On "De vandrande djäknarne" (LibriVox, ggml-small, 2026-08-14) it wrote
-    /// **"Älfte kapitlet"** at 3:10:09 and **"tolvte och sista kapitlet"** at 4:31:22, and both
-    /// announcements were logged as "no readable number" - the second cost the book its last
-    /// chapter outright. "elvte" is the same substitution as "tolvte" applied to 11 and has not
-    /// been seen, but none of the three is a Swedish word, so recognizing them can collide with
-    /// nothing. Deliberately *not* added: "skätte" for "sjätte", which the same run also produced -
-    /// it normalizes to "skatte", which is an ordinary Swedish word.
+    /// beside "tolv". Both were logged as "no readable number" on a real book, one of them costing
+    /// it its last chapter outright. "elvte" is the same substitution as "tolvte" applied to 11 and
+    /// has not been seen, but none of the three is a Swedish word, so recognizing them can collide
+    /// with nothing. Deliberately *not* added: "skätte" for "sjätte", which the same run also
+    /// produced - it normalizes to "skatte", which is an ordinary Swedish word.
+    /// <include file='../../../notes/Language/Parsers/SwedishNumberParser.xml' path='doc/member[@name="OrdinalBase"]/*' />
+    /// </para>
     /// </para>
     /// </summary>
     private static readonly Dictionary<string, int> OrdinalBase = new()

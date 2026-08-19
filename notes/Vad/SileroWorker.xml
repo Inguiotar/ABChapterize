@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Vad\SileroWorker.cs. -->
+<doc>
+  <member name="SileroWorker">
+    <para>
+    <b>What pre-binding bought.</b> Measured with <c>tools\vadbench</c> on 2026-07-31: pre-binding
+    plus the single-threaded session options took the shipped per-frame cost from 116 to 95 us,
+    bit-identically.
+    </para>
+    <para>
+    <b>What a shared session cost.</b> Same measurement date: 802x realtime at 4 workers, 360x at 24
+    - it stopped scaling past four and then got slower with each one added.
+    </para>
+  </member>
+</doc>

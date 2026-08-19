@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Transcription\ModelCatalog.cs. -->
+<doc>
+  <member name="Models">
+    <para>
+    <b>When the digests and sizes were captured.</b> 2026-07-28 - the SHA-256 values from the Hugging
+    Face repository's Git LFS metadata, the SHA3-256 values by hashing the downloaded bytes, and the
+    byte sizes measured on those same files.
+    </para>
+  </member>
+</doc>

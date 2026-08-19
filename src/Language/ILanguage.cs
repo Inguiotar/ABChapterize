@@ -44,14 +44,10 @@ public interface ILanguage
     /// <para>
     /// Every wording carries a <c>^</c>: an announcement is by definition set off from what precedes
     /// it, and saying so is what keeps a chapter word occurring in ordinary prose from becoming a
-    /// mark. It was not always safe to say. Against a pause alone it would have cost a real
-    /// chapter - "I Shall Wear Midnight" chapter 9, whose announcement follows the previous
-    /// chapter's last words after 0.64 s against a threshold of 0.85 s, its mark otherwise perfect
-    /// at -105.6 dBFS - and it is only affordable because a <c>^</c> is now satisfied by the
-    /// recognizer setting the announcement off as a transcript segment of its own as well, which
-    /// that chapter does (see <see cref="ABChapterize.Detection.AnnouncementIsolation.ForChapter"/>).
-    /// It is the one mark of the sixteen-book corpus with under 0.85 s in front of it; the
-    /// next-lowest has 0.99 s.
+    /// mark. It was not always safe to say. Against a pause alone it would have cost a real chapter,
+    /// and it is only affordable because a <c>^</c> is now satisfied by the recognizer setting the
+    /// announcement off as a transcript segment of its own as well (see
+    /// <see cref="ABChapterize.Detection.AnnouncementIsolation.ForChapter"/>).
     /// </para>
     /// <para>
     /// The number-first wording is what gives an ordinal-first language that same rescue. Without it
@@ -63,16 +59,16 @@ public interface ILanguage
     /// <para>
     /// It is also the one wording that can be claimed by words the narrator never said. Matches are
     /// taken leftmost-first, so on "Der erste Kapitel 5" it claims "erste Kapitel" before
-    /// <c>kapitel ()</c> can claim "Kapitel 5", and the chapter would become 1. Three of the corpus's
-    /// 12,916 probe transcripts read exactly like that (BARDIOC, Die Maahks and Gruelfin,
-    /// 2026-08-14); the narrator says no such thing in any of them - "Der erste" is not even
-    /// grammatical, and the neighbouring probes of the same announcement transcribe it plainly as
-    /// "Kapitel 5." - so what it exposes is Whisper's habit of filling a short window's opening with
+    /// <c>kapitel ()</c> can claim "Kapitel 5", and the chapter would become 1. A handful of the
+    /// corpus's probe transcripts read exactly like that, and the narrator says no such thing in any
+    /// of them - what it exposes is Whisper's habit of filling a short window's opening with
     /// plausible words. Which is why a superseded wording is kept rather than discarded: the sequence
     /// turns the 1 down and the reading behind it, "Kapitel 5", is taken instead (see
     /// <see cref="Phrases.PhrasePattern.MatchGroups"/> and Probe's accept loop).
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the one corpus mark a pause-only guard would have cost, and the three transcripts that read a word the narrator never said.
+    /// <include file='../../notes/Language/ILanguage.xml' path='doc/member[@name="ChapterPhrase"]/*' /></remarks>
     string ChapterPhrase { get; }
 
     /// <summary>The word chapter titles are built from: "Chapter 1", "Kapitel 1", ...</summary>

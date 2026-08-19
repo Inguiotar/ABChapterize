@@ -13,13 +13,13 @@ namespace ABChapterize.Audio;
 /// LavaSR's speech denoiser over one stretch of 16 kHz mono audio, used to give the recognizer a
 /// second, cleaner look at a probe window whose announcement it garbled.
 /// <para>
-/// What it is for, measured: on "De vandrande djäknarne" the chapter 1 announcement is a coin flip
-/// for ggml-small, recovered by only <b>10 of 22</b> window framings 20 ms apart - the same audio
-/// coming back as "1. Kapitlet – Gjäknupptåg", "1. KAPITLET", "1. KAPITLÄT", "1. KJÄKNUGTÅG" or
-/// "1. Jäknuktåg" depending on where the window opened, at p=0.45-0.65 throughout. Denoised first,
-/// every one of the 22 reads "1. Kapitlet", and the announcement lands in a segment of its own with
-/// the chapter title split off - the clean segmentation only the far bigger models produced on the
-/// raw audio (medium and large-v3-turbo, at 2-3x the decode cost of a denoise plus a re-read).
+/// What it is for, measured: a chapter announcement can be a coin flip for the small model,
+/// recovered by fewer than half of the window framings a few milliseconds apart, the same audio
+/// coming back spelled a different way each time. Denoised first, every framing reads it the same,
+/// and the announcement lands in a segment of its own with the chapter title split off - the clean
+/// segmentation only the far bigger models produced on the raw audio, at two to three times the
+/// decode cost of a denoise plus a re-read.
+/// <include file='../../notes/Audio/SpeechDenoiser.xml' path='doc/member[@name="SpeechDenoiser"]/*' />
 /// </para>
 /// <para>
 /// Only the denoiser is bundled, not LavaSR's bandwidth extension: that stage reconstructs content

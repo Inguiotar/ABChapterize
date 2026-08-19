@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Ui\ConsoleColors.cs. -->
+<doc>
+  <member name="ConsoleColors">
+    <para>
+    <b>The terminfo measurement.</b> Verified 2026-07-29 on Debian under WSL2: the stock
+    <c>xterm</c> entry advertises <c>colors#8</c>, against <c>xterm-256color</c>'s
+    <c>colors#0x100</c>. Under it <see cref="ConsoleColor.DarkGray"/> emits <c>SGR 30</c>, plain
+    black.
+    </para>
+  </member>
+
+  <member name="TerminalNamesColorSupport">
+    <para>
+    <b>Why <c>$COLORTERM</c> is not consulted.</b> Measured 2026-07-29:
+    <c>COLORTERM=truecolor TERM=xterm</c> renders the bar's dark grey as <c>SGR 30</c>, plain black -
+    i.e. honoring <c>$COLORTERM</c> produces exactly the unreadable output the check exists to
+    prevent.
+    </para>
+  </member>
+</doc>

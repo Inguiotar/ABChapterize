@@ -38,14 +38,15 @@ namespace ABChapterize.Vad;
 /// micro-optimization for its own sake: the model runs 31.25 inferences per second of audio (512 new
 /// samples at 16 kHz), so a 12-hour audiobook is ~1.35 million <c>Run</c> calls on a model of a
 /// couple of megabytes, a shape where everything is per-call overhead and nothing is arithmetic.
-/// Measured with <c>tools\vadbench</c> on 2026-07-31: pre-binding plus the single-threaded session
-/// options below took the shipped per-frame cost from 116 to 95 us, bit-identically.
+/// Measured with <c>tools\vadbench</c>: pre-binding plus the single-threaded session options below
+/// cut the per-frame cost by about a fifth, bit-identically.
 /// </para>
 /// <para>
 /// One session per worker, not one session shared by all of them. Sharing runs correctly, but
-/// stopped scaling past four workers and then got *slower* with each one added (802x realtime at 4,
-/// 360x at 24, same measurement date) - which is what a contended per-session allocator arena looks
-/// like. A session apiece costs a few megabytes of duplicated weights and removes it.
+/// stopped scaling past four workers and then got *slower* with each one added - which is what a
+/// contended per-session allocator arena looks like. A session apiece costs a few megabytes of
+/// duplicated weights and removes it.
+/// <include file='../../notes/Vad/SileroWorker.xml' path='doc/member[@name="SileroWorker"]/*' />
 /// </para>
 /// </remarks>
 internal sealed class SileroWorker : IDisposable
