@@ -20,6 +20,14 @@
          release folders, where nothing would read it. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PublishDocumentationFile>false</PublishDocumentationFile>
+    <!-- The doc-comment warnings are errors, not warnings, because a warning is only as good
+         as the attention paid to it: four malformed comments once rode along in a build whose
+         tail said "0 Fehler" and whose warning count nobody read. These are the ones that mean
+         a comment has stopped matching the code - malformed XML, a <param> that names nothing,
+         a parameter with no <param>, an unresolved cref, a broken <include> - i.e. exactly the
+         rot GenerateDocumentationFile is switched on to catch. CS1591 ("missing XML comment")
+         is deliberately not among them: it is a coverage rule, not a correctness one. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS1570;CS1571;CS1572;CS1573;CS1574;CS1580;CS1581;CS1584;CS1587;CS1589;CS1590;CS1592;CS1710;CS1711;CS1712;CS1723</WarningsAsErrors>
     <!-- win-x64 by default; publish for Linux with: dotnet publish -c Release -r linux-x64 -->
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>

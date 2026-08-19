@@ -189,7 +189,6 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: how far the measure actually moves within one book.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="FidelityExcerpts"]/*' /></remarks>
-    /// </summary>
     internal const int FidelityExcerpts = 8;
 
     /// <summary>How much audio each of those excerpts covers. Long enough to hold speech through

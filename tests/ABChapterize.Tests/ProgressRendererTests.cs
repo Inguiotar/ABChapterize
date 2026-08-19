@@ -128,20 +128,52 @@ public class ProgressRendererTests
     }
 
     [Fact]
-    public void BuildLine_ShowsMuxingInsteadOfChapters_DuringTheMuxingPhase()
+    public void BuildLine_ShowsTheFinishLabelInsteadOfChapters_WhileTheFileIsWritten()
     {
-        // The chapter list is already final by the time muxing runs, so the phase slot shows
-        // "Muxing..." instead of a now-meaningless chapter count, with no separate phase label
-        // after the bar (that would just repeat the same word).
+        // The chapter list is already final by the time the file is written, so the phase slot
+        // shows the label instead of a now-meaningless chapter count, with no separate phase
+        // label after the bar (that would just repeat the same word).
         var t = new WorkTracker();
-        t.BeginPhase("Muxing", 100);
+        t.BeginPhase(WorkTracker.FinishPhaseLabel, 100);
         t.SetPhaseProgress(50);
         t.HighestChapter = 6;
         var line = ProgressRenderer.BuildLine((t, "book.m4b"));
 
-        Assert.Contains("| Muxing... | 0:00 | book.m4b", line);
+        Assert.Contains("| Finish | 0:00 | book.m4b", line);
         Assert.DoesNotContain("ch 6", line);
-        Assert.DoesNotContain(" Muxing 50%", line);
+        Assert.DoesNotContain(" Finish 50%", line);
+    }
+
+    [Fact]
+    public void BuildLine_MarksThePhaseAsRevisiting_WhileItReReadsGroundItCovered()
+    {
+        // A sequence-gap re-probe runs inside Probe and walks backwards through candidates the
+        // phase has already counted, so its percentage falls. The suffix is what says why.
+        var t = new WorkTracker();
+        t.BeginPhase("Probe", 100);
+        t.SetPhaseProgress(40);
+        Assert.Contains(" Probe |", ProgressRenderer.BuildLine((t, "book.m4b")));
+
+        t.PhaseRevisiting = true;
+        Assert.Contains(" Probe<< |", ProgressRenderer.BuildLine((t, "book.m4b")));
+
+        t.PhaseRevisiting = false;
+        Assert.Contains(" Probe |", ProgressRenderer.BuildLine((t, "book.m4b")));
+    }
+
+    [Fact]
+    public void BeginPhase_ClearsTheRevisitingMarker_SoItCannotLeakIntoTheNextPhase()
+    {
+        // The flag is cleared by whoever set it, but a re-probe abandoned by an exception would
+        // otherwise leave every later phase labelled as if it were re-reading.
+        var t = new WorkTracker();
+        t.BeginPhase("Probe", 100);
+        t.PhaseRevisiting = true;
+
+        t.BeginPhase("Scan", 100);
+
+        Assert.False(t.PhaseRevisiting);
+        Assert.Equal("Scan", t.PhaseLabel);
     }
 
     [Fact]

@@ -2450,6 +2450,38 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AGapReprobe_MarksTheProgressBarAsRevisiting_ForExactlyItsOwnStretch()
+    {
+        // A gap re-probe runs inside Probe and walks back through candidates the phase has
+        // already counted, so the bar's percentage falls; the label is what says why. Sampling it
+        // as each log line is written is the only way to see a marker that is up transiently -
+        // and the geometry is the re-read fixture's above, which is where this file's re-probe
+        // comes from.
+        var tracker = new WorkTracker();
+        var seen = new List<(string Message, string Label)>();
+        var audio = new FakeAudioSource { Silences = [new(595, 600), new(698, 700), new(1195, 1200)] };
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(0, Seg(0.5, " Chapter one."));
+        transcriber.Add(600, Seg(0.3, " Chapter two."));
+        transcriber.AddWithin(16, 700, Seg(0.3, " Chapter three."));
+        transcriber.AddBeyond(16, 700, Seg(0.3, " Chapter forty."));
+        transcriber.Add(1200, Seg(0.3, " Chapter four."));
+        var detector = new ChapterDetector(
+            Options("--verbose", "--quick-marks"), audio, transcriber, null);
+
+        await detector.DetectAsync(
+            _file, Info, tracker,
+            new DetectionLog(m => seen.Add((m, tracker.PhaseLabel)), null),
+            CancellationToken.None);
+
+        Assert.Contains(seen, s => s.Message.Contains("re-probing") && s.Label == "Probe<<");
+        // The primary walk's own lines are not marked, or the suffix would say nothing.
+        Assert.Contains(seen, s => s.Label == "Probe");
+        // And nothing after the re-probe inherits it.
+        Assert.False(tracker.PhaseRevisiting);
+    }
+
+    [Fact]
     public async Task AnOrdinaryGap_AndARepeatedAnnouncement_AreNotReRead()
     {
         // The two cases that must stay cheap. A gap of two chapters is the ordinary kind the re-probe

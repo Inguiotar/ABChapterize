@@ -18,6 +18,7 @@ namespace ABChapterize.Ui;
 public sealed class WorkTracker
 {
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+    private string _phaseLabel = "";
     private long _phaseTotalBytes;
     private long _phaseDoneBytes;
     private long _phaseCurrentBytes;
@@ -27,8 +28,38 @@ public sealed class WorkTracker
     /// (see <see cref="ProgressRenderer.FormatElapsedTimer"/>).</summary>
     public TimeSpan Elapsed => _stopwatch.Elapsed;
 
-    /// <summary>Short name of the current phase (e.g. "Analyze"); shown directly after the bar.</summary>
-    public string PhaseLabel { get; private set; } = "";
+    /// <summary>Short name of the current phase (e.g. "Analyze"), with
+    /// <see cref="RevisitSuffix"/> appended while <see cref="PhaseRevisiting"/> holds; shown
+    /// directly after the bar.</summary>
+    public string PhaseLabel => PhaseRevisiting ? _phaseLabel + RevisitSuffix : _phaseLabel;
+
+    /// <summary>What <see cref="PhaseLabel"/> gains while a phase is re-reading ground it has
+    /// already covered - short and wordless, because the label sits in a fixed-width line beside
+    /// a percentage that is itself running backwards, and the two say the same thing.</summary>
+    public const string RevisitSuffix = "<<";
+
+    /// <summary>
+    /// The label of the phase that writes the finished file. Named here rather than spelled out
+    /// at both ends because <see cref="ProgressRenderer"/> singles it out - the chapters are all
+    /// decided by the time it runs, so it shows this word where every other phase shows a chapter
+    /// count - and a renderer testing for a label the writer no longer sets would fail silently,
+    /// by printing "----" where the count would be.
+    /// </summary>
+    public const string FinishPhaseLabel = "Finish";
+
+    /// <summary>
+    /// Whether the current phase is presently re-reading audio it has already passed, which is
+    /// what makes its percentage run backwards: Probe re-probing the candidates inside a sequence
+    /// gap (<see cref="ABChapterize.Detection.RegionProber"/>).
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="BeginPhase"/> because a gap re-probe is not a phase of its own: it
+    /// runs inside Probe, against Probe's own totals, and beginning a phase would reset the bar to
+    /// zero and throw away everything the walk has covered so far. Cleared by
+    /// <see cref="BeginPhase"/> so a flag left set by an abandoned re-probe cannot leak into the
+    /// next phase's label.
+    /// </remarks>
+    public bool PhaseRevisiting { get; set; }
 
     /// <summary>Highest chapter number detected so far; 0 while none has been found yet
     /// (rendered as "----", since a zero count carries no information during e.g. Analyze).</summary>
@@ -54,7 +85,8 @@ public sealed class WorkTracker
     /// <param name="totalBytes">Total number of bytes this phase will process.</param>
     public void BeginPhase(string label, long totalBytes)
     {
-        PhaseLabel = label;
+        _phaseLabel = label;
+        PhaseRevisiting = false;
         Interlocked.Exchange(ref _phaseTotalBytes, Math.Max(0, totalBytes));
         Interlocked.Exchange(ref _phaseDoneBytes, 0);
         Interlocked.Exchange(ref _phaseCurrentBytes, 0);
@@ -116,7 +148,8 @@ public sealed class ProgressRenderer : IDisposable
         /// two "what and how far" anchors, and everything else is detail hung off them.</summary>
         public const ConsoleColor Bar = ConsoleColor.White;
 
-        /// <summary>The phase label ("Probe"), and "Muxing..." standing in for the chapter count.</summary>
+        /// <summary>The phase label ("Probe"), and the finish label standing in for the chapter
+    /// count.</summary>
         public const ConsoleColor Phase = ConsoleColor.DarkCyan;
 
         /// <summary>The two numbers that only ever count upward, percentage and timer.</summary>
@@ -378,10 +411,10 @@ public sealed class ProgressRenderer : IDisposable
         var bar = new string('#', filled).PadRight(barWidth, '-');
         var timer = FormatElapsedTimer(slot.Tracker.Elapsed);
 
-        // Muxing has no chapter count of its own to show (the chapters were already decided
-        // by the time it runs) - it gets a plain "Muxing..." in the slot instead, with no
-        // separate phase label after the bar since that would just repeat the same word.
-        var muxing = slot.Tracker.PhaseLabel == "Muxing";
+        // The final write has no chapter count of its own to show (the chapters were already
+        // decided by the time it runs) - its label goes in the slot instead, with no separate
+        // phase label after the bar since that would just repeat the same word.
+        var finishing = slot.Tracker.PhaseLabel == WorkTracker.FinishPhaseLabel;
 
         var spans = new List<ColoredSpan>(14)
         {
@@ -390,14 +423,14 @@ public sealed class ProgressRenderer : IDisposable
             new("]", Palette.Structure),
             new($" {percent,3}%", Palette.Progress),
         };
-        if (!muxing && slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
+        if (!finishing && slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
         {
             spans.Add(Separator);
             spans.Add(new(phaseLabel, Palette.Phase));
         }
         spans.Add(Separator);
-        if (muxing)
-            spans.Add(new("Muxing...", Palette.Phase));
+        if (finishing)
+            spans.Add(new(WorkTracker.FinishPhaseLabel, Palette.Phase));
         else
             AddChapterSpans(spans, slot.Tracker);
         spans.Add(Separator);

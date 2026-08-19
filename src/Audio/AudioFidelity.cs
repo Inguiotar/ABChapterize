@@ -152,7 +152,6 @@ public static class AudioFidelity
     /// </summary>
     /// <remarks>Notes: the transform count and what the measurement costs end to end.
     /// <include file='../../notes/Audio/AudioFidelity.xml' path='doc/member[@name="Dft"]/*' /></remarks>
-    /// </summary>
     /// <param name="real">Real parts, overwritten with the transform's.</param>
     /// <param name="imaginary">Imaginary parts, overwritten with the transform's.</param>
     private static void Dft(double[] real, double[] imaginary)

@@ -2838,7 +2838,9 @@ where every mark is an
 announcement without a number, the state shows the plain total instead:
 `mk 12`. Probe's percentage follows the probe position within the
 file's play time, so it can move nonlinearly — and, briefly, backwards,
-when a sequence gap makes the detector re-probe earlier candidates. `S-probe`
+when a sequence gap makes the detector re-probe earlier candidates. The label
+reads `Probe<<` for exactly that stretch, so a falling percentage is
+recognisable as the re-probe rather than as the bar misbehaving. `S-probe`
 is [Probe's second half](#reading-the-music-first) on a file that read its
 music first; its percentage runs over the stretches that half still has to
 read rather than over the whole file. Scan
@@ -2847,7 +2849,7 @@ recognizer's own position through the chunk it is working on rather than
 jumping once per finished chunk — so a long gap keeps showing that something
 is happening throughout.
 
-Once detection finishes, the bar switches to a final `Muxing...` phase while
+Once detection finishes, the bar switches to a final `Finish` phase while
 the chapter marks are written into the file — worth watching on a large
 file or a slow disk, since this step still has to shuffle the whole file's
 data through ffmpeg even though it only copies streams rather than

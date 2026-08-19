@@ -196,7 +196,6 @@ internal static class PhraseCompiler
     /// </summary>
     /// <remarks>Notes: the spelling wobble that made an unquantified alternation cost six marks.
     /// <include file='../../../notes/Language/Phrases/PhraseCompiler.xml' path='doc/member[@name="Distribute"]/*' /></remarks>
-    /// </summary>
     /// <param name="body">One wording, anchors already stripped and with no top-level alternation
     /// left.</param>
     /// <param name="what">How to name this phrase in an error message.</param>

@@ -59,7 +59,6 @@ public sealed class SwedishNumberParser : INumberWordParser
     /// produced - it normalizes to "skatte", which is an ordinary Swedish word.
     /// <include file='../../../notes/Language/Parsers/SwedishNumberParser.xml' path='doc/member[@name="OrdinalBase"]/*' />
     /// </para>
-    /// </para>
     /// </summary>
     private static readonly Dictionary<string, int> OrdinalBase = new()
     {

@@ -461,16 +461,16 @@ public sealed class FileProcessor
         "  on Linux). Point the FFMPEG_DIR environment variable at that build to use it.";
 
     /// <summary>
-    /// Starts the "Muxing" phase on a file's progress bar and returns a callback translating
+    /// Starts the "Finish" phase on a file's progress bar and returns a callback translating
     /// ffmpeg's processed play time (what <see cref="FfmpegClient.WriteChaptersAsync"/> reports)
     /// into the byte-based progress <see cref="WorkTracker"/> expects - the same play-time-to-bytes
     /// conversion <see cref="ChapterDetector"/> uses for its own phases.
     /// </summary>
     /// <param name="work">The file's progress tracker.</param>
     /// <param name="info">The file's probe result, for its size and duration.</param>
-    private static Action<double> BeginMuxingPhase(WorkTracker work, MediaInfo info)
+    private static Action<double> BeginFinishPhase(WorkTracker work, MediaInfo info)
     {
-        work.BeginPhase("Muxing", info.SizeBytes);
+        work.BeginPhase(WorkTracker.FinishPhaseLabel, info.SizeBytes);
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         return seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond));
     }
@@ -1554,7 +1554,7 @@ public sealed class FileProcessor
     {
         var earlierBakKept = await ctx.Ffmpeg.WriteChaptersAsync(
             ctx.File, chapters, ctx.Info.DurationSeconds, _options.Backup,
-            BeginMuxingPhase(ctx.Work, ctx.Info), ct);
+            BeginFinishPhase(ctx.Work, ctx.Info), ct);
         return (RenameCommitted(ctx.File, renameTo), FormatBackupNote(_options.Backup, earlierBakKept));
     }
 

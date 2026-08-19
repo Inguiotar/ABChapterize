@@ -39,6 +39,14 @@ earn a round number.
 
 ### Changed
 
+- **The progress bar says when it is going back over ground it has already covered.**
+  Probe's percentage runs backwards while a gap in the chapter numbering sends it to
+  re-probe earlier candidates, which looked like the bar misbehaving. It now reads
+  `Probe<<` for exactly that stretch and `Probe` again afterwards.
+
+- **The final phase is called `Finish` rather than `Muxing...`.** Same step — writing the
+  chapter marks into the file — under a name that says what is happening rather than how.
+
 - **The processing passes have names instead of numbers.** They had grown into Pass 1, 2,
   2.5, 3 and 3.5, and the fractions were a fiction: "pass 2.5" was never a step between
   two others, it was the probing pass run again over a gap with a heavier model. Each pass

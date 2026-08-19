@@ -304,8 +304,29 @@ internal sealed class RegionProber
     /// reading ahead (see <see cref="ExtendToPlannedSeam"/>), both for the same reason: what a
     /// second look is worth is its own framing, and anything shared with the first look throws that
     /// away.
+    /// <para>
+    /// Assigned only through <see cref="Reprobing"/>, so the progress bar cannot disagree with it.
+    /// </para>
     /// </summary>
     private bool _reprobing;
+
+    /// <summary>
+    /// <see cref="_reprobing"/> together with the progress bar's own marker for it
+    /// (<see cref="WorkTracker.PhaseRevisiting"/>), which is why nothing assigns the field
+    /// directly: a re-probe walks backwards through candidates the phase has already counted, so
+    /// its percentage falls, and without the label saying why that reads as the bar malfunctioning.
+    /// Setting the two together is what keeps them from drifting apart across the several places a
+    /// re-probe can end - including the early return when a gap yields no candidates at all.
+    /// </summary>
+    private bool Reprobing
+    {
+        get => _reprobing;
+        set
+        {
+            _reprobing = value;
+            _ctx.Work.PhaseRevisiting = value;
+        }
+    }
 
     /// <summary>Where the last accepted mark's own candidate expected its announcement, or null
     /// before this region has one. The lower bound of a sequence-gap re-probe: the stretch worth a
@@ -2856,7 +2877,7 @@ internal sealed class RegionProber
     {
         // Before the candidates are built: the recovery framing and the union candidate set are the
         // same flag, and both belong to this list.
-        _reprobing = true;
+        Reprobing = true;
         _gapAbove = number;
         _subFloorSeconds = SubFloorForReprobe();
         var candidates = ReprobeCandidates(fromSeconds, toSeconds);
@@ -2874,7 +2895,7 @@ internal sealed class RegionProber
         if (candidates.Count == 0)
         {
             _env.Log?.Invoke(note + "no candidates between the two marks - deferred to the gap scan");
-            _reprobing = false;
+            Reprobing = false;
             _gapAbove = null;
             return;
         }
@@ -2917,7 +2938,7 @@ internal sealed class RegionProber
             _env.Log?.Invoke(
                 note + $"measured a {withheld:0.##} s chapter break - kept for the gap passes, " +
                 "not applied to the forward scan");
-        _reprobing = false;
+        Reprobing = false;
         _gapAbove = null;
         _subFloorSeconds = null;
     }
