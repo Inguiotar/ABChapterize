@@ -790,20 +790,11 @@ internal static class DetectionTuning
     /// word remarkably well: "Chapter Five" read from audio starting a third of the way into
     /// "Chapter" still comes back as "Chapter 5". So the reported onset is biased <em>late</em>, and
     /// a mark placed one --mark-lead before it lands on the announcement instead of in front of it.
-    /// The effect is per-narrator, not per-language: it cost nothing on the German jingle books and
-    /// broke five marks across the two English ones and the French one.
-    /// </para>
-    /// <para>
-    /// Measured over the fourteen-book run of 2026-08-03 (328 refinements that reported an onset,
-    /// debug logs replayed): the gap between a refined onset and the end of the silence in front of
-    /// it is 0.00-0.57 s for 114 marks and 4.5 s or more for the remaining 214, with nothing at all
-    /// in between - the second group being the jingle books, where music, not silence, precedes the
-    /// announcement and there is no boundary to anchor to. Any threshold from 0.75 s to 4.5 s
-    /// therefore produces the identical result on that corpus; 1 s sits in it with room on both
-    /// sides. Not one of the 328 had its onset land <em>before</em> the preceding silence ended,
-    /// which is what makes a backward-only correction the right shape.
+    /// The effect is per-narrator, not per-language.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the bimodal gap distribution that lets any threshold across a wide range give the identical result.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkSilenceAnchorSeconds"]/*' /></remarks>
     internal const double PreciseMarkSilenceAnchorSeconds = 1.0;
 
     /// <summary>
@@ -814,13 +805,10 @@ internal static class DetectionTuning
     /// edge's known late bias.
     /// <para>
     /// Capped rather than trusted outright, because the voice-activity detector's idea of where
-    /// speech resumes is occasionally far out: replaying the fourteen-book corpus's own logs
-    /// (2026-08-09), 116 of the 264 marks that take the no-floor branch have a jingle's speech
-    /// resumption within reach of their onset, and the edge sits a median of 0.05 s behind it, 88 %
-    /// within 0.10 s and none further than 0.20 s - but two marks in "Gruelfin.m4b" (3:31:20 and
-    /// 12:04:50) have VAD hearing speech 2.54 s and 2.65 s before the announcement, and anchoring
-    /// straight to that would plant those marks in the middle of the music. The cap keeps the
-    /// correction worth having on the tail without letting one bad reading move a mark by seconds.
+    /// speech resumes is occasionally far out - one corpus book has it hearing speech more than two
+    /// seconds before the announcement, and anchoring straight to that would plant those marks in
+    /// the middle of the music. The cap keeps the correction worth having on the tail without
+    /// letting one bad reading move a mark by seconds.
     /// </para>
     /// <para>
     /// Set to <see cref="PreciseMarkFixedStepSeconds"/>, and that identity is the argument for the
@@ -829,6 +817,8 @@ internal static class DetectionTuning
     /// bounded by one step claims no more precision than the search that produced it.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: how close the VAD speech resumption normally sits to the plateau edge, and the two marks it is far out on.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkMusicAnchorCapSeconds"]/*' /></remarks>
     internal const double PreciseMarkMusicAnchorCapSeconds = PreciseMarkFixedStepSeconds;
 
     /// <summary>
@@ -840,24 +830,21 @@ internal static class DetectionTuning
     /// and leave this test measuring exactly the same ratio.
     /// <para>
     /// 25 dB is a power ratio of about 300. Comfortably above the room tone a narrator's pause is
-    /// actually made of - measured at 50-58 dB below the announcement on the two cases this was
-    /// calibrated against, Paula Monti chapter 19 and The Philosopher's Stone chapter 5 - and
-    /// comfortably below the announcement's own opening consonant, which on Philosopher's Stone
-    /// chapter 5 is the affricate of "Chapter", reaching within 27 dB of the peak in its first
-    /// 10 ms.
+    /// actually made of, and comfortably below the announcement's own opening consonant.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the room-tone and opening-consonant levels measured on the two calibration cases.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkOnsetFloorDb"]/*' /></remarks>
     internal const double PreciseMarkOnsetFloorDb = 25;
 
     /// <summary>
     /// How long audio must stay above <see cref="PreciseMarkOnsetFloorDb"/> before
     /// <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/> accepts it as the announcement
-    /// beginning rather than as a click inside the pause. The failure it exists for is on record:
-    /// silencedetect closed Paula Monti chapter 19's pause at 3:18:50.72 on a -47 dBFS mouth noise
-    /// lasting 20 ms, while "Première" did not begin until 3:18:51.13 - so a rule that stopped at
-    /// the silence's end alone put that mark 0.39 s early. Long enough to outlast such a transient,
+    /// beginning rather than as a click inside the pause. Long enough to outlast such a transient,
     /// short enough that no real speech onset is missed: a syllable runs several times this.
     /// </summary>
+    /// <remarks>Notes: the mouth noise that closed a silence early, and what it cost.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkOnsetSustainSeconds"]/*' /></remarks>
     internal const double PreciseMarkOnsetSustainSeconds = 0.05;
 
     /// <summary>
@@ -867,13 +854,12 @@ internal static class DetectionTuning
     /// <para>
     /// A single announcement numbered below the last accepted one is the ordinary in-text mention
     /// ("as I said in chapter three") the rejection message already guesses at; a run of them
-    /// climbing 1, 2, 3 is a book divided into parts. Measured over the fourteen-book run of
-    /// 2026-08-03: thirteen books produced no such rejection at all - every rejection they had was
-    /// a re-detection of the chapter just accepted, equal to it rather than below it - and "The
-    /// Forever War", which restarts its numbering in each of its parts, produced 27 of them in two
-    /// runs of 9 and 8. Three is a comfortable floor between those.
+    /// climbing 1, 2, 3 is a book divided into parts. Three is a comfortable floor between what an
+    /// ordinary book produces and what a genuinely restarting one does.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the corpus counts on both sides of that floor.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SequenceRestartRunLength"]/*' /></remarks>
     internal const int SequenceRestartRunLength = 3;
 
     /// <summary>
@@ -921,8 +907,7 @@ internal static class DetectionTuning
     /// suspect and re-read (<see cref="SuspectNumberMender"/>). Above this, a misheard number is by
     /// far the likelier explanation than that many consecutive announcements going unheard: the
     /// numbers that sound alike are exactly the ones that are far apart, since the confusion is in
-    /// the word, not the value. Observed on BARDIOC.m4b (2026-07-30) where "neunzehn" (19) came back
-    /// as 90, and every earlier gap on that book was one or two chapters wide.
+    /// the word, not the value.
     /// <para>
     /// Set at three because that is where the two costs cross. Gaps of one to three are the ordinary
     /// kind - a chapter with no jingle, an unreadable number, an announcement the narrator rushed -
@@ -932,6 +917,8 @@ internal static class DetectionTuning
     /// gets better the wider the gap.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the mishearing that shows why numbers far apart are the ones that sound alike.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SuspectGapMinMissing"]/*' /></remarks>
     internal const int SuspectGapMinMissing = 3;
 
     /// <summary>
@@ -942,13 +929,13 @@ internal static class DetectionTuning
     /// not a re-roll of the same dice - the same property <see cref="RegionProber"/>'s gap re-probe
     /// relies on.
     /// <para>
-    /// The two widths straddle the case that first demonstrated it: chapter 13 of "I Shall Wear
-    /// Midnight" came back as "CHAPTER XIII" from a 16.1 s window and as "Chapter 13" from a 48.8 s
-    /// one over the same announcement (2026-07-30). The leads differ as well as the widths, so the
-    /// announcement's offset inside Whisper's fixed 30 s mel frame moves too rather than only the
-    /// amount of context around it.
+    /// The two widths straddle the case that first demonstrated it. The leads differ as well as the
+    /// widths, so the announcement's offset inside Whisper's fixed 30 s mel frame moves too rather
+    /// than only the amount of context around it.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the chapter that read Roman from one width and digits from the other.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SuspectGapReframes"]/*' /></remarks>
     internal static readonly (double LeadSeconds, double LengthSeconds)[] SuspectGapReframes =
         [(2.0, 15.0), (12.0, 45.0)];
 
@@ -960,24 +947,18 @@ internal static class DetectionTuning
     /// twice, which is what the corpus figures below were measured on.
     /// <para>
     /// The whole check is free - those probes are transcribed either way, and only their yes/no
-    /// answer used to be kept - and the ten-book test run of 2026-08-01 says it is also close to
-    /// unerring. Over 271 marks the refinement's plurality reading agreed with the accepted number
-    /// 267 times, disagreed once (the mishearing this was built for: "Die Cyber-Brutzellen" chapter
-    /// 14 announced at 7:01:30, read as 40 by the one 44 s window that found it and as 14 by all ten
-    /// refinement probes) and offered nothing at all 3 times. Four refinements split their vote and
-    /// the majority was right in all four ({18:3, 8:2}, {15:8, 510:4}, {15:11, 4:1, 5:1, 50:1},
-    /// {19:4, 9:1}), which is what the majority requirement is calibrated against.
+    /// answer used to be kept - and it is close to unerring on the corpus it was calibrated against.
     /// </para>
     /// <para>
     /// Three rather than two because a two-probe refinement is a thin sample and abstaining costs
     /// nothing: the vote only ever acts when it <em>disagrees</em>, and a number left uncorrected
     /// here still faces <see cref="SuspectNumberMender"/>, the ascending-sequence filter in
     /// <see cref="GapPlanning.Normalize"/> and the repair in
-    /// <see cref="ChapterDetector.RepairSequenceOutliersAsync"/>. Measured on the same run, a minimum of
-    /// three abstains on 4 of 271 marks and 3 more have no numbered reading at all; the median
-    /// refinement offers five.
+    /// <see cref="ChapterDetector.RepairSequenceOutliersAsync"/>.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the 271-mark agreement count, the four split votes, and what a minimum of three abstains on.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="RefinedNumberVoteMinimum"]/*' /></remarks>
     internal const int RefinedNumberVoteMinimum = 3;
 
     /// <summary>
@@ -988,10 +969,11 @@ internal static class DetectionTuning
     /// <para>
     /// Generous rather than tight, because reaching this cap means the book has more mis-numbered
     /// marks than it has chapters worth trusting, and eight re-reads (at most two decodes each) is a
-    /// rounding error next to the Scan such a book is heading for anyway. Over the ten-book run of
-    /// 2026-08-01 exactly one file produced a single outlier.
+    /// rounding error next to the Scan such a book is heading for anyway.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: how many outliers a real corpus actually produces.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MaxSequenceRepairsPerFile"]/*' /></remarks>
     internal const int MaxSequenceRepairsPerFile = 8;
 
     /// <summary>
@@ -1001,14 +983,13 @@ internal static class DetectionTuning
     /// mention reaches the re-read too, and each one costs up to three decodes.
     /// <para>
     /// Set well above what real books need rather than tightly, because the event is rare and the
-    /// cases it does fire on are the ones worth paying for. Counted over the seven-book test run of
-    /// 2026-07-31 (4.5-15.6 h each, "chapter phrase heard, no number readable, window produced no
-    /// mark"): zero occurrences on five of them, exactly one on "I Shall Wear Midnight" ("CHAPTER X"
-    /// re-hearing an already-marked chapter 10) and one on "Paula Monti" ("chapitre ban 5", the
-    /// genuine chapter 25 that the run lost). A per-region cap therefore only ever bites on a book
-    /// whose prose talks about chapters constantly, which is exactly the book where it should.
+    /// cases it does fire on are the ones worth paying for. A per-region cap therefore only ever
+    /// bites on a book whose prose talks about chapters constantly, which is exactly the book where
+    /// it should.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: how rarely this fires across a seven-book run, and the two cases that did.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MaxUnnumberedMendsPerRegion"]/*' /></remarks>
     internal const int MaxUnnumberedMendsPerRegion = 8;
 
     /// <summary>
@@ -1017,20 +998,19 @@ internal static class DetectionTuning
     /// 0.1 s reach from just under <c>--min-silence-length</c> down to 0.5 s below it - at the
     /// default floor, [1.4, 1.5) down to [1.0, 1.1).
     /// <para>
-    /// The range is measured, not guessed. On "Paula Monti" (2026-07-31, 4 h 34 min, French) every
-    /// one of the five chapters Probe missed was preceded by a pause just under the floor: chapter
-    /// 3 by 1.46 s, 12 by 1.49 s, 14 by 1.39 s, 16 by 1.41 s and 19 by 1.41 s. That narrator's
-    /// non-jingle chapter break simply sits on the 1.5 s line, and a book whose breaks are that
-    /// short will have all of them in the top band or two - which is why the sweeps run longest-first
-    /// and stop the moment the gap closes, instead of one wide sweep down to 1.0 s.
+    /// The range is measured, not guessed: on the book this was calibrated against, every chapter
+    /// Probe missed was preceded by a pause just under the floor. A book whose breaks are that short
+    /// will have all of them in the top band or two - which is why the sweeps run longest-first and
+    /// stop the moment the gap closes, instead of one wide sweep down to 1.0 s.
     /// </para>
     /// <para>
-    /// Stopping at 0.5 s below the floor is where the yield dies. Band populations on that same
-    /// file, top to bottom: 5, 6, 13, 36, 123 silences - roughly geometric growth downwards, so each
-    /// further step buys several times as much probing as the one before it while the chance of a
-    /// real chapter break hiding there keeps falling.
+    /// Stopping at 0.5 s below the floor is where the yield dies: band populations grow roughly
+    /// geometrically downwards, so each further step buys several times as much probing as the one
+    /// before it while the chance of a real chapter break hiding there keeps falling.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the five pauses that set the range, and the measured band populations.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SubFloorSweepBandCount"]/*' /></remarks>
     internal const int SubFloorSweepBandCount = 5;
 
     /// <summary>Width of one <see cref="SubFloorSweepBandCount"/> band, in seconds.</summary>
@@ -1046,10 +1026,11 @@ internal static class DetectionTuning
     /// of the whole thing would let a gap cost twice what it did before the sweeps existed. Three
     /// quarters keeps the worst case at 1.75x while still affording one probe per 80 s of gap at the
     /// 50 s ceiling window, or per 40 s at the plain 12 s one - far more than the one or two a real
-    /// book's bands hold (measured on "Paula Monti", 2026-07-31: five gaps, one probe each, two for
-    /// one of them).
+    /// book's bands hold.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: what a real book's bands actually cost.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SubFloorSweepBudgetFraction"]/*' /></remarks>
     internal const double SubFloorSweepBudgetFraction = 0.75;
 
     /// <summary>
@@ -1103,23 +1084,18 @@ internal static class DetectionTuning
     /// book whose pauses cluster just above the probing threshold produces windows that each overlap
     /// the next for hours on end, and then the premise is not merely unlikely but false.
     /// <para>
-    /// The case that forced this: BARDIOC.m4b, 2026-08-08, build 257 (the build that first cut the
-    /// candidate list at <see cref="AdaptiveSilenceFloorSeconds"/> rather than at
-    /// --min-silence-length). A single confident chapter-1 mark at 0:07:58 settled <em>6260</em>
-    /// windows in one step and probing resumed at 11:13:27 - eleven hours of a fifteen-hour book
-    /// skipped outright, with all 6260 also queued for the unconditional gap re-probe that any later
-    /// sequence gap would trigger.
+    /// The case that forced this was a single confident chapter-1 mark settling thousands of windows
+    /// in one step, skipping most of a fifteen-hour book outright - with all of them also queued for
+    /// the unconditional gap re-probe that any later sequence gap would trigger.
     /// </para>
     /// <para>
-    /// Ten is where the corpus says the cap costs nothing. Counted over the fourteen-book run's
-    /// debug logs in L:\Temp (builds 244-251, i.e. before the candidate list widened), 292 chains:
-    /// lengths 1:126, 2:88, 3:38, 4:13, 5:5, 6:6, 7:4, 8:4, 9:1, 10:2, 11:1, 12:1, 15:1, 17:1,
-    /// 23:1. A cap of 10 leaves 287 of them exactly as they were and clips five, for 28 extra probes
-    /// across all fourteen books put together. The cap is also safe by construction in a way the
-    /// skip is not: a clipped window is <em>probed</em>, never dropped, so this can only ever find
-    /// more chapters than going uncapped would.
+    /// Ten is where the corpus says the cap costs nothing, and the cap is safe by construction in a
+    /// way the skip is not: a clipped window is <em>probed</em>, never dropped, so this can only ever
+    /// find more chapters than going uncapped would.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the run that skipped eleven hours of a book, and the chain-length histogram behind the cap.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MaxSettledWindowSkip"]/*' /></remarks>
     internal const int MaxSettledWindowSkip = 10;
 
     /// <summary>
@@ -1148,10 +1124,11 @@ internal static class DetectionTuning
     /// Applied twice per match, to the phrase time before placement and to the placed time after -
     /// the jitter can exceed this window on the phrase time alone (a re-decode may put the same
     /// words in a segment starting well over ten seconds earlier), while the anchors both walk back
-    /// to agree exactly. Only the second check caught the four duplicate pairs seen on
-    /// "Die Dritte Macht.m4b", 2026-07-28.
+    /// to agree exactly. Only the second check catches the duplicates seen on real audio.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the book and run those duplicate pairs came from.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="NamedMarkDedupeSeconds"]/*' /></remarks>
     internal const double NamedMarkDedupeSeconds = 10;
 
     /// <summary>
@@ -1171,20 +1148,18 @@ internal static class DetectionTuning
     /// <para>
     /// The difference from the named case is what happens next, and it is the whole reason this is
     /// a separate rule. Two named matches of the same phrase are interchangeable, so the duplicate
-    /// is simply dropped. Two numbered ones disagree about something - "Paula Monti", 2026-07-31,
-    /// <c>-m turbo</c>: chapter 13's announcement was read as "chapitre 12" by Probe and correctly
-    /// as 13 by Scan, leaving two marks a hundredth of a second apart titled Chapitre 12 and
-    /// Chapitre 13 - and dropping either one at random would be a coin toss over which number the
-    /// book carries from there on.
+    /// is simply dropped. Two numbered ones disagree about something, and dropping either one at
+    /// random would be a coin toss over which number the book carries from there on.
     /// </para>
     /// <para>
     /// <see cref="ChapterDetector.DropNamedMarkEchoes"/> borrows it for a third question - is this
     /// chapter mark another line of a named announcement's heading? - on the strength of the same
     /// "well below the shortest chapter anyone writes" half. The spread it has to cover there is
-    /// between two lines of one heading rather than between two readings of one onset, measured at
-    /// 2.86 s on "Corsa nello spazio"'s "Epilogo / 2179 / Spazio profondo" (2026-08-06).
+    /// between two lines of one heading rather than between two readings of one onset.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the two-mark disagreement that makes this a separate rule, and the heading spread it has to cover.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="CollidingChapterMarkSeconds"]/*' /></remarks>
     internal const double CollidingChapterMarkSeconds = NamedMarkDedupeSeconds / 2;
 
     /// <summary>
@@ -1194,12 +1169,13 @@ internal static class DetectionTuning
     /// attempts are voted on.
     /// <para>
     /// Raised from 0.5 to 0.6 on 2026-08-03. The old value was <see cref="LowConfidenceThreshold"/>
-    /// borrowed for a question it does not really describe, and it was never the binding problem:
-    /// "Das Mutantenkorps" resolved to English off a single 0.36 answer, which fails either bar.
+    /// borrowed for a question it does not really describe, and it was never the binding problem.
     /// What changed is that falling below the bar is now cheap - it costs another probe rather than
     /// the whole book - so the bar may as well sit where a weak answer stops being worth believing.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the misdetection that raising the bar would not have caught either.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AutoLanguageProbabilityThreshold"]/*' /></remarks>
     internal const double AutoLanguageProbabilityThreshold = 0.6;
 
     /// <summary>
@@ -1221,14 +1197,16 @@ internal static class DetectionTuning
     /// worth sampling - half of it, which no jingle, credit roll or scene of sound effects reaches
     /// and ordinary narration clears easily.
     /// <para>
-    /// Measured over the window rather than demanded of one contiguous VAD run, which is the
-    /// version this replaced and was wrong in practice: raw VAD segments are sentence-sized (13779
-    /// of them in "Das Mutantenkorps", averaging 4 s), so a 20 s unbroken run is rare enough that
-    /// the search for one walked 80 minutes away from the anchor it was supposed to sample near.
-    /// A window that is half speech is what "this is narration" actually means; whether the reader
-    /// paused for breath inside it does not matter, since the detector reads the whole 30 s.
+    /// Measured over the window rather than demanded of one contiguous VAD run, which is the version
+    /// this replaced and was wrong in practice: raw VAD segments are sentence-sized, so a 20 s
+    /// unbroken run is rare enough that the search for one walked far away from the anchor it was
+    /// supposed to sample near. A window that is half speech is what "this is narration" actually
+    /// means; whether the reader paused for breath inside it does not matter, since the detector
+    /// reads the whole 30 s.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: how far the contiguous-run version wandered, and the segment statistics behind it.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AutoLanguageMinSpeechInWindowSeconds"]/*' /></remarks>
     internal const double AutoLanguageMinSpeechInWindowSeconds = AutoLanguageProbeSeconds / 2;
 
     /// <summary>How far past an existing chapter mark a language-detection sample starts, on
@@ -1291,17 +1269,18 @@ internal static class DetectionTuning
     /// <summary>
     /// How far before the phrase a Scan "heard it, could not number it" retry starts its decode.
     /// The retry exists because the notation Whisper writes a number in follows the window framing
-    /// rather than the audio: chapter 13 of "I Shall Wear Midnight" came out "CHAPTER XIII" from
-    /// windows starting 0 s and 1.7 s before the phrase, and "Chapter 13" from one starting 4.8 s
-    /// before it (measured 2026-07-30). This sits comfortably past that observed flip - the run-up
-    /// is what has to be in the window, and a couple of seconds either way costs nothing.
+    /// rather than the audio. This sits comfortably past the observed flip - the run-up is what has
+    /// to be in the window, and a couple of seconds either way costs nothing.
     /// </summary>
+    /// <remarks>Notes: the window starts that flipped one chapter between Roman numerals and digits.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="UnnumberedRetryLeadSeconds"]/*' /></remarks>
     internal const double UnnumberedRetryLeadSeconds = 8.0;
 
-    /// <summary>Length of a Scan "heard it, could not number it" retry decode, chosen to match
-    /// the framing that produced a readable number in the case above (48.8 s) rather than the
-    /// short sub-chunks <see cref="GapRetryChunkSeconds"/> uses - those recover audio Whisper
-    /// skipped, which is the opposite problem and wants the opposite window.</summary>
+    /// <summary>Length of a Scan "heard it, could not number it" retry decode, chosen to match the
+    /// framing that produced a readable number in the case <see cref="UnnumberedRetryLeadSeconds"/>
+    /// documents, rather than the short sub-chunks <see cref="GapRetryChunkSeconds"/> uses - those
+    /// recover audio Whisper skipped, which is the opposite problem and wants the opposite
+    /// window.</summary>
     internal const double UnnumberedRetryWindowSeconds = 45.0;
 
     /// <summary>

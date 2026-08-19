@@ -184,4 +184,212 @@
     window A/B-able across boxes.
     </para>
   </member>
+
+  <member name="PreciseMarkSilenceAnchorSeconds">
+    <para>
+    <b>Why the effect is per-narrator, not per-language.</b> The plateau's late bias cost nothing on
+    the German jingle books and broke five marks across the two English ones and the French one.
+    </para>
+    <para>
+    <b>The bimodal gap distribution.</b> Measured over the fourteen-book run of 2026-08-03 (328
+    refinements that reported an onset, debug logs replayed): the gap between a refined onset and the
+    end of the silence in front of it is 0.00-0.57 s for 114 marks and 4.5 s or more for the
+    remaining 214, with nothing at all in between - the second group being the jingle books, where
+    music, not silence, precedes the announcement and there is no boundary to anchor to. Any
+    threshold from 0.75 s to 4.5 s therefore produces the identical result on that corpus; 1 s sits
+    in it with room on both sides. Not one of the 328 had its onset land <em>before</em> the
+    preceding silence ended, which is what makes a backward-only correction the right shape.
+    </para>
+  </member>
+
+  <member name="PreciseMarkMusicAnchorCapSeconds">
+    <para>
+    <b>How close the VAD speech resumption normally sits.</b> Replaying the fourteen-book corpus's
+    own logs (2026-08-09), 116 of the 264 marks that take the no-floor branch have a jingle's speech
+    resumption within reach of their onset, and the edge sits a median of 0.05 s behind it, 88 %
+    within 0.10 s and none further than 0.20 s.
+    </para>
+    <para>
+    <b>The two marks it is far out on.</b> Two marks in "Gruelfin.m4b" (3:31:20 and 12:04:50) have
+    VAD hearing speech 2.54 s and 2.65 s before the announcement; anchoring straight to that would
+    plant both in the middle of the music. The cap buys the tail without betting on the detector.
+    </para>
+  </member>
+
+  <member name="PreciseMarkOnsetFloorDb">
+    <para>
+    <b>The levels this sits between.</b> Room tone in a narrator's pause measured at 50-58 dB below
+    the announcement on the two cases this was calibrated against, Paula Monti chapter 19 and The
+    Philosopher's Stone chapter 5; the announcement's own opening consonant on Philosopher's Stone
+    chapter 5 is the affricate of "Chapter", reaching within 27 dB of the peak in its first 10 ms.
+    25 dB clears both.
+    </para>
+  </member>
+
+  <member name="PreciseMarkOnsetSustainSeconds">
+    <para>
+    <b>The click that closed a silence early.</b> silencedetect closed Paula Monti chapter 19's pause
+    at 3:18:50.72 on a -47 dBFS mouth noise lasting 20 ms, while "Première" did not begin until
+    3:18:51.13 - so a rule that stopped at the silence's end alone put that mark 0.39 s early.
+    </para>
+  </member>
+
+  <member name="SequenceRestartRunLength">
+    <para>
+    <b>The corpus counts on both sides of the floor.</b> Measured over the fourteen-book run of
+    2026-08-03: thirteen books produced no such rejection at all - every rejection they had was a
+    re-detection of the chapter just accepted, equal to it rather than below it - and "The Forever
+    War", which restarts its numbering in each of its parts, produced 27 of them in two runs of 9
+    and 8.
+    </para>
+  </member>
+
+  <member name="AdaptiveSilenceFloorSeconds">
+    <para>
+    <b>The two books that put the floor at 0.8 s.</b> "Paula Monti" (2026-07-31, 4 h 34 min, French)
+    lost five chapters to pauses of 1.39-1.49 s - that narrator's non-jingle chapter break simply
+    sits on the 1.5 s line - and "Die Dritte Macht" (2026-07-28, 15 h 10 min) had a genuine
+    inter-chapter silence of 0.54 s.
+    </para>
+    <para>
+    <b>What an unbounded band would cost.</b> "Die Dritte Macht"'s 0.54 s silence proposes 0.41 s,
+    i.e. the floor, from its own chapter onwards, so the band would be the full [0.8, 1.5) over
+    fifteen hours. The order of magnitude that implies, measured on "Stalker.m4b" (2026-07-28,
+    13 h 28 min): 1032 silences of &gt;= 1.5 s against 5962 of &gt;= 1.0 s.
+    </para>
+  </member>
+
+  <member name="SuspectGapMinMissing">
+    <para>
+    <b>Why numbers far apart are the ones that sound alike.</b> Observed on BARDIOC.m4b (2026-07-30)
+    where "neunzehn" (19) came back as 90, and every earlier gap on that book was one or two chapters
+    wide.
+    </para>
+  </member>
+
+  <member name="SuspectGapReframes">
+    <para>
+    <b>The case that first demonstrated it.</b> Chapter 13 of "I Shall Wear Midnight" came back as
+    "CHAPTER XIII" from a 16.1 s window and as "Chapter 13" from a 48.8 s one over the same
+    announcement (2026-07-30).
+    </para>
+  </member>
+
+  <member name="RefinedNumberVoteMinimum">
+    <para>
+    <b>How well the refinement's plurality reading agrees.</b> Over the ten-book test run of
+    2026-08-01, across 271 marks it agreed with the accepted number 267 times, disagreed once - the
+    mishearing this was built for, "Die Cyber-Brutzellen" chapter 14 announced at 7:01:30, read as 40
+    by the one 44 s window that found it and as 14 by all ten refinement probes - and offered nothing
+    at all 3 times.
+    </para>
+    <para>
+    <b>The four split votes, which the majority requirement is calibrated against.</b> {18:3, 8:2},
+    {15:8, 510:4}, {15:11, 4:1, 5:1, 50:1}, {19:4, 9:1} - the majority was right in all four.
+    </para>
+    <para>
+    <b>What a minimum of three abstains on.</b> Measured on the same run: 4 of 271 marks, with 3 more
+    having no numbered reading at all; the median refinement offers five readings.
+    </para>
+  </member>
+
+  <member name="MaxSequenceRepairsPerFile">
+    <para>
+    <b>How many outliers a real corpus produces.</b> Over the ten-book run of 2026-08-01, exactly one
+    file produced a single outlier.
+    </para>
+  </member>
+
+  <member name="MaxUnnumberedMendsPerRegion">
+    <para>
+    <b>How rarely this fires.</b> Counted over the seven-book test run of 2026-07-31 (4.5-15.6 h
+    each, "chapter phrase heard, no number readable, window produced no mark"): zero occurrences on
+    five of them, exactly one on "I Shall Wear Midnight" ("CHAPTER X" re-hearing an already-marked
+    chapter 10) and one on "Paula Monti" ("chapitre ban 5", the genuine chapter 25 that the run
+    lost).
+    </para>
+  </member>
+
+  <member name="SubFloorSweepBandCount">
+    <para>
+    <b>The five pauses that set the range.</b> On "Paula Monti" (2026-07-31, 4 h 34 min, French)
+    every one of the five chapters Probe missed was preceded by a pause just under the floor: chapter
+    3 by 1.46 s, 12 by 1.49 s, 14 by 1.39 s, 16 by 1.41 s and 19 by 1.41 s.
+    </para>
+    <para>
+    <b>The measured band populations.</b> On that same file, top to bottom: 5, 6, 13, 36, 123
+    silences - roughly geometric growth downwards, which is why stopping 0.5 s below the floor is
+    where the yield dies.
+    </para>
+  </member>
+
+  <member name="SubFloorSweepBudgetFraction">
+    <para>
+    <b>What a real book's bands cost.</b> Measured on "Paula Monti", 2026-07-31: five gaps, one probe
+    each, two for one of them - far below the budget, which only ever bites on a gap dense in short
+    pauses.
+    </para>
+  </member>
+
+  <member name="MaxSettledWindowSkip">
+    <para>
+    <b>The run that skipped eleven hours.</b> BARDIOC.m4b, 2026-08-08, build 257 (the build that
+    first cut the candidate list at <see cref="AdaptiveSilenceFloorSeconds"/> rather than at
+    --min-silence-length). A single confident chapter-1 mark at 0:07:58 settled <b>6260</b> windows
+    in one step and probing resumed at 11:13:27 - eleven hours of a fifteen-hour book skipped
+    outright, with all 6260 also queued for the unconditional gap re-probe that any later sequence
+    gap would trigger.
+    </para>
+    <para>
+    <b>The chain-length histogram behind the cap.</b> Counted over the fourteen-book run's debug logs
+    in L:\Temp (builds 244-251, i.e. before the candidate list widened), 292 chains: lengths 1:126,
+    2:88, 3:38, 4:13, 5:5, 6:6, 7:4, 8:4, 9:1, 10:2, 11:1, 12:1, 15:1, 17:1, 23:1. A cap of 10 leaves
+    287 of them exactly as they were and clips five, for 28 extra probes across all fourteen books
+    put together.
+    </para>
+  </member>
+
+  <member name="NamedMarkDedupeSeconds">
+    <para>
+    <b>Where the duplicate pairs came from.</b> Four of them, seen on "Die Dritte Macht.m4b",
+    2026-07-28, and caught only by the second of the two checks.
+    </para>
+  </member>
+
+  <member name="CollidingChapterMarkSeconds">
+    <para>
+    <b>The disagreement that makes this a separate rule.</b> "Paula Monti", 2026-07-31,
+    <c>-m turbo</c>: chapter 13's announcement was read as "chapitre 12" by Probe and correctly as 13
+    by Scan, leaving two marks a hundredth of a second apart titled Chapitre 12 and Chapitre 13.
+    </para>
+    <para>
+    <b>The heading spread it has to cover.</b> Measured at 2.86 s on "Corsa nello spazio"'s
+    "Epilogo / 2179 / Spazio profondo" (2026-08-06).
+    </para>
+  </member>
+
+  <member name="AutoLanguageProbabilityThreshold">
+    <para>
+    <b>The misdetection raising the bar would not have caught.</b> "Das Mutantenkorps" resolved to
+    English off a single 0.36 answer, which fails either bar - which is why the raise from 0.5 to 0.6
+    (2026-08-03) is justified by the retry being cheap rather than by this case.
+    </para>
+  </member>
+
+  <member name="AutoLanguageMinSpeechInWindowSeconds">
+    <para>
+    <b>How far the contiguous-run version wandered.</b> Raw VAD segments are sentence-sized - 13779
+    of them in "Das Mutantenkorps", averaging 4 s - so a 20 s unbroken run is rare enough that the
+    search for one walked 80 minutes away from the anchor it was supposed to sample near.
+    </para>
+  </member>
+
+  <member name="UnnumberedRetryLeadSeconds">
+    <para>
+    <b>The window starts that flipped one chapter between notations.</b> Chapter 13 of "I Shall Wear
+    Midnight" came out "CHAPTER XIII" from windows starting 0 s and 1.7 s before the phrase, and
+    "Chapter 13" from one starting 4.8 s before it (measured 2026-07-30). The 48.8 s framing is the
+    one <see cref="UnnumberedRetryWindowSeconds"/> matches.
+    </para>
+  </member>
 </doc>
