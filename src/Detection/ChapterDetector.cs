@@ -1172,7 +1172,7 @@ public sealed class ChapterDetector
                 gap.Sequence, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-            work.HighestChapter = highest;
+            work.HighestChapters = highest;
             work.MissingChapters = missingNumbers.Count;
         }
         if (gaps.Count > 0)
@@ -1210,7 +1210,7 @@ public sealed class ChapterDetector
                 profile, chapters, trailing.Sequence, ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-            work.HighestChapter = highest;
+            work.HighestChapters = highest;
             work.MissingChapters = missingNumbers.Count;
             _log?.Invoke("Scan finished (trailing)");
 
@@ -1342,7 +1342,7 @@ public sealed class ChapterDetector
             speechSegments, bytesPerSecond, work, profile, chapters, sequence, ct);
         chapters = Normalize(chapters.Concat(fills).ToList());
         var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-        work.HighestChapter = highest;
+        work.HighestChapters = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke(fills.Count > 0
             ? $"Re-scan recovered {fills.Count} chapter(s)"
@@ -1571,7 +1571,7 @@ public sealed class ChapterDetector
         var recovered = found.Count - knownCount;
         chapters = Normalize(found);
         var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-        work.HighestChapter = highest;
+        work.HighestChapters = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke(recovered > 0
             ? $"Re-probe finished - recovered {recovered} chapter(s) without a full transcription"
@@ -2351,7 +2351,7 @@ public sealed class ChapterDetector
                 confirmedChapters.Add(new DetectedChapter(
                     expected, corrected ?? mark.StartSeconds, Sequence: part));
             var (highest, missingNumbers) = ChapterProgress(confirmedChapters, ExpectedStartChapter);
-            work.HighestChapter = highest;
+            work.HighestChapters = highest;
             work.MissingChapters = missingNumbers.Count;
             work.Advance(1);
         }
@@ -2992,7 +2992,7 @@ public sealed class ChapterDetector
         found.Add(new DetectedChapter(number, time, match.Confidence, Sequence: sequence));
         remaining?.Remove(number);
         var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), ExpectedStartChapter);
-        work.HighestChapter = highest;
+        work.HighestChapters = highest;
         work.MissingChapters = missingNumbers.Count;
         _log?.Invoke($"chapter {number} found in gap, mark placed at {FormatTimestamp(time)} " +
                      $"(confidence {match.Confidence:0.00}" +

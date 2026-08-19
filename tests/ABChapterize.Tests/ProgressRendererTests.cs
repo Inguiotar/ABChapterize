@@ -29,12 +29,14 @@ public class ProgressRendererTests
     /// reports.</param>
     private static (WorkTracker Tracker, string Label) Slot(
         long done, long total, int highestChapter = 0, int missingChapters = 0,
-        int extraMarks = 0, int? namedMarks = null)
+        int extraMarks = 0, int? namedMarks = null, int[]? sequences = null)
     {
         var t = new WorkTracker();
         t.BeginPhase("Analyze", total);
         t.SetPhaseProgress(done);
-        t.HighestChapter = highestChapter;
+        // The single-sequence spelling is the common one, so it stays the short parameter;
+        // sequences takes the multi-part case, where 0 is not a value the detector can produce.
+        t.HighestChapters = sequences ?? (highestChapter == 0 ? [] : [highestChapter]);
         t.MissingChapters = missingChapters;
         t.ExtraMarks = extraMarks;
         t.NamedMarks = namedMarks ?? extraMarks;
@@ -119,6 +121,25 @@ public class ProgressRendererTests
     }
 
     [Fact]
+    public void BuildLine_ShowsOneChapterNumberPerPart_WhenTheNumberingRestarts()
+    {
+        // A book in parts has no single "how far in": part 3's chapter 4 has not gone backwards
+        // from part 1's chapter 11, and reporting the last part alone would say it had. Each
+        // part's own high, in part order. The missing/extra bracket stays one total across them.
+        var line = ProgressRenderer.BuildLine(Slot(50, 100, sequences: [11, 15, 4], extraMarks: 1));
+        Assert.Contains("| ch 11,15,4(+1) |", line);
+    }
+
+    [Fact]
+    public void BuildLine_KeepsTheSingleNumberSpelling_ForAnOrdinaryBook()
+    {
+        // One part is by far the common case and must read exactly as it always did - no comma,
+        // no brackets around a single figure.
+        var line = ProgressRenderer.BuildLine(Slot(50, 100, highestChapter: 6, missingChapters: 2, extraMarks: 1));
+        Assert.Contains("| ch 6(-2+1) |", line);
+    }
+
+    [Fact]
     public void BuildLine_KeepsThePlainMarkTotal_WhenChapterNumbersAreIgnored()
     {
         // --ignore-chapter-numbers files chapter announcements among the named marks, so the
@@ -136,7 +157,7 @@ public class ProgressRendererTests
         var t = new WorkTracker();
         t.BeginPhase(WorkTracker.FinishPhaseLabel, 100);
         t.SetPhaseProgress(50);
-        t.HighestChapter = 6;
+        t.HighestChapters = [6];
         var line = ProgressRenderer.BuildLine((t, "book.m4b"));
 
         Assert.Contains("| Finish | 0:00 | book.m4b", line);

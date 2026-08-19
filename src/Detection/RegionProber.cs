@@ -2620,7 +2620,7 @@ internal sealed class RegionProber
         // holds the book's beginning - which the progress display would otherwise only learn of
         // once Probe was over and gap planning took the same view.
         var (highest, missingNumbers) = ChapterProgress(_found, ExpectedStartFor(_env.Options, _namedFound));
-        _ctx.Work.HighestChapter = highest;
+        _ctx.Work.HighestChapters = highest;
         _ctx.Work.MissingChapters = missingNumbers.Count;
         _env.Log?.Invoke($"chapter {number} detected, mark placed at {FormatTimestamp(time)} " +
                          $"(confidence {match.Confidence:0.00}" +

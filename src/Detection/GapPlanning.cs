@@ -658,7 +658,8 @@ internal static class GapPlanning
 
     /// <summary>
     /// Computes the chapter numbers shown in the progress bar and in detection log lines from a
-    /// detection list: the highest chapter number found so far, and which numbers below it are
+    /// detection list: how far each of the file's chapter sequences has got - one entry per part,
+    /// in part order - and which numbers below those are
     /// still undetected (the gaps Scan would have to chase). Runs the input through
     /// <see cref="Normalize"/> first so in-text mentions of earlier chapters (regressions that
     /// Normalize drops anyway) cannot make a genuinely missing chapter look found. Mirrors
@@ -672,19 +673,21 @@ internal static class GapPlanning
     /// <param name="found">The chapters detected so far.</param>
     /// <param name="expectedStartChapter">The chapter number the book is expected to start at
     /// (<see cref="CliOptions.ExpectedStartChapter"/>), or null for no expectation.</param>
-    internal static (int Highest, List<int> Missing) ChapterProgress(
+    internal static (IReadOnlyList<int> Highest, List<int> Missing) ChapterProgress(
         IEnumerable<DetectedChapter> found, int? expectedStartChapter = null)
     {
         var kept = Normalize(found.ToList());
         if (kept.Count == 0)
-            return (0, []);
-        var highest = 0;
+            return ([], []);
+        var highest = new List<int>();
         var missing = new List<int>();
-        // Per part, and the reported "highest" is the last part's: the bar is saying how far into
-        // the book this run has got, and a book on part 3's chapter 2 has not gone backwards from
-        // part 1's chapter 15.
+        // One entry per part, in part order, because that is what "how far has this run got"
+        // means on a book that restarts its numbering: a file on part 3's chapter 2 has not gone
+        // backwards from part 1's chapter 15, and neither number alone says where it stands.
+        // Every group BySequence yields holds at least one chapter, and a chapter always carries
+        // a number, so no entry here is ever the 0 that means "nothing found".
         foreach (var sequence in BySequence(kept))
-            highest = MissingInSequence(sequence, expectedStartChapter, missing);
+            highest.Add(MissingInSequence(sequence, expectedStartChapter, missing));
         return (highest, missing);
     }
 

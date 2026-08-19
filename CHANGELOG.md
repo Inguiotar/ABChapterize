@@ -39,6 +39,11 @@ earn a round number.
 
 ### Changed
 
+- **The progress bar shows every part of a book that restarts its numbering.** Instead of
+  one chapter number it now reads e.g. `ch 11,15,4(+1)` — one per part, in order — so a run
+  on part 3's chapter 4 no longer looks as though it had gone backwards from part 1's
+  chapter 11. Books with a single sequence are unchanged.
+
 - **A processed file's result line now says how long it took.** Both the plain figure and
   its share of that book's own run length, so it means something without your having to
   remember how long the book is: `; took 38:20 (7.2% of run length)`. Files that were

@@ -2839,7 +2839,17 @@ counts, either of which is left out when it is zero:
 
 So `ch 6(-2+1)` means chapter 6 is marked, two chapters below it are still
 outstanding, and one extra mark has been found. An extra mark found before
-the first chapter reads `ch 0(+1)`, and under
+the first chapter reads `ch 0(+1)`.
+
+On a book whose numbering restarts —
+[several chapter sequences in one file](#books-that-count-from-one-again-in-every-part) —
+there is one number per part instead, comma-separated and in part order:
+`ch 11,15,4(+1)` is a run that has reached chapter 4 of the third part, having
+found 11 and 15 chapters in the first two. No single number could say where such
+a run stands, and the last part's alone would read as the book having gone
+backwards. The bracket stays one total across all the parts.
+
+Under
 [`--ignore-chapter-numbers`](#detecting-chapters-without-believing-their-numbers),
 where every mark is an
 announcement without a number, the state shows the plain total instead:

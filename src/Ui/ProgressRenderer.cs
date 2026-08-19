@@ -61,12 +61,23 @@ public sealed class WorkTracker
     /// </remarks>
     public bool PhaseRevisiting { get; set; }
 
-    /// <summary>Highest chapter number detected so far; 0 while none has been found yet
-    /// (rendered as "----", since a zero count carries no information during e.g. Analyze).</summary>
-    public int HighestChapter { get; set; }
+    /// <summary>
+    /// How far each of the file's chapter sequences has got: the highest number detected in
+    /// each, one entry per part and in part order. Empty while nothing has been found yet
+    /// (rendered as "----", since a zero carries no information during e.g. Analyze).
+    /// </summary>
+    /// <remarks>
+    /// A list rather than a single number because a book whose numbering restarts has no single
+    /// "how far in" to report - part 3's chapter 2 has not gone backwards from part 1's chapter
+    /// 15. Replaced wholesale on every update, never mutated in place: the renderer reads it
+    /// from its own timer thread while detection writes it, and a reference assignment is the
+    /// one thing that is safe to do across the two without a lock.
+    /// </remarks>
+    public IReadOnlyList<int> HighestChapters { get; set; } = [];
 
-    /// <summary>How many chapter numbers below <see cref="HighestChapter"/> are still
-    /// undetected (gaps that Scan will chase); rendered as "(-N)" after the chapter number.</summary>
+    /// <summary>How many chapter numbers below the highs in <see cref="HighestChapters"/> are
+    /// still undetected (gaps that Scan will chase); rendered as "(-N)" after the chapter
+    /// numbers. One total across every part, not one per part.</summary>
     public int MissingChapters { get; set; }
 
     /// <summary>How many named marks of every kind - including the chapter announcements that
@@ -442,36 +453,45 @@ public sealed class ProgressRenderer : IDisposable
 
     /// <summary>
     /// Appends the bar's chapter section: "----" until anything at all is found (nothing can
-    /// change during Analyze anyway); then the highest detected chapter number, followed by one
-    /// bracket holding the count of still-missing earlier chapters - the ones Scan would have to
-    /// chase - and the count of extra marks found, as e.g. "ch 6(-2+1)". Each count is split off
-    /// into its own span so the numbers alone carry their colors while the brackets stay
-    /// structural. An extra mark found before the first chapter shows as "ch 0(+1)": the zero is
-    /// worth printing there because the bracket next to it is not empty.
+    /// change during Analyze anyway); then how far each of the file's chapter sequences has got,
+    /// followed by one bracket holding the count of still-missing earlier chapters - the ones
+    /// Scan would have to chase - and the count of extra marks found, as e.g. "ch 6(-2+1)". Each
+    /// count is split off into its own span so the numbers alone carry their colors while the
+    /// brackets stay structural. An extra mark found before the first chapter shows as
+    /// "ch 0(+1)": the zero is worth printing there because the bracket next to it is not empty.
+    /// <para>
+    /// A book whose numbering restarts shows one number per part, comma-separated and in part
+    /// order - "ch 11,15,4(+1)" for a file on part 3's chapter 4. No single number could say
+    /// where such a run stands, and the last part's alone reads as the book having gone
+    /// backwards. The missing count stays one total across every part, which is what it counts.
+    /// Commas are unambiguous here because this tool never groups digits (see
+    /// <see cref="ABChapterize.Cli.NumberCulture"/>), so a comma can only ever be a separator.
+    /// </para>
     /// </summary>
     /// <param name="spans">The line being built, appended to in place.</param>
     /// <param name="tracker">The file's work tracker.</param>
     private static void AddChapterSpans(List<ColoredSpan> spans, WorkTracker tracker)
     {
-        var highest = tracker.HighestChapter;
+        var highest = tracker.HighestChapters;
         var missing = tracker.MissingChapters;
         var extra = tracker.ExtraMarks;
 
         // --ignore-chapter-numbers is the one mode where chapters land among the named marks, so
         // it is the one mode where the extra count alone would understate the yield by everything
         // the run is actually finding - it keeps the plain total instead.
-        if (highest == 0 && tracker.NamedMarks > extra)
+        if (highest.Count == 0 && tracker.NamedMarks > extra)
         {
             spans.Add(new($"mk {tracker.NamedMarks}", Palette.Chapters));
             return;
         }
-        if (highest == 0 && extra == 0)
+        if (highest.Count == 0 && extra == 0)
         {
             spans.Add(new("----", Palette.NoChapters));
             return;
         }
 
-        spans.Add(new($"ch {highest}", Palette.Chapters));
+        spans.Add(new($"ch {(highest.Count > 0 ? string.Join(",", highest) : "0")}",
+                      Palette.Chapters));
         if (missing == 0 && extra == 0)
             return;
         spans.Add(new("(", Palette.Structure));

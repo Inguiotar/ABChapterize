@@ -1262,6 +1262,36 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task ARestartedSequence_GivesTheProgressBarOneNumberPerPart()
+    {
+        // The same geometry as the restart fixture above, watched from the progress bar's side:
+        // once the second part opens, the bar has two numbers to show rather than one, and the
+        // last part's alone would read as the book having gone backwards from 4 to 3.
+        var tracker = new WorkTracker();
+        var audio = new FakeAudioSource
+        {
+            Silences = [new(395, 400), new(795, 800), new(1195, 1200),
+                        new(1595, 1600), new(1995, 2000), new(2395, 2400)],
+        };
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(0, Seg(0.5, " Chapter one."));
+        transcriber.Add(400, Seg(0.4, " Chapter two."));
+        transcriber.Add(800, Seg(0.3, " Chapter three."));
+        transcriber.Add(1200, Seg(0.3, " Chapter four."));
+        transcriber.Add(1600, Seg(0.3, " Chapter one."));
+        transcriber.Add(2000, Seg(0.3, " Chapter two."));
+        transcriber.Add(2400, Seg(0.3, " Chapter three."));
+        var detector = new ChapterDetector(Options(), audio, transcriber, null);
+
+        var result = await detector.DetectAsync(
+            _file, Info, tracker, new DetectionLog(_ => { }, null), CancellationToken.None);
+
+        Assert.Equal(2, result.SequenceCount);
+        Assert.Equal([4, 3], tracker.HighestChapters);
+        Assert.Equal(0, tracker.MissingChapters);
+    }
+
+    [Fact]
     public async Task ARestartedSequence_KeepsCountingWhereTheOldOneWouldHaveSwallowedIt()
     {
         // The mixing-up hazard, and the reason a run being tracked outranks the ordinary sequence
@@ -1708,7 +1738,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // display/log line (GitHub-reported regression: "still missing: 1" with no -e given).
         var chapters = new List<DetectedChapter> { new(2, 500) };
         var (highest, missing) = GapPlanning.ChapterProgress(chapters);
-        Assert.Equal(2, highest);
+        Assert.Equal([2], highest);
         Assert.Empty(missing);
     }
 
@@ -1717,7 +1747,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         var chapters = new List<DetectedChapter> { new(2, 500), new(3, 900), new(6, 2000) };
         var (highest, missing) = GapPlanning.ChapterProgress(chapters);
-        Assert.Equal(6, highest);
+        Assert.Equal([6], highest);
         Assert.Equal([4, 5], missing);
     }
 
@@ -1726,7 +1756,7 @@ public sealed class ChapterDetectorTests : IDisposable
     {
         var chapters = new List<DetectedChapter> { new(2, 500) };
         var (highest, missing) = GapPlanning.ChapterProgress(chapters, expectedStartChapter: 1);
-        Assert.Equal(2, highest);
+        Assert.Equal([2], highest);
         Assert.Equal([1], missing);
     }
 
@@ -1734,7 +1764,7 @@ public sealed class ChapterDetectorTests : IDisposable
     public void ChapterProgress_ReturnsNoMissingChapters_WhenNoneFoundYet()
     {
         var (highest, missing) = GapPlanning.ChapterProgress([]);
-        Assert.Equal(0, highest);
+        Assert.Empty(highest);
         Assert.Empty(missing);
     }
 
@@ -1746,7 +1776,7 @@ public sealed class ChapterDetectorTests : IDisposable
         // "below expectation" check aborts the run - must not crash on a negative-length range.
         var chapters = new List<DetectedChapter> { new(2, 500) };
         var (highest, missing) = GapPlanning.ChapterProgress(chapters, expectedStartChapter: 5);
-        Assert.Equal(2, highest);
+        Assert.Equal([2], highest);
         Assert.Empty(missing);
     }
 
@@ -1832,14 +1862,15 @@ public sealed class ChapterDetectorTests : IDisposable
     [Fact]
     public void ChapterProgress_CountsEachPartsMissingChaptersSeparately()
     {
-        // The bar reports how far into the book the run has got, which on a book in parts is the
-        // last part's own position - not the highest number seen anywhere.
+        // The bar reports how far into the book the run has got, which on a book in parts is
+        // every part's own position: one number each, in part order. The missing count stays a
+        // single total across them.
         var chapters = new List<DetectedChapter>
         {
             new(1, 100), new(3, 500), new(1, 900, Sequence: 1), new(3, 1300, Sequence: 1),
         };
         var (highest, missing) = GapPlanning.ChapterProgress(chapters);
-        Assert.Equal(3, highest);
+        Assert.Equal([3, 3], highest);
         Assert.Equal([2, 2], missing);
     }
 
@@ -6968,7 +6999,7 @@ public sealed class ChapterDetectorTests : IDisposable
 
         Assert.Empty(GapPlanning.FindGaps(chapters, Duration));
         var (highest, missing) = GapPlanning.ChapterProgress(chapters);
-        Assert.Equal(2, highest);
+        Assert.Equal([2], highest);
         Assert.Empty(missing);
     }
 
@@ -6982,7 +7013,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var (highest, missing) = GapPlanning.ChapterProgress(
             [new(2179, 2189, 1.0, NumberUnverified: true)], expectedStartChapter: 65);
 
-        Assert.Equal(2179, highest);
+        Assert.Equal([2179], highest);
         Assert.Empty(missing);
     }
 
@@ -7437,7 +7468,7 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1200, Seg(10, " Chapter 3."));
             });
 
-        Assert.Equal(3, tracker.HighestChapter);
+        Assert.Equal([3], tracker.HighestChapters);
         Assert.Equal(1, tracker.MissingChapters);
     }
 
