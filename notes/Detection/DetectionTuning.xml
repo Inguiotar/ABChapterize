@@ -392,4 +392,74 @@
     one <see cref="UnnumberedRetryWindowSeconds"/> matches.
     </para>
   </member>
+
+  <member name="DefaultSilenceNoiseDb">
+    <para>
+    <b>The measurement behind -35.</b> Fourteen-book corpus of 2026-08-05, eight 20 s excerpts per
+    book at 50 ms RMS frames: -35 sits inside every one of those books' gap between room tone and
+    speech. The quietest sustained speech was "I Shall Wear Midnight" at -25.1 dBFS (p75 of its
+    frames) and the loudest room tone "The Philosopher's Stone" at -50.1 (p5), so the narrowest
+    margins the value actually had were 9.9 dB below speech and 15.1 dB above hiss - which is where
+    <see cref="SpeechHeadroomDb"/> and <see cref="NoiseFloorHeadroomDb"/> come from.
+    </para>
+  </member>
+
+  <member name="NoiseProbeExcerpts">
+    <para>
+    <b>The seek cost.</b> Eight 20 s excerpts cost about a second of ffmpeg seeking on a 15-hour
+    .m4b (measured 2026-08-05).
+    </para>
+  </member>
+
+  <member name="NoiseFloorHeadroomDb">
+    <para>
+    <b>The margin the noisiest master left.</b> "The Philosopher's Stone", room tone -50.1 dBFS, left
+    the default exactly 15.1 dB of room, so 15 is the largest value that would leave every reference
+    book untouched. Rounded down to 14 for a full decibel of slack.
+    </para>
+  </member>
+
+  <member name="SpeechHeadroomDb">
+    <para>
+    <b>The margin the quietest speech allowed.</b> "I Shall Wear Midnight", p75 -25.1 dBFS, allowed
+    at most 9.9 dB; 8 is that rounded down for margin.
+    </para>
+  </member>
+
+  <member name="FidelityExcerpts">
+    <para>
+    <b>How far the measure moves within one book.</b> 3.2x to 24.1x between excerpts of the same book
+    (sixteen-book corpus, 2026-08-17) - which is why one excerpt says nothing and only a median over
+    several is worth reading.
+    </para>
+  </member>
+
+  <member name="JingleLeadInSeconds">
+    <para>
+    <b>The drift the generous run-up absorbs.</b> Up to 2.15 s of VAD timeline drift was measured
+    across the corpus before the PCM resync fix (see
+    <see cref="Audio.FfmpegClient.PcmResyncToleranceSeconds"/>).
+    </para>
+  </member>
+
+  <member name="DefaultMarkLeadSeconds">
+    <para>
+    <b>The change and when.</b> Raised from 0.25 to 0.35 on 2026-07-29 after listening to real marks.
+    </para>
+  </member>
+
+  <member name="PreJingleSpeechToleranceSeconds">
+    <para>
+    <b>How tightly the two marks this was written for hugged the silence end.</b> Measured
+    2026-08-02: both blips began within 3 ms of that silence's end, so 0.5 s sits two orders of
+    magnitude above the jitter.
+    </para>
+  </member>
+
+  <member name="JingleGlueMaxSeconds">
+    <para>
+    <b>The longest such fragment observed.</b> Real trailing-narration fragments and mid-jingle
+    vocals both ran up to about 1.1 s, well under the 3.0 s bar.
+    </para>
+  </member>
 </doc>

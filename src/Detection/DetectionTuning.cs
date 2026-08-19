@@ -20,22 +20,23 @@ internal static class DetectionTuning
     /// <c>--noise-floor</c>, and the value <see cref="SilenceThresholdProbe"/>'s automatic mode
     /// keeps unless a master's own levels argue against it.
     /// <para>
-    /// Measured over the fourteen-book corpus of 2026-08-05 (eight 20 s excerpts per book, 50 ms
-    /// RMS frames): -35 sits inside every one of those books' gap between room tone and speech,
-    /// with room to spare at both ends. The quietest sustained speech was "I Shall Wear Midnight"
-    /// at -25.1 dBFS (p75 of its frames) and the loudest room tone "The Philosopher's Stone" at
-    /// -50.1 (p5), so the narrowest margins the value actually had were 9.9 dB below speech and
-    /// 15.1 dB above hiss. Those two numbers are where <see cref="SpeechHeadroomDb"/> and
+    /// Measured over the reference corpus: -35 sits inside every one of those books' gap between
+    /// room tone and speech, with room to spare at both ends. The narrowest margins the value
+    /// actually had are where <see cref="SpeechHeadroomDb"/> and
     /// <see cref="NoiseFloorHeadroomDb"/> come from, each rounded down for slack.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the excerpt scheme, the quietest speech and loudest room tone, and the margins they left.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="DefaultSilenceNoiseDb"]/*' /></remarks>
     internal const double DefaultSilenceNoiseDb = -35;
 
     /// <summary>How many excerpts <see cref="SilenceThresholdProbe"/> decodes to judge a file's
     /// levels, spread evenly between the 5% and 95% marks of its play time - a book's opening
-    /// label jingle and closing credits are not what its body sounds like. Eight 20 s excerpts cost
-    /// about a second of ffmpeg seeking on a 15-hour .m4b (measured 2026-08-05), which is nothing
-    /// beside the full decode Analyze is about to do anyway.</summary>
+    /// label jingle and closing credits are not what its body sounds like. Eight excerpts cost about
+    /// a second of ffmpeg seeking on a long book, which is nothing beside the full decode Analyze is
+    /// about to do anyway.</summary>
+    /// <remarks>Notes: the seek cost measured.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="NoiseProbeExcerpts"]/*' /></remarks>
     internal const int NoiseProbeExcerpts = 8;
 
     /// <summary>Length of one <see cref="NoiseProbeExcerpts"/> excerpt, in seconds. Eight of these
@@ -61,19 +62,20 @@ internal static class DetectionTuning
     /// <summary>How far above the measured room tone the silence threshold must sit, in dB. Below
     /// this the hiss itself never counts as silence and the file yields no candidates at all.</summary>
     /// <remarks>
-    /// The corpus's noisiest master ("The Philosopher's Stone", room tone -50.1 dBFS) left the
-    /// default exactly 15.1 dB of room, so 15 is the largest value that would leave every reference
-    /// book untouched - and a tenth of a decibel of margin is no margin at all, since re-measuring
-    /// the same book from different excerpts moves the reading by more than that. Rounded down to
-    /// 14 for a full decibel of slack. The same reasoning, in the other direction, gives
-    /// <see cref="SpeechHeadroomDb"/>.
+    /// The corpus's noisiest master left the default only just enough room, and a tenth of a decibel
+    /// of margin is no margin at all, since re-measuring the same book from different excerpts moves
+    /// the reading by more than that - hence rounding down for a full decibel of slack. The same
+    /// reasoning, in the other direction, gives <see cref="SpeechHeadroomDb"/>.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="NoiseFloorHeadroomDb"]/*' />
     /// </remarks>
     internal const double NoiseFloorHeadroomDb = 14;
 
     /// <summary>How far below sustained speech the silence threshold must sit, in dB. Above this
     /// the narration itself reads as silence and the file yields thousands of spurious candidates.
-    /// The corpus's quietest speech ("I Shall Wear Midnight", p75 -25.1 dBFS) allowed at most 9.9;
-    /// 8 for the margin, as <see cref="NoiseFloorHeadroomDb"/> explains.</summary>
+    /// Sized from the corpus's quietest speech and then rounded down for margin, as
+    /// <see cref="NoiseFloorHeadroomDb"/> explains.</summary>
+    /// <remarks>Notes: the quietest speech measured and the margin it allowed.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SpeechHeadroomDb"]/*' /></remarks>
     internal const double SpeechHeadroomDb = 8;
 
     /// <summary>The range an automatically chosen silence threshold is confined to, whatever the
@@ -181,11 +183,12 @@ internal static class DetectionTuning
     internal const double SandwichedAnnouncementSeconds = 3.5;
 
     /// <summary>
-    /// How many excerpts <see cref="ChapterDetector.DenoiserForFileAsync"/> measures a file's
-    /// fidelity over. Eight because one says nothing: the measure moves 3.2x to 24.1x between excerpts of the
-    /// same book (sixteen-book corpus, 2026-08-17), and re-sampling a book at different positions
-    /// reshuffles the bottom of the corpus ranking outright, so only a median over several is worth
-    /// reading at all.
+    /// levels. Eight because one says nothing: the measure moves several-fold between excerpts of
+    /// the same book, and re-sampling a book at different positions reshuffles the bottom of the
+    /// corpus ranking outright, so only a median over several is worth reading at all.
+    /// </summary>
+    /// <remarks>Notes: how far the measure actually moves within one book.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="FidelityExcerpts"]/*' /></remarks>
     /// </summary>
     internal const int FidelityExcerpts = 8;
 
@@ -198,10 +201,12 @@ internal static class DetectionTuning
     /// The same run-up for a jingle candidate, taken from inside the music, and deliberately longer:
     /// the point it is measured back from is a VAD speech onset rather than a silencedetect edge, so
     /// it carries the detector's own latency plus whatever timeline drift survives Analyze's resync
-    /// (see <see cref="Audio.FfmpegClient.PcmResyncToleranceSeconds"/> - up to 2.15 s was measured
+    /// (see <see cref="Audio.FfmpegClient.PcmResyncToleranceSeconds"/> - seconds of it were measured
     /// across the corpus before that fix). Generous by design: the run-up costs nothing, and the
     /// announcement landing before the window opens costs a chapter.
     /// </summary>
+    /// <remarks>Notes: the timeline drift the generous run-up absorbs.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="JingleLeadInSeconds"]/*' /></remarks>
     internal const double JingleLeadInSeconds = 8.0;
 
     /// <summary>Flat margin added to a measured jingle length so the phrase after the jingle still
@@ -247,13 +252,14 @@ internal static class DetectionTuning
     /// --min-silence-length auto threshold and the per-file jingle statistics --summary reports.
     /// </summary>
     /// <remarks>
-    /// Raised from 0.25 to 0.35 on 2026-07-29 after listening to real marks: at 0.25 the mark lands
-    /// so close to the announcement that a plosive onset - the /k/ of "Kapitel" - can be clipped
-    /// without the listener being able to say whether they heard it. That consonant is the awkward
-    /// case on purpose: a stop's burst carries almost no energy before its release, so neither
-    /// Whisper's onset estimate nor an attentive ear resolves it to a tenth of a second, and the
-    /// cheapest insurance is to start earlier. The refiner's own accuracy is not the limit here -
-    /// it pins onsets to 0.1 s - the audible margin is.
+    /// Raised after listening to real marks: at the old value the mark lands so close to the
+    /// announcement that a plosive onset - the /k/ of "Kapitel" - can be clipped without the
+    /// listener being able to say whether they heard it. That consonant is the awkward case on
+    /// purpose: a stop's burst carries almost no energy before its release, so neither Whisper's
+    /// onset estimate nor an attentive ear resolves it to a tenth of a second, and the cheapest
+    /// insurance is to start earlier. The refiner's own accuracy is not the limit here - it pins
+    /// onsets to 0.1 s - the audible margin is.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="DefaultMarkLeadSeconds"]/*' />
     /// </remarks>
     internal const double DefaultMarkLeadSeconds = 0.35;
 
@@ -295,12 +301,14 @@ internal static class DetectionTuning
     /// <para>
     /// The two are told apart by which detector saw the gap in front of the blip. Silencedetect does
     /// not read jingle music as silence, so a blip that starts where the region's leading silence
-    /// ends is speech resuming after a pause - in front of the music, not inside it. Measured on the
-    /// two marks this was written for (2026-08-02): both blips began within 3 ms of that silence's
-    /// end. This sits two orders of magnitude above that jitter and still far below where a real
-    /// announcement sits from its jingle's start, since an announcement comes at the music's end.
+    /// ends is speech resuming after a pause - in front of the music, not inside it. This sits two
+    /// orders of magnitude above the measured jitter at that boundary and still far below where a
+    /// real announcement sits from its jingle's start, since an announcement comes at the music's
+    /// end.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: how tightly the two marks this was written for hugged the silence end.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreJingleSpeechToleranceSeconds"]/*' /></remarks>
     internal const double PreJingleSpeechToleranceSeconds = 0.5;
 
     /// <summary>
@@ -308,10 +316,12 @@ internal static class DetectionTuning
     /// <see cref="JingleGeometry.AdjustJingleRegion"/>) steps across at the jingle's leading edge -
     /// both when trimming trailing-narration blips off a merged region's front and when bridging
     /// backward across an untranscribed music vocal to an earlier region the jingle was split
-    /// into. Real trailing-narration fragments and mid-jingle vocals both run well under this
-    /// (observed up to ~1.1 s); anything longer between two non-speech stretches is genuine
-    /// narration the jingle cannot extend across.
+    /// into. Real trailing-narration fragments and mid-jingle vocals both run well under this;
+    /// anything longer between two non-speech stretches is genuine narration the jingle cannot
+    /// extend across.
     /// </summary>
+    /// <remarks>Notes: the longest such fragment observed.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="JingleGlueMaxSeconds"]/*' /></remarks>
     internal const double JingleGlueMaxSeconds = 3.0;
 
     /// <summary>
@@ -452,7 +462,7 @@ internal static class DetectionTuning
     /// else's words.
     /// <para>
     /// Generous rather than tight on purpose, because VAD is capable of calling music speech: two
-    /// marks in "Gruelfin.m4b" have it hearing speech 2.54 s and 2.65 s early inside a jingle (see
+    /// marks in "Gruelfin.m4b" have it hearing speech seconds early inside a jingle (see
     /// <see cref="PreciseMarkMusicAnchorCapSeconds"/>). No corpus mark actually lands inside such a
     /// segment, but a spurious one is the only way this guard could fire on a good mark, and the
     /// comparison in <see cref="MarkPlacer.KeepOutOfSpeech"/> - which declines unless the
@@ -656,8 +666,8 @@ internal static class DetectionTuning
     /// Not larger, although "more audio, surer answer" is the obvious extrapolation: it is wrong on
     /// the very audio this exists for. A jingle is music, Whisper writes music off as a single
     /// "[Musik]" segment, and the more of it a window holds the likelier the announcement goes with
-    /// it - at 8 s the same Stalker probe from 48.04 s came back "[Musik]" where the unextended
-    /// 6.15 s window had read "Zeittafel" cleanly. The floor has to clear the coin-flip zone without
+    /// it - a longer window on that same probe came back as music where the unextended one had read
+    /// the announcement cleanly. The floor has to clear the coin-flip zone without
     /// buying more music than it has to.
     /// </para>
     /// <para>
@@ -689,8 +699,8 @@ internal static class DetectionTuning
     /// It extends the search's reach only, never where the gallop sets out from: that first probe
     /// spans the whole distance to the end anchor and is the longest window the search ever asks
     /// about, so starting it a stretch further back buys nothing and risks the failure mode in
-    /// <see cref="PreciseMarkMinSurvivalSeconds"/>'s remarks - the same Stalker.m4b probe read
-    /// "Zeittafel" over 15.65 s from the segment bracket and "[Musik]" over 25 s from here.
+    /// <see cref="PreciseMarkMinSurvivalSeconds"/>'s remarks - the same probe read the announcement
+    /// over the segment bracket and only music over the wider one.
     /// </para>
     /// <para>
     /// Sized to one <see cref="WhisperChunkSeconds"/> less a phrase margin of headroom. Past a chunk
@@ -714,7 +724,7 @@ internal static class DetectionTuning
     /// boundary is enough to lose it - twice, on the same book's prologue.
     /// </para>
     /// <para>
-    /// The same book lost it again in build 280 (2026-08-09), to a window one second short of a
+    /// The same book lost it again in build 280, to a window one second short of a
     /// chunk's worth of narration rather than twenty: the classified jingle candidate opens
     /// <see cref="JingleLeadInSeconds"/> into the music and runs
     /// <see cref="ExpectedAnnouncementSeconds"/> past the announcement, which is exactly 30.0 s. The
