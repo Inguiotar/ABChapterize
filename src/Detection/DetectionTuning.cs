@@ -471,7 +471,6 @@ internal static class DetectionTuning
     /// times this fast, so coverage at a fraction of that pace is not continuous speech but a long
     /// near-silent stretch of music/reverb that Whisper folded into one oversized segment together
     /// with a few real words at its edges (one merged segment was observed spanning almost 30 s
-    /// with a few real words at its edges (one merged segment was observed spanning almost 30 s
     /// while containing a couple of seconds of speech). Set well below the real-narration floor,
     /// leaving margin for slow delivery or short, punctuation-heavy segments.
     /// </summary>

@@ -902,14 +902,10 @@ public sealed class ChapterDetector
     /// number would continue the sequence.
     /// </para>
     /// <para>
-    /// The case on record is "Corsa nello spazio" (build 251, 2026-08-06), whose epilogue is headed
-    /// "Epilogo / 2179 / Spazio profondo". Under <c>--chapter-phrase none</c> a year spoken alone is
-    /// an announcement by definition, and a well-formed one - set off by real pauses, read as 2179 by
-    /// every probe that saw it - so it reached the written file as "Capitolo 2179", 2.86 s after the
-    /// epilogue's own mark. Nothing about the number gives it away; the geometry does, exactly as it
-    /// does for two numbered marks on one announcement (<see cref="SettleCollidingMarksAsync"/>),
-    /// and it borrows that rule's threshold for the same reason: five seconds sits far above the
-    /// spread between two lines of one heading and far below the shortest chapter anyone writes.
+    /// Nothing about such a number gives it away; the geometry does, exactly as it does for two
+    /// numbered marks on one announcement (<see cref="SettleCollidingMarksAsync"/>), and it borrows
+    /// that rule's threshold for the same reason: five seconds sits far above the spread between two
+    /// lines of one heading and far below the shortest chapter anyone writes.
     /// </para>
     /// <para>
     /// The sequence's own first chapter is never dropped, however badly it fits. Its lower bound is
@@ -923,6 +919,8 @@ public sealed class ChapterDetector
     /// recognizer to test. Internal for that reason.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the epilogue heading that became a chapter, and why its threshold is borrowed.
+    /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="DropNamedMarkEchoes"]/*' /></remarks>
     /// <param name="chapters">The chapter sequence, ascending in time.</param>
     /// <param name="named">The file's prologue/epilogue/--custom marks, in any order.</param>
     /// <param name="expectedStartChapter">--expected-start-chapter, or null.</param>
@@ -997,11 +995,7 @@ public sealed class ChapterDetector
     /// That evidence is the rest of the book. Chapter numbers ascend with time, so a mark whose
     /// number contradicts the marks around it is provably wrong, and the chapters that were detected
     /// <em>after</em> it - later in the file, and often later in the run - pin down what it should
-    /// have been. "Die Cyber-Brutzellen" (2026-08-01) is the worked example: the announcement at
-    /// 7:01:30 was read as chapter 40, sits between chapter 13 at 6:21:09 and chapter 15 at 7:47:34,
-    /// and 14 is therefore the only number it can carry. Neither bounding chapter was known when the
-    /// misreading happened - 15 had been found but not yet related to it, and everything up to 29
-    /// came later.
+    /// have been - and typically neither bounding chapter was known when the misreading happened.
     /// </para>
     /// <para>
     /// Two ways to settle an outlier, in order of how much they cost. When the chapters bracketing
@@ -1023,8 +1017,6 @@ public sealed class ChapterDetector
     /// Runs once, between Probe and Re-probe, which is where it pays for itself twice over: the
     /// repaired sequence is also what the missing-chapter list is computed from, so a book no longer
     /// sends Re-probe and Scan hunting through hours of audio for chapters that were never missing.
-    /// On the file above that was 14 minutes spent searching the stretch between 6:21 and 7:01 for a
-    /// chapter 14 whose announcement sits at the far end of it.
     /// </para>
     /// <para>
     /// The one step that touches audio is a delegate rather than a call, so everything here -
@@ -1032,6 +1024,8 @@ public sealed class ChapterDetector
     /// Internal for that reason.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the worked example, and the hunting time the repair saves downstream.
+    /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="RepairSequenceOutliersAsync"]/*' /></remarks>
     /// <param name="found">The raw detections, in any order.</param>
     /// <param name="expectedStartChapter">--expected-start-chapter, or null; the lower bound for an
     /// outlier that has no chapter before it.</param>
@@ -1242,16 +1236,8 @@ public sealed class ChapterDetector
     /// likeliest reason for that is where the announcement fell inside
     /// <see cref="DetectionTuning.WhisperChunkSeconds"/>. An announcement landing just after a window
     /// boundary can vanish from the transcript entirely while the timeline stays contiguous, so the
-    /// text reads as if nothing were missing. Chapter 14 of "Paula Monti" (2026-07-31) is the case on
-    /// record and the measurement behind the shift: decoded from 2:30:31.29 the 601 s chunk produced
-    /// "…solennité dramatique." / "Berthe de Brevan occupait une des places de cette loge." with
-    /// "Première partie, chapitre 14, première loge numéro 7" simply absent between them, reproducibly
-    /// at every chunk length tried from 120 s to 601 s. The identical chunk decoded from 2:30:46.29 -
-    /// the same audio, 15 s later - reads it at p=0.94. Half a window is the displacement that moves
-    /// whatever sat on a boundary as far from one as it can get. End to end on that clip
-    /// (<c>-m turbo</c>, which switches Re-probe off so the case reaches Scan at all): Scan
-    /// recovered chapter 13 from the head of the gap and left 14 missing exactly as before, and the
-    /// shifted re-read placed it at the same mark the Re-probe sweep produces, 0.93 confidence.
+    /// the text reads as if nothing were missing. Half a window is the displacement that moves
+    /// whatever sat on a boundary as far from one as it can get.
     /// </para>
     /// <para>
     /// Shifting the region's start rather than re-planning its chunks is what makes this cheap and
@@ -1271,6 +1257,8 @@ public sealed class ChapterDetector
     /// cost of the gap it just failed on would be exactly the opposite.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the chapter that vanished from a full transcription at every chunk length tried, and reappeared 15 s later.
+    /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="RescanShiftedAsync"]/*' /></remarks>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
     /// <param name="work">Progress tracker; begins its own phase when there is work.</param>
@@ -1474,8 +1462,8 @@ public sealed class ChapterDetector
     /// The cost is <em>not</em> guaranteed to be small, and scales with the gap's candidate count
     /// rather than its length: a region dense in qualifying silences can decode about as much audio
     /// as the full transcription it is avoiding, and when it finds nothing Scan still runs after
-    /// it. Measured on real audio (2026-07-26, --model tiny --upgrade-model large): a 56-minute gap
-    /// took ~40 minutes of re-probing and recovered nothing. A favourable bet only where candidates
+    /// it - a long gap dense in candidates has been measured spending most of an hour to recover
+    /// nothing. A favourable bet only where candidates
     /// are sparse - hence gated behind a upgrade model heavier than the probing one, which since
     /// 0.11.0 the default small/turbo pair is, so this runs unless --model says otherwise.
     /// </para>
@@ -1493,6 +1481,8 @@ public sealed class ChapterDetector
     /// Scan's own (see <see cref="ProbeContext.Transcriber"/>).
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the gap that re-probed for most of an hour and recovered nothing.
+    /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="RunReprobeAsync"]/*' /></remarks>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
     /// <param name="work">Progress tracker; begins its own "Re-probe" phase when there is work.</param>
@@ -1600,21 +1590,13 @@ public sealed class ChapterDetector
     /// (<see cref="DetectionTuning.MinStoredSilenceSeconds"/>), so the material is already in hand
     /// and each band costs a handful of probe windows.
     /// <para>
-    /// The case this exists for is a narrator whose chapter break simply lands on the floor. On
-    /// "Paula Monti" (2026-07-31, French, 4 h 34 min) all five chapters Probe missed were preceded
-    /// by a pause of 1.39-1.49 s against a 1.5 s floor; four were eventually recovered by Scan
-    /// transcribing whole gaps, and the fifth was lost outright because Whisper's long-form decode
-    /// swallowed the announcement - a 601 s chunk produced a contiguous transcript with the words
-    /// "Première partie, chapitre 14, première loge numéro 7" simply absent from it, reproducibly,
-    /// while any short window aimed at the same audio read them cleanly. A targeted probe is not
-    /// merely the cheaper way to find such a chapter, it is sometimes the only way.
-    /// </para>
-    /// <para>
-    /// What that came to on the same file, re-run 2026-07-31 with the sweeps in place: all five gaps
-    /// closed here, one probe each (two candidates only for chapter 19's band), Scan never ran at
-    /// all, and the run transcribed 1:00:43 of audio instead of 1:49:57 - 45 % less - while finding
-    /// two chapters more than before. Chapters 3, 12 and 16 came back on the exact marks Scan's
-    /// full transcription had produced.
+    /// The case this exists for is a narrator whose chapter break simply lands on the floor - every
+    /// chapter Probe missed preceded by a pause a hundredth or two under the demand. Some such
+    /// chapters are eventually recovered by Scan transcribing whole gaps; one was lost outright
+    /// because Whisper's long-form decode swallowed the announcement, a long chunk producing a
+    /// contiguous transcript with the words simply absent from it, reproducibly, while any short
+    /// window aimed at the same audio read them cleanly. A targeted probe is not merely the cheaper
+    /// way to find such a chapter, it is sometimes the only way.
     /// </para>
     /// <para>
     /// Band by band rather than one sweep down to the bottom, because the yield is concentrated at
@@ -1631,10 +1613,12 @@ public sealed class ChapterDetector
     /// <see cref="SubFloorSweepBudgetFraction"/> of what transcribing the whole gap would cost ends
     /// it instead of starting, so the sweep is always the cheaper bet even when it finds nothing and
     /// Scan runs in full afterwards. Without a bound, a long gap dense in short pauses could spend
-    /// more than Scan and still come back empty - the shape the pass's own remarks already record
-    /// from a 56-minute gap that re-probed for 40 minutes to no effect.
+    /// more than Scan and still come back empty - the shape <see cref="RunReprobeAsync"/>'s own
+    /// notes already record.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the book whose breaks all landed on the floor, and what the sweeps came to on it when re-run.
+    /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="SweepSubFloorSilencesAsync"]/*' /></remarks>
     /// <param name="env">The probe environment the gap's ordinary re-probe used.</param>
     /// <param name="ctx">The Re-probe probe context, whose silence list each band replaces.</param>
     /// <param name="gap">The gap being recovered.</param>
@@ -1773,11 +1757,7 @@ public sealed class ChapterDetector
     /// where one decode <em>stops</em> and the next resumes, and read-ahead, transcript caching and
     /// VAD jingle-candidate selection all read it too. Extra entries therefore re-cut the decodes of
     /// the whole book, and Whisper's reading of a stretch depends on the window it arrives in.
-    /// Measured on a 25-minute BARDIOC clip (2026-08-08, build 257): going from 27 candidates to 200
-    /// re-cut the last two minutes from 49.4 s and 34.9 s decodes into 28.8, 19.8 and 13.5 s, and
-    /// chapter 2's announcement at 0:24:44.73 - heard comfortably by the long decode - fell 1.2 s
-    /// short of the end of a short one and was lost, along with the jingle re-read that inherits
-    /// that end. A sweep cannot do this: it builds its own candidate list
+    /// A sweep cannot do this: it builds its own candidate list
     /// (<see cref="RegionProber"/>'s sweeping mode) and never touches the grid the ordinary walk
     /// used, so it is additive by construction.
     /// </para>
@@ -1785,9 +1765,8 @@ public sealed class ChapterDetector
     /// Gaps only, and budgeted: the sweep is worth its probes where a chapter is known to be
     /// missing, and <see cref="SweepGapBandsAsync"/>'s share of what transcribing the gap would cost
     /// keeps it the cheaper bet even when it finds nothing. Without both, a book that measures a
-    /// 0.54 s break - "Die Dritte Macht", 2026-07-28 - would sweep the whole sub-floor range across
-    /// its whole fifteen hours, which on a file of that length is thousands of probes for pauses no
-    /// chapter is missing behind.
+    /// very short break would sweep the whole sub-floor range across its entire length, which on a
+    /// long file is thousands of probes for pauses no chapter is missing behind.
     /// </para>
     /// <para>
     /// Runs on the Probe recognizer and before Re-probe, so a chapter this recovers costs a handful
@@ -1796,6 +1775,8 @@ public sealed class ChapterDetector
     /// and reads the same audio through the upgrade model, which is a genuinely different answer.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: what a wider candidate list did to the decode grid when that was tried instead, and the break length that would make an ungated sweep unbounded.
+    /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="SweepAdaptiveSubFloorAsync"]/*' /></remarks>
     /// <param name="ctx">Probe's probe context, whose silence list the band replaces.</param>
     /// <param name="found">The chapter accumulator, added to in place.</param>
     /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>

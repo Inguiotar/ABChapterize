@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\ChapterDetector.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="DropNamedMarkEchoes">
+    <para>
+    <b>The epilogue heading that became a chapter.</b> "Corsa nello spazio" (build 251, 2026-08-06),
+    whose epilogue is headed "Epilogo / 2179 / Spazio profondo". Under <c>--chapter-phrase none</c> a
+    year spoken alone is an announcement by definition, and a well-formed one - set off by real
+    pauses, read as 2179 by every probe that saw it - so it reached the written file as "Capitolo
+    2179", 2.86 s after the epilogue's own mark. It also pushed the sequence ceiling to 2179, which
+    declared chapters 66-2178 missing and cost about 25 minutes of a 90-minute run hunting through
+    empty audio.
+    </para>
+  </member>
+
+  <member name="RepairSequenceOutliersAsync">
+    <para>
+    <b>The worked example.</b> "Die Cyber-Brutzellen" (2026-08-01): the announcement at 7:01:30 was
+    read as chapter 40, sits between chapter 13 at 6:21:09 and chapter 15 at 7:47:34, and 14 is
+    therefore the only number it can carry. Neither bounding chapter was known when the misreading
+    happened - 15 had been found but not yet related to it, and everything up to 29 came later.
+    </para>
+    <para>
+    <b>What the repair saves downstream.</b> On that same file, 14 minutes spent searching the
+    stretch between 6:21 and 7:01 for a chapter 14 whose announcement sits at the far end of it.
+    </para>
+  </member>
+
+  <member name="RescanShiftedAsync">
+    <para>
+    <b>The chapter that vanished from a full transcription.</b> Chapter 14 of "Paula Monti"
+    (2026-07-31) is the case on record and the measurement behind the shift: decoded from 2:30:31.29
+    the 601 s chunk produced "…solennité dramatique." / "Berthe de Brevan occupait une des places de
+    cette loge." with "Première partie, chapitre 14, première loge numéro 7" simply absent between
+    them, reproducibly at every chunk length tried from 120 s to 601 s. The identical chunk decoded
+    from 2:30:46.29 - the same audio, 15 s later - reads it at p=0.94.
+    </para>
+    <para>
+    <b>End to end on that clip</b> (<c>-m turbo</c>, which switches Re-probe off so the case reaches
+    Scan at all): Scan recovered chapter 13 from the head of the gap and left 14 missing exactly as
+    before, and the shifted re-read placed it at the same mark the Re-probe sweep produces, 0.93
+    confidence.
+    </para>
+  </member>
+
+  <member name="RunReprobeAsync">
+    <para>
+    <b>When the bet loses.</b> Measured on real audio (2026-07-26, <c>--model tiny --upgrade-model
+    large</c>): a 56-minute gap took ~40 minutes of re-probing and recovered nothing, and Scan still
+    ran afterwards.
+    </para>
+  </member>
+
+  <member name="SweepSubFloorSilencesAsync">
+    <para>
+    <b>The book whose breaks all landed on the floor.</b> "Paula Monti" (2026-07-31, French,
+    4 h 34 min): all five chapters Probe missed were preceded by a pause of 1.39-1.49 s against a
+    1.5 s floor. Four were eventually recovered by Scan transcribing whole gaps, and the fifth was
+    lost outright because Whisper's long-form decode swallowed the announcement - a 601 s chunk
+    produced a contiguous transcript with the words "Première partie, chapitre 14, première loge
+    numéro 7" simply absent from it, reproducibly, while any short window aimed at the same audio
+    read them cleanly.
+    </para>
+    <para>
+    <b>What the sweeps came to on the same file</b>, re-run 2026-07-31 with them in place: all five
+    gaps closed here, one probe each (two candidates only for chapter 19's band), Scan never ran at
+    all, and the run transcribed 1:00:43 of audio instead of 1:49:57 - 45 % less - while finding two
+    chapters more than before. Chapters 3, 12 and 16 came back on the exact marks Scan's full
+    transcription had produced.
+    </para>
+  </member>
+
+  <member name="SweepAdaptiveSubFloorAsync">
+    <para>
+    <b>What a wider candidate list did instead.</b> The obvious implementation - have Analyze keep
+    everything down to <see cref="DetectionTuning.AdaptiveSilenceFloorSeconds"/> and let the
+    threshold admit what it likes - was built first and measured on a 25-minute BARDIOC clip
+    (2026-08-08, build 257): going from 27 candidates to 200 re-cut the last two minutes from 49.4 s
+    and 34.9 s decodes into 28.8, 19.8 and 13.5 s, and chapter 2's announcement at 0:24:44.73 - heard
+    comfortably by the long decode - fell 1.2 s short of the end of a short one and was lost, along
+    with the jingle re-read that inherits that end. The candidate list is the grid the windows are
+    planned on, so extra entries re-cut the decodes of the whole book.
+    </para>
+    <para>
+    <b>The break length that would make an ungated sweep unbounded.</b> "Die Dritte Macht"
+    (2026-07-28) measures a 0.54 s break, so without the gap gate and the budget it would sweep the
+    whole sub-floor range across its whole fifteen hours - thousands of probes for pauses no chapter
+    is missing behind.
+    </para>
+  </member>
+</doc>
