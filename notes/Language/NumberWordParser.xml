@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Language\NumberWordParser.cs. -->
+<doc>
+  <member name="SpokenAloneAtSegmentStart">
+    <para>
+    <b>What each reading finds over a whole book.</b> Over the 15345 transcript segments one 18-hour
+    Italian run logged (2026-08-05), the strict reading finds all 65 chapter numbers plus five
+    implausible extras (150, 600, 1947, 2059, 2068), every one of them out of sequence. Merely
+    requiring the segment to <em>start</em> with a number doubles the hits to 1797 and floods the
+    plausible range - prose such as "12 il capitano Fan Castro spostò lo sguardo" or "25 Perfino con
+    un reattore spento" becomes indistinguishable from an announcement at the right sequence
+    position.
+    </para>
+  </member>
+
+  <member name="LeadingASentence">
+    <para>
+    <b>The same window transcribed two ways on two GPUs.</b> The window at 12:25:23 of "Corsa nello
+    spazio" came back as "45. Zhang Mingoua lanciò…" on one GPU and "45 Zangmingoa lanciò…" on
+    another (2026-08-05), so a rule hinging on that period would find different chapters on different
+    hardware.
+    </para>
+  </member>
+
+  <member name="FindBareNumberAnnouncement">
+    <para>
+    <b>What the old segment-wide rule cost.</b> On "Corsa nello spazio" (18 h, 65 chapters, build
+    244) Whisper glued the announcement onto the first sentence of the chapter - "45. Zhang Mingoua
+    lanciò un'occhiata…" - for ten of them, and every one was then discarded despite having been
+    transcribed correctly, chapter 53 six separate times across two models. Changed 2026-08-05.
+    </para>
+    <para>
+    <b>Why the split requires whitespace after the sentence mark.</b> So "2.179" stays one token
+    rather than yielding a spurious "2" - a real case from the same book, whose epilogue is followed
+    by the year 2179.
+    </para>
+  </member>
+
+  <member name="TryParseRoman">
+    <para>
+    <b>The transcripts the one-letter period rule was read off.</b> On "I Shall Wear Midnight"
+    (2026-07-30) Whisper wrote the one-letter cases as "CHAPTER V. THE MOTHER OF TONGUES" and
+    "CHAPTER X. THE MELTING GIRL" - both with the period - while the multi-letter "CHAPTER VII SONGS
+    IN THE NIGHT" came without one.
+    </para>
+  </member>
+</doc>

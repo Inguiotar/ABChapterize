@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Vad\SileroVadDetector.cs. -->
+<doc>
+  <member name="SileroVadDetector">
+    <para>
+    <b>Why the VAD, not ffmpeg, is the bottleneck.</b> Measured on 2026-07-31 with
+    <c>tools\vadbench</c>: ffmpeg's own decode plus silencedetect runs at ~1400x realtime while the
+    same run with a single-threaded VAD attached drops to 190-280x, so the model accounts for 82-86%
+    of the pass.
+    </para>
+    <para>
+    <b>Why not a GPU.</b> DirectML measured 6.3x <em>slower</em> than the best CPU configuration
+    (585 vs 92 us/frame), because the model runs 31.25 tiny inferences per second of audio and the
+    run is therefore pure per-dispatch overhead with no arithmetic to amortize it against.
+    </para>
+    <para>
+    <b>What the block-parallel implementation measured.</b> Against its own single-worker path over
+    the whole of Wintersmith.m4b (8:32:52), 12 workers on a Ryzen AI 9 HX 370 (12C/24T), 2026-07-31:
+    Analyze end to end 201.5 s single-stream against 49.7 s block-parallel, a 4.05x speed-up of a
+    pass whose ffmpeg floor is 29.2 s - so of the 172 s the single-stream VAD added on top of the
+    decode, 152 s are gone and VAD has dropped from 86% of the pass to 41%. Fidelity over those
+    ~960000 frames: 178 frames differ by more than 0.001, the worst by 0.011, and <b>zero</b> speech
+    segments differ.
+    </para>
+  </member>
+
+  <member name="WarmupSeconds">
+    <para>
+    <b>The calibration sweep, block size against warm-up.</b> 2026-07-31, from the run that chose
+    this value (before the block scheduler moved into this class):
+    </para>
+    <list type="bullet">
+    <item>600 s blocks / 60 s warm-up: one frame in ~960000 differs, by 0.001; zero segment
+    differences. Inference 1653x realtime against 276x.</item>
+    <item>300 s / 30 s: zero segment differences, worst frame delta 0.05.</item>
+    <item>300 s / 2 s: 12 segment boundaries moved, worst by 32 ms (one frame).</item>
+    <item>60 s / 2 s: ~3300 disagreeing frames scattered across the whole file, 17 boundaries moved
+    by up to 96 ms.</item>
+    </list>
+    <para>
+    The last two lines are why the value is not shaved.
+    </para>
+  </member>
+</doc>

@@ -161,15 +161,14 @@ public static class NumberWordParser
         /// uses: it walks the whole book with no upper bound on the sequence and nothing vets its
         /// finds afterwards, so a false accept there displaces real chapters.
         /// <para>
-        /// The strictness is measured rather than cautious. Over the 15345 transcript segments one
-        /// 18-hour Italian run logged (2026-08-05), this reading finds all 65 chapter numbers plus
-        /// five implausible extras (150, 600, 1947, 2059, 2068), every one of them out of sequence.
-        /// Merely requiring the segment to <em>start</em> with a number instead doubles the hits to
-        /// 1797 and floods the plausible range: Italian "un"/"una"/"uno" all parse as 1, and prose
-        /// such as "12 il capitano Fan Castro spostò lo sguardo" or "25 Perfino con un reattore
-        /// spento" is then indistinguishable from an announcement at the right sequence position.
+        /// The strictness is measured rather than cautious. Merely requiring the segment to
+        /// <em>start</em> with a number instead floods the plausible range: Italian
+        /// "un"/"una"/"uno" all parse as 1, and ordinary prose beginning with a numeral is then
+        /// indistinguishable from an announcement at the right sequence position.
         /// </para>
         /// </summary>
+        /// <remarks>Notes: what the strict and the loose reading each find over a whole book's transcripts.
+        /// <include file='../../notes/Language/NumberWordParser.xml' path='doc/member[@name="SpokenAloneAtSegmentStart"]/*' /></remarks>
         SpokenAloneAtSegmentStart,
 
         /// <summary>
@@ -190,15 +189,15 @@ public static class NumberWordParser
         /// <see cref="ABChapterize.Detection.AnnouncementIsolation"/> vets the position afterwards -
         /// so nothing about Whisper's output has to be trusted, neither its segmentation nor its
         /// punctuation.
-        /// <para>
-        /// The punctuation half is why this cannot just be the reading above applied to every
-        /// sentence. Whisper's period after a heading number is not dependable, and specifically not
-        /// dependable <em>across machines</em>: the same window at 12:25:23 of the same book came
-        /// back as "45. Zhang Mingoua lanciò…" on one GPU and "45 Zangmingoa lanciò…" on another
-        /// (2026-08-05; see the cross-machine reproducibility note in the project docs). A rule
-        /// hinging on that period quietly finds different chapters on different hardware.
-        /// </para>
+    /// <para>
+    /// The punctuation half is why this cannot just be the reading above applied to every
+    /// sentence. Whisper's period after a heading number is not dependable, and specifically not
+    /// dependable <em>across machines</em> (see the cross-machine reproducibility note in the project
+    /// docs). A rule hinging on that period quietly finds different chapters on different hardware.
+    /// </para>
         /// </summary>
+        /// <remarks>Notes: the same window transcribed two ways on two GPUs.
+        /// <include file='../../notes/Language/NumberWordParser.xml' path='doc/member[@name="LeadingASentence"]/*' /></remarks>
         LeadingASentence,
     }
 
@@ -215,13 +214,12 @@ public static class NumberWordParser
     /// <summary>
     /// Reads a <c>--chapter-phrase none</c> announcement out of one transcript segment.
     /// <para>
-    /// The unit is a <em>sentence</em>, not the segment, and that is the entire point. Until
-    /// 2026-08-05 this asked whether the segment <em>was</em> a number start to finish, on the
-    /// reasoning that Whisper ends a segment where the speaking stops and so brackets a number
-    /// spoken alone. It does not, reliably: on "Corsa nello spazio" (18 h, 65 chapters, build 244)
-    /// it glued the announcement onto the first sentence of the chapter - "45. Zhang Mingoua
-    /// lanciò un'occhiata…" - for ten of them, and every one was then discarded despite having been
-    /// transcribed correctly, chapter 53 six separate times across two models.
+    /// The unit is a <em>sentence</em>, not the segment, and that is the entire point. The earlier
+    /// rule asked whether the segment <em>was</em> a number start to finish, on the reasoning that
+    /// Whisper ends a segment where the speaking stops and so brackets a number spoken alone. It does
+    /// not, reliably: it glues the announcement onto the first sentence of the chapter often enough
+    /// to cost a book many of its chapters, every one of them transcribed correctly and then
+    /// discarded.
     /// </para>
     /// <para>
     /// The split deliberately requires whitespace after the sentence mark, so "2.179" stays one
@@ -247,6 +245,8 @@ public static class NumberWordParser
     /// the announcement itself, notation changes included.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: what the old segment-wide rule cost on one book.
+    /// <include file='../../notes/Language/NumberWordParser.xml' path='doc/member[@name="FindBareNumberAnnouncement"]/*' /></remarks>
     /// <param name="text">One transcript segment's text.</param>
     /// <param name="language">Two-letter language code steering number-word parsing.</param>
     /// <param name="reading">How much of the segment counts; see <see cref="BareNumberReading"/>.</param>
@@ -340,14 +340,14 @@ public static class NumberWordParser
     /// ("DIM", "LID", "CIVIC", "MILD" are all non-canonical; "MIX" is 1009 and out of range).
     /// </para>
     /// <para>
-    /// The rule is what real transcripts do, not a guess: on "I Shall Wear Midnight" (2026-07-30)
-    /// Whisper wrote the one-letter cases as "CHAPTER V. THE MOTHER OF TONGUES" and "CHAPTER X.
-    /// THE MELTING GIRL" - both with the period - while the multi-letter "CHAPTER VII SONGS IN THE
-    /// NIGHT" came without one. The cost of being wrong is asymmetric and points the same way: a
-    /// missed one-letter numeral is one chapter Scan still gets a shot at, whereas a false
-    /// chapter 1 read out of an English pronoun displaces a real mark.
+    /// The rule is what real transcripts do, not a guess: Whisper writes the one-letter cases with a
+    /// trailing period and the multi-letter ones without. The cost of being wrong is asymmetric and
+    /// points the same way: a missed one-letter numeral is one chapter Scan still gets a shot at,
+    /// whereas a false chapter 1 read out of an English pronoun displaces a real mark.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the transcripts the one-letter period rule was read off.
+    /// <include file='../../notes/Language/NumberWordParser.xml' path='doc/member[@name="TryParseRoman"]/*' /></remarks>
     /// <param name="token">The token that parsed as a Roman numeral.</param>
     private static bool RomanNumeralIsUnambiguous(Token token)
         => token.Text.Length > 1 || token.TrailingPeriod;

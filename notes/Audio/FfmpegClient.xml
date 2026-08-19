@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Audio\FfmpegClient.cs. -->
+<doc>
+  <member name="PcmResyncToleranceSeconds">
+    <para>
+    <b>The drift, measured.</b> "Raumschiff Erde.m4b" (17:00:40, 2026-08-02): 202 short packets out
+    of 2637487, 78565 samples of overlap in total, putting the VAD 0.29 s late by 2:46:40, 1.09 s by
+    10:51 and 1.76 s by the end. That 1.09 s is what moved chapter 25's mark off the announcement and
+    onto the chapter title behind it.
+    </para>
+    <para>
+    <b>How much of the corpus carries it.</b> Three more of the ten books in that test set have the
+    same defect (0.99-2.15 s); the other six are within 0.07 s. Screening one file costs nothing:
+    compare <c>nb_frames * 1024</c> against <c>duration_ts</c> from
+    <c>ffprobe -select_streams a -show_entries stream=nb_frames,duration_ts</c>.
+    </para>
+  </member>
+
+  <member name="StartProcess">
+    <para>
+    <b>What an unpinned read actually does today.</b> Measured 2026-08-18 under console code pages
+    850, 1252, 437 and 65001: an unpinned read decoded correctly every time, because
+    InvariantGlobalization leaves .NET unable to build a legacy code page and its fallback is UTF-8.
+    </para>
+  </member>
+</doc>

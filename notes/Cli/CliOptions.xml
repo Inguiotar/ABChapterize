@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Cli\CliOptions.cs. -->
+<doc>
+  <member name="Model">
+    <para>
+    <b>A large model against a small one on short probes.</b> Measured on "Paula Monti.m4b" by
+    replaying a real run's own probe windows (2026-08-08): ggml-large-v3-turbo matched the
+    announcement in 4 of 15 windows at 11-22 s where ggml-small matched 14 of 14. On the same book
+    turbo-throughout lost chapters 19 and 21-25 outright while <c>-m small -M turbo</c> found all 25.
+    </para>
+  </member>
+
+  <member name="TrailingScan">
+    <para>
+    <b>The book that lost its last five chapters with nothing to notice.</b> "Paula Monti.m4b" lost
+    chapters 21-25 (2026-08-08) and was written out with 20 marks, no missing-number list and no
+    ".missing-marks" tag, because nothing above chapter 20 existed to notice they were gone. That is
+    what settled the argument for making the trailing scan a default in 0.11.0 rather than opt-in.
+    </para>
+  </member>
+
+  <member name="DefaultChapterCount">
+    <para>
+    <b>The corpus run whose front matter became chapters.</b> The build-328 run turned the years of a
+    Perry Rhodan "Zeittafel" into chapters 3578-3585, which pushed the real chapter 1 below the
+    sequence, split four books into parts that do not exist, cost "Raumschiff Erde" its prologue (a
+    chapter accepted at 0:01:53 closes the before-first-chapter scope the prologue at 0:03:55 needed)
+    and left ".missing-marks" tags naming numbers no book ever had.
+    </para>
+    <para>
+    <b>The book lengths 200 is set against.</b> Comfortably past the longest book on record here (67)
+    and past the classics that run longest - "The Count of Monte Cristo" has 117.
+    </para>
+  </member>
+</doc>

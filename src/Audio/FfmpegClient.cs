@@ -299,11 +299,7 @@ public sealed partial class FfmpegClient : IAudioSource
     /// how a container assembled by concatenating separately-encoded pieces absorbs each piece's
     /// encoder delay. Every such packet leaves the raw sample stream a fraction of a second longer
     /// than the timeline silencedetect, <c>-ss</c> seeking and the written chapter marks all use, and
-    /// the error only ever accumulates. Measured on "Raumschiff Erde.m4b" (17:00:40, 2026-08-02):
-    /// 202 short packets out of 2637487, 78565 samples of overlap in total, putting the VAD 0.29 s
-    /// late by 2:46:40, 1.09 s by 10:51 and 1.76 s by the end. That 1.09 s is what moved chapter 25's
-    /// mark off the announcement and onto the chapter title behind it. Three more of the ten books in
-    /// that test set carry the same defect (0.99-2.15 s); the other six are within 0.07 s.
+    /// the error only ever accumulates.
     /// </para>
     /// <para>
     /// A millisecond is far below anything the rest of the pipeline resolves (a VAD frame is 32 ms)
@@ -313,6 +309,8 @@ public sealed partial class FfmpegClient : IAudioSource
     /// in visible 0.1 s steps instead of smoothly.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the file the drift was measured on, how far it ran, and how much of the corpus carries it.
+    /// <include file='../../notes/Audio/FfmpegClient.xml' path='doc/member[@name="PcmResyncToleranceSeconds"]/*' /></remarks>
     private const double PcmResyncToleranceSeconds = 0.001;
 
     /// <inheritdoc/>
@@ -635,10 +633,11 @@ public sealed partial class FfmpegClient : IAudioSource
     /// and ffprobe's stdout carries chapter titles: a Spanish book's "Capitulo 1" read back through
     /// the wrong page and written out again by --verify --fix would corrupt the user's file
     /// silently, the mode's whole promise being that it only moves marks. Today the pin is
-    /// belt-and-braces - measured 2026-08-18 under console code pages 850, 1252, 437 and 65001, an
-    /// unpinned read decoded correctly every time, because InvariantGlobalization leaves .NET
-    /// unable to build a legacy code page and its fallback is UTF-8 - but that makes the behaviour
+    /// belt-and-braces - an unpinned read has been measured decoding correctly under every console
+    /// code page tried, because InvariantGlobalization leaves .NET unable to build a legacy code page
+    /// and its fallback is UTF-8 - but that makes the behaviour
     /// hostage to a csproj switch it has nothing to do with, so it is stated here instead. Harmless
+    /// <include file='../../notes/Audio/FfmpegClient.xml' path='doc/member[@name="StartProcess"]/*' />
     /// for the two callers that want bytes: DecodePcmAsync and DetectSilencesAndStreamPcmAsync read
     /// StandardOutput.BaseStream, which never goes near the decoder.
     /// </remarks>

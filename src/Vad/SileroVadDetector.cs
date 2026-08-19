@@ -19,23 +19,16 @@ namespace ABChapterize.Vad;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Why blocks at all. Analyze is VAD-bound rather than ffmpeg-bound: measured on 2026-07-31 with
-/// <c>tools\vadbench</c>, ffmpeg's own decode plus silencedetect runs at ~1400x realtime while the
-/// same run with a single-threaded VAD attached drops to 190-280x, so the model accounts for 82-86%
-/// of the pass. The work cannot go to a GPU - DirectML measured 6.3x *slower* than the best CPU
-/// configuration (585 vs 92 us/frame), because the model runs 31.25 tiny inferences per second of
-/// audio and the run is therefore pure per-dispatch overhead with no arithmetic to amortize it
-/// against. Blocks are the remaining direction.
+/// Why blocks at all. Analyze is VAD-bound rather than ffmpeg-bound: the model accounts for the
+/// large majority of the pass, and the work cannot go to a GPU - the model runs 31.25 tiny
+/// inferences per second of audio, so a dispatch-bound accelerator is measurably slower than the
+/// CPU, there being no arithmetic to amortize the per-dispatch overhead against. Blocks are the
+/// remaining direction.
 /// </para>
 /// <para>
-/// What this implementation actually measured, against its own single-worker path over the whole of
-/// Wintersmith.m4b (8:32:52), 12 workers on a Ryzen AI 9 HX 370 (12C/24T), 2026-07-31: Analyze end to
-/// end 201.5 s single-stream against 49.7 s block-parallel, a 4.05x speed-up of a pass whose ffmpeg
-/// floor is 29.2 s - so of the 172 s the single-stream VAD added on top of the decode, 152 s are
-/// gone and VAD has dropped from 86% of the pass to 41%. Fidelity over those ~960000 frames: 178
-/// frames differ by more than 0.001, the worst by 0.011, and <b>zero</b> speech segments differ.
 /// Re-run <c>tools\vadbench pipeline &lt;file&gt; --only seq,live</c> against any change here; its
 /// per-frame and per-segment comparison is what turns "faster" into "faster and identical".
+/// <include file='../../notes/Vad/SileroVadDetector.xml' path='doc/member[@name="SileroVadDetector"]/*' />
 /// </para>
 /// <para>
 /// Why blocks are allowed to be independent. Silero is recurrent, so frame N's answer needs the
@@ -78,29 +71,20 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
     /// Audio prepended to each block purely to converge its recurrent state before the block's own
     /// frames start counting.
     /// <para>
-    /// Calibrated on 2026-07-31 with <c>tools\vadbench</c>, which compares every frame's raw
-    /// probability and every smoothed segment against a single-threaded run of the same model. The
-    /// figures below come from the calibration sweep that chose this value, before the block
-    /// scheduler moved into this class; see the type's remarks for what the shipped implementation
-    /// then measured at the winning setting.
+    /// Calibrated with <c>tools\vadbench</c>, which compares every frame's raw probability and every
+    /// smoothed segment against a single-threaded run of the same model.
     /// </para>
-    /// <list type="bullet">
-    /// <item>600 s blocks / 60 s warm-up: one frame in ~960000 differs, by 0.001; zero segment
-    /// differences. Inference 1653x realtime against 276x.</item>
-    /// <item>300 s / 30 s: zero segment differences, worst frame delta 0.05.</item>
-    /// <item>300 s / 2 s: 12 segment boundaries moved, worst by 32 ms (one frame).</item>
-    /// <item>60 s / 2 s: ~3300 disagreeing frames scattered across the whole file, 17 boundaries
-    /// moved by up to 96 ms.</item>
-    /// </list>
     /// <para>
-    /// The last two lines are the reason this value is not shaved to save its overhead: too short a
-    /// warm-up does not produce a transient that fades, it produces a divergence that never
-    /// re-converges and shows up anywhere in the file. A moved boundary matters here even when the
-    /// probability delta could not have moved one, because these segments feed
+    /// This value is not shaved to save its overhead because too short a warm-up does not produce a
+    /// transient that fades, it produces a divergence that never re-converges and shows up anywhere
+    /// in the file. A moved boundary matters here even when the probability delta could not have
+    /// moved one, because these segments feed
     /// <see cref="ABChapterize.Detection.JingleGeometry"/>'s non-speech regions and therefore mark
     /// placement.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the calibration sweep, block size against warm-up.
+    /// <include file='../../notes/Vad/SileroVadDetector.xml' path='doc/member[@name="WarmupSeconds"]/*' /></remarks>
     internal const double WarmupSeconds = 60;
 
     private readonly int _workers;

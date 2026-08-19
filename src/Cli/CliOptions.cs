@@ -186,15 +186,14 @@ public sealed class CliOptions
     /// jingle plus an announcement, ten to twenty-five seconds - and Whisper pads anything under
     /// <see cref="ABChapterize.Detection.DetectionTuning.WhisperChunkSeconds"/> out to a full mel
     /// chunk. The large models degenerate on that padding: the window comes back as one unpunctuated
-    /// run-on segment with the announcement missing from it. Measured on "Paula Monti.m4b" by
-    /// replaying a real run's own probe windows (2026-08-08), ggml-large-v3-turbo matched the
-    /// announcement in 4 of 15 windows at 11-22 s where ggml-small matched 14 of 14. On the same book
-    /// turbo-throughout lost chapters 19 and 21-25 outright while <c>-m small -M turbo</c> found all
-    /// 25. Whisper's rankings hold for a long, well-framed transcription, which is what Scan does
-    /// and <see cref="UpgradeModel"/> is for; they do not survive being asked five-second questions.
-    /// The smaller model is also several times faster, so the default is not a trade at all.
+    /// run-on segment with the announcement missing from it. Whisper's rankings hold for a long,
+    /// well-framed transcription, which is what Scan does and <see cref="UpgradeModel"/> is for; they
+    /// do not survive being asked five-second questions. The smaller model is also several times
+    /// faster, so the default is not a trade at all.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the window-by-window measurement of a large model against a small one on short probes.
+    /// <include file='../../notes/Cli/CliOptions.xml' path='doc/member[@name="Model"]/*' /></remarks>
     public string Model { get; private set; } = "small";
 
     /// <summary>
@@ -303,12 +302,11 @@ public sealed class CliOptions
     /// <para>
     /// It was opt-in until 0.11.0, on the grounds that the cost is paid on every file whether or not
     /// anything is wrong - the region is a whole chapter long in a healthy book, and with no expected
-    /// numbers to satisfy nothing can stop it early. What settled the argument was that the hole is
-    /// invisible from the outside: "Paula Monti.m4b" lost chapters 21-25 to it (2026-08-08) and was
-    /// written out with 20 marks, no missing-number list and no ".missing-marks" tag, because nothing
-    /// above chapter 20 existed to notice they were gone. A run that silently drops the end of a book
-    /// is a worse default than a run that takes a few minutes longer, and the price is bounded and
-    /// predictable - one final chapter's worth of transcription per file. --no-trailing-scan buys
+    /// invisible from the outside: a real book lost its last five chapters to it and was written out
+    /// looking complete, with no missing-number list and no ".missing-marks" tag, because nothing
+    /// above the last mark existed to notice they were gone. A run that silently drops the end of a
+    /// book is a worse default than a run that takes a few minutes longer, and the price is bounded
+    /// and predictable - one final chapter's worth of transcription per file. --no-trailing-scan buys
     /// that time back for a library already known to be sound.
     /// </para>
     /// <para>
@@ -320,6 +318,8 @@ public sealed class CliOptions
     /// number of chapters is known, so the two are worth reading together.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the book that lost its last five chapters with nothing to notice.
+    /// <include file='../../notes/Cli/CliOptions.xml' path='doc/member[@name="TrailingScan"]/*' /></remarks>
     public bool TrailingScan { get; private set; } = true;
 
     /// <summary>
@@ -402,16 +402,15 @@ public sealed class CliOptions
     /// gets the same allowance from wherever its numbering begins.
     /// <para>
     /// A cap is not a nicety. Without one, a single misread number sets the sequence ceiling and
-    /// everything under it becomes a gap to hunt: the build-328 corpus run turned the years of a
-    /// Perry Rhodan "Zeittafel" into chapters 3578-3585, which pushed the real chapter 1 below the
-    /// sequence, split four books into parts that do not exist, cost "Raumschiff Erde" its prologue
-    /// (a chapter accepted at 0:01:53 closes the before-first-chapter scope the prologue at 0:03:55
-    /// needed) and left ".missing-marks" tags naming numbers no book ever had. 200 is comfortably
-    /// past the longest book on record here (67) and past the classics that run longest - "The Count
-    /// of Monte Cristo" has 117 - while excluding every year, price and house number a narrator
+    /// everything under it becomes a gap to hunt: front-matter years read as chapter numbers push the
+    /// real chapter 1 below the sequence, split books into parts that do not exist, cost a prologue
+    /// its scope and leave ".missing-marks" tags naming numbers no book ever had. 200 is comfortably
+    /// past the longest books on record while excluding every year, price and house number a narrator
     /// reads out. A book that really runs longer says so with --max-chapter-number.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the corpus run whose front-matter years became chapters, and the book lengths the cap is set against.
+    /// <include file='../../notes/Cli/CliOptions.xml' path='doc/member[@name="DefaultChapterCount"]/*' /></remarks>
     public const int DefaultChapterCount = 200;
 
     /// <summary>
