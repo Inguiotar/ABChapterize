@@ -25,6 +25,23 @@ public sealed class RunStatisticsTests
         => new(silence, interSilence, jingle, interJingle, whisperAudio, transcribeSeconds);
 
     [Fact]
+    public void ProcessingTime_ReportsBothTheAbsoluteFigureAndItsShareOfTheBook()
+    {
+        // Six minutes is fast for a fifteen-hour book and slow for a ten-minute one, so the
+        // share is what makes the absolute figure mean anything to the reader.
+        Assert.Equal("; took 5:00 (10.0% of run length)",
+            RunStatistics.FormatProcessingTime(TimeSpan.FromMinutes(5), 3000));
+
+        // Past an hour the absolute figure grows an hours field rather than counting minutes up.
+        Assert.Equal("; took 1:30:00 (50.0% of run length)",
+            RunStatistics.FormatProcessingTime(TimeSpan.FromMinutes(90), 10800));
+
+        // A run length of zero is "not known", not "instantaneous": the share is left off
+        // rather than printed as a division by nothing.
+        Assert.Equal("; took 0:42", RunStatistics.FormatProcessingTime(TimeSpan.FromSeconds(42), 0));
+    }
+
+    [Fact]
     public void RunSummary_ReportsBothExtremesWithTheirInterChapterFigures()
     {
         var run = new RunStatistics();

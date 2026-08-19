@@ -39,6 +39,11 @@ earn a round number.
 
 ### Changed
 
+- **A processed file's result line now says how long it took.** Both the plain figure and
+  its share of that book's own run length, so it means something without your having to
+  remember how long the book is: `; took 38:20 (7.2% of run length)`. Files that were
+  skipped, or that failed before anything was read, have no such figure.
+
 - **The progress bar says when it is going back over ground it has already covered.**
   Probe's percentage runs backwards while a gap in the chapter numbering sends it to
   re-probe earlier candidates, which looked like the bar misbehaving. It now reads

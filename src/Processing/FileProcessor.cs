@@ -935,7 +935,8 @@ public sealed class FileProcessor
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
             $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")}" +
-            $"{RenameNote(retarget, finalPath, "re-tagged as")}{backupNote}", important: true);
+            $"{RenameNote(retarget, finalPath, "re-tagged as")}{backupNote}"
+            + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds), important: true);
         return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
@@ -966,7 +967,8 @@ public sealed class FileProcessor
         var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: resume complete - {written}" +
-            $"{RenameNote(restored, finalPath)}{backupNote}");
+            $"{RenameNote(restored, finalPath)}{backupNote}"
+            + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds));
         return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
@@ -1202,7 +1204,8 @@ public sealed class FileProcessor
             return null;
         }
         var (_, backupNote) = await CommitChaptersAsync(ctx, chapters, null, ct);
-        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {what}{backupNote}");
+        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {what}{backupNote}"
+            + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds));
         return null;
     }
 
@@ -1273,7 +1276,8 @@ public sealed class FileProcessor
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
             $"wrote {FormatWrittenCount(result, chapters, "partial mark(s)")}" +
-            $"{RenameNote(target, finalPath)}{backupNote}", important: true);
+            $"{RenameNote(target, finalPath)}{backupNote}"
+            + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds), important: true);
         return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
@@ -1323,7 +1327,8 @@ public sealed class FileProcessor
         var reason = DescribeNoChapters(result);
         _outcomes.RecordNoChapters(ctx.Name, reason);
         var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
-        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {reason}; file unchanged{langHint}");
+        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {reason}; file unchanged{langHint}"
+            + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds));
     }
 
     /// <summary>Which of the three ways a detection can come back empty-handed this one was, as the
@@ -1390,7 +1395,8 @@ public sealed class FileProcessor
         var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: {DescribeDropped(dropped, prospective: false)}{what}" +
-            $"{notes}{RenameNote(restored, finalPath)}{backupNote}", important);
+            $"{notes}{RenameNote(restored, finalPath)}{backupNote}"
+            + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds), important);
         return SamePath(finalPath, ctx.File) ? null : finalPath;
     }
 
@@ -1777,7 +1783,8 @@ public sealed class FileProcessor
             new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), chapters, null, ct);
         _progress.FinishWithSummary(work,
             $"{name}: {DescribeDropped(dropped, prospective: false)}{chapters.Count} chapter(s) " +
-            $"imported from {Path.GetFileName(sidecarPath)}{backupNote}");
+            $"imported from {Path.GetFileName(sidecarPath)}{backupNote}"
+            + FormatProcessingTime(work.Elapsed, info.DurationSeconds));
     }
 
     /// <summary>

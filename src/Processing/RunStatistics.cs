@@ -62,6 +62,18 @@ internal sealed class RunStatistics
     internal static string FormatPercent(double part, double whole)
         => whole > 0 ? $" ({100 * part / whole:0.0}% of run length)" : "";
 
+    /// <summary>
+    /// Formats the "; took M:SS (NN.N% of run length)" clause a processed file's summary line
+    /// ends with. The share is what makes the figure comparable: six minutes is fast for a
+    /// fifteen-hour book and slow for a ten-minute one, and the reader knows the book.
+    /// </summary>
+    /// <param name="elapsed">Wall-clock time this file took, i.e.
+    /// <see cref="ABChapterize.Ui.WorkTracker.Elapsed"/> - the tracker is created immediately
+    /// before the file's own stopwatch, so the two measure the same stretch.</param>
+    /// <param name="runLengthSeconds">The file's run length; 0 leaves the share off.</param>
+    internal static string FormatProcessingTime(TimeSpan elapsed, double runLengthSeconds)
+        => $"; took {FormatTime(elapsed)}" + FormatPercent(elapsed.TotalSeconds, runLengthSeconds);
+
     /// <summary>Appends " (inter-chapter Y.YY s)" when the chapter-1-excluded value is present,
     /// marking the extreme taken over the book's regular chapter breaks alone.</summary>
     /// <param name="interChapter">The extreme excluding chapter 1, or null when unavailable.</param>

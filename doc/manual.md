@@ -1537,8 +1537,8 @@ The outcome is shown in the per-file result line, `--dry-run` listing and
 
 ```
 Whisper model "turbo" loaded (Vulkan backend on NVIDIA GeForce GTX 1070, auto language detection), 2 file(s) to process.
-buch.m4b: 13 mark(s) written (12 chapter(s) 1-12, 1 named), language: de (p=1.00)
-book.m4b: 9 mark(s) written (8 chapter(s) 1-8, 1 named), language: en (p=0.98)
+buch.m4b: 13 mark(s) written (12 chapter(s) 1-12, 1 named), language: de (p=1.00); took 51:07 (5.6% of run length)
+book.m4b: 9 mark(s) written (8 chapter(s) 1-8, 1 named), language: en (p=0.98); took 22:14 (4.9% of run length)
 ```
 
 `--verbose` additionally logs the detection as it happens:
@@ -2815,8 +2815,15 @@ chapter state) that is replaced by a one-line result when the file is
 done:
 
 ```
-My Audiobook.m4b: 24 mark(s) written (23 chapter(s) 1-23, 1 named)
+My Audiobook.m4b: 24 mark(s) written (23 chapter(s) 1-23, 1 named); took 38:20 (7.2% of run length)
 ```
+
+Every result line for a file that was actually processed ends with how long it
+took, both as a plain figure and as a share of that book's own run length —
+half an hour means nothing on its own, but "7% of run length" says the same
+thing about a two-hour novel and a fifteen-hour omnibus. Files that were
+skipped, or that failed before anything was read, have no such figure. Under
+`--dry-run` the result line is followed by the chapter listing instead.
 
 The chapter state reads `----` until the first mark is confirmed (all
 of Analyze, where nothing can change anyway), then shows the highest

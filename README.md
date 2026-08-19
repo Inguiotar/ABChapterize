@@ -55,14 +55,14 @@ Prebuilt binaries for Windows and Linux are available on the
 - **GPU accelerated** — uses CUDA or Vulkan when available, falls back to CPU.
   On a laptop or desktop with both an integrated and a discrete GPU, the
   discrete one is picked automatically (left alone, the Vulkan runtime may
-  well grab the integrated one — measured 8.6x slower on a test machine), and
-  the GPU in use is named in the startup line. Override with
+  well grab the integrated one, which is dramatically slower), and the GPU in
+  use is named in the startup line. Override with
   `--use-gpu <name>`; `--list-gpus` shows the names.
 - **One file at a time, with the whole machine behind it** — the scan that opens
-  every run spreads a single book across all your cores: on a 12-core machine an
-  8.5-hour audiobook's first pass went from about 200 seconds to about 50, and
-  found exactly the same speech. Thread counts default to your physical core
-  count; `--vad-threads` and `--whisper-threads` override them.
+  every run spreads a single book across all your cores, which takes most of that
+  pass off the clock without changing a single thing it finds. Thread counts
+  default to your physical core count; `--vad-threads` and `--whisper-threads`
+  override them.
 - **Batches survive being interrupted** — name as many files and folders as you
   like in one command; each folder quietly keeps track of what is already done
   while it is being worked on, so a run stopped by Ctrl+C, a crash or a power
