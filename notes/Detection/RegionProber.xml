@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\RegionProber.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="_scanFloorSeconds">
+    <para>
+    <b>What the lowering cost where it bought nothing.</b> Measured on "Die Cyber-Brutzellen"
+    (builds 331 and 339, 2026-08-17). Chapter 14 is recovered inside a gap re-probe at a genuine
+    1.01 s break - 0.7575 s once scaled, hence clamped to the floor - which floored the threshold at
+    minute 11 of the run with chapters 16-29, about 9.5 hours of audio, still to scan:
+    921 -> 2177 probes, 26.5 -> 55.7 minutes, Whisper audio 4:20:51 -> 12:13:36. It bought
+    <b>nothing</b>. Build 331 is the control experiment, its Probe having run at 2.5 s throughout
+    because the identical lowering landed in Re-probe when nothing was left to scan: all 29 chapters
+    at identical positions, and the seven that build 339 accepted "at a silence" (16, 18, 20, 21, 23,
+    27, 29) were accepted "at a jingle" by build 331 at the same millisecond. That book's chapters
+    are announced after music; the extra silence candidates only won the race to the same
+    announcement.
+    </para>
+    <para>
+    <b>Where the lowering does pay, and through which consumer.</b> "I Shall Wear Midnight"
+    chapter 9 sits behind a 0.74 s break where the book's other thirteen run 4.47-5.25 s, and it was
+    recovered by the sub-floor sweep, not by the scan gate; "Paula Monti" chapters 4 and 12 likewise.
+    No corpus mark is known to depend on the forward scan's own gate having come down. A book whose
+    breaks really are short still throttles itself through its own forward scan: "De vandrande
+    djäknarne" reaches 0.8 s from chapter 3, a primary-scan mark.
+    </para>
+  </member>
+
+  <member name="JingleCandidate">
+    <para>
+    <b>How wide the old blip-driven windows got.</b> A candidate that started at the jingle's first
+    note and ran <see cref="ExpectedAnnouncementSeconds"/> past the announcement was bounded by
+    nothing but the music's own length: 9 of the corpus's 20 marks found that way came from windows
+    of 33 s or more, four of them 51-60 s - well past the width
+    <see cref="WhisperChunkSeconds"/> exists to warn about.
+    </para>
+    <para>
+    <b>The corpus split that sets the order of the two looks.</b> 225 marks sit after the music
+    against 20 inside it, so reading the speech behind the music first means the second look at the
+    music itself is rarely paid for at all.
+    </para>
+  </member>
+
+  <member name="ExtendToPlannedSeam">
+    <para>
+    <b>What reading ahead saved over a whole book.</b> Measured on BARDIOC.m4b's 15.6 h debug log
+    (2026-08-01, 1659 probe decodes): 1814 encoder passes without reading ahead, 1570 with it, 244
+    windows served from cache that had cost a pass each - and not one decode made longer than the
+    passes it already bought.
+    </para>
+    <para>
+    <b>What stopping at the chunk boundary would have saved instead.</b> A further 124 passes - and
+    it was refused anyway, because every planned end is snapped to a silence or non-speech mid-point
+    while a chunk boundary is not, so the cache would end mid-speech and an announcement straddling
+    the cut would be lost on both sides of it.
+    </para>
+  </member>
+
+  <member name="RereadDenoisedAsync">
+    <para>
+    <b>The transcript that lost a chapter.</b> On "De vandrande djäknarne" chapter 1 the recognizer
+    wrote <c>"1. Jäknuktåg"</c> - the number and the chapter's title, with "Första kapitlet"
+    collapsed into the digit - so no wording of the phrase could match and the chapter was lost.
+    </para>
+    <para>
+    <b>What denoising recovers, measured.</b> Across 22 window framings 20 ms apart over that
+    announcement, ggml-small recovers the chapter word from 10 of them on the raw audio and from
+    <b>all 22</b> denoised, at a steady p≈0.6 instead of a notation that swung between
+    "1. Kapitlet – Gjäknupptåg", "1. KAPITLET", "1. KAPITLÄT", "1. KJÄKNUGTÅG" and "1. Jäknuktåg".
+    It is also cheaper than the alternative that works equally well: medium and large-v3-turbo read
+    it at every framing too, at 2-3x the decode cost of a denoise plus a re-read.
+    </para>
+  </member>
+
+  <member name="RereadInOnePassAsync">
+    <para>
+    <b>The decode grid behind the re-read width.</b> Gruelfin.m4b's prologue was lost first to a 50 s
+    window (2026-07-30) and again to build 280's classified one (2026-08-09), which is exactly
+    <see cref="WhisperChunkSeconds"/> wide. Re-measured on the live decode at 0:03:20.19 with
+    ggml-small, "Prolog." is read at 22.0, 23.5 and 25.0 s and gone at 27.0 and 30.0 s - identically
+    on both of this project's machines, which is rare enough to be worth stating.
+    </para>
+    <para>
+    <b>What a narrower planned window would have cost.</b> 2 of the fourteen-book corpus's 220 jingle
+    marks are accepted 26.2 s and 28.3 s into their window ("Die Dritte Macht" 8:06:31, "Die Maahks"
+    10:11:27, 2026-08-09), so narrowing at planning time would have traded this prologue for them.
+    </para>
+  </member>
+
+  <member name="CacheHidesTheExpectation">
+    <para>
+    <b>The run-on that lost a chapter with no pass ever reading it.</b> "The Forever War" chapter 1
+    (2026-08-08), and the shape is not exotic. The candidate at 0:01:14.36 was handed 23.2 s spanning
+    two announcements - the publisher's title card, a 5 s pause, then "Chapter 1" - and Whisper
+    returned the whole window as one run-on segment reading "And now, the FOREVER WAR." (p=0.62), the
+    announcement simply absent from it. That is ordinary recognizer behaviour on a long window and
+    not something this pass can prevent. What it can prevent is the second half: the chapter's
+    <em>own</em> candidate at 0:01:21.66 - whose window opens 3 s before the announcement and reads
+    "CHAPTER 1" cleanly when decoded (verified with the wprobe harness) - was served that run-on from
+    the cache, and the segment starting 7 s before its window was then dropped as out of range. The
+    chapter was lost with no pass ever having read it, and, being chapter 1, no sequence gap to
+    notice.
+    </para>
+  </member>
+
+  <member name="CacheableEnd">
+    <para>
+    <b>The announcement lost for a whole run to a decode the recognizer stopped short of.</b>
+    "BARDIOC.m4b" (2026-08-02): the "Zeittafel" announcement at 0:00:51. The probe at 0:00:00 planned
+    a window to 0:00:40.73 and read ahead to 0:00:54.19; handed 54 s beginning with ~20 s of jingle
+    music, Whisper stopped emitting at 0:00:37. The unread 17 s went into the cache as if empty, the
+    next two candidates (a VAD jingle region at 0:00:19.48, a silence end at 0:00:43.33) were both
+    served from it, and the next fresh decode began at 0:00:54.19 - past the phrase. Replayed through
+    the real decoder and recognizer, the tail decode this rule restores
+    (0:00:40.73-0:01:10.69) reads "Zeittafel 1971 bis 1984..." at p=0.72, and so do windows framed
+    from 0:00:43.33 and 0:00:46. Nothing else could have caught it: Silero hears no speech at all
+    between 0:00:23.3 and 0:00:54.56 at any threshold from 0.50 to 0.70, so the announcement is not a
+    blip <see cref="RereadJingleSpeechAsync"/> could have found either.
+    </para>
+  </member>
+</doc>

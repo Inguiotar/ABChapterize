@@ -423,27 +423,13 @@ internal sealed class RegionProber
     /// cleanly, because it asks whether the break is one the forward scan could ever have probed.
     /// </para>
     /// <para>
-    /// Measured on "Die Cyber-Brutzellen" (builds 331 and 339, 2026-08-17). Chapter 14 is recovered
-    /// inside a gap re-probe at a genuine 1.01 s break - 0.7575 s once scaled, hence clamped to the
-    /// floor - which floored the threshold at minute 11 of
-    /// the run with chapters 16-29 - about 9.5 hours of audio - still to scan: 921 -> 2177 probes,
-    /// 26.5 -> 55.7 minutes, Whisper audio 4:20:51 -> 12:13:36. It bought <b>nothing</b>. Build 331
-    /// is the control experiment, its Probe having run at 2.5 s throughout because the identical
-    /// lowering landed in Re-probe when nothing was left to scan: all 29 chapters at identical
-    /// positions, and the seven that build 339 accepted "at a silence" (16, 18, 20, 21, 23, 27, 29)
-    /// were accepted "at a jingle" by build 331 at the same millisecond. That book's chapters are
-    /// announced after music; the extra silence candidates only won the race to the same
-    /// announcement.
-    /// </para>
-    /// <para>
     /// What the lowering does buy, it buys through the gap-scoped consumers, so this split keeps it.
-    /// "I Shall Wear Midnight" chapter 9 sits behind a 0.74 s break where the book's other thirteen
-    /// run 4.47-5.25 s, and it was recovered by the sub-floor sweep, not by the scan gate; "Paula
-    /// Monti" chapters 4 and 12 likewise. A book whose breaks really are short still throttles
-    /// itself, because its <em>own forward scan</em> measures them: "De vandrande djäknarne" reaches
-    /// 0.8 s from chapter 3, a primary-scan mark.
+    /// A book whose breaks really are short still throttles itself, because its <em>own forward
+    /// scan</em> measures them.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: what the lowering cost on one book that gained nothing from it, and the three books whose short breaks it does pay for.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="_scanFloorSeconds"]/*' /></remarks>
     private double? _scanFloorSeconds;
 
     /// <summary>What the current sequence-gap re-probe withheld from <see cref="_scanFloorSeconds"/>,
@@ -956,17 +942,16 @@ internal sealed class RegionProber
     /// spoken <em>over</em> the jingle rather than after it - does not change that window. It used
     /// to: such a candidate started at the jingle's first note and ran
     /// <see cref="ExpectedAnnouncementSeconds"/> past the announcement, a width bounded by nothing
-    /// but the music's own length, and 9 of the corpus's 20 marks found that way came from windows
-    /// of 33 s or more, four of them 51-60 s. That is the width
-    /// <see cref="WhisperChunkSeconds"/> exists to warn about, shipped by the very classification
-    /// that was meant to retire it.
+    /// but the music's own length, and most marks found that way came from windows wider than
+    /// <see cref="WhisperChunkSeconds"/> - the width that constant exists to warn about, shipped by
+    /// the very classification that was meant to retire it.
     /// </para>
     /// <para>
     /// So the two possibilities become two looks instead of one window: the speech behind the music
     /// first, and the music itself only when that comes back empty (see
     /// <see cref="RereadJingleMusicAsync"/>, which tiles it at single-pass width). The order is the
-    /// corpus's: 225 marks sit after the music against 20 inside it, so the second look is rarely
-    /// paid for at all - and where it is, it reads the music in framings the recognizer can
+    /// corpus's - marks sit after the music far more often than inside it - so the second look is
+    /// rarely paid for at all, and where it is, it reads the music in framings the recognizer can
     /// actually hear a word in.
     /// </para>
     /// <para>
@@ -976,6 +961,8 @@ internal sealed class RegionProber
     /// answers, that being the order the two looks run in.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: how wide the old blip-driven windows really got, and the corpus split between marks after the music and inside it.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="JingleCandidate"]/*' /></remarks>
     /// <param name="jingle">The jingle to probe around.</param>
     private ProbeCandidate JingleCandidate(Jingle jingle)
     {
@@ -1028,9 +1015,7 @@ internal sealed class RegionProber
     /// The whole saving rests on the encoder's fixed input: it runs on a 30 s mel whatever it is
     /// handed, so a 6 s tail decode costs exactly what a 30 s one costs. A run of overlapping
     /// candidates therefore pays a full pass per candidate for a stretch that a chunk-sized decode
-    /// covers in one. Measured on BARDIOC.m4b's 15.6 h debug log (2026-08-01, 1659 probe decodes):
-    /// 1814 encoder passes without reading ahead, 1570 with it, 244 windows served from cache that
-    /// had cost a pass each - and not one decode made longer than the passes it already bought.
+    /// covers in one.
     /// </para>
     /// <para>
     /// Why the reach is a <em>planned window end</em> and not simply the chunk boundary, although
@@ -1054,6 +1039,8 @@ internal sealed class RegionProber
     /// transcript rather than re-decoding.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the encoder passes read-ahead saved over a whole book, and what stopping at the chunk boundary would have saved instead.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="ExtendToPlannedSeam"]/*' /></remarks>
     /// <param name="plan">The window being decoded, and the candidates that follow it.</param>
     /// <param name="decodeStart">Absolute time the decode itself starts at - the window start for a
     /// full decode, the overlap split point for a tail decode.</param>
@@ -1208,18 +1195,9 @@ internal sealed class RegionProber
     /// <para>
     /// The shape it answers to is narrow on purpose. A window that came back empty is somebody
     /// else's case (the two jingle re-reads above); this one is the opposite - the recognizer heard
-    /// the announcement, wrote its number, and dropped the word that would have made it one. On
-    /// "De vandrande djäknarne" that is literally what happened: chapter 1 was transcribed
-    /// <c>"1. Jäknuktåg"</c>, the number and the chapter's title with "Första kapitlet" collapsed
-    /// into the digit, so no wording of the phrase could match and the chapter was lost.
-    /// </para>
-    /// <para>
-    /// Denoising is what fixes it, measured rather than hoped: across 22 window framings 20 ms apart
-    /// over that announcement, ggml-small recovers the word from 10 of them on the raw audio and
-    /// from <b>all 22</b> denoised, at a steady p≈0.6 instead of a notation that swung between
-    /// "1. Kapitlet – Gjäknupptåg", "1. KAPITLET", "1. KAPITLÄT", "1. KJÄKNUGTÅG" and "1. Jäknuktåg".
-    /// It is also cheaper than the alternative that works equally well - medium and large-v3-turbo
-    /// read it at every framing too, at 2-3x the decode cost of a denoise plus a re-read.
+    /// the announcement, wrote its number, and dropped the word that would have made it one.
+    /// Denoising is what fixes that, measured rather than hoped, and it is cheaper than the
+    /// alternative that works equally well, a re-read on a larger model.
     /// </para>
     /// <para>
     /// Like the re-reads above it can only ever <em>add</em> a mark: it runs only where the window
@@ -1230,6 +1208,8 @@ internal sealed class RegionProber
     /// (measured on The Philosopher's Stone chapter 11: 3 of 12 framings raw, 4 of 12 denoised).
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the transcript that lost a chapter to a swallowed chapter word, and what denoising recovers across window framings.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="RereadDenoisedAsync"]/*' /></remarks>
     /// <param name="candidate">The candidate whose window produced no mark.</param>
     /// <param name="start">Absolute start of that window, kept unchanged.</param>
     /// <param name="windowEnd">Absolute planned end of that window, kept unchanged.</param>
@@ -1417,15 +1397,12 @@ internal sealed class RegionProber
     /// to find; the evidence is only that this candidate expected an announcement and was asked for
     /// it at a width known to lose them.
     /// <para>
-    /// Gruelfin.m4b's prologue is the case on record, twice over. It was lost first to a 50 s window
-    /// (2026-07-30, see <see cref="WhisperChunkSeconds"/>) and again to build 280's classified one
-    /// (2026-08-09), which is <see cref="JingleLeadInSeconds"/> plus
-    /// <see cref="ExpectedAnnouncementSeconds"/> = exactly <see cref="WhisperChunkSeconds"/> wide -
-    /// the one width that constant exists to warn about. Re-measured on the live decode at
-    /// 0:03:20.19 with ggml-small, "Prolog." is read at 22.0, 23.5 and 25.0 s and gone at 27.0 and
-    /// 30.0 s, identically on both of this project's machines. So the re-read keeps the window's own
-    /// start and merely stops it at <see cref="JingleRereadWindowSeconds"/>: the same single-pass
-    /// width the rest of the tool probes at, and the widest one measured to still hear this word.
+    /// Gruelfin.m4b's prologue is the case on record, twice over - lost first to a 50 s window and
+    /// again to build 280's classified one, which is <see cref="JingleLeadInSeconds"/> plus
+    /// <see cref="ExpectedAnnouncementSeconds"/> = exactly <see cref="WhisperChunkSeconds"/> wide,
+    /// the one width that constant exists to warn about. So the re-read keeps the window's own start
+    /// and merely stops it at <see cref="JingleRereadWindowSeconds"/>: the same single-pass width the
+    /// rest of the tool probes at, and the widest one measured to still hear this word.
     /// </para>
     /// <para>
     /// Through the probing model, not a <c>--upgrade-model</c> upgrade, unlike the blip re-read. What
@@ -1433,14 +1410,15 @@ internal sealed class RegionProber
     /// framing's alone, and an upgrade would load a model the file may otherwise never need.
     /// </para>
     /// <para>
-    /// Narrowing the window at planning time instead was rejected by measurement: 2 of the fourteen-
-    /// book corpus's 220 jingle marks are accepted 26.2 s and 28.3 s into their window
-    /// ("Die Dritte Macht" 8:06:31, "Die Maahks" 10:11:27, 2026-08-09), so a narrower window would
-    /// have traded this prologue for them. Running only where the window came back empty can add a
-    /// mark but can never move one, which is what makes it safe to reach for - and it is confined to
-    /// the primary scan's own planned windows, so no recovery pass pays a second decode for it.
+    /// Narrowing the window at planning time instead was rejected by measurement: a handful of corpus
+    /// jingle marks are accepted more than 26 s into their window, so a narrower window would have
+    /// traded this prologue for them. Running only where the window came back empty can add a mark
+    /// but can never move one, which is what makes it safe to reach for - and it is confined to the
+    /// primary scan's own planned windows, so no recovery pass pays a second decode for it.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: both Gruelfin prologue losses with their decode grid, and the marks a narrower planned window would have cost.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="RereadInOnePassAsync"]/*' /></remarks>
     /// <param name="candidate">The candidate whose window came back empty.</param>
     /// <param name="start">Absolute start of that window, kept as the re-read's start so the phrase
     /// timing rule and the jingle run-up stay exactly what this candidate planned.</param>
@@ -1595,18 +1573,6 @@ internal sealed class RegionProber
     /// <see cref="WindowSlice"/> is about to drop that segment and leave the scan with a hole
     /// exactly where the candidate is looking.
     /// <para>
-    /// "The Forever War" chapter 1 (2026-08-08) is the case on record, and the shape is not exotic.
-    /// The candidate at 0:01:14.36 was handed 23.2 s spanning two announcements - the publisher's
-    /// title card, a 5 s pause, then "Chapter 1" - and Whisper returned the whole window as one
-    /// run-on segment reading "And now, the FOREVER WAR." (p=0.62), the announcement simply absent
-    /// from it. That is ordinary recognizer behaviour on a long window and not something this pass
-    /// can prevent. What it can prevent is the second half: the chapter's <em>own</em> candidate at
-    /// 0:01:21.66 - whose window opens 3 s before the announcement and reads "CHAPTER 1" cleanly
-    /// when decoded (verified with the wprobe harness) - was served that run-on from the cache,
-    /// and the segment starting 7 s before its window was then dropped as out of range. The chapter
-    /// was lost with no pass ever having read it, and, being chapter 1, no sequence gap to notice.
-    /// </para>
-    /// <para>
     /// Deliberately not "the cache has nothing at the expectation": an empty stretch of cache is
     /// genuinely quiet audio, and re-reading it would only find it quiet again - the whole-book
     /// re-decode the overlap cache's original bargain exists to avoid (see
@@ -1617,6 +1583,8 @@ internal sealed class RegionProber
     /// candidate-grade silence whole, which is the run-on signature itself.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the run-on segment that lost The Forever War's chapter 1 with no pass ever reading it.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="CacheHidesTheExpectation"]/*' /></remarks>
     /// <param name="start">Absolute start of the window.</param>
     /// <param name="expectAt">Where this candidate expects its announcement.</param>
     private bool CacheHidesTheExpectation(double start, double expectAt)
@@ -1731,17 +1699,7 @@ internal sealed class RegionProber
     /// A transcript that stops short of the decode end has not established silence there, it has
     /// failed to read it - and the cache cannot tell those apart, so a later window served from that
     /// stretch inherits the failure instead of decoding the audio itself with its own, better
-    /// framing. "BARDIOC.m4b" (2026-08-02) is the case on record: the "Zeittafel" announcement at
-    /// 0:00:51 was lost for a whole run. The probe at 0:00:00 planned a window to 0:00:40.73 and read
-    /// ahead to 0:00:54.19; handed 54 s beginning with ~20 s of jingle music, Whisper stopped
-    /// emitting at 0:00:37. The unread 17 s went into the cache as if empty, the next two candidates
-    /// (a VAD jingle region at 0:00:19.48, a silence end at 0:00:43.33) were both served from it, and
-    /// the next fresh decode began at 0:00:54.19 - past the phrase. Replayed through the real decoder
-    /// and recognizer, the tail decode this rule restores (0:00:40.73-0:01:10.69) reads "Zeittafel
-    /// 1971 bis 1984..." at p=0.72, and so do windows framed from 0:00:43.33 and 0:00:46. Nothing
-    /// else could have caught it: Silero hears no speech at all between 0:00:23.3 and 0:00:54.56 at
-    /// any threshold from 0.50 to 0.70, so the announcement is not a blip
-    /// <see cref="RereadJingleSpeechAsync"/> could have found either.
+    /// framing.
     /// </para>
     /// <para>
     /// Floored at the window's own planned end, never below: the scan has already covered that far,
@@ -1758,6 +1716,8 @@ internal sealed class RegionProber
     /// stretch in a book, which wants a measurement this fix does not have.
     /// </para>
     /// </summary>
+    /// <remarks>Notes: the BARDIOC announcement lost for a whole run to a decode the recognizer stopped short of.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="CacheableEnd"]/*' /></remarks>
     /// <param name="segmentsAbs">The decode's transcript, in absolute file time.</param>
     /// <param name="windowEnd">Absolute planned end of the window it was decoded for.</param>
     /// <param name="decodeEnd">Absolute end of what was decoded.</param>
