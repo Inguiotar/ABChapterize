@@ -4811,7 +4811,9 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.True(result.PhraseHeard);
         AssertMarkTime("Zeittafel", 52.45, result.Mark);
 
-        const double checkWindow =
+        // Read rather than const: the tuning values are settable at startup by --set:, so they are
+        // static fields now and no longer usable in a compile-time constant.
+        var checkWindow =
             DetectionTuning.PreciseMarkCheckWindowSeconds + DetectionTuning.PreciseMarkLeadInSeconds;
         Assert.All(transcriber.Audio.DecodeWindows, w => Assert.True(
             w.Duration is not { } d ||

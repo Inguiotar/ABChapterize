@@ -2395,6 +2395,44 @@ with what the machine actually has:
 [14:32:07] threads: Whisper 12, voice-activity pre-Analyze2 (cores: 12 physical, 24 logical)
 ```
 
+### Tuning constants
+
+`--set:<class>.<constant>=<value>` (repeatable)
+
+Detection is governed by around a hundred internal numbers — how wide a probe
+window is, how long a pause has to be to be worth reading, how far a mark may
+be nudged, how many retries a chunk gets. `--set:` changes one of them for a
+run. [`constants.md`](constants.md) lists every one that can be changed, the
+value this build uses, and what it does.
+
+```
+abchapterize --set:DetectionTuning.WhisperChunkSeconds=25 \
+             --set:VadSegmenter.Threshold=0.5 book.m4b
+```
+
+**Please read this before using it.** These numbers are not arbitrary defaults
+waiting to be improved. Nearly every one was calibrated against real
+audiobooks, most of them fix a specific failure that was observed and
+diagnosed, and several are load-bearing for each other. Changing one on a
+hunch is an excellent way to make a book quietly lose a chapter — quietly
+being the problem, since a chapter that is never found produces no error. The
+reasoning behind each value lives in the source, next to the value itself; if
+you are going to change one, that is what to read first.
+
+The class name is required even though the constant names happen to be unique.
+That is on purpose: it is a small confirmation that you went and looked at the
+class the constant belongs to.
+
+A constant that is *derived* from others cannot be set on its own and is not
+listed — `RescanShiftSeconds` is half of `WhisperChunkSeconds`, so setting the
+latter moves it too. An unknown class or constant is an error rather than
+being ignored, so a typo cannot leave you believing a run was tuned when it
+was not.
+
+Every override is echoed in a `--debug` log's header (`setting: set ...`) and
+counts towards the run's identity, so a batch interrupted under one set of
+values will not resume under another.
+
 ### Miscellaneous
 
 `-?`, `--help`

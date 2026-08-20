@@ -65,7 +65,7 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
     /// audiobook is hardly ever short enough for the block count to matter, and a 20-minute file
     /// finishes fast enough on one or two workers that nothing needs adapting.
     /// </summary>
-    internal const double BlockSeconds = 600;
+    internal static double BlockSeconds = 600;
 
     /// <summary>
     /// Audio prepended to each block purely to converge its recurrent state before the block's own
@@ -85,7 +85,7 @@ public sealed class SileroVadDetector : IVoiceActivityDetector, IDisposable
     /// </summary>
     /// <remarks>Notes: the calibration sweep, block size against warm-up.
     /// <include file='../../notes/Vad/SileroVadDetector.xml' path='doc/member[@name="WarmupSeconds"]/*' /></remarks>
-    internal const double WarmupSeconds = 60;
+    internal static double WarmupSeconds = 60;
 
     private readonly int _workers;
     private readonly int _blockSamples;

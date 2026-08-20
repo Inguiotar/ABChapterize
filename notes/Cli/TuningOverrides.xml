@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Cli\TuningOverrides.cs. -->
+<doc>
+  <member name="TuningOverrides">
+    <para>
+    <b>What it took to make the constants settable at all</b> (2026-08-20). C# inlines a
+    <c>const</c> at every use site, so nothing can override one at run time; the exposed constants
+    had to become static fields. Converting all 97 of <see cref="DetectionTuning"/>'s with a script
+    and building came back with zero warnings, which is the measurement that made this feasible
+    rather than merely plausible - the tree had been checked first for the things that genuinely
+    require a compile-time constant, and has none of them: no constant patterns, no attribute
+    arguments, no <c>stackalloc</c>, no cross-class <c>const</c> references.
+    </para>
+    <para>
+    <b>Three traps the conversion surfaced, all of which had to be fixed rather than reasoned
+    around.</b> First, nine of <see cref="DetectionTuning"/>'s constants are derived from others,
+    and static field initializers run in <em>declaration</em> order - <see
+    cref="DetectionTuning.PreciseMarkMaxBracketSeconds"/> is declared 23 lines before
+    <see cref="DetectionTuning.WhisperChunkSeconds"/>, so as a plain field it would have
+    initialized to -5.0 instead of 25.0, silently. They are expression-bodied properties now, which
+    fixes the order and also makes an override of an input reach everything downstream of it. (The
+    ninth was missed by the first script pass because its initializer sits on the following line -
+    grep for the declaration, not for the assignment.) Second,
+    <see cref="VadSegmenter.Smooth"/> used <see cref="VadSegmenter.Threshold"/> as a <em>default
+    parameter value</em>, which must be a compile-time constant; the parameter is nullable now.
+    Third, one test declared a <c>const</c> from two tuning values.
+    </para>
+    <para>
+    The whole 1653-test suite passing after the conversion is what says the derived-as-properties
+    approach yields the right numbers: several fixtures assert on positions computed from exactly
+    those derived values.
+    </para>
+    <para>
+    <b>Why the snapshot exists.</b> These are process-global statics. The CLI parses one command
+    line and exits, so it would never notice; the test suite parses hundreds in one process, and
+    without restoring the compiled-in values first, the first test to use <c>--set:</c> would
+    change the meaning of every test after it. Restoring on every <see cref="Apply"/> also makes
+    parsing the same command line twice give the same answer, which is a property worth having
+    regardless.
+    </para>
+  </member>
+</doc>

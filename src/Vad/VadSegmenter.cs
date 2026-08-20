@@ -22,18 +22,18 @@ internal static class VadSegmenter
     /// stricter threshold has headroom to reject more jingle-music false positives without losing
     /// real narration - confirmed via <c>tools\vadprobe</c>'s threshold sweep against a real
     /// audiobook, up to 0.70, before picking this value.</summary>
-    internal const float Threshold = 0.6f;
+    internal static float Threshold = 0.6f;
 
     /// <summary>A candidate speech run must persist at least this long to be kept (Silero's own
     /// default for <c>min_speech_duration_ms</c>).</summary>
-    internal const double MinSpeechSeconds = 0.25;
+    internal static double MinSpeechSeconds = 0.25;
 
     /// <summary>Non-speech must persist at least this long to end a speech run (Silero's own
     /// default for <c>min_silence_duration_ms</c>). Short compared to a real jingle transition
     /// (seconds long), so it does not need to be tuned for this use case: the much longer
     /// minimum jingle-gap length is enforced separately, by the caller in
     /// <see cref="ABChapterize.Detection.ChapterDetector"/>.</summary>
-    internal const double MinSilenceSeconds = 0.1;
+    internal static double MinSilenceSeconds = 0.1;
 
     /// <summary>
     /// Converts frame samples into speech segments. Segment boundaries land on frame start
@@ -44,13 +44,16 @@ internal static class VadSegmenter
     /// </summary>
     /// <param name="frames">Each frame's start time in seconds and speech probability [0,1],
     /// in chronological order.</param>
-    /// <param name="threshold">Frame probability at/above which counts as speech; defaults to
+    /// <param name="threshold">Frame probability at/above which counts as speech, or null for
     /// <see cref="Threshold"/>. Exposed only so diagnostic tooling can re-smooth the same raw
     /// frames at other candidate thresholds without re-running VAD inference - production code
-    /// always uses the default.</param>
+    /// always passes null. Null rather than defaulting to the field directly, because a default
+    /// parameter value has to be a compile-time constant and <see cref="Threshold"/> is settable
+    /// at startup (see <c>--set:</c>).</param>
     internal static List<SpeechSegment> Smooth(
-        IReadOnlyList<(double TimeSeconds, float Probability)> frames, float threshold = Threshold)
+        IReadOnlyList<(double TimeSeconds, float Probability)> frames, float? threshold = null)
     {
+        var speechAt = threshold ?? Threshold;
         var result = new List<SpeechSegment>();
         double? runStart = null;
         double? silenceStart = null;
@@ -58,7 +61,7 @@ internal static class VadSegmenter
 
         foreach (var (time, probability) in frames)
         {
-            if (probability >= threshold)
+            if (probability >= speechAt)
             {
                 runStart ??= time;
                 silenceStart = null;

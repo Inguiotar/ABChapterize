@@ -249,4 +249,52 @@
     forward walk still reads no more windows than the two halves did.
     </para>
   </member>
+
+  <member name="ProposeThreshold">
+    <para>
+    <b>What the running minimum actually prunes</b> (replayed over all seventeen frozen build-366
+    logs, 2026-08-20; <c>scratchpad\anchor_dist.py</c>, reading the gate in force from each log's own
+    "threshold tightened/lowered" lines rather than reconstructing it, so a recovery mark that build
+    341 withholds from the scan gate cannot skew the figure). Corpus-wide it skips <b>3075 of 11236
+    candidates</b>, and almost all of that is five books: Die Cyber-Brutzellen 1852, The Forever War
+    649, Wintersmith 256, The Philosopher's Stone 209, Corsa 109.
+    </para>
+    <para>
+    <b>On the other nine it prunes nothing at all, and the cause is not this method.</b> Those books
+    place <em>every</em> mark at a jingle - BARDIOC 25, Raumschiff Erde 39, Die Dritte Macht 35,
+    Gruelfin 33, Das Mutantenkorps 30, Stalker 29, Die Maahks 26 - and a jingle mark is deliberately
+    never handed here (see <see cref="ThresholdSilenceFor"/>), because the hush around music says
+    nothing about how long the book's chapter breaks are. So the gate never leaves its
+    --min-silence-length starting value and skips <b>0 of 6524 candidates</b> on them. This corrects
+    a long-standing suspicion that the running minimum was being pinned low by one tight transition
+    on such a book: on Die Dritte Macht the 0.54 s silence that was blamed for it is irrelevant,
+    since no threshold is ever proposed there at all.
+    </para>
+    <para>
+    <b>Relaxing the minimum to a 10th percentile was measured and is not worth it.</b> Over the same
+    logs it would skip 3815 rather than 3075, and every bit of the difference is two books - I Shall
+    Wear Midnight 0 -> 310 and Rendezvous With Rama 0 -> 468, both sitting at the 0.8 s floor today
+    because one genuinely short break pinned them. On The Forever War it would skip <em>fewer</em>
+    (649 -> 610), and on the other five it changes nothing, their anchor spreads being far too tight
+    for a percentile to differ from the minimum (Corsa min 3.04 / p10 3.07, Rama 4.04 / 4.07,
+    Wintersmith 2.98 / 3.00). About fifteen minutes across seventeen books, against a change that
+    moves which windows Probe opens.
+    </para>
+    <para>
+    <b>Two other relaxations, rejected on soundness rather than on cost.</b> Pruning by a raw
+    percentile of the <em>file's own</em> silence distribution would have worked on Stalker only by
+    luck: that book's Zeittafel anchor is the 5.49 s silence, rank 1 of 5962, so any percentile cut
+    keeps it - but had it been rank ~400 (~2.0 s) a p95 cut at 2.96 s would have skipped it and lost
+    the mark permanently, with nothing in the output to say so. And tightening from <em>rejected</em>
+    probes is worse than useless: a probe that finds nothing at a long silence carries no positive
+    information about how long a chapter's silence is, and if it argues for anything it argues for
+    lowering the threshold.
+    </para>
+    <para>
+    Distribution figures for the two books those rejections were reasoned on, since they are not
+    cheap to recover: Stalker has 5962 silences of at least 1.0 s, 1032 of at least 1.5 s and 158 of
+    at least 2.0 s (median 1.22 s, p90 1.61, p95 1.75, max 5.49); Die Dritte Macht 727 candidates
+    against 759 probes.
+    </para>
+  </member>
 </doc>

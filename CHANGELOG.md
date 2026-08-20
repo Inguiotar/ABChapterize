@@ -17,6 +17,12 @@ earn a round number.
 
 ### Added
 
+- **The tuning constants detection runs on can be overridden for a run**, with
+  `--set:<class>.<constant>=<value>`. An in-depth feature: the numbers are calibrated
+  against real audiobooks and changing one on a hunch is a good way to lose a chapter
+  quietly, so it is documented in the manual only, alongside a new `doc/constants.md`
+  listing every constant, its default and what it does.
+
 - **`--config <path>` reads options from a file**, one option per line, written exactly
   as you would type it. Everything after the option name is its argument, so a phrase or
   a `--custom` mapping needs no quoting; blank lines and `#` comments are ignored. What

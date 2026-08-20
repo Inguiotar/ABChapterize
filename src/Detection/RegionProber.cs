@@ -3399,6 +3399,9 @@ internal sealed class RegionProber
     /// build theirs. Does nothing when the mark brought no silence to teach from
     /// - it sat on a VAD region, or <see cref="ThresholdSilenceFor"/> withheld one.
     /// </summary>
+    /// <remarks>Notes: what this prunes across the corpus, and the two relaxations measured and
+    /// rejected.
+    /// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="ProposeThreshold"]/*' /></remarks>
     /// <param name="thresholdSilence">The silence to learn from, or null to learn nothing.</param>
     private void ProposeThreshold(Silence? thresholdSilence)
     {

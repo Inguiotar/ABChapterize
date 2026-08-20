@@ -862,6 +862,18 @@ public sealed class CliOptions
     // for applying the --lang-dependent defaults only when the user did not choose.
     private bool _langSet, _modelSet, _upgradeModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
 
+    // What --set: changed, already applied to the constants themselves by the time this instance
+    // exists (see TuningOverrides). Kept only to be reported and fingerprinted: a run under
+    // different tuning is a different command, so it must not resume one recorded under the
+    // defaults, and a debug log that does not say which numbers it ran with is unreadable later.
+    private IReadOnlyList<string> _tuningOverrides = [];
+
+    /// <summary>The <c>--set:</c> overrides this run applied, "Class.Constant=value" each, in the
+    /// order given; empty when the run uses the tuning it was built with. Named for what it holds
+    /// rather than after <see cref="Cli.TuningOverrides"/>, which it would otherwise shadow inside
+    /// this class.</summary>
+    public IReadOnlyList<string> TuningChanges => _tuningOverrides;
+
     // The title options, each holding what was given for every language, per language, or nothing at
     // all when the option was not given - in which case the language's own default applies. Null
     // therefore also stands in for the "was it set" flags above, there being nothing left worth
@@ -956,6 +968,7 @@ public sealed class CliOptions
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
                 $"runbefore={RunBefore?.Raw}", $"runafter={RunAfter?.Raw}",
+                $"set={string.Join('|', _tuningOverrides)}",
             ]);
             return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(relevant)))[..16];
         }
@@ -1006,7 +1019,10 @@ public sealed class CliOptions
         // Before anything reads args: a --config file's options are the same options, so they are
         // spliced in and then parsed by the code below like any others (see ConfigFile.Expand).
         args = ConfigFile.Expand(args);
-        var o = new CliOptions();
+        // And before the instance exists, because its own defaults are read out of the very
+        // constants --set: writes (see TuningOverrides, which also restores them first).
+        var overrides = TuningOverrides.Apply(args);
+        var o = new CliOptions { _tuningOverrides = overrides };
         var i = 0;
         var targetArgs = new List<string>();
 
@@ -1035,6 +1051,10 @@ public sealed class CliOptions
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
                 RejectTrailingOption(arg);
+                // Already applied above, before this instance existed. Recognized here only so it
+                // is subject to the ordering rule and is not reported as unknown.
+                if (arg.StartsWith(TuningOverrides.Option, StringComparison.Ordinal))
+                    continue;
                 if (!o.TryApplyFlag(arg) && !o.TryApplyValueOption(arg, () => NextParam(arg)))
                     throw new CliError($"Unknown option: {arg}");
             }

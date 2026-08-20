@@ -194,5 +194,11 @@ public sealed class DebugLog : IDisposable
             yield return $"run-before {before.Raw}";
         if (o.RunAfter is { } after)
             yield return $"run-after {after.Raw}";
+        // Dead last, and one line each rather than a joined list, because this is the setting a
+        // reader most needs to see and least expects: every measurement quoted anywhere in the
+        // project assumes the tuning this build was calibrated with, and a log that ran under
+        // other numbers explains nothing until you know which.
+        foreach (var change in o.TuningChanges)
+            yield return $"set {change}";
     }
 }

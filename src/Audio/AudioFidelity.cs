@@ -39,7 +39,7 @@ public static class AudioFidelity
     /// with any claim to being dark, the darkest of which measure around 0.001. A tighter cut-off
     /// was rejected: the nearest excluded book would have sat 1.3x away while the measure itself
     /// moves 5x inside one book.</summary>
-    public const double Threshold = 0.02;
+    public static double Threshold = 0.02;
 
     /// <summary>Where the speech band is split. Lossy coding and a dull microphone both shed the
     /// treble above this first, and it is the frequency the corpus separates on.</summary>

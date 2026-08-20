@@ -58,12 +58,16 @@
     A narrower exemption was measured rather than assumed. The cost falls off roughly linearly with
     the sandwich width, and this chapter's 0.98 s of speech survives every width down to 1.0 s:
     3.5 s -> 1553 dropped promotions, 2.0 s -> 664, 1.5 s -> 400, 1.0 s -> 171. So an exemption
-    gated at ~1 s would cost about 1% of the corpus's window probes rather than 10%. It is still not
-    implemented, for a reason the count does not show: a promoted candidate that gets probed can
-    accept a mark, can floor the scan gate and does re-cut the overlap cache, so this is not a speed
-    knob but a change to which windows Probe opens on eight books - and what it buys is robustness
-    on a chapter that is already found. Do not narrow this constant itself to get there; 3.5 s is
-    what "De vandrande djäknarne" needs.
+    gated at ~1 s would cost about 1% of the corpus's window probes rather than 10%.
+    </para>
+    <para>
+    <b>Rejected even in that form (user's call, 2026-08-20), and the reason is not the count.</b> A
+    promoted candidate that gets probed can accept a mark, can floor the scan gate and does re-cut
+    the overlap cache, so this is not a speed knob: it changes which windows Probe opens on eight
+    books and would need a full corpus run to clear. What it buys is robustness on a chapter that is
+    already found, at its correct position, by machinery built for exactly this shape. Do not
+    reopen it without a book where the recovery ladder actually fails - and do not reach the same
+    end by narrowing this constant, since 3.5 s is what "De vandrande djäknarne" needs.
     </para>
   </member>
 

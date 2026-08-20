@@ -28,7 +28,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the excerpt scheme, the quietest speech and loudest room tone, and the margins they left.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="DefaultSilenceNoiseDb"]/*' /></remarks>
-    internal const double DefaultSilenceNoiseDb = -35;
+    internal static double DefaultSilenceNoiseDb = -35;
 
     /// <summary>How many excerpts <see cref="SilenceThresholdProbe"/> decodes to judge a file's
     /// levels, spread evenly between the 5% and 95% marks of its play time - a book's opening
@@ -37,27 +37,27 @@ internal static class DetectionTuning
     /// about to do anyway.</summary>
     /// <remarks>Notes: the seek cost measured.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="NoiseProbeExcerpts"]/*' /></remarks>
-    internal const int NoiseProbeExcerpts = 8;
+    internal static int NoiseProbeExcerpts = 8;
 
     /// <summary>Length of one <see cref="NoiseProbeExcerpts"/> excerpt, in seconds. Eight of these
     /// yield 3200 frames at <see cref="NoiseProbeFrameSeconds"/>, enough for the percentiles below
     /// to be stable.</summary>
-    internal const double NoiseProbeExcerptSeconds = 20;
+    internal static double NoiseProbeExcerptSeconds = 20;
 
     /// <summary>Length of one RMS frame in the level histogram. Short enough that the pauses
     /// between words register as their own frames rather than being averaged into the speech
     /// around them, which is the whole point of measuring in frames at all.</summary>
-    internal const double NoiseProbeFrameSeconds = 0.05;
+    internal static double NoiseProbeFrameSeconds = 0.05;
 
     /// <summary>Percentile of the frame levels taken for the master's room tone. Low enough to be
     /// about the pauses rather than the speech, high enough not to be dominated by whatever
     /// stretches of true digital silence the file happens to contain.</summary>
-    internal const int NoiseProbeFloorPercentile = 5;
+    internal static int NoiseProbeFloorPercentile = 5;
 
     /// <summary>Percentile of the frame levels taken for "sustained speech" - a level continuous
     /// narration reliably exceeds. Not a peak: what has to stay above the threshold is the body of
     /// the speech, since silencedetect only declares silence after a run of quiet frames.</summary>
-    internal const int NoiseProbeSpeechPercentile = 75;
+    internal static int NoiseProbeSpeechPercentile = 75;
 
     /// <summary>How far above the measured room tone the silence threshold must sit, in dB. Below
     /// this the hiss itself never counts as silence and the file yields no candidates at all.</summary>
@@ -68,7 +68,7 @@ internal static class DetectionTuning
     /// reasoning, in the other direction, gives <see cref="SpeechHeadroomDb"/>.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="NoiseFloorHeadroomDb"]/*' />
     /// </remarks>
-    internal const double NoiseFloorHeadroomDb = 14;
+    internal static double NoiseFloorHeadroomDb = 14;
 
     /// <summary>How far below sustained speech the silence threshold must sit, in dB. Above this
     /// the narration itself reads as silence and the file yields thousands of spurious candidates.
@@ -76,16 +76,16 @@ internal static class DetectionTuning
     /// <see cref="NoiseFloorHeadroomDb"/> explains.</summary>
     /// <remarks>Notes: the quietest speech measured and the margin it allowed.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SpeechHeadroomDb"]/*' /></remarks>
-    internal const double SpeechHeadroomDb = 8;
+    internal static double SpeechHeadroomDb = 8;
 
     /// <summary>The range an automatically chosen silence threshold is confined to, whatever the
     /// measurement says. A reading far outside it means the excerpts were unrepresentative (an
     /// entirely silent stretch, a corrupt decode) rather than that the book really is like that,
     /// and the fixed default has a far better record than an outlier would.</summary>
-    internal const double MinAutoSilenceNoiseDb = -60;
+    internal static double MinAutoSilenceNoiseDb = -60;
 
     /// <inheritdoc cref="MinAutoSilenceNoiseDb"/>
-    internal const double MaxAutoSilenceNoiseDb = -20;
+    internal static double MaxAutoSilenceNoiseDb = -20;
 
     /// <summary>
     /// The shortest silence Analyze keeps (see the <c>allSilences</c>/<c>silences</c> split in
@@ -96,7 +96,7 @@ internal static class DetectionTuning
     /// mid-point when the nearest real one is shorter than the book's candidate threshold. Low
     /// enough to catch ordinary clause pauses without noticeably growing Analyze's list.
     /// </summary>
-    internal const double MinStoredSilenceSeconds = 0.5;
+    internal static double MinStoredSilenceSeconds = 0.5;
 
     /// <summary>
     /// How far past a Probe window's natural end <see cref="GapPlanning.PlanWindowEnd"/> looks
@@ -107,12 +107,12 @@ internal static class DetectionTuning
     /// before the natural end could cut off the very phrase the probe exists to find. With
     /// nothing in reach the window keeps its natural length.
     /// </summary>
-    internal const double WindowEndSnapSearchSeconds = 5.0;
+    internal static double WindowEndSnapSearchSeconds = 5.0;
 
     /// <summary>Without a VAD pre-pass, the phrase must start within this many seconds after the
     /// silence that triggered its probe (or a closer anchor silence still inside the window) to
     /// count as a real announcement rather than an in-text mention.</summary>
-    internal const double PhraseLatestStartSeconds = 5.0;
+    internal static double PhraseLatestStartSeconds = 5.0;
 
     /// <summary>
     /// How far past the point where Probe's primary scan <em>expects</em> an announcement its
@@ -139,7 +139,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the corpus replay that sized this reach, and the marks trimming it would have cost.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="ExpectedAnnouncementSeconds"]/*' /></remarks>
-    internal const double ExpectedAnnouncementSeconds = 22.0;
+    internal static double ExpectedAnnouncementSeconds = 22.0;
 
     /// <summary>
     /// How much of the silence before an expected announcement a probe window opens with, so
@@ -153,7 +153,7 @@ internal static class DetectionTuning
     /// closing sentence would quietly make that false.
     /// </para>
     /// </summary>
-    internal const double SilenceLeadInSeconds = 3.0;
+    internal static double SilenceLeadInSeconds = 3.0;
 
     /// <summary>
     /// How much speech may sit between a sub-threshold pause and the candidate pause behind it for
@@ -180,7 +180,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the two corpus cases it was built for, and what each candidate bound costs.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SandwichedAnnouncementSeconds"]/*' /></remarks>
-    internal const double SandwichedAnnouncementSeconds = 3.5;
+    internal static double SandwichedAnnouncementSeconds = 3.5;
 
     /// <summary>
     /// levels. Eight because one says nothing: the measure moves several-fold between excerpts of
@@ -189,12 +189,12 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: how far the measure actually moves within one book.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="FidelityExcerpts"]/*' /></remarks>
-    internal const int FidelityExcerpts = 8;
+    internal static int FidelityExcerpts = 8;
 
     /// <summary>How much audio each of those excerpts covers. Long enough to hold speech through
     /// several sentences and their pauses, short enough that the eight together cost a fraction of
     /// one probe's decode.</summary>
-    internal const double FidelityExcerptSeconds = 30.0;
+    internal static double FidelityExcerptSeconds = 30.0;
 
     /// <summary>
     /// The same run-up for a jingle candidate, taken from inside the music, and deliberately longer:
@@ -206,11 +206,11 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the timeline drift the generous run-up absorbs.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="JingleLeadInSeconds"]/*' /></remarks>
-    internal const double JingleLeadInSeconds = 8.0;
+    internal static double JingleLeadInSeconds = 8.0;
 
     /// <summary>Flat margin added to a measured jingle length so the phrase after the jingle still
     /// fits into the probe window.</summary>
-    internal const double PhraseMarginSeconds = 5.0;
+    internal static double PhraseMarginSeconds = 5.0;
 
     /// <summary>
     /// How much of its lead-in a recovery pass's window gives up against the primary scan's
@@ -227,12 +227,12 @@ internal static class DetectionTuning
     /// single recognizer pass, where a lone word survives best.
     /// </para>
     /// </summary>
-    internal const double RecoveryLeadInTrimSeconds = 2.0;
+    internal static double RecoveryLeadInTrimSeconds = 2.0;
 
     /// <summary>How much of its reach past the expected announcement a recovery pass's window gives
     /// up against <see cref="ExpectedAnnouncementSeconds"/>; see
     /// <see cref="RecoveryLeadInTrimSeconds"/> for why either is trimmed at all.</summary>
-    internal const double RecoveryReachTrimSeconds = 5.0;
+    internal static double RecoveryReachTrimSeconds = 5.0;
 
     /// <summary>
     /// The fallback lead <see cref="JingleGeometry.ComputeMarkBeforeJingle"/>'s step 5 backs off
@@ -242,7 +242,7 @@ internal static class DetectionTuning
     /// Nothing to do with <see cref="JingleLeadInSeconds"/>, which is how much music a jingle
     /// candidate's probe window opens with; this one is a mark placement of last resort.
     /// </summary>
-    internal const double JingleWalkFallbackLeadSeconds = 0.5;
+    internal static double JingleWalkFallbackLeadSeconds = 0.5;
 
     /// <summary>
     /// Default for <see cref="ABChapterize.Cli.CliOptions.MarkLeadSeconds"/> (--mark-lead): without
@@ -260,7 +260,7 @@ internal static class DetectionTuning
     /// onsets to 0.1 s - the audible margin is.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="DefaultMarkLeadSeconds"]/*' />
     /// </remarks>
-    internal const double DefaultMarkLeadSeconds = 0.35;
+    internal static double DefaultMarkLeadSeconds = 0.35;
 
     /// <summary>
     /// Slack when matching a VAD non-speech region (the jingle) to a Whisper phrase. The region
@@ -271,7 +271,7 @@ internal static class DetectionTuning
     /// Far below any real jingle length or inter-chapter spacing, so it only absorbs boundary
     /// jitter and can never grab an unrelated later region.
     /// </summary>
-    internal const double JinglePhraseMatchToleranceSeconds = 0.5;
+    internal static double JinglePhraseMatchToleranceSeconds = 0.5;
 
     /// <summary>
     /// How far a candidate <see cref="JingleGeometry.LeadingSilence"/> may start after its VAD
@@ -282,7 +282,7 @@ internal static class DetectionTuning
     /// timing) - observed well under 1 s on real audio, against false-candidate gaps of several
     /// seconds or more.
     /// </summary>
-    internal const double LeadingSilenceStartToleranceSeconds = 1.5;
+    internal static double LeadingSilenceStartToleranceSeconds = 1.5;
 
     /// <summary>
     /// How close a silence boundary and a VAD speech segment's end must be to describe the same
@@ -291,7 +291,7 @@ internal static class DetectionTuning
     /// walk back through). Reuses <see cref="LeadingSilenceStartToleranceSeconds"/>'s value under
     /// its own name: same silencedetect-vs-VAD jitter, different boundary pairing.
     /// </summary>
-    internal const double JingleWalkAdjacencyToleranceSeconds = LeadingSilenceStartToleranceSeconds;
+    internal static double JingleWalkAdjacencyToleranceSeconds => LeadingSilenceStartToleranceSeconds;
 
     /// <summary>
     /// How far past a jingle's own musical start a VAD speech blip swallowed into its region must
@@ -308,7 +308,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: how tightly the two marks this was written for hugged the silence end.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreJingleSpeechToleranceSeconds"]/*' /></remarks>
-    internal const double PreJingleSpeechToleranceSeconds = 0.5;
+    internal static double PreJingleSpeechToleranceSeconds = 0.5;
 
     /// <summary>
     /// Longest stretch of VAD-speech "glue" the anchor-time jingle edge adjustment (see
@@ -321,7 +321,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the longest such fragment observed.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="JingleGlueMaxSeconds"]/*' /></remarks>
-    internal const double JingleGlueMaxSeconds = 3.0;
+    internal static double JingleGlueMaxSeconds = 3.0;
 
     /// <summary>
     /// Minimum overlap between a VAD non-speech region and the matched phrase's transcript-segment
@@ -331,7 +331,7 @@ internal static class DetectionTuning
     /// timed announcement's short segment barely grazes a following pause region, while a segment
     /// Whisper smeared across the jingle - the failure this rescues - overlaps it by many seconds.
     /// </summary>
-    internal const double SmearedPhraseMinOverlapSeconds = 2.0;
+    internal static double SmearedPhraseMinOverlapSeconds = 2.0;
 
     /// <summary>
     /// Slack when deciding a Whisper segment <em>starts with</em> a stored silence or VAD
@@ -341,7 +341,7 @@ internal static class DetectionTuning
     /// timestamp would not count as leading it. Small enough never to trim a segment that
     /// genuinely opens with speech.
     /// </summary>
-    internal const double SegmentLeadTrimToleranceSeconds = 0.5;
+    internal static double SegmentLeadTrimToleranceSeconds = 0.5;
 
     /// <summary>
     /// The shortest span this codebase treats as "plausibly a real jingle", used three ways.
@@ -355,7 +355,7 @@ internal static class DetectionTuning
     /// --verbose jingle tally at, so that tally means the same thing as the two decisions above and
     /// cannot drift away from them.
     /// </summary>
-    internal const double MinJingleObservationSeconds = 2.0;
+    internal static double MinJingleObservationSeconds = 2.0;
 
     /// <summary>
     /// How much music a file must have, per hour of play time, before Probe reads its jingles first
@@ -370,7 +370,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the two populations' measured jingle tallies.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="JingleFirstMinPerHour"]/*' /></remarks>
-    internal const double JingleFirstMinPerHour = 1.0;
+    internal static double JingleFirstMinPerHour = 1.0;
 
     /// <summary>
     /// With the VAD pre-pass, a "speech" segment shorter than this between two non-speech regions
@@ -381,7 +381,7 @@ internal static class DetectionTuning
     /// regions (see <see cref="JingleGeometry.ComputeNonSpeechRegions"/>). Well below any real
     /// inter-chapter narration gap, so a genuine speech resume is never merged away.
     /// </summary>
-    internal const double MergeShortSpeechGapSeconds = 1.0;
+    internal static double MergeShortSpeechGapSeconds = 1.0;
 
     /// <summary>
     /// The speech-duration floor <see cref="JingleGeometry.AdvancePastNonSpeech"/> uses to tell a
@@ -400,7 +400,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the transient and announcement-word durations this sits midway between.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="TransientSpeechFloorSeconds"]/*' /></remarks>
-    internal const double TransientSpeechFloorSeconds = 0.4;
+    internal static double TransientSpeechFloorSeconds = 0.4;
 
     /// <summary>
     /// Non-speech an announcement must have in front of it before
@@ -420,7 +420,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the corpus measurements bounding that window at both ends.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AnnouncementLeadInSeconds"]/*' /></remarks>
-    internal const double AnnouncementLeadInSeconds = 0.85;
+    internal static double AnnouncementLeadInSeconds = 0.85;
 
     /// <summary>
     /// Non-speech an announcement must have behind it where a wording's <c>$</c> asks for one, and
@@ -440,7 +440,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the lead-out measured on every bare-number chapter of one book, and the two genuine heading marks a stricter bar would cost.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AnnouncementLeadOutSeconds"]/*' /></remarks>
-    internal const double AnnouncementLeadOutSeconds = 0.3;
+    internal static double AnnouncementLeadOutSeconds = 0.3;
 
     /// <summary>
     /// How far past a VAD speech segment's end an announcement onset may still be counted as
@@ -451,7 +451,7 @@ internal static class DetectionTuning
     /// tail of the preceding segment. One <see cref="VadSegmenter.MinSilenceSeconds"/> hangover is
     /// the natural size for that, and it is far below any real inter-chapter pause.
     /// </summary>
-    internal const double OnsetSegmentToleranceSeconds = 0.1;
+    internal static double OnsetSegmentToleranceSeconds = 0.1;
 
     /// <summary>
     /// How far a finished mark may sit inside a VAD speech segment before the refinement that put it
@@ -470,7 +470,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the two marks written into a reader's credit, and why this quantity is bimodal rather than distributed.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MarkInsideSpeechSeconds"]/*' /></remarks>
-    internal const double MarkInsideSpeechSeconds = 0.5;
+    internal static double MarkInsideSpeechSeconds = 0.5;
 
     /// <summary>
     /// Minimum letters-plus-digits per second a transcript segment must average for
@@ -485,7 +485,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the measured pace of genuine segments against smeared ones.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MinPlausibleSpeechCharsPerSecond"]/*' /></remarks>
-    internal const double MinPlausibleSpeechCharsPerSecond = 3.0;
+    internal static double MinPlausibleSpeechCharsPerSecond = 3.0;
 
     /// <summary>
     /// Ceiling on a VAD speech blip's duration for <see cref="MinPlausibleSpeechCharsPerSecond"/>'s
@@ -500,7 +500,7 @@ internal static class DetectionTuning
     /// real-audio cases above) and below ordinary narration blips, commonly several seconds once
     /// mid-sentence micro-pauses are cleared.
     /// </summary>
-    internal const double MaxPaceScrutinizedBlipSeconds = 2.0;
+    internal static double MaxPaceScrutinizedBlipSeconds = 2.0;
 
     /// <summary>
     /// Length of the decode precise marking transcribes to check whether a mark's chapter phrase
@@ -509,7 +509,7 @@ internal static class DetectionTuning
     /// anywhere near this long and a jingle - the only other thing a mark can land on - rarely
     /// shorter, so one window normally tells the two apart without probes of increasing length.
     /// </summary>
-    internal const double PreciseMarkCheckWindowSeconds = 4.0;
+    internal static double PreciseMarkCheckWindowSeconds = 4.0;
 
     /// <summary>
     /// Real audio lead-in precise marking decodes before every position it checks, widening the
@@ -525,7 +525,7 @@ internal static class DetectionTuning
     /// tenths the onset lag can reach: too much pulls trailing syllables of whatever precedes the
     /// phrase into the window.
     /// </summary>
-    internal const double PreciseMarkLeadInSeconds = 0.1;
+    internal static double PreciseMarkLeadInSeconds = 0.1;
 
     /// <summary>
     /// How far behind the pre-walk mark --mark-before-jingle's backward walk must have landed
@@ -542,7 +542,7 @@ internal static class DetectionTuning
     /// the figure to reason about when reading a log from one.
     /// </para>
     /// </summary>
-    internal const double MarkBeforeJingleVerifyMinGapSeconds =
+    internal static double MarkBeforeJingleVerifyMinGapSeconds =>
         PreciseMarkCheckWindowSeconds - DefaultMarkLeadSeconds;
 
     /// <summary>
@@ -551,7 +551,7 @@ internal static class DetectionTuning
     /// cannot pass a loud passage off as silence, short enough to still describe the mark itself
     /// rather than the sentence after it.
     /// </summary>
-    internal const double MarkLoudnessWindowSeconds = 0.25;
+    internal static double MarkLoudnessWindowSeconds = 0.25;
 
     /// <summary>
     /// The finest granularity precise marking probes at: the resolution both of its bisections -
@@ -566,7 +566,7 @@ internal static class DetectionTuning
     /// worth probing at, given <see cref="PreciseMarkCheckWindowSeconds"/> - rather than some
     /// unrelated value.
     /// </summary>
-    internal const double PreciseMarkFixedStepSeconds = 0.1;
+    internal static double PreciseMarkFixedStepSeconds = 0.1;
 
     /// <summary>
     /// How far back from the survival edge
@@ -642,7 +642,7 @@ internal static class DetectionTuning
     /// everywhere it matters.
     /// </para>
     /// </summary>
-    internal const double PlateauWalkLimitSeconds = 60;
+    internal static double PlateauWalkLimitSeconds = 60;
 
     /// <summary>
     /// How many times <see cref="PreciseMarkRefiner.FindOnsetEdgeAsync"/> may restart its walk after
@@ -652,7 +652,7 @@ internal static class DetectionTuning
     /// this only caps a pathological alternation of holes and plateaus - which would otherwise cost
     /// an unbounded number of transcriptions on a single mark.
     /// </summary>
-    internal const int PreciseMarkPlateauResumeLimit = 2;
+    internal static int PreciseMarkPlateauResumeLimit = 2;
 
     /// <summary>
     /// The shortest stretch of audio <see cref="PreciseMarkRefiner.PhraseSurvivesFromAsync"/> will
@@ -678,7 +678,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the probe probabilities by clip length that put the floor at six seconds.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkMinSurvivalSeconds"]/*' /></remarks>
-    internal const double PreciseMarkMinSurvivalSeconds = 6.0;
+    internal static double PreciseMarkMinSurvivalSeconds = 6.0;
 
     /// <summary>
     /// How far before its end anchor <see cref="PreciseMarkRefiner.LocatePhraseByShrinkingWindowAsync"/>
@@ -711,7 +711,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the segment Whisper timestamped later than the words in it, which is why the floor is extended at all.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkMaxBracketSeconds"]/*' /></remarks>
-    internal const double PreciseMarkMaxBracketSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
+    internal static double PreciseMarkMaxBracketSeconds => WhisperChunkSeconds - PhraseMarginSeconds;
 
     /// <summary>
     /// The stride whisper.cpp decodes in: it converts audio to a mel spectrogram of exactly this
@@ -734,7 +734,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the two Gruelfin prologue losses and the decode grids behind the 25-27 s cliff.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="WhisperChunkSeconds"]/*' /></remarks>
-    internal const double WhisperChunkSeconds = 30.0;
+    internal static double WhisperChunkSeconds = 30.0;
 
     /// <summary>
     /// Length of the second, deliberately short look <see cref="RegionProber.RereadJingleSpeechAsync"/>
@@ -744,7 +744,7 @@ internal static class DetectionTuning
     /// stay clear of <see cref="WhisperChunkSeconds"/>, with a phrase margin of headroom in case the
     /// window ends up anchored a little later than planned.
     /// </summary>
-    internal const double JingleRereadWindowSeconds = WhisperChunkSeconds - PhraseMarginSeconds;
+    internal static double JingleRereadWindowSeconds => WhisperChunkSeconds - PhraseMarginSeconds;
 
     /// <summary>
     /// How far <see cref="RegionProber.RereadJingleMusicAsync"/> advances between two of the tiles it
@@ -760,7 +760,7 @@ internal static class DetectionTuning
     /// exactly where the recognizer needs the run-up as much as the tail.
     /// </para>
     /// </summary>
-    internal const double JingleMusicTileStepSeconds = JingleRereadWindowSeconds - 2 * PhraseMarginSeconds;
+    internal static double JingleMusicTileStepSeconds => JingleRereadWindowSeconds - 2 * PhraseMarginSeconds;
 
     /// <summary>
     /// How far <em>before</em> a confirmed or left-as-is mark
@@ -768,7 +768,7 @@ internal static class DetectionTuning
     /// move it to. Backward-only, so a one-sided lookback rather than a window centered on the
     /// mark, and independent of (and larger than) the candidate search step size above.
     /// </summary>
-    internal const double PreciseMarkQuietSnapRadiusSeconds = 0.15;
+    internal static double PreciseMarkQuietSnapRadiusSeconds = 0.15;
 
     /// <summary>
     /// Width of the sliding RMS window <see cref="PreciseMarkRefiner.SnapToQuietestPointAsync"/>
@@ -776,7 +776,7 @@ internal static class DetectionTuning
     /// genuine micro-pause between words rather than averaging across most of one, long enough
     /// that a single sample near a zero-crossing in loud audio cannot masquerade as a quiet spot.
     /// </summary>
-    internal const double PreciseMarkQuietWindowSeconds = 0.01;
+    internal static double PreciseMarkQuietWindowSeconds = 0.01;
 
     /// <summary>
     /// Minimum power-ratio improvement, in dB, a backward candidate within
@@ -785,7 +785,7 @@ internal static class DetectionTuning
     /// 4x power ratio - comfortably audible, not noise-floor jitter - so a nudge only happens for
     /// a genuine improvement, never as a coin flip between two near-identical spots.
     /// </summary>
-    internal const double PreciseMarkQuietSnapMinImprovementDb = 6.0;
+    internal static double PreciseMarkQuietSnapMinImprovementDb = 6.0;
 
     /// <summary>
     /// How far behind a refined onset <see cref="PreciseMarkRefiner.PrecedingSilenceEnd"/> will
@@ -804,7 +804,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the bimodal gap distribution that lets any threshold across a wide range give the identical result.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkSilenceAnchorSeconds"]/*' /></remarks>
-    internal const double PreciseMarkSilenceAnchorSeconds = 1.0;
+    internal static double PreciseMarkSilenceAnchorSeconds = 1.0;
 
     /// <summary>
     /// How far <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/> may pull an onset back onto
@@ -828,7 +828,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: how close the VAD speech resumption normally sits to the plateau edge, and the two marks it is far out on.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkMusicAnchorCapSeconds"]/*' /></remarks>
-    internal const double PreciseMarkMusicAnchorCapSeconds = PreciseMarkFixedStepSeconds;
+    internal static double PreciseMarkMusicAnchorCapSeconds => PreciseMarkFixedStepSeconds;
 
     /// <summary>
     /// How far below the loudest thing in its window <see cref="PreciseMarkRefiner.AnchorOnsetToSoundAsync"/>
@@ -844,7 +844,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the room-tone and opening-consonant levels measured on the two calibration cases.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkOnsetFloorDb"]/*' /></remarks>
-    internal const double PreciseMarkOnsetFloorDb = 25;
+    internal static double PreciseMarkOnsetFloorDb = 25;
 
     /// <summary>
     /// How long audio must stay above <see cref="PreciseMarkOnsetFloorDb"/> before
@@ -854,7 +854,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the mouth noise that closed a silence early, and what it cost.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="PreciseMarkOnsetSustainSeconds"]/*' /></remarks>
-    internal const double PreciseMarkOnsetSustainSeconds = 0.05;
+    internal static double PreciseMarkOnsetSustainSeconds = 0.05;
 
     /// <summary>
     /// How many announcements must be rejected as below the sequence, their own numbers ascending,
@@ -869,7 +869,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the corpus counts on both sides of that floor.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SequenceRestartRunLength"]/*' /></remarks>
-    internal const int SequenceRestartRunLength = 3;
+    internal static int SequenceRestartRunLength = 3;
 
     /// <summary>
     /// With --min-silence-length auto, the Probe probing threshold is this factor times a mark's
@@ -879,7 +879,7 @@ internal static class DetectionTuning
     /// it again - a threshold above an observed inter-chapter silence would by definition skip the
     /// very kind of silence proven to precede this book's chapters.
     /// </summary>
-    internal const double AdaptiveTightenFactor = 0.75;
+    internal static double AdaptiveTightenFactor = 0.75;
 
     /// <summary>
     /// How short a chapter break --min-silence-length auto may end up believing in
@@ -905,7 +905,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the two books that put the floor at 0.8 s, and the silence counts showing what an unbounded band would cost.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AdaptiveSilenceFloorSeconds"]/*' /></remarks>
-    internal const double AdaptiveSilenceFloorSeconds = 0.8;
+    internal static double AdaptiveSilenceFloorSeconds = 0.8;
 
     /// <summary>
     /// How many chapters a single announcement may leave missing before its number is treated as
@@ -924,7 +924,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the mishearing that shows why numbers far apart are the ones that sound alike.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SuspectGapMinMissing"]/*' /></remarks>
-    internal const int SuspectGapMinMissing = 3;
+    internal static int SuspectGapMinMissing = 3;
 
     /// <summary>
     /// The re-framings <see cref="SuspectNumberMender"/> tries on a suspect announcement with the
@@ -964,7 +964,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the 271-mark agreement count, the four split votes, and what a minimum of three abstains on.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="RefinedNumberVoteMinimum"]/*' /></remarks>
-    internal const int RefinedNumberVoteMinimum = 3;
+    internal static int RefinedNumberVoteMinimum = 3;
 
     /// <summary>
     /// How many outliers <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> may spend audio
@@ -979,7 +979,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: how many outliers a real corpus actually produces.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MaxSequenceRepairsPerFile"]/*' /></remarks>
-    internal const int MaxSequenceRepairsPerFile = 8;
+    internal static int MaxSequenceRepairsPerFile = 8;
 
     /// <summary>
     /// How many unreadable-number re-reads (<see cref="SuspectNumberMender.ReadUnnumberedAsync"/>)
@@ -995,7 +995,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: how rarely this fires across a seven-book run, and the two cases that did.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MaxUnnumberedMendsPerRegion"]/*' /></remarks>
-    internal const int MaxUnnumberedMendsPerRegion = 8;
+    internal static int MaxUnnumberedMendsPerRegion = 8;
 
     /// <summary>
     /// How many sub-floor silence bands Re-probe sweeps through before giving a gap up to Scan,
@@ -1016,10 +1016,10 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the five pauses that set the range, and the measured band populations.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SubFloorSweepBandCount"]/*' /></remarks>
-    internal const int SubFloorSweepBandCount = 5;
+    internal static int SubFloorSweepBandCount = 5;
 
     /// <summary>Width of one <see cref="SubFloorSweepBandCount"/> band, in seconds.</summary>
-    internal const double SubFloorSweepBandSeconds = 0.1;
+    internal static double SubFloorSweepBandSeconds = 0.1;
 
     /// <summary>
     /// How much of Scan's own cost the sub-floor sweep may spend on a gap before giving it up
@@ -1036,7 +1036,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: what a real book's bands actually cost.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="SubFloorSweepBudgetFraction"]/*' /></remarks>
-    internal const double SubFloorSweepBudgetFraction = 0.75;
+    internal static double SubFloorSweepBudgetFraction = 0.75;
 
     /// <summary>
     /// How far Scan's shifted re-scan (<see cref="ChapterDetector.RescanShiftedAsync"/>) displaces
@@ -1045,16 +1045,16 @@ internal static class DetectionTuning
     /// internal decode window border as far from one as it can get. Any other value leaves some
     /// offset that was near a border still near one.
     /// </summary>
-    internal const double RescanShiftSeconds = WhisperChunkSeconds / 2;
+    internal static double RescanShiftSeconds => WhisperChunkSeconds / 2;
 
     /// <summary>Chunk length in seconds for full transcription of gap regions.</summary>
-    internal const double GapChunkSeconds = 600;
+    internal static double GapChunkSeconds = 600;
 
     /// <summary>Overlap between gap transcription chunks so no phrase is cut in half. Only for a
     /// chunk border that could not be snapped to a word-safe seam (see
     /// <see cref="ScanSeamSearchSeconds"/>); snapped borders abut exactly and need no
     /// redundancy.</summary>
-    internal const double GapChunkOverlapSeconds = 10;
+    internal static double GapChunkOverlapSeconds = 10;
 
     /// <summary>
     /// How far around a Scan chunk's natural border the seam search reaches in each direction:
@@ -1064,7 +1064,7 @@ internal static class DetectionTuning
     /// has no hard input-length cap (it decodes in internal 30 s strides), but the decoded sample
     /// buffer scales with chunk length.
     /// </summary>
-    internal const double ScanSeamSearchSeconds = 30;
+    internal static double ScanSeamSearchSeconds = 30;
 
     /// <summary>
     /// At a snapped (overlap-free) Scan seam, segments of the previous chunk ending within this
@@ -1074,12 +1074,12 @@ internal static class DetectionTuning
     /// the whole phrase. Comfortably longer than any spoken announcement. Irrelevant at unsnapped
     /// borders, where <see cref="GapChunkOverlapSeconds"/> provides the redundancy.
     /// </summary>
-    internal const double ScanBridgeSeconds = 15;
+    internal static double ScanBridgeSeconds = 15;
 
     /// <summary>Whisper segment probability below which a chapter detection is flagged as
     /// low-confidence rather than silently trusted: the point below which Whisper itself is, on
     /// average, more unsure than sure about the words it heard.</summary>
-    internal const double LowConfidenceThreshold = 0.5;
+    internal static double LowConfidenceThreshold = 0.5;
 
     /// <summary>
     /// How many consecutive candidates one confident mark may settle in
@@ -1101,7 +1101,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the run that skipped eleven hours of a book, and the chain-length histogram behind the cap.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="MaxSettledWindowSkip"]/*' /></remarks>
-    internal const int MaxSettledWindowSkip = 10;
+    internal static int MaxSettledWindowSkip = 10;
 
     /// <summary>
     /// The most <c>--custom</c> marks one file may produce before the rest are dropped. A guard
@@ -1116,7 +1116,7 @@ internal static class DetectionTuning
     /// so they are capped at one each by construction.
     /// </para>
     /// </summary>
-    internal const int MaxCustomMarksPerFile = 100;
+    internal static int MaxCustomMarksPerFile = 100;
 
     /// <summary>
     /// How close two matches of the same repeatable phrase must be to count as the same
@@ -1134,7 +1134,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the book and run those duplicate pairs came from.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="NamedMarkDedupeSeconds"]/*' /></remarks>
-    internal const double NamedMarkDedupeSeconds = 10;
+    internal static double NamedMarkDedupeSeconds = 10;
 
     /// <summary>
     /// How close two <em>numbered</em> chapter marks have to be before they are read as one
@@ -1165,7 +1165,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the two-mark disagreement that makes this a separate rule, and the heading spread it has to cover.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="CollidingChapterMarkSeconds"]/*' /></remarks>
-    internal const double CollidingChapterMarkSeconds = NamedMarkDedupeSeconds / 2;
+    internal static double CollidingChapterMarkSeconds => NamedMarkDedupeSeconds / 2;
 
     /// <summary>
     /// Whisper language-detection probability at or above which a single probe settles the file's
@@ -1181,7 +1181,7 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the misdetection that raising the bar would not have caught either.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AutoLanguageProbabilityThreshold"]/*' /></remarks>
-    internal const double AutoLanguageProbabilityThreshold = 0.6;
+    internal static double AutoLanguageProbabilityThreshold = 0.6;
 
     /// <summary>
     /// How many language-detection samples one file may take before the vote decides it. Each
@@ -1190,12 +1190,12 @@ internal static class DetectionTuning
     /// book is already enough to outvote any one unrepresentative stretch, and a sixth would be
     /// answering a question the first five did not settle.
     /// </summary>
-    internal const int AutoLanguageProbeAttempts = 5;
+    internal static int AutoLanguageProbeAttempts = 5;
 
     /// <summary>Length of one language-detection sample. Whisper's detector reads a single 30 s
     /// mel window and ignores anything past it, so a longer decode would be discarded audio and a
     /// shorter one would leave the window padded with silence.</summary>
-    internal const double AutoLanguageProbeSeconds = 30;
+    internal static double AutoLanguageProbeSeconds = 30;
 
     /// <summary>
     /// How much of an <see cref="AutoLanguageProbeSeconds"/> window must be speech for it to be
@@ -1212,12 +1212,12 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: how far the contiguous-run version wandered, and the segment statistics behind it.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="AutoLanguageMinSpeechInWindowSeconds"]/*' /></remarks>
-    internal const double AutoLanguageMinSpeechInWindowSeconds = AutoLanguageProbeSeconds / 2;
+    internal static double AutoLanguageMinSpeechInWindowSeconds => AutoLanguageProbeSeconds / 2;
 
     /// <summary>How far past an existing chapter mark a language-detection sample starts, on
     /// the --verify and resume paths. Clears the announcement and the jingle around it, landing the
     /// window in the chapter's own narration.</summary>
-    internal const double AutoLanguageExistingMarkOffsetSeconds = 20;
+    internal static double AutoLanguageExistingMarkOffsetSeconds = 20;
 
     /// <summary>
     /// Minimum length of the leading region (file start to the first detected chapter) for Scan
@@ -1226,15 +1226,15 @@ internal static class DetectionTuning
     /// begins mid-series, with no room for a missed earlier chapter, and the intro chapter covers
     /// the short lead-in anyway.
     /// </summary>
-    internal const double MinLeadingGapSeconds = 10;
+    internal static double MinLeadingGapSeconds = 10;
 
     /// <summary>How far before a pre-existing chapter mark's own timestamp --verify starts
     /// probing - the mark may sit slightly after the phrase actually started.</summary>
-    internal const double VerifyMarginBeforeSeconds = 10;
+    internal static double VerifyMarginBeforeSeconds = 10;
 
     /// <summary>Total length of the --verify probe window, starting
     /// <see cref="VerifyMarginBeforeSeconds"/> before the mark.</summary>
-    internal const double VerifyWindowSeconds = 60;
+    internal static double VerifyWindowSeconds = 60;
 
     /// <summary>
     /// How far off a confirmed mark has to be before <c>--verify --fix</c> bothers moving it.
@@ -1243,7 +1243,7 @@ internal static class DetectionTuning
     /// would be shuffling noise. Set at a quarter of a second, comfortably under the
     /// <see cref="DefaultMarkLeadSeconds"/> lead a listener would actually notice losing.
     /// </summary>
-    internal const double VerifyFixMinShiftSeconds = 0.25;
+    internal static double VerifyFixMinShiftSeconds = 0.25;
 
     /// <summary>
     /// The largest correction <c>--verify --fix</c> will apply. Beyond this the mark is left
@@ -1253,7 +1253,7 @@ internal static class DetectionTuning
     /// information rather than correct it. Half the <see cref="VerifyWindowSeconds"/> window, which
     /// is also the furthest a confirmation can be found from the mark in either direction.
     /// </summary>
-    internal const double VerifyFixMaxShiftSeconds = 30;
+    internal static double VerifyFixMaxShiftSeconds = 30;
 
     /// <summary>
     /// Minimum length for a gap between transcribed segments (or before the first/after the last)
@@ -1265,11 +1265,11 @@ internal static class DetectionTuning
     /// transcribing it as empty; since detection already found the phrase somewhere in this audio,
     /// a gap this size is more likely that artifact than genuine emptiness.
     /// </summary>
-    internal const double GapRetryThresholdSeconds = 3.0;
+    internal static double GapRetryThresholdSeconds = 3.0;
 
     /// <summary>Context padding added to each side of a gap before re-transcribing it, so the
     /// phrase is not cut off if it starts or ends right at the boundary.</summary>
-    internal const double GapRetryPaddingSeconds = 2.0;
+    internal static double GapRetryPaddingSeconds = 2.0;
 
     /// <summary>
     /// How far before the phrase a Scan "heard it, could not number it" retry starts its decode.
@@ -1279,14 +1279,14 @@ internal static class DetectionTuning
     /// </summary>
     /// <remarks>Notes: the window starts that flipped one chapter between Roman numerals and digits.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="UnnumberedRetryLeadSeconds"]/*' /></remarks>
-    internal const double UnnumberedRetryLeadSeconds = 8.0;
+    internal static double UnnumberedRetryLeadSeconds = 8.0;
 
     /// <summary>Length of a Scan "heard it, could not number it" retry decode, chosen to match the
     /// framing that produced a readable number in the case <see cref="UnnumberedRetryLeadSeconds"/>
     /// documents, rather than the short sub-chunks <see cref="GapRetryChunkSeconds"/> uses - those
     /// recover audio Whisper skipped, which is the opposite problem and wants the opposite
     /// window.</summary>
-    internal const double UnnumberedRetryWindowSeconds = 45.0;
+    internal static double UnnumberedRetryWindowSeconds = 45.0;
 
     /// <summary>
     /// How many unreadable-number retries one Scan chunk may run. In-text mentions ("the next
@@ -1294,16 +1294,16 @@ internal static class DetectionTuning
     /// <see cref="UnnumberedRetryWindowSeconds"/> decode, so a chunk of prose that happens to talk
     /// about chapters cannot turn into an unbounded re-transcription of itself.
     /// </summary>
-    internal const int MaxUnnumberedRetriesPerChunk = 3;
+    internal static int MaxUnnumberedRetriesPerChunk = 3;
 
     /// <summary>Length of each sub-chunk a padded gap is scanned in, rather than re-transcribing
     /// it in one call. A single call spanning a long, mostly non-speech stretch risks the very
     /// failure it recovers from: Whisper can judge the whole call's audio non-speech on average
     /// and return a token leading segment, where a short call over just the phrase succeeds
     /// easily.</summary>
-    internal const double GapRetryChunkSeconds = 8.0;
+    internal static double GapRetryChunkSeconds = 8.0;
 
     /// <summary>Overlap between consecutive gap-retry sub-chunks, so a phrase straddling a chunk
     /// boundary is still fully contained in at least one of them.</summary>
-    internal const double GapRetryChunkOverlapSeconds = 2.0;
+    internal static double GapRetryChunkOverlapSeconds = 2.0;
 }
