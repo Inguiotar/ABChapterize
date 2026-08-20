@@ -862,6 +862,16 @@ public sealed class CliOptions
     // for applying the --lang-dependent defaults only when the user did not choose.
     private bool _langSet, _modelSet, _upgradeModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
 
+    // The command line this was parsed from, after --config expansion. Kept so a per-folder
+    // .abchapterize-config can be resolved by re-parsing with its options in front (see
+    // FolderConfig): layering them any other way would mean a second implementation of what an
+    // option means, and the two would drift.
+    private string[] _rawArguments = [];
+
+    /// <summary>The command line this was parsed from, with any <c>--config</c> file already
+    /// expanded into it.</summary>
+    public IReadOnlyList<string> RawArguments => _rawArguments;
+
     // What --set: changed, already applied to the constants themselves by the time this instance
     // exists (see TuningOverrides). Kept only to be reported and fingerprinted: a run under
     // different tuning is a different command, so it must not resume one recorded under the
@@ -1022,7 +1032,7 @@ public sealed class CliOptions
         // And before the instance exists, because its own defaults are read out of the very
         // constants --set: writes (see TuningOverrides, which also restores them first).
         var overrides = TuningOverrides.Apply(args);
-        var o = new CliOptions { _tuningOverrides = overrides };
+        var o = new CliOptions { _tuningOverrides = overrides, _rawArguments = args };
         var i = 0;
         var targetArgs = new List<string>();
 

@@ -205,7 +205,11 @@ public sealed class FileProcessor
     /// </summary>
     /// <param name="Path">Full path of the file.</param>
     /// <param name="Progress">Batch checkpoint of the directory the file came from, if any.</param>
-    private readonly record struct PendingFile(string Path, BatchProgress? Progress);
+    /// <param name="TargetRoot">The command line target this file was found through - the directory
+    /// that was named, or the file itself. It bounds how far up <see cref="FolderConfig"/> looks for
+    /// a per-folder settings file, so a run never reads one from outside what it was asked to
+    /// process.</param>
+    private readonly record struct PendingFile(string Path, BatchProgress? Progress, string TargetRoot);
 
     /// <summary>
     /// Opens each directory target's <see cref="BatchProgress"/>, drops the files a previous,
@@ -224,7 +228,7 @@ public sealed class FileProcessor
         {
             if (!group.Target.IsDirectory || _options.DryRun)
             {
-                pending.AddRange(group.Files.Select(f => new PendingFile(f, null)));
+                pending.AddRange(group.Files.Select(f => new PendingFile(f, null, group.Target.Path)));
                 continue;
             }
             var progress = BatchProgress.Open(
@@ -232,7 +236,7 @@ public sealed class FileProcessor
             var todo = group.Files.Where(f => !progress.IsDone(f)).ToList();
             resumed += group.Files.Count - todo.Count;
             progress.Begin(todo.Count);
-            pending.AddRange(todo.Select(f => new PendingFile(f, progress)));
+            pending.AddRange(todo.Select(f => new PendingFile(f, progress, group.Target.Path)));
         }
         if (resumed > 0 && !_options.Quiet)
             _progress.Announce($"Resuming an interrupted run: {resumed} file(s) already processed, skipped.");
@@ -303,10 +307,18 @@ public sealed class FileProcessor
             using var vad = new SileroVadDetector(_options.EffectiveVadThreads);
             LogThreadBudget(vad);
 
-            var detector = new ChapterDetector(_options, ffmpeg, transcriber, vad, upgrade);
+            // One detector per file rather than one per run, because a folder's own
+            // .abchapterize-config may hand this file a different chapter phrase, language or mark
+            // placement than the last one (see FolderConfig). Costs nothing - the constructor only
+            // stores the references it is given, and the run-scoped ones (the models, the VAD, the
+            // ffmpeg client) are the same objects every time - and it makes "no per-file state
+            // survives into the next file" structural rather than a matter of SetLog remembering to
+            // clear it.
             foreach (var file in files)
             {
                 ct.ThrowIfCancellationRequested();
+                var options = FolderConfig.ResolveForFile(_options, file.Path, file.TargetRoot);
+                var detector = new ChapterDetector(options, ffmpeg, transcriber, vad, upgrade);
                 await ProcessOneAsync(file, ffmpeg, detector, ct);
             }
         }
@@ -621,8 +633,13 @@ public sealed class FileProcessor
     /// <param name="Info">Its probe result, with the input decoder already resolved (see
     /// <see cref="ResolveXheAacDecoderAsync"/>).</param>
     /// <param name="Ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="Options">The settings this file is worked on under. The run's own, except where
+    /// a per-folder <c>.abchapterize-config</c> changed how the book is read (see
+    /// <see cref="FolderConfig"/>) - so anything describing what detection did takes it from here
+    /// rather than from the run.</param>
     private readonly record struct FileContext(
-        string File, string Name, WorkTracker Work, DetectionLog Logs, MediaInfo Info, FfmpegClient Ffmpeg);
+        string File, string Name, WorkTracker Work, DetectionLog Logs, MediaInfo Info,
+        FfmpegClient Ffmpeg, CliOptions Options);
 
     /// <summary>
     /// Processes a single audiobook file, prints its summary line and - once it is finished for
@@ -682,7 +699,7 @@ public sealed class FileProcessor
         // what the probe found - so the probe, the decoder resolution and --run-before log to the
         // ordinary sink alone. Nothing is lost by that: the header restates everything the first
         // two carry, and a log opened before the hook would describe a file the hook then replaced.
-        if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, ct) is not { } opened)
+        if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, detector.Options, ct) is not { } opened)
             return null;
         var (probed, plan) = opened;
 
@@ -695,13 +712,13 @@ public sealed class FileProcessor
             // Skipped under --dry-run, where nothing ran and so nothing can have changed.
             if (!_options.DryRun)
             {
-                if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, ct) is not { } reopened)
+                if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, detector.Options, ct) is not { } reopened)
                     return null;
                 (probed, plan) = reopened;
             }
         }
 
-        using var debug = _options.Debug ? DebugLog.Open(file, _options, probed.Info) : null;
+        using var debug = _options.Debug ? DebugLog.Open(file, probed.Options, probed.Info) : null;
         var ctx = probed with { Logs = new DetectionLog(log, debug != null ? debug.Write : null) };
 
         // Whether the run ended up leaving the file alone is asked of RunOutcomes rather than
@@ -778,16 +795,19 @@ public sealed class FileProcessor
     /// <param name="work">Its progress tracker, already started.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="log">Its ordinary log sink, or null when nothing is listening.</param>
+    /// <param name="options">The settings this file is detected under; see
+    /// <see cref="FileContext.Options"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The file's context and what is to be done with it, or null when it is not going to
     /// be worked on at all - in which case it has already been counted and reported.</returns>
     private async Task<(FileContext Ctx, FilePlan Plan)?> OpenAndPlanAsync(
         string file, string name, WorkTracker work, FfmpegClient ffmpeg, Action<string>? log,
-        CancellationToken ct)
+        CliOptions options, CancellationToken ct)
     {
         var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
         if (await ResolveXheAacDecoderAsync(
-                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), ct)
+                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, options),
+                ct)
             is not { } probed)
             return null;
         var plan = PlanFor(probed);
@@ -1324,9 +1344,9 @@ public sealed class FileProcessor
         // The language hint is deliberately not carried into the listing: it says which profile the
         // file was read with, which is per-file diagnostics rather than an answer to "why is this
         // book on the list", and in a batch of two hundred it would repeat on nearly every entry.
-        var reason = DescribeNoChapters(result);
+        var reason = DescribeNoChapters(result, ctx.Options);
         _outcomes.RecordNoChapters(ctx.Name, reason);
-        var langHint = _options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
+        var langHint = ctx.Options.AutoLanguage ? $" (language used: {result.Profile.Language})" : "";
         _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {reason}; file unchanged{langHint}"
             + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds));
     }
@@ -1335,13 +1355,16 @@ public sealed class FileProcessor
     /// fragment following the file name. One wording feeding both the file's own result line and
     /// its --summary entry, so the two can never end up disagreeing.</summary>
     /// <param name="result">The file's detection result.</param>
-    private string DescribeNoChapters(DetectionResult result)
+    /// <param name="options">The options this file was detected with, which a per-folder
+    /// <c>.abchapterize-config</c> may have changed - so the message quotes the threshold that
+    /// actually applied rather than the one on the command line.</param>
+    private static string DescribeNoChapters(DetectionResult result, CliOptions options)
         => result.EarlyAborted
             ? "early-abort - no chapter found within the first " +
-              $"{_options.EarlyAbortMinutes:0.#} minute(s) of play time"
+              $"{options.EarlyAbortMinutes:0.#} minute(s) of play time"
             : result.BelowExpectedStartNumber is { } foundNumber
                 ? $"first chapter found ({foundNumber}) is below --expected-start-chapter " +
-                  $"{_options.ExpectedStartChapter}"
+                  $"{options.ExpectedStartChapter}"
                 : "no chapter phrases found";
 
     /// <summary>The normal, successful outcome: writes the detected chapters into the file (or,
@@ -1746,7 +1769,7 @@ public sealed class FileProcessor
 
         if (_options.RunBefore is { } before)
         {
-            var probed = new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg);
+            var probed = new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, _options);
             if (!await RunBeforeHookAsync(before, probed, ct))
                 return;
             // Re-probed for the same reason the detection path re-probes: the command may have
@@ -1781,7 +1804,7 @@ public sealed class FileProcessor
         }
 
         var (_, backupNote) = await CommitChaptersAsync(
-            new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg), chapters, null, ct);
+            new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, _options), chapters, null, ct);
         _progress.FinishWithSummary(work,
             $"{name}: {DescribeDropped(dropped, prospective: false)}{chapters.Count} chapter(s) " +
             $"imported from {Path.GetFileName(sidecarPath)}{backupNote}"

@@ -23,6 +23,16 @@ earn a round number.
   quietly, so it is documented in the manual only, alongside a new `doc/constants.md`
   listing every constant, its default and what it does.
 
+- **A folder can carry its own settings.** Drop a `.abchapterize-config` into it — the
+  same one-option-per-line format as `--config` — and every book in that folder is
+  processed with those options; a `.abchapterize-custom` beside it is read as `--custom`
+  mappings. Settings layer from the outside in, so a shelf overrides the library and the
+  command line overrides both, and only folders the run actually reached through are read.
+  A per-folder file may change how a book is read — phrases, titles, language, mark
+  placement, where and how hard the tool looks — but not what the run is: the models, the
+  file selection, the output and mode options stay the command line's, and asking for one
+  of those in a folder file is an error naming it rather than a setting silently ignored.
+
 - **`--config <path>` reads options from a file**, one option per line, written exactly
   as you would type it. Everything after the option name is its argument, so a phrase or
   a `--custom` mapping needs no quoting; blank lines and `#` comments are ignored. What

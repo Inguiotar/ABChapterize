@@ -225,6 +225,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | Option | What it does |
 | --- | --- |
 | `--config <path>` | Read options from a file, one per line, written as you would type them. Anything you also type on the command line wins. |
+| (none) | A `.abchapterize-config` in a folder applies to the books in it, and a `.abchapterize-custom` beside it supplies `--custom` mappings. Sub-folders and the command line win over it. |
 
 **File selection**
 

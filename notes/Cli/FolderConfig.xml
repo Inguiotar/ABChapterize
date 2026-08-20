@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Cli\FolderConfig.cs. -->
+<doc>
+  <member name="FolderConfig">
+    <para>
+    <b>Why the folders' settings are layered by re-parsing rather than merged.</b> A merge would
+    need to know, for every option, whether a second value replaces the first or adds to it -
+    <c>--model</c> replaces, <c>--custom</c> adds, <c>--chapter-phrase</c> adds - which is knowledge
+    the parser already has and nothing else should have a second copy of. Putting the folders'
+    tokens in front of the command line and parsing the whole thing gives the right answer for every
+    option by construction, including options added later, and cost nothing to build: it is the same
+    mechanism <see cref="ConfigFile"/> uses for an explicit <c>--config</c>. The price is a parse per
+    file that has a folder file, which is microseconds against a book.
+    </para>
+    <para>
+    <b>Why run-wide settings are refused rather than applied</b> (the user's call, 2026-08-20, from
+    two alternatives that were on the table). The tool loads its Whisper model once for the whole
+    run, before the first file, and holds one log, one progress renderer, one mode and one file
+    selection. Honouring <c>--model</c> from a folder would mean reloading gigabytes at a folder
+    boundary and growing a per-file component into the resume fingerprint; honouring
+    <c>--recurse</c> or <c>--filter</c> from a folder is incoherent, since those decided which files
+    exist before any folder was read. The alternative considered and rejected was to apply run-wide
+    options from whichever folder was reached first, which is defensible in code and impossible to
+    explain in a manual.
+    </para>
+    <para>
+    <b>What that boundary costs, stated plainly:</b> <c>--max-chapters</c> is refused even though it
+    is a per-file judgement, because it is read where a file is skipped rather than where it is
+    detected, and this feature deliberately reaches only the detection. If a folder ever genuinely
+    needs it, that is a decision to extend the per-file options into <see cref="ABChapterize.Processing.FileProcessor"/>'s
+    own skip logic, not to move the line quietly.
+    </para>
+  </member>
+</doc>

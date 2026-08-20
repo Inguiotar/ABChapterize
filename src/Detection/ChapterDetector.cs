@@ -122,6 +122,12 @@ public sealed class ChapterDetector
     /// given there.</summary>
     private int? ExpectedStartChapter => ExpectedStartFor(_options, _namedMarks);
 
+    /// <summary>The options this detector reads, which for a file under a per-folder
+    /// <c>.abchapterize-config</c> are not the run's own (see <see cref="FolderConfig"/>). Exposed
+    /// so whatever reports what detection did - the debug log's header above all - reports the
+    /// settings that were actually in force rather than the ones the command line asked for.</summary>
+    public CliOptions Options => _options;
+
     /// <summary>Creates a detector bound to the given tools and options.</summary>
     /// <param name="options">Validated command line options.</param>
     /// <param name="audio">Audio source used for silence detection and PCM decoding.</param>

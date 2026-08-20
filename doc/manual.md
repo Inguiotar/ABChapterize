@@ -984,6 +984,49 @@ so that logs and reports stay comparable regardless of regional settings.
   stay on the command line, and a line that is not an option is an error naming
   the line it is on.
 
+#### Settings that live with the books
+
+A folder may also carry its settings itself, with no option at all. Drop a file
+called `.abchapterize-config` into it — same format as above — and every book
+in that folder is processed with those options. A `.abchapterize-custom`
+alongside it is read as `--custom` mappings, one per line, exactly like
+`--custom-file`.
+
+```
+D:\Audiobooks\
+    .abchapterize-config          # for the whole library
+    German SF\
+        .abchapterize-config      # for this shelf
+        .abchapterize-custom      # its Zeittafel mapping
+        Perry Rhodan 1.m4b
+```
+
+Settings layer from the outside in, so a shelf overrides the library and the
+command line overrides both. Options meant to be repeated — `--custom` and
+`--chapter-phrase` — accumulate rather than replace, outermost folder first.
+
+Only folders the run actually reached through are read: a plain
+`abchapterize D:\Audiobooks\German SF` reads that folder alone, `--recurse`
+adds the folders it descends into, and a file named directly on the command
+line gets its own folder's settings and nothing above it. Nothing outside what
+you asked the tool to process is ever read.
+
+**A per-folder file may change how a book is read, not what the run is.** The
+phrases and titles, `--custom`, `--lang`, `--mark-lead`, `--quick-marks`,
+`--mark-before-jingle`, `--min-silence-length`, `--noise-floor`,
+`--early-abort`, `--expected-start-chapter`, `--chapter-count`,
+`--max-chapter-number`, `--jingle-first`, `--no-denoise` and
+`--no-trailing-scan` are all fair game. Anything belonging to the run as a
+whole is not — the models, the thread and GPU options, `--recurse` and
+`--filter`, the output and logging options, the mode options, `--force`,
+`--backup` and `--set:` — because the tool loads one model, writes one log and
+chose its files before it read any folder. Trying anyway is an error naming
+the option and the file, rather than a setting quietly ignored.
+
+One limitation worth knowing: if you edit a per-folder file and resume an
+interrupted batch, the files that run already finished are not done again. The
+checkpoint remembers the command line, not the folders' contents.
+
 ### Target selection
 
 `<file-or-directory>...` (required, last arguments)
