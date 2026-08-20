@@ -374,8 +374,16 @@ public sealed class ChapterDetector
         //
         // Begun before the language is resolved, which reports no progress of its own: the bar
         // would otherwise sit at a finished Analyze for the several seconds that takes. A
-        // jingle-first file relabels this to "J-probe" below, once the shape is known.
-        work.BeginPhase("Probe", info.SizeBytes);
+        // jingle-first file relabels this to J-probe below, once the shape is known.
+        //
+        // The census stands in for the candidate list, which does not exist yet: a walk with no
+        // music in it is named for what it does read (see PhaseNames.ChronologicalProbe). The two
+        // are built by different rules - the census bridges its stretches across short silences,
+        // candidates come one per non-speech region - so they could in principle disagree about a
+        // marginal file. Only the label is at stake, and this is the last moment before the several
+        // seconds of silence the bar would otherwise sit through.
+        work.BeginPhase(
+            jingles.Count > 0 ? PhaseNames.Probe : PhaseNames.ChronologicalProbe, info.SizeBytes);
 
         // The language is settled here, before a single probe runs, and fixed via ChangeLanguage
         // rather than re-detected per window - it belongs to the file, not to a region. Resolving it
@@ -443,14 +451,14 @@ public sealed class ChapterDetector
             _log?.Invoke(pauseNote);
 
         // The label is the shape, which is the one thing about this pass a watcher cannot
-        // otherwise see: a jingle-first file reads its music under "J-probe" and the pauses it
-        // deferred under "S-probe", a descending one skims its longest pauses under "SD-probe"
-        // before "Probe" itself. An ordinary file stays "Probe" throughout. Re-beginning resets the
-        // bar to zero, which is where it already is.
+        // otherwise see: a jingle-first file reads its music under J-probe and the pauses it
+        // deferred under S-probe, a descending one skims its longest pauses under SD-probe before
+        // the walk itself. An ordinary file keeps the label begun above throughout. Re-beginning
+        // resets the bar to zero, which is where it already is.
         if (jingleFirst.Run)
-            work.BeginPhase("J-probe", info.SizeBytes);
+            work.BeginPhase(PhaseNames.JingleProbe, info.SizeBytes);
         else if (descending.Run)
-            work.BeginPhase("SD-probe", info.SizeBytes);
+            work.BeginPhase(PhaseNames.DescendingProbe, info.SizeBytes);
 
         // The shortest chapter break any region measured, which is what decides whether the sweep
         // below has anything to do. Taken across regions rather than per region: it is a statement
@@ -647,7 +655,7 @@ public sealed class ChapterDetector
         if (stretchSeconds <= 0)
             return new ProbeOutcome(false, null, null);
 
-        ctx.Work.BeginPhase("S-probe", (long)(stretchSeconds * bytesPerSecond));
+        ctx.Work.BeginPhase(PhaseNames.SilenceProbe, (long)(stretchSeconds * bytesPerSecond));
         return await ProbeRegionsAsync(
             ctx, stretches, found, namedFound, language,
             ProbeShape.SilencesOnly, bytesPerSecond, wholeFileProgress: false, ct);
@@ -1217,7 +1225,7 @@ public sealed class ChapterDetector
         var gaps = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter);
         if (gaps.Count > 0)
         {
-            work.BeginPhase("Scan",
+            work.BeginPhase(PhaseNames.Scan,
                 (long)(gaps.Sum(g => g.ToSeconds - g.FromSeconds) * bytesPerSecond));
             // A distinct --upgrade-model needs its language set here; the probe transcriber already
             // carries it, so the common (same-model) case leaves everything untouched.
@@ -1264,7 +1272,7 @@ public sealed class ChapterDetector
             var rereadPossible = trailing.Targets is not null && !_options.UpgradeModelIsWorse;
             _log?.Invoke($"transcribing {what} " +
                          $"{FormatTimestamp(trailing.From)} - {FormatTimestamp(info.DurationSeconds)}");
-            work.BeginPhase("Scan", (long)((info.DurationSeconds - trailing.From) * bytesPerSecond));
+            work.BeginPhase(PhaseNames.Scan, (long)((info.DurationSeconds - trailing.From) * bytesPerSecond));
             if (!ReferenceEquals(_upgradeTranscriber, _transcriber))
                 _upgradeTranscriber.ChangeLanguage(profile.Language);
             var fills = await new RegionScanner(
@@ -1372,7 +1380,7 @@ public sealed class ChapterDetector
         _log?.Invoke(
             $"Re-scan: {what}{FormatTimestamp(fromSeconds)} - {FormatTimestamp(toSeconds)} " +
             $"from {FormatTimestamp(from)}, half a decode window later");
-        ctx.Work.BeginPhase("Re-scan", (long)((toSeconds - from) * ctx.BytesPerSecond));
+        ctx.Work.BeginPhase(PhaseNames.Rescan, (long)((toSeconds - from) * ctx.BytesPerSecond));
         if (!ReferenceEquals(_upgradeTranscriber, _transcriber))
             _upgradeTranscriber.ChangeLanguage(ctx.Profile.Language);
 
@@ -1561,7 +1569,8 @@ public sealed class ChapterDetector
         if (reprobeWork.Count == 0)
             return chapters;
 
-        work.BeginPhase("Re-probe", (long)(reprobeWork.Sum(g => g.Gap.ToSeconds - g.Gap.FromSeconds) * bytesPerSecond));
+        work.BeginPhase(PhaseNames.Reprobe,
+            (long)(reprobeWork.Sum(g => g.Gap.ToSeconds - g.Gap.FromSeconds) * bytesPerSecond));
         _upgradeTranscriber.ChangeLanguage(profile.Language);
 
         // --early-abort and --expected-start-chapter are both disabled for these regions (infinity
@@ -1760,7 +1769,21 @@ public sealed class ChapterDetector
             var prober = new RegionProber(
                 env, ctx with { Silences = band }, region, found, namedFound, language,
                 progressOffsetSeconds, sweepingSubFloorSilences: true, hunting: stillMissing);
-            await prober.RunAsync(ct);
+            // Named for the length of the sweep itself and not a moment longer: the enclosing phase
+            // is Probe or Re-probe, its bar is the one this walks over, and the name it was under is
+            // restored whatever the sweep does - which is also why the name is taken from the
+            // tracker rather than from the log's own phase word, a walk having possibly begun under
+            // SC-probe rather than Probe.
+            var enclosingPhase = ctx.Work.PhaseName;
+            ctx.Work.Relabel(PhaseNames.SubFloorProbe);
+            try
+            {
+                await prober.RunAsync(ct);
+            }
+            finally
+            {
+                ctx.Work.Relabel(enclosingPhase);
+            }
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
 
@@ -2185,7 +2208,7 @@ public sealed class ChapterDetector
     private async Task<AnalysisResult> RunAnalysisAsync(
         string file, MediaInfo info, WorkTracker work, double bytesPerSecond, CancellationToken ct)
     {
-        work.BeginPhase("Analyze", info.SizeBytes);
+        work.BeginPhase(PhaseNames.Analyze, info.SizeBytes);
         // The scan always goes down to MinStoredSilenceSeconds (or --min-silence-length, if lower
         // still) so short silences are available for overlap-border snapping (see
         // FindOverlapSplitPoint). allSilences holds all of those; `silences` keeps only the ones at
@@ -2338,7 +2361,7 @@ public sealed class ChapterDetector
         // marks around it into two.
         var outcomes = new List<ExistingMarkOutcome>();
 
-        work.BeginPhase("Verify", info.ExistingChapters.Count);
+        work.BeginPhase(PhaseNames.Verify, info.ExistingChapters.Count);
         foreach (var mark in info.ExistingChapters)
         {
             ct.ThrowIfCancellationRequested();

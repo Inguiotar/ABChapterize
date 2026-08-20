@@ -219,6 +219,15 @@ internal sealed class RegionScanner
     /// <returns>Every chapter start found in the region, in the order they were accepted.</returns>
     internal async Task<List<DetectedChapter>> RunAsync(CancellationToken ct)
     {
+        // Scan only ever reads a piece of the book - a gap, or its tail - so the bar always has a
+        // region to mark out, even where that piece is the whole of what this phase covers. The
+        // region begins where the phase's booked progress stands, which is exactly the regions
+        // already read: see WorkTracker.MarkRegion. Nothing clears it on the way out, deliberately:
+        // whatever follows either marks its own region or begins a phase (which clears it), so the
+        // only moment the old mark is still up is between two regions of one phase, where it names
+        // the one just finished.
+        _ctx.Work.MarkRegion((long)((_toSeconds - _fromSeconds) * _ctx.BytesPerSecond));
+
         // Inputs to the cross-chunk bridging below: the previous chunk's transcript in absolute
         // file time, and whether the seam it ends at was snapped (overlap-free).
         List<TranscriptSegment> previousChunkAbs = [];

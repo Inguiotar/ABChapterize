@@ -482,7 +482,7 @@ public sealed class FileProcessor
     /// <param name="info">The file's probe result, for its size and duration.</param>
     private static Action<double> BeginFinishPhase(WorkTracker work, MediaInfo info)
     {
-        work.BeginPhase(WorkTracker.FinishPhaseLabel, info.SizeBytes);
+        work.BeginPhase(PhaseNames.Finish, info.SizeBytes);
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
         return seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond));
     }

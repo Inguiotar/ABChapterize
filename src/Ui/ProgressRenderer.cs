@@ -18,7 +18,7 @@ namespace ABChapterize.Ui;
 public sealed class WorkTracker
 {
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
-    private string _phaseLabel = "";
+    private string _phaseName = "";
     private long _phaseTotalBytes;
     private long _phaseDoneBytes;
     private long _phaseCurrentBytes;
@@ -28,24 +28,22 @@ public sealed class WorkTracker
     /// (see <see cref="ProgressRenderer.FormatElapsedTimer"/>).</summary>
     public TimeSpan Elapsed => _stopwatch.Elapsed;
 
-    /// <summary>Short name of the current phase (e.g. "Analyze"), with
-    /// <see cref="RevisitSuffix"/> appended while <see cref="PhaseRevisiting"/> holds; shown
-    /// directly after the bar.</summary>
-    public string PhaseLabel => PhaseRevisiting ? _phaseLabel + RevisitSuffix : _phaseLabel;
+    /// <summary>
+    /// The current phase under its own name (one of <see cref="PhaseNames"/>' constants), which is
+    /// what code compares against - <see cref="PhaseLabel"/> is the wording shown to the user and
+    /// nothing should key on it.
+    /// </summary>
+    public string PhaseName => _phaseName;
+
+    /// <summary>What the bar shows for the current phase: <see cref="PhaseName"/> as
+    /// <see cref="PhaseNames.Display"/> spells it, with <see cref="RevisitSuffix"/> appended while
+    /// <see cref="PhaseRevisiting"/> holds.</summary>
+    public string PhaseLabel => PhaseNames.Display(_phaseName) + (PhaseRevisiting ? RevisitSuffix : "");
 
     /// <summary>What <see cref="PhaseLabel"/> gains while a phase is re-reading ground it has
-    /// already covered - short and wordless, because the label sits in a fixed-width line beside
-    /// a percentage that is itself running backwards, and the two say the same thing.</summary>
-    public const string RevisitSuffix = "<<";
-
-    /// <summary>
-    /// The label of the phase that writes the finished file. Named here rather than spelled out
-    /// at both ends because <see cref="ProgressRenderer"/> singles it out - the chapters are all
-    /// decided by the time it runs, so it shows this word where every other phase shows a chapter
-    /// count - and a renderer testing for a label the writer no longer sets would fail silently,
-    /// by printing "----" where the count would be.
-    /// </summary>
-    public const string FinishPhaseLabel = "Finish";
+    /// already covered - short and wordless, because the label sits beside a percentage that is
+    /// itself running backwards, and the two say the same thing.</summary>
+    public const string RevisitSuffix = " (<<)";
 
     /// <summary>
     /// Whether the current phase is presently re-reading audio it has already passed, which is
@@ -81,6 +79,28 @@ public sealed class WorkTracker
     /// the next phase's bar.
     /// </remarks>
     public int? LocationsExplored { get; set; }
+
+    /// <summary>
+    /// The stretch of the current phase's own timeline that the pass is working right now - a
+    /// sequence gap, a jingle-first stretch, the file's tail - or null while it is working the
+    /// whole of what the bar covers, which is the ordinary case. Drawn as a highlight inside the
+    /// bar, so a falling or oddly placed fill can be read against the piece of the book it belongs
+    /// to.
+    /// <para>
+    /// In the phase's own progress bytes, not in file positions, because that is the unit the bar is
+    /// drawn in: a phase whose total is the summed length of its regions (Re-probe, Scan) counts a
+    /// region's own stretch of that shorter timeline, not where the region sits in the book.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// The primary whole-file walk deliberately leaves this null even though its region technically
+    /// spans the bar: the highlight says "this is a piece of the book, not the book", and a bar
+    /// tinted end to end from the first second of every run would say nothing at all. Scan is the
+    /// case that does tint end to end - it only ever reads regions, so its bar really is one.
+    /// Cleared by <see cref="BeginPhase"/> like <see cref="PhaseRevisiting"/>, so a span left behind
+    /// by an abandoned pass cannot leak into the next phase's bar.
+    /// </remarks>
+    public (long FromBytes, long ToBytes)? RegionSpan { get; set; }
 
     /// <summary>The work this phase was begun with, so a phase that turns into another one part way
     /// through can hand the same total on - see <see cref="LocationsExplored"/> for the one that
@@ -122,12 +142,47 @@ public sealed class WorkTracker
     /// <param name="totalBytes">Total number of bytes this phase will process.</param>
     public void BeginPhase(string label, long totalBytes)
     {
-        _phaseLabel = label;
+        _phaseName = label;
         PhaseRevisiting = false;
         LocationsExplored = null;
+        RegionSpan = null;
         Interlocked.Exchange(ref _phaseTotalBytes, Math.Max(0, totalBytes));
         Interlocked.Exchange(ref _phaseDoneBytes, 0);
         Interlocked.Exchange(ref _phaseCurrentBytes, 0);
+    }
+
+    /// <summary>
+    /// Renames the running phase without disturbing anything else about it - the bar keeps its
+    /// total, its progress and its region highlight.
+    /// </summary>
+    /// <param name="phase">The phase name to show from now on; one of <see cref="PhaseNames"/>'
+    /// constants.</param>
+    /// <remarks>
+    /// For a step that runs inside another phase, against that phase's own totals, and is still
+    /// worth naming: the sub-floor sweep (<see cref="PhaseNames.SubFloorProbe"/>) re-walks a gap it
+    /// has already counted, exactly as a gap re-probe does, so beginning a phase for it would reset
+    /// the bar and throw away everything the enclosing pass has covered. Whoever relabels restores
+    /// the previous name afterwards; <see cref="BeginPhase"/> is the backstop that keeps a name left
+    /// behind by an abandoned step out of the next phase.
+    /// </remarks>
+    public void Relabel(string phase) => _phaseName = phase;
+
+    /// <summary>
+    /// Marks the region the pass is about to work as starting where the phase currently stands - the
+    /// shape every pass that books whole regions of work has (see <see cref="RegionSpan"/>).
+    /// </summary>
+    /// <param name="lengthBytes">The region's own length in progress bytes.</param>
+    /// <remarks>
+    /// Taking the start from the phase's booked progress rather than from a caller-supplied offset
+    /// is what keeps this free of plumbing: a pass that finishes each region with
+    /// <see cref="Advance"/> has already booked exactly the regions behind it, so "where the phase
+    /// stands" and "where this region begins on the bar" are the same number by construction, and
+    /// cannot drift apart the way a second, separately maintained offset would.
+    /// </remarks>
+    public void MarkRegion(long lengthBytes)
+    {
+        var from = Interlocked.Read(ref _phaseDoneBytes);
+        RegionSpan = (from, from + Math.Max(0, lengthBytes));
     }
 
     /// <summary>Reports transient progress of the work item currently running within the phase.</summary>
@@ -157,9 +212,10 @@ public sealed class WorkTracker
 }
 
 /// <summary>
-/// Renders the progress bar of the file currently being processed - one line, periodically
-/// refreshed and truncated to the terminal's width (re-checked on every redraw, so a resize is
-/// picked up automatically). When the file is finished the bar is replaced by a one-line summary
+/// Renders the progress of the file currently being processed - two lines, the console-wide bar
+/// with its percentage above and the phase, chapter state, timer and file name below, periodically
+/// refreshed and fitted to the terminal's width (re-checked on every redraw, so a resize is
+/// picked up automatically). When the file is finished the block is replaced by a one-line summary
 /// that scrolls up normally. Degrades gracefully when output is redirected.
 /// </summary>
 /// <remarks>
@@ -205,6 +261,12 @@ public sealed class ProgressRenderer : IDisposable
         /// muted as the separators: there is nothing to read there yet.</summary>
         public const ConsoleColor NoChapters = ConsoleColor.DarkGray;
 
+        /// <summary>The stretch of the bar a pass is working right now, where that is a piece of
+        /// the book rather than all of it (<see cref="WorkTracker.RegionSpan"/>). Shares the phase
+        /// label's darker cyan, which is the same statement made twice: the label says what the
+        /// pass is doing, the highlight says where.</summary>
+        public const ConsoleColor Region = ConsoleColor.DarkCyan;
+
         /// <summary>The count of chapters still missing below the highest one found - the only
         /// part of the line reporting something outstanding, so the only warm color in it.</summary>
         public const ConsoleColor Missing = ConsoleColor.DarkRed;
@@ -231,9 +293,10 @@ public sealed class ProgressRenderer : IDisposable
     /// anything else is written.</summary>
     private bool _barDrawn;
 
-    /// <summary>The exact line last drawn on screen, so a timer tick that would redraw an identical
-    /// bar can be skipped entirely (see <see cref="Render"/>). Null whenever no bar is currently
-    /// drawn - including right after <see cref="ClearBar"/> erased it.</summary>
+    /// <summary>The exact block last drawn on screen, its lines joined by newlines, so a timer tick
+    /// that would redraw an identical bar can be skipped entirely (see <see cref="Render"/>). Null
+    /// whenever no bar is currently drawn - including right after <see cref="ClearBar"/> erased
+    /// it.</summary>
     private string? _lastLine;
     private readonly Lock _lock = new();
 
@@ -244,8 +307,9 @@ public sealed class ProgressRenderer : IDisposable
     /// <param name="logFile">Opened <c>--log-file</c> destination, or null. It takes the log stream
     /// over entirely: with a log file the console shows its bar and summaries and nothing else,
     /// which is the point of asking for one.</param>
-    /// <param name="color">Whether output is colorized (--color). This reaches the progress bar
-    /// and the closing --summary block; log lines, per-file summaries and the run banner stay
+    /// <param name="color">Whether output is colorized (--color). This reaches the progress bar, the
+    /// file name at the front of a per-file result line, and the closing --summary block; log lines
+    /// - which is what a result line becomes under --verbose or --no-bar - and the run banner stay
     /// plain, and a --log-file always receives plain text whatever the console gets.</param>
     public ProgressRenderer(bool quiet, bool verbose = false, bool noBar = false, LogFile? logFile = null,
         ColorMode color = ColorMode.Auto)
@@ -294,18 +358,47 @@ public sealed class ProgressRenderer : IDisposable
     {
         lock (_lock)
         {
+            string? name = null;
             if (_slot is { } slot && ReferenceEquals(slot.Tracker, tracker))
+            {
+                name = slot.Label;
                 _slot = null;
+            }
             ClearBar();
             // A summary is the one line worth having in both places: --quiet may hold it back from
             // the console, but a log file exists to be complete.
             _logFile?.Write(summary);
             if (!_quiet || important)
-                Console.WriteLine(_logStyle ? FormatLog(summary) : summary);
+            {
+                if (_logStyle)
+                    Console.WriteLine(FormatLog(summary));
+                else
+                    WriteSpans(SummarySpans(summary, name));
+            }
             if (_slot == null)
                 _timer?.Change(Timeout.Infinite, Timeout.Infinite);
         }
     }
+
+    /// <summary>
+    /// A finished file's result line, with the file name at the front picked out in the same white
+    /// the bar gave it - the line scrolls away into a run's backlog, where the name is what somebody
+    /// scanning it is looking for.
+    /// </summary>
+    /// <param name="summary">The finished summary line.</param>
+    /// <param name="name">The file's name as the bar showed it, or null when the line belongs to no
+    /// file the renderer was tracking.</param>
+    /// <remarks>
+    /// The name is matched against the front of the line rather than assumed to be there: every
+    /// caller writes "<c>{name}: ...</c>" today, and a line that ever stops doing so falls back to
+    /// plain text instead of colouring an arbitrary prefix. Matching the tracked label also settles
+    /// what "the name ends here" means without a rule about colons, which a file name may itself
+    /// contain.
+    /// </remarks>
+    private static List<ColoredSpan> SummarySpans(string summary, string? name)
+        => name is { Length: > 0 } && summary.StartsWith(name + ":", StringComparison.Ordinal)
+            ? [new(name, Palette.Label), new(summary[name.Length..], null)]
+            : [new(summary, null)];
 
     /// <summary>
     /// Records a log line, on the console (--verbose) or in the --log-file. On the console the
@@ -383,10 +476,10 @@ public sealed class ProgressRenderer : IDisposable
     private static string FormatLog(string message) => $"[{DateTime.Now:HH:mm:ss}] {message}";
 
     /// <summary>
-    /// Redraws the active file's progress bar - but only when it actually differs from what is
-    /// already on screen. The visible line is quantized (integer percent, a fixed-width bar, a
+    /// Redraws the active file's progress block - but only when it actually differs from what is
+    /// already on screen. The visible block is quantized (integer percent, whole bar cells, a
     /// chapter count), so it changes far less often than the timer ticks; skipping the
-    /// erase-and-redraw for an unchanged line keeps the bar from flickering on every tick while
+    /// erase-and-redraw for an unchanged block keeps the bar from flickering on every tick while
     /// nothing is moving.
     /// </summary>
     private void Render()
@@ -397,93 +490,176 @@ public sealed class ProgressRenderer : IDisposable
                 return;
 
             var width = SafeWindowWidth() - 1;
-            var spans = BuildSpans(slot);
-            var line = ConsoleColors.PlainText(spans);
-            // Below a dozen columns the bar is not truncated but left to wrap, which ClearBar - it
-            // erases exactly one line - then cannot fully undo. Deliberate: a bar cut to ten
-            // columns says nothing at all, and a terminal that narrow is not a case worth carrying
-            // multi-line erase logic for.
-            if (width > 10 && line.Length > width)
-            {
-                spans = ConsoleColors.Truncate(spans, width);
-                line = line[..width];
-            }
+            var block = BuildBlock(slot, width);
+            // Below a dozen columns nothing is truncated and the block is left to wrap, which
+            // ClearBar - it erases exactly BlockLines lines - then cannot fully undo. Deliberate: a
+            // bar cut to ten columns says nothing at all, and a terminal that narrow is not a case
+            // worth carrying variable-height erase logic for.
+            if (width > 10)
+                block = [.. block.Select(l => ConsoleColors.PlainText(l).Length > width
+                    ? ConsoleColors.Truncate(l, width)
+                    : l)];
+            var text = string.Join('\n', block.Select(ConsoleColors.PlainText));
 
-            // Nothing to do when the identical line is already drawn. The comparison runs on the
+            // Nothing to do when the identical block is already drawn. The comparison runs on the
             // plain text, which is the whole reason colors are applied at write time: it stays a
             // comparison of what the user actually sees. When the bar was erased by an interleaved
             // log/summary line, _barDrawn is false, so this never wrongly skips the redraw needed
             // to put the bar back.
-            if (_barDrawn && line == _lastLine)
+            if (_barDrawn && text == _lastLine)
                 return;
 
             ClearBar();
-            WriteSpans(spans);
+            foreach (var line in block)
+                WriteSpans(line);
             _barDrawn = true;
-            _lastLine = line;
+            _lastLine = text;
         }
     }
 
     /// <summary>
-    /// Builds one progress bar line for a single active file as the plain text it renders as.
-    /// Internal for unit testing: the per-tick redraw is skipped only when this exact string is
-    /// unchanged (see <see cref="Render"/>), so the tests assert that the percent number and
-    /// chapter display both take part in the string and therefore always trigger a redraw when
-    /// they change.
+    /// Builds the whole progress block for a single active file as the plain text it renders as,
+    /// its lines joined by newlines. Internal for unit testing: the per-tick redraw is skipped only
+    /// when this exact string is unchanged (see <see cref="Render"/>), so the tests assert that the
+    /// percent number and chapter display both take part in it and therefore always trigger a
+    /// redraw when they change.
     /// </summary>
-    internal static string BuildLine((WorkTracker Tracker, string Label) slot)
-        => ConsoleColors.PlainText(BuildSpans(slot));
+    /// <param name="slot">The tracker and label of the file to draw.</param>
+    /// <param name="width">The console width the bar is drawn to fill.</param>
+    internal static string BuildLine((WorkTracker Tracker, string Label) slot, int width = DefaultWidth)
+        => string.Join('\n', BuildBlock(slot, width).Select(ConsoleColors.PlainText));
+
+    /// <summary>How many console lines one file's progress block occupies. Named rather than
+    /// spelled as a literal because <see cref="ClearBar"/> has to erase exactly as many as
+    /// <see cref="Render"/> wrote, and a mismatch leaves the terminal scrolling debris. Internal
+    /// for the unit test that holds <see cref="BuildBlock"/> to exactly this many lines.</summary>
+    internal const int BlockLines = 2;
+
+    /// <summary>Everything the bar line spends on something other than bar cells: the space in
+    /// front of it, its two brackets, the five columns of " 100%" and the space closing the
+    /// line.</summary>
+    private const int BarLineOverhead = 9;
+
+    /// <summary>The width assumed where none is known - the tests, and a console that does not
+    /// report one (see <see cref="SafeWindowWidth"/>).</summary>
+    internal const int DefaultWidth = 120;
 
     /// <summary>
-    /// Builds one progress bar line as its colored sections. Internal for unit testing, which
-    /// guards which section gets which color.
+    /// Builds one file's progress block: the bar with its percentage on the first line, everything
+    /// else on the second. Two lines rather than one because the bar is now drawn as wide as the
+    /// console, which leaves no room beside it for the phase, the chapter state, the timer and a
+    /// file name.
     /// </summary>
-    /// <param name="slot">The tracker and label of the file to draw a line for.</param>
-    internal static List<ColoredSpan> BuildSpans((WorkTracker Tracker, string Label) slot)
-    {
-        var fraction = slot.Tracker.Fraction;
-        var percent = (int)Math.Floor(fraction * 100);
+    /// <param name="slot">The tracker and label of the file to draw.</param>
+    /// <param name="width">The console width the bar is drawn to fill.</param>
+    internal static List<List<ColoredSpan>> BuildBlock(
+        (WorkTracker Tracker, string Label) slot, int width = DefaultWidth)
+        => [BuildBarSpans(slot.Tracker, width), BuildStatusSpans(slot)];
 
-        const int barWidth = 24;
+    /// <summary>
+    /// Builds the bar line as its colored sections: one space, the bracketed bar, the percentage,
+    /// one space. Internal for unit testing, which guards which section gets which color.
+    /// </summary>
+    /// <param name="tracker">The file's work tracker.</param>
+    /// <param name="width">The console width the line is drawn to fill.</param>
+    internal static List<ColoredSpan> BuildBarSpans(WorkTracker tracker, int width = DefaultWidth)
+    {
+        // Four cells is not a useful bar, it is the point below which the arithmetic would start
+        // producing negative widths; a console this narrow is left with a line that overruns it, as
+        // Render's own truncation note describes.
+        var barWidth = Math.Max(4, width - BarLineOverhead);
+        var fraction = tracker.Fraction;
+        var percent = (int)Math.Floor(fraction * 100);
         var filled = (int)Math.Round(fraction * barWidth);
         // A phase that does not work through the file in order gets a position marker instead of a
         // fill, and a count of what it has looked at instead of a percentage - see
         // WorkTracker.LocationsExplored for why a bar would be a lie there.
-        var explored = slot.Tracker.LocationsExplored;
+        var explored = tracker.LocationsExplored;
         var bar = explored is null
             ? new string('#', filled).PadRight(barWidth, '-')
             : PositionMarker(filled, barWidth);
-        var timer = FormatElapsedTimer(slot.Tracker.Elapsed);
 
-        // The final write has no chapter count of its own to show (the chapters were already
-        // decided by the time it runs) - its label goes in the slot instead, with no separate
-        // phase label after the bar since that would just repeat the same word.
-        var finishing = slot.Tracker.PhaseLabel == WorkTracker.FinishPhaseLabel;
-
-        var spans = new List<ColoredSpan>(14)
+        var spans = new List<ColoredSpan>(7)
         {
+            new(" ", null),
             new("[", Palette.Structure),
-            new(bar, Palette.Bar),
-            new("]", Palette.Structure),
-            // Same width as " 100%", so a phase turning into an ordinary one does not shuffle
-            // everything to its right by a column.
-            new(explored is { } count ? $" {count,4}" : $" {percent,3}%", Palette.Progress),
         };
-        if (!finishing && slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
+        AddBarSpans(spans, bar, RegionCells(tracker, barWidth));
+        spans.Add(new("]", Palette.Structure));
+        // Same width as " 100%", so a phase turning into an ordinary one does not shuffle the
+        // bar's right edge by a column.
+        spans.Add(new(explored is { } count ? $" {count,4}" : $" {percent,3}%", Palette.Progress));
+        spans.Add(new(" ", null));
+        return spans;
+    }
+
+    /// <summary>
+    /// Builds the status line as its colored sections: the phase, the chapter state, the elapsed
+    /// timer and the file name. Internal for unit testing.
+    /// </summary>
+    /// <param name="slot">The tracker and label of the file to draw a line for.</param>
+    internal static List<ColoredSpan> BuildStatusSpans((WorkTracker Tracker, string Label) slot)
+    {
+        // The final write has no chapter count of its own to show - the chapters were all decided
+        // by the time it runs, so a count there would be a number nothing can change any more.
+        var finishing = slot.Tracker.PhaseName == PhaseNames.Finish;
+
+        var spans = new List<ColoredSpan>(11);
+        if (slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
         {
-            spans.Add(Separator);
             spans.Add(new(phaseLabel, Palette.Phase));
+            spans.Add(Separator);
         }
-        spans.Add(Separator);
-        if (finishing)
-            spans.Add(new(WorkTracker.FinishPhaseLabel, Palette.Phase));
-        else
+        if (!finishing)
+        {
             AddChapterSpans(spans, slot.Tracker);
-        spans.Add(Separator);
-        spans.Add(new(timer, Palette.Progress));
+            spans.Add(Separator);
+        }
+        spans.Add(new(FormatElapsedTimer(slot.Tracker.Elapsed), Palette.Progress));
         spans.Add(Separator);
         spans.Add(new(slot.Label, Palette.Label));
         return spans;
+    }
+
+    /// <summary>
+    /// Which cells of the bar the pass's current region covers, or null where it is working all of
+    /// what the bar shows (see <see cref="WorkTracker.RegionSpan"/>).
+    /// </summary>
+    /// <param name="tracker">The file's work tracker.</param>
+    /// <param name="barWidth">The bar's width in cells.</param>
+    /// <remarks>
+    /// Rounded outwards - floor at the start, ceiling at the end - and then held to at least one
+    /// cell, so a gap far too short to fill a cell still shows up. Understating where the pass is
+    /// working by a cell costs nothing; drawing nothing at all would leave a bar running backwards
+    /// with no explanation on the line beside it.
+    /// </remarks>
+    private static (int From, int To)? RegionCells(WorkTracker tracker, int barWidth)
+    {
+        var total = tracker.PhaseTotalBytes;
+        if (tracker.RegionSpan is not { } span || total <= 0)
+            return null;
+        var from = Math.Clamp((int)Math.Floor((double)span.FromBytes / total * barWidth), 0, barWidth - 1);
+        var to = Math.Clamp((int)Math.Ceiling((double)span.ToBytes / total * barWidth), from + 1, barWidth);
+        return (from, to);
+    }
+
+    /// <summary>Appends the bar's cells, split at the region highlight's edges where there is
+    /// one.</summary>
+    /// <param name="spans">The line being built, appended to in place.</param>
+    /// <param name="bar">The bar's cells as drawn.</param>
+    /// <param name="region">The highlighted cell range, or null.</param>
+    private static void AddBarSpans(List<ColoredSpan> spans, string bar, (int From, int To)? region)
+    {
+        if (region is not { } cells)
+        {
+            spans.Add(new(bar, Palette.Bar));
+            return;
+        }
+        if (cells.From > 0)
+            spans.Add(new(bar[..cells.From], Palette.Bar));
+        spans.Add(new(bar[cells.From..cells.To], Palette.Region));
+        if (cells.To < bar.Length)
+            spans.Add(new(bar[cells.To..], Palette.Bar));
     }
 
     /// <summary>
@@ -608,19 +784,20 @@ public sealed class ProgressRenderer : IDisposable
     }
 
     /// <summary>
-    /// Erases the currently drawn bar (if any), leaving the cursor on its line ready for the next
-    /// redraw or for an interleaved log/summary line. Also drops the <see cref="_lastLine"/> cache
-    /// so <see cref="Render"/> treats the bar as gone and redraws it, rather than skipping on a
-    /// stale content match.
+    /// Erases the currently drawn progress block (if any), leaving the cursor on its first line
+    /// ready for the next redraw or for an interleaved log/summary line. Also drops the
+    /// <see cref="_lastLine"/> cache so <see cref="Render"/> treats the bar as gone and redraws it,
+    /// rather than skipping on a stale content match.
     /// </summary>
     private void ClearBar()
     {
         if (!_interactive || !_barDrawn)
             return;
-        var width = SafeWindowWidth() - 1;
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - 1));
-        Console.WriteLine(new string(' ', Math.Max(0, width)));
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - 1));
+        var blank = new string(' ', Math.Max(0, SafeWindowWidth() - 1));
+        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - BlockLines));
+        for (var i = 0; i < BlockLines; i++)
+            Console.WriteLine(blank);
+        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - BlockLines));
         _barDrawn = false;
         _lastLine = null;
     }
@@ -640,7 +817,7 @@ public sealed class ProgressRenderer : IDisposable
     /// <summary>Returns the console width, tolerating consoles that do not report one.</summary>
     private static int SafeWindowWidth()
     {
-        try { return Console.WindowWidth; } catch { return 120; }
+        try { return Console.WindowWidth; } catch { return DefaultWidth; }
     }
 
     /// <summary>Stops the refresh timer and restores the cursor hidden for the interactive run.

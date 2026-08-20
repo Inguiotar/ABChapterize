@@ -58,7 +58,7 @@ earn a round number.
   qualifies for neither reason; it cannot be combined with `--ignore-chapter-numbers`,
   which leaves no chapter sequence to scope the second half by. `--verbose` says which
   shape a file ran under, and the progress bar shows the two halves as phases of their
-  own, `J-probe` and `S-probe`.
+  own, `J-probing...` and `S-probing...`.
 
 - **Books with no jingles now read their longest pauses first, which saves time on a long
   file.** Chapters are announced after a book's longer pauses, and the pauses it announces
@@ -78,7 +78,7 @@ earn a round number.
   of your own `--custom` mappings may be announced between two chapters. It is skipped
   where `--min-silence-length` was given explicitly, that being you naming the pauses worth
   probing. **Experimental.** `--verbose` says which shape a file ran under, and the skim is a
-  phase of its own, `SD-probe` — which is not a progress bar, having a position in the file but
+  phase of its own, `SD-probing...` — which is not a progress bar, having a position in the file but
   no notion of how far along it is. It shows a single `X` moving about the track as it reads,
   and counts the locations it has looked at where the percentage would be.
 
@@ -101,18 +101,38 @@ earn a round number.
   skipped, or that failed before anything was read, have no such figure.
 
 - **The progress bar says when it is going back over ground it has already covered.**
-  Probe's percentage runs backwards while a gap in the chapter numbering sends it to
-  re-probe earlier candidates, which looked like the bar misbehaving. It now reads
-  `Probe<<` for exactly that stretch and `Probe` again afterwards.
+  Probing's percentage runs backwards while a gap in the chapter numbering sends it to
+  re-probe earlier candidates, which looked like the bar misbehaving. The phase now reads
+  `Probing... (<<)` for exactly that stretch, and the stretch itself is marked out on the
+  bar.
 
-- **The final phase is called `Finish` rather than `Muxing...`.** Same step — writing the
-  chapter marks into the file — under a name that says what is happening rather than how.
+- **The progress display is now two lines.** The bar and its percentage take the first,
+  as wide as the console; the phase, chapter state, elapsed timer and file name move to a
+  line of their own underneath, where a long book title no longer has to compete with the
+  bar for room.
+
+- **Phase names read as something in progress** — `Analyzing...`, `Probing...`,
+  `Scanning...`, `Finishing...` — and the last of those replaces the old `Muxing...` for
+  the step that writes the chapter marks into the file, under a name that says what is
+  happening rather than how. A file with no chapter music, where all probing has to read
+  is pauses, names its walk `SC-probing...`, and a gap swept for pauses shorter than
+  probing was willing to consider shows as `SF-probing...` — both were silently part of
+  `Probing...` before.
+
+- **The bar shows which piece of the book is being worked.** Wherever a pass is on one
+  stretch rather than the whole file — a gap in the numbering, the stretches a music-first
+  read left over, the file's tail — that stretch is picked out in dark cyan, so a fill that
+  stops short or runs backwards can be read against the part it belongs to.
+
+- **A finished file's result line carries its name in white**, so a name is as easy to pick
+  out of a long run's backlog as it is on the bar. Under `--verbose` or `--no-bar`, where
+  that line is a log line, it stays plain as before.
 
 - **The processing passes have names instead of numbers.** They had grown into Pass 1, 2,
   2.5, 3 and 3.5, and the fractions were a fiction: "pass 2.5" was never a step between
   two others, it was the probing pass run again over a gap with a heavier model. Each pass
-  is now named for what it does, and that name is what the progress bar shows and what
-  `--verbose` writes at the start of a log line:
+  is now named for what it does, and that name is what `--verbose` writes at the start of
+  a log line — and what the progress bar shows, spelled as something in progress:
 
   | was | is now | what it does |
   | --- | --- | --- |

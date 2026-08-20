@@ -312,7 +312,7 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-T`, `--verbose-transcripts` | Like `--verbose`, but also dump every Whisper transcript's segments. Implies `--verbose`. |
 | `-o`, `--log-file <path>` | Write the log to a file instead of the console — switches logging on by itself (add `-T` for the transcripts). The console keeps its progress bar and result lines, which the file gets too. Appends to an existing file. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
-| `--color <mode>` | Colorize the progress bar and the `--summary` block: `auto` (default), `always` or `never`. Nothing else is ever colored, and a `--log-file` always gets plain text. |
+| `--color <mode>` | Colorize the progress bar, the file name on a per-file result line, and the `--summary` block: `auto` (default), `always` or `never`. Nothing else is ever colored, and a `--log-file` always gets plain text. |
 | `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics — followed by a list of every file that was skipped and why, of every file no chapters were found in, of every file left with chapter marks still missing, and of every file carrying marks read below a Whisper confidence of 0.50, which are the ones worth checking by hand. |
 
 **Performance**
@@ -415,7 +415,7 @@ use `.`, whatever the machine's locale says.
    problem from the other side: it announces its chapters after its pauses, and
    it has a hundred pauses that announce nothing for every one that does. So its
    pauses are skimmed once through longest first, purely to find out roughly
-   where the chapters are, and `Probe` behind it then reads the file in order as
+   where the chapters are, and `SC-probe` behind it then reads the file in order as
    always but passes over every pause lying between two chapters whose numbers
    already run consecutively. Nothing read during the skim is read again. The
    skim stops as soon as the pauses get too short to be this book's chapter

@@ -24,10 +24,10 @@ public class WorkTrackerTests
     public void BeginPhase_ResetsProgressAndSetsLabel()
     {
         var t = new WorkTracker();
-        t.BeginPhase("Analyze", 1000);
+        t.BeginPhase(PhaseNames.Analyze, 1000);
         t.Advance(500);
-        t.BeginPhase("Probe", 200);
-        Assert.Equal("Probe", t.PhaseLabel);
+        t.BeginPhase(PhaseNames.Probe, 200);
+        Assert.Equal(PhaseNames.Probe, t.PhaseName);
         Assert.Equal(0, t.Fraction);
     }
 
@@ -35,7 +35,7 @@ public class WorkTrackerTests
     public void AdvanceAndTransientProgress_AddUp()
     {
         var t = new WorkTracker();
-        t.BeginPhase("Probe", 1000);
+        t.BeginPhase(PhaseNames.Probe, 1000);
         t.Advance(250);
         t.SetPhaseProgress(250);
         Assert.Equal(0.5, t.Fraction);
@@ -45,7 +45,7 @@ public class WorkTrackerTests
     public void Advance_ClearsTransientProgress()
     {
         var t = new WorkTracker();
-        t.BeginPhase("Analyze", 1000);
+        t.BeginPhase(PhaseNames.Analyze, 1000);
         t.SetPhaseProgress(900);
         t.Advance(100); // the finished work item replaces its own transient progress
         Assert.Equal(0.1, t.Fraction);
@@ -55,7 +55,7 @@ public class WorkTrackerTests
     public void Fraction_IsClampedToOne()
     {
         var t = new WorkTracker();
-        t.BeginPhase("Analyze", 100);
+        t.BeginPhase(PhaseNames.Analyze, 100);
         t.Advance(500);
         Assert.Equal(1, t.Fraction);
     }
@@ -64,7 +64,7 @@ public class WorkTrackerTests
     public void ZeroTotal_YieldsZeroFraction()
     {
         var t = new WorkTracker();
-        t.BeginPhase("Analyze", 0);
+        t.BeginPhase(PhaseNames.Analyze, 0);
         t.Advance(10);
         Assert.Equal(0, t.Fraction);
     }
@@ -73,7 +73,7 @@ public class WorkTrackerTests
     public void NegativeInputs_AreIgnored()
     {
         var t = new WorkTracker();
-        t.BeginPhase("Analyze", 100);
+        t.BeginPhase(PhaseNames.Analyze, 100);
         t.Advance(-50);
         t.SetPhaseProgress(-10);
         Assert.Equal(0, t.Fraction);

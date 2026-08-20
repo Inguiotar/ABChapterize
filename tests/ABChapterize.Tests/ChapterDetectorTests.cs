@@ -2517,11 +2517,55 @@ public sealed class ChapterDetectorTests : IDisposable
             new DetectionLog(m => seen.Add((m, tracker.PhaseLabel)), null),
             CancellationToken.None);
 
-        Assert.Contains(seen, s => s.Message.Contains("re-probing") && s.Label == "Probe<<");
+        var probing = PhaseNames.Display(PhaseNames.ChronologicalProbe);
+        Assert.Contains(seen, s => s.Message.Contains("re-probing") &&
+                                   s.Label == probing + WorkTracker.RevisitSuffix);
         // The primary walk's own lines are not marked, or the suffix would say nothing.
-        Assert.Contains(seen, s => s.Label == "Probe");
+        Assert.Contains(seen, s => s.Label == probing);
         // And nothing after the re-probe inherits it.
         Assert.False(tracker.PhaseRevisiting);
+    }
+
+    [Fact]
+    public async Task AGapReprobe_MarksItsOwnStretchOnTheProgressBar()
+    {
+        // The other half of that: the label says the pass is going back, and the highlight says
+        // how far back. Same fixture and the same transient sampling, since the span is up only
+        // while the re-probe runs.
+        var tracker = new WorkTracker();
+        var seen = new List<(string Message, (long From, long To)? Region)>();
+        var audio = new FakeAudioSource { Silences = [new(595, 600), new(698, 700), new(1195, 1200)] };
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(0, Seg(0.5, " Chapter one."));
+        transcriber.Add(600, Seg(0.3, " Chapter two."));
+        transcriber.AddWithin(16, 700, Seg(0.3, " Chapter three."));
+        transcriber.AddBeyond(16, 700, Seg(0.3, " Chapter forty."));
+        transcriber.Add(1200, Seg(0.3, " Chapter four."));
+        var detector = new ChapterDetector(
+            OptionsInOneSweep("--verbose", "--quick-marks"), audio, transcriber, null);
+
+        await detector.DetectAsync(
+            _file, Info, tracker,
+            new DetectionLog(m => seen.Add((m, tracker.RegionSpan)), null),
+            CancellationToken.None);
+
+        // The re-probe's own line names the stretch it is about to walk, so the highlight can be
+        // checked against the log rather than against a recomputed expectation.
+        var line = seen.Single(s => s.Message.Contains("re-probing"));
+        var region = Assert.NotNull(line.Region);
+        var bytesPerSecond = Info.SizeBytes / Info.DurationSeconds;
+        // The stretch brackets where chapter 3 is being hunted - the 698-700 s pause the
+        // primary walk read as "chapter forty" - and is a piece of the file rather than all
+        // of it, which is the whole point of drawing it.
+        Assert.InRange(region.From, 0, (long)(700 * bytesPerSecond));
+        Assert.InRange(region.To, (long)(700 * bytesPerSecond),
+                       (long)(Info.DurationSeconds * bytesPerSecond));
+        Assert.True(region.To - region.From < Info.SizeBytes);
+
+        // The primary walk covers the whole file, so it marks nothing - a bar tinted end to end
+        // from the first second of a run would say nothing at all - and nothing inherits the span.
+        Assert.Contains(seen, s => s.Message.Contains("chapter 1 detected") && s.Region is null);
+        Assert.Null(tracker.RegionSpan);
     }
 
     [Fact]
@@ -2709,7 +2753,7 @@ public sealed class ChapterDetectorTests : IDisposable
         var during = new List<double>();
         upgrade.OnTranscribe = () =>
         {
-            if (tracker.PhaseLabel == "Re-probe")
+            if (tracker.PhaseName == PhaseNames.Reprobe)
                 during.Add(tracker.Fraction);
         };
 
@@ -2726,7 +2770,7 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.All(during, f => Assert.InRange(f, 0.0, 0.8));
         // And the pass still lands exactly on 100 % when its last gap is done; nothing else began
         // a phase afterwards, since Scan found no gap left to fill.
-        Assert.Equal("Re-probe", tracker.PhaseLabel);
+        Assert.Equal(PhaseNames.Reprobe, tracker.PhaseName);
         Assert.Equal(1.0, tracker.Fraction, 6);
     }
 
@@ -6355,10 +6399,13 @@ public sealed class ChapterDetectorTests : IDisposable
 
         var work = new WorkTracker();
         var duringScan = new List<double>();
+        var scannedRegions = new List<((long From, long To)? Region, long Total)>();
         transcriber.OnProgressReported = _ =>
         {
-            if (work.PhaseLabel == "Scan")
-                duringScan.Add(work.Fraction);
+            if (work.PhaseName != PhaseNames.Scan)
+                return;
+            duringScan.Add(work.Fraction);
+            scannedRegions.Add((work.RegionSpan, work.PhaseTotalBytes));
         };
 
         var detector = new ChapterDetector(Options(), audio, transcriber);
@@ -6374,6 +6421,10 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.True(duringScan[0] > 0, $"the bar had not moved at the first report ({duringScan[0]})");
         Assert.Equal(duringScan.OrderBy(f => f), duringScan);
         Assert.All(duringScan, f => Assert.InRange(f, 0.0, 1.0));
+        // Scan only ever reads a piece of the book, so its bar is a map of that piece and is
+        // marked out as one throughout - here a single region filling the whole phase.
+        Assert.NotEmpty(scannedRegions);
+        Assert.All(scannedRegions, r => Assert.Equal((0L, r.Total), r.Region));
     }
 
     [Fact]
@@ -8305,20 +8356,21 @@ public sealed class ChapterDetectorTests : IDisposable
         transcriber.Add(2003.5, Seg(3, " Chapter three."));
         var work = new WorkTracker();
         var seen = new List<(string Phase, int? Explored)>();
-        transcriber.OnTranscribe = () => seen.Add((work.PhaseLabel, work.LocationsExplored));
+        transcriber.OnTranscribe = () => seen.Add((work.PhaseName, work.LocationsExplored));
 
         var detector = new ChapterDetector(
             Options(), audio, transcriber, new FakeVad { Speech = [new(0, 3600)] });
         await detector.DetectAsync(
             _file, Info, work, new DetectionLog(_ => { }, null), CancellationToken.None);
 
-        var skim = seen.Where(s => s.Phase == "SD-probe").Select(s => s.Explored).ToList();
+        var skim = seen.Where(s => s.Phase == PhaseNames.DescendingProbe).Select(s => s.Explored).ToList();
         Assert.NotEmpty(skim);
         // Counted before the window it is about is added, so the first read reports none explored
         // yet and each one after it reports exactly the reads behind it.
         Assert.Equal([.. Enumerable.Range(0, skim.Count).Select(i => (int?)i)], skim);
-        // And the walk behind the skim gets an ordinary bar back, under its own name.
-        Assert.Contains(seen, s => s.Phase == "Probe" && s.Explored is null);
+        // And the walk behind the skim gets an ordinary bar back, under its own name - which on
+        // this fixture is the pauses-only one, its single speech segment leaving no music to read.
+        Assert.Contains(seen, s => s.Phase == PhaseNames.ChronologicalProbe && s.Explored is null);
     }
 
     /// <summary>

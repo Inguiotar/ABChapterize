@@ -346,21 +346,33 @@ internal sealed class RegionProber
     /// </summary>
     private bool _reprobing;
 
+    /// <summary>Backing field of <see cref="Reprobing"/>.</summary>
+    private (double FromSeconds, double ToSeconds)? _reprobedGap;
+
     /// <summary>
-    /// <see cref="_reprobing"/> together with the progress bar's own marker for it
-    /// (<see cref="WorkTracker.PhaseRevisiting"/>), which is why nothing assigns the field
-    /// directly: a re-probe walks backwards through candidates the phase has already counted, so
-    /// its percentage falls, and without the label saying why that reads as the bar malfunctioning.
-    /// Setting the two together is what keeps them from drifting apart across the several places a
-    /// re-probe can end - including the early return when a gap yields no candidates at all.
+    /// The gap a sequence-gap re-probe is walking, or null when none is - <see cref="_reprobing"/>
+    /// together with everything the progress bar shows about it, which is why nothing assigns that
+    /// field directly. A re-probe walks backwards through candidates the phase has already counted,
+    /// so its percentage falls: without the label saying why (<see cref="WorkTracker.PhaseRevisiting"/>)
+    /// and the gap marked out on the bar (<see cref="WorkTracker.RegionSpan"/>) that reads as the bar
+    /// malfunctioning. Setting them together is what keeps them from drifting apart across the
+    /// several places a re-probe can end - including the early return when a gap yields no
+    /// candidates at all.
     /// </summary>
-    private bool Reprobing
+    private (double FromSeconds, double ToSeconds)? Reprobing
     {
-        get => _reprobing;
+        get => _reprobedGap;
         set
         {
-            _reprobing = value;
-            _ctx.Work.PhaseRevisiting = value;
+            _reprobedGap = value;
+            _reprobing = value is not null;
+            _ctx.Work.PhaseRevisiting = _reprobing;
+            // Back to the walk's own region on the way out, not to nothing: a re-probe inside a
+            // recovery pass is a stretch within a stretch, and the outer one is still being worked.
+            if (value is { } gap)
+                _ctx.Work.RegionSpan = SpanOnBar(gap.FromSeconds, gap.ToSeconds);
+            else
+                ShowRegionOnBar();
         }
     }
 
@@ -726,14 +738,49 @@ internal sealed class RegionProber
     internal async Task RunAsync(CancellationToken ct)
     {
         var candidates = BuildCandidates();
-        if (_shape == ProbeShape.SilencesDescending)
-            await GatherThenResolveAsync(candidates, ct);
-        else
-            await WalkInFileOrderAsync(candidates, ct);
+        // Cleared however the walk ends: an abandoned region would otherwise leave the next phase's
+        // bar highlighting a stretch nothing is working on. The same belt-and-braces the re-probe
+        // marker and the skim's own bar shape have.
+        try
+        {
+            ShowRegionOnBar();
+            if (_shape == ProbeShape.SilencesDescending)
+                await GatherThenResolveAsync(candidates, ct);
+            else
+                await WalkInFileOrderAsync(candidates, ct);
+        }
+        finally
+        {
+            _ctx.Work.RegionSpan = null;
+        }
         // A restart still being tracked when the region runs out never earned its chapters, so its
         // announcements are booked as lost here rather than quietly forgotten.
         AbandonPendingRestart();
     }
+
+    /// <summary>
+    /// Highlights this region's own stretch of the progress bar, unless the region is the whole
+    /// file - the primary forward walk, where there is no piece of the book to point at (see
+    /// <see cref="WorkTracker.RegionSpan"/>).
+    /// </summary>
+    /// <remarks>
+    /// Called again after every step that resets the bar underneath a running walk: a re-probe
+    /// finishing (which borrowed the highlight for its gap) and the skim handing over to the
+    /// file-order walk (which begins a phase, and with it clears the highlight).
+    /// </remarks>
+    private void ShowRegionOnBar()
+        => _ctx.Work.RegionSpan =
+            _region.FromSeconds <= 0 && _region.ToSeconds >= _ctx.Info.DurationSeconds
+                ? null
+                : SpanOnBar(_region.FromSeconds, _region.ToSeconds);
+
+    /// <summary>Where a stretch of this region's audio falls on the enclosing phase's bar, in the
+    /// progress bytes it counts in.</summary>
+    /// <param name="fromSeconds">Absolute start of the stretch.</param>
+    /// <param name="toSeconds">Absolute end of the stretch.</param>
+    private (long FromBytes, long ToBytes) SpanOnBar(double fromSeconds, double toSeconds)
+        => ((long)((fromSeconds + _progressOffsetSeconds) * _ctx.BytesPerSecond),
+            (long)((toSeconds + _progressOffsetSeconds) * _ctx.BytesPerSecond));
 
     /// <summary>
     /// The walk probing has always had: every candidate in file order, each one's verdict settled
@@ -847,10 +894,26 @@ internal sealed class RegionProber
         // The skim really is a phase of its own and ends here, so the walk gets the bar back: same
         // total, counted from zero, and labelled for what it is. Begun from here rather than by the
         // caller because only this method knows when the skim finished - it may stop at any of its
-        // three termination conditions or run the list out.
-        _ctx.Work.BeginPhase("Probe", _ctx.Work.PhaseTotalBytes);
+        // three termination conditions or run the list out. Beginning a phase clears the region
+        // highlight, hence the second call.
+        _ctx.Work.BeginPhase(WalkPhaseName(candidates), _ctx.Work.PhaseTotalBytes);
+        ShowRegionOnBar();
         await WalkInFileOrderAsync(candidates, ct);
     }
+
+    /// <summary>
+    /// What to call the file-order walk on the bar: <see cref="PhaseNames.Probe"/> where it has
+    /// music to read as well as pauses, <see cref="PhaseNames.ChronologicalProbe"/> where all it
+    /// has is pauses.
+    /// </summary>
+    /// <param name="candidates">The walk's own candidate list.</param>
+    /// <remarks>
+    /// Decided once, when the phase begins, and not revisited as the walk consumes its jingles: the
+    /// label describes what the pass set out to read, and a name that changed part way through
+    /// would read as one phase having ended and another begun.
+    /// </remarks>
+    private static string WalkPhaseName(List<ProbeCandidate> candidates)
+        => candidates.Any(c => c.IsJingle) ? PhaseNames.Probe : PhaseNames.ChronologicalProbe;
 
 
     /// <summary>
@@ -3240,7 +3303,7 @@ internal sealed class RegionProber
     {
         // Before the candidates are built: the recovery framing and the union candidate set are the
         // same flag, and both belong to this list.
-        Reprobing = true;
+        Reprobing = (fromSeconds, toSeconds);
         _gapAbove = number;
         _subFloorSeconds = SubFloorForReprobe();
         var candidates = ReprobeCandidates(fromSeconds, toSeconds);
@@ -3258,7 +3321,7 @@ internal sealed class RegionProber
         if (candidates.Count == 0)
         {
             _env.Log?.Invoke(note + "no candidates between the two marks - deferred to the gap scan");
-            Reprobing = false;
+            Reprobing = null;
             _gapAbove = null;
             return;
         }
@@ -3301,7 +3364,7 @@ internal sealed class RegionProber
             _env.Log?.Invoke(
                 note + $"measured a {withheld:0.##} s chapter break - kept for the gap passes, " +
                 "not applied to the forward scan");
-        Reprobing = false;
+        Reprobing = null;
         _gapAbove = null;
         _subFloorSeconds = null;
     }

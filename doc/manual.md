@@ -83,15 +83,18 @@ naming one directly as the target is an error.
 Detection opens with one pass over the whole file that transcribes nothing, and
 then puts as much of the file through Whisper as it has to: the probing every
 file pays for, and further passes that run only where chapters are still
-missing. Each pass has a name rather than a number, and that name is what the
-progress bar shows while it runs:
+missing. Each pass has a name rather than a number, and the progress bar names
+the one that is running — as something in progress, so `Probe` shows as
+`Probing...` and `Scan` as `Scanning...`:
 
 | Pass | What it does | When it runs |
 | --- | --- | --- |
 | `Analyze` | Measures the file — silences, speech, music. Recognizes nothing. | Always |
 | `Probe` | Transcribes a short window everywhere a chapter could start. | Always |
+| `SC-probe` | The same, on a file with no chapter music: all it has to read is pauses, in chronological order. | Instead of `Probe`, whenever there is no music to read |
 | `J-probe` / `S-probe` | The same probing, split into the jingles first and the pauses afterwards. | Instead of `Probe`, on a book of chapter music — see [Reading the music first](#reading-the-music-first) |
-| `SD-probe` | A quick skim of the longest pauses, before `Probe` itself. | On a book with no chapter music — see [Reading the longest pauses first](#reading-the-longest-pauses-first) |
+| `SD-probe` | A quick skim of the longest pauses, before the chronological walk itself. | On a book with no chapter music — see [Reading the longest pauses first](#reading-the-longest-pauses-first) |
+| `SF-probe` | Sweeps a gap for pauses shorter than probing was ever willing to consider. | Inside `Probe` or `Re-probe`, only where a chapter is missing |
 | `Re-probe` | Probes a gap again on the heavier model. | Only with a heavier `--upgrade-model`, and only where a chapter is missing |
 | `Scan` | Transcribes a whole stretch end to end. | Only where a chapter is still missing |
 | `Re-scan` | Reads that stretch once more, framed differently. | Only where the `Scan` came back empty |
@@ -200,8 +203,8 @@ ordinary file walks both together and stays `Probe` throughout.
 after its pauses — and it has a hundred pauses that announce nothing for every
 one that does. Such a file is skimmed once through before probing proper, taking
 its pauses longest first, purely to find out roughly where its chapters are.
-`Probe` then reads the file in order as it always has, but passes over every
-pause that lies between two chapters whose numbers already run consecutively:
+`SC-probe` then reads the file in order as probing always has, but passes over
+every pause that lies between two chapters whose numbers already run consecutively:
 nothing else can be announced there, for the same reason as above. Nothing read
 during the skim is read a second time.
 
@@ -2206,11 +2209,12 @@ The details worth knowing:
 
 `--color <mode>`
 : Whether output is drawn in color: `auto` (the default), `always` or `never`.
-  Two things are colored, the progress bar and the closing
-  [`--summary`](#12-output-progress-and-logging) block; log lines and per-file
-  result lines stay plain, and a `--log-file` receives plain text whatever the
-  console gets. `auto` turns color off when the output
-  is redirected and when the `NO_COLOR` environment variable is set to a
+  Three things are colored: the progress bar, the file name at the front of a
+  per-file result line, and the closing
+  [`--summary`](#12-output-progress-and-logging) block; log lines stay plain —
+  which is what a result line becomes under `--verbose` or `--no-bar` — and a
+  `--log-file` receives plain text whatever the console gets. `auto` turns color
+  off when the output is redirected and when the `NO_COLOR` environment variable is set to a
   non-empty value (the no-color.org convention). On Unix it additionally wants `TERM` to name a 16-color terminal
   such as `xterm-256color`: a terminal that still calls itself plain `xterm` is
   described by its own terminfo entry as having eight colors, and everything
@@ -2959,9 +2963,15 @@ the written file keeps the original xHE-AAC stream untouched.
 
 ## 12. Output, progress and logging
 
-**Normal mode** shows a live progress bar per file (phase, percentage,
-chapter state) that is replaced by a one-line result when the file is
-done:
+**Normal mode** shows live progress per file on two lines — a bar as wide as the
+console with its percentage on the first, and the phase, chapter state, elapsed
+timer and file name on the second — replaced by a one-line result when the file
+is done:
+
+```
+ [###################################----------------------------------]  50%
+Probing... | ch 6(-2+1) | 0:41 | My Audiobook.m4b
+```
 
 ```
 My Audiobook.m4b: 24 mark(s) written (23 chapter(s) 1-23, 1 named); took 38:20 (7.2% of run length)
@@ -3002,26 +3012,36 @@ Under
 [`--ignore-chapter-numbers`](#detecting-chapters-without-believing-their-numbers),
 where every mark is an
 announcement without a number, the state shows the plain total instead:
-`mk 12`. Probe's percentage follows the probe position within the
+`mk 12`.
+
+Probing's percentage follows the probe position within the
 file's play time, so it can move nonlinearly — and, briefly, backwards,
 when a sequence gap makes the detector re-probe earlier candidates. The label
-reads `Probe<<` for exactly that stretch, so a falling percentage is
-recognisable as the re-probe rather than as the bar misbehaving. `S-probe`
+gains a `(<<)` for exactly that stretch, so a falling percentage is
+recognisable as the re-probe rather than as the bar misbehaving.
+`S-probing...`
 is [Probe's second half](#reading-the-music-first) on a file that read its
 music first; its percentage runs over the stretches that half still has to
-read rather than over the whole file. `SD-probe` — the
+read rather than over the whole file. `SD-probing...` — the
 [skim of a book's longest pauses](#reading-the-longest-pauses-first) — stops
 being a bar altogether, because it has a position in the file but no notion of
 how far along it is: it shows a single `X` where the fill would have ended,
 moving about the file as it reads, and counts the locations it has looked at
-in place of the percentage. An ordinary bar returns when `Probe` itself
-begins. Scan
+in place of the percentage. An ordinary bar returns when the chronological walk
+behind it begins. Scanning
 transcribes in chunks of several minutes each, and the bar follows the
 recognizer's own position through the chunk it is working on rather than
 jumping once per finished chunk — so a long gap keeps showing that something
 is happening throughout.
 
-Once detection finishes, the bar switches to a final `Finish` phase while
+Whenever a pass is working one piece of the book rather than all of it — a gap
+in the numbering, the stretches a music-first read left over, the file's tail —
+that piece is picked out in dark cyan inside the bar, so a fill that stops short
+or runs backwards can be read against the stretch it belongs to. Where the whole
+bar covers one such piece, as `Scanning...` always does, all of it is dark cyan:
+the bar is then a map of that stretch and not of the book.
+
+Once detection finishes, the bar switches to a final `Finishing...` phase while
 the chapter marks are written into the file — worth watching on a large
 file or a slow disk, since this step still has to shuffle the whole file's
 data through ffmpeg even though it only copies streams rather than
@@ -3033,7 +3053,7 @@ one book is easy to spot at a glance.
 
 There is one bar, because there is one file in flight: it is replaced by that
 file's one-line result as soon as it finishes, and the next file's bar takes its
-place. The line is truncated to the terminal's width, and a resize is picked up
+place. Both lines are fitted to the terminal's width, and a resize is picked up
 automatically on the next refresh.
 
 Progress bars are only drawn on an interactive console; when the output is
@@ -3048,10 +3068,13 @@ logs.
 
 The bar is drawn in color where the terminal supports it: the bar fill and the
 file name in white, the separators and brackets in dark grey, the percentage
-and the timer in cyan, the phase in a darker cyan, and the chapter count in
+and the timer in cyan, the phase — and the stretch of the bar it is working, if
+it is working one — in a darker cyan, and the chapter count in
 dark green — grey while it is still `----`, and with the bracketed count of
 missing chapters in dark red, since that is the one part of the line reporting
-something outstanding.
+something outstanding. A finished file's result line takes the file name's white
+with it, so a name is as easy to pick out of a long run's backlog as it is on the
+bar. (Under `--verbose` or `--no-bar` that line is a log line and stays plain.)
 
 The `--summary` block is colored on the same principle: prose in white,
 brackets in dark grey, and every measured value in cyan together with its unit,
