@@ -36,6 +36,35 @@
     corpus run, the shipped 3.5 s came out at 1.13x rather than 1.31x - the overlap cache absorbs
     most promoted windows.
     </para>
+    <para>
+    <b>Why a promoted candidate is still subject to the adaptive skip</b> (measured 2026-08-20 over
+    the frozen build-366 logs; <c>scratchpad\promo_cost.py</c>, <c>promo_sweep.py</c>). The obvious
+    follow-up to the Philosopher's Stone case above is to exempt a promoted candidate from
+    <see cref="RegionProber.ShouldSkipCandidate"/>, since that book tightens to 5.29 s and so drops
+    the very 1.39 s pause this rule offers. The replay says the mechanism is real and the trade is
+    bad. Real: the promoted pause ends at 17477.46 s and the announcement onset is at 17477.48, so
+    the window would open <b>0.02 s</b> ahead of it, where the candidate actually probed
+    (17478.44-17480.22) opens <b>2.74 s past</b> it - which is why that probe read the title
+    "Quidditch" with no chapter word in front of it. Bad: the rule promotes 3491 pauses across the
+    corpus and the adaptive gate drops between 1031 and 1553 of them (a bracket, not an exact count,
+    because the threshold in force at a position depends on a walk order the descending-silence
+    books do not take in file time). <b>961 of the lower bound are Die Cyber-Brutzellen alone</b> -
+    the book whose recorded history is that extra silence candidates bought no mark at all and cost
+    half an hour (see <see cref="RegionProber._scanFloorSeconds"/>). Against that, nothing is lost
+    today: the sub-floor sweep plus Re-probe recover chapter 11 at -141.1 dBFS, and the whole ladder
+    costs 2 min 29 s of a 4 h corpus run.
+    </para>
+    <para>
+    A narrower exemption was measured rather than assumed. The cost falls off roughly linearly with
+    the sandwich width, and this chapter's 0.98 s of speech survives every width down to 1.0 s:
+    3.5 s -> 1553 dropped promotions, 2.0 s -> 664, 1.5 s -> 400, 1.0 s -> 171. So an exemption
+    gated at ~1 s would cost about 1% of the corpus's window probes rather than 10%. It is still not
+    implemented, for a reason the count does not show: a promoted candidate that gets probed can
+    accept a mark, can floor the scan gate and does re-cut the overlap cache, so this is not a speed
+    knob but a change to which windows Probe opens on eight books - and what it buys is robustness
+    on a chapter that is already found. Do not narrow this constant itself to get there; 3.5 s is
+    what "De vandrande djäknarne" needs.
+    </para>
   </member>
 
   <member name="JingleFirstMinPerHour">

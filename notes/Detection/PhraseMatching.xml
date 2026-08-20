@@ -16,4 +16,39 @@
     where the phrase writes one, and the chapter was silently lost.
     </para>
   </member>
+
+  <member name="CarriesWords">
+    <para>
+    <b>How common the tags are.</b> Counted over the sixteen books of the L:\Temp corpus
+    (2026-08-09): "[Musik]" 259x, "[Abspann]" 130x, "[BLANK_AUDIO]" 103x, "[Aufregende Musik]" 57x,
+    "[MUSIK]" 38x, "[Musica]" 24x, in 14 of the 16. The spread across languages and spellings is
+    what rules out matching a word list.
+    </para>
+    <para>
+    <b>Both defects are real in mechanism and neither has cost anything yet</b> (re-measured
+    2026-08-20 over the seventeen frozen build-366 logs; <c>scratchpad\tags.py</c>). Of 10,298
+    logged transcripts <b>35</b> are nothing but tags - the shape that vetoes
+    <see cref="RegionProber.FindUnheardJingleSpeech"/>, up from 9 of 5,800 when this was first
+    counted at build 280. Of 4,555 "no" answers from an onset or survival probe, <b>30</b> open with
+    a tag and only <b>3</b> have real words behind it - all three in "Das Mutantenkorps", and all
+    three ordinary narration ("Als ich die ersten Sonnenbewerber habe,", "Eine solche
+    Geschäftigkeit"), so every one of those "no" answers was right. That is the same verdict the
+    build-280 count reached on different data, which is why this shipped as a correctness tidy-up
+    rather than as a fix for an observed loss.
+    </para>
+    <para>
+    <b>Provably inert on the corpus, which is the safety argument.</b> For the 27 tag-only "no"
+    answers, discounting the tag leaves the probe no segment at all and the answer stays "no"; for
+    the 3 with narration behind it, the probe now reads the narration, which is not the phrase, and
+    the answer stays "no". So no mark can move on this corpus. Where it does change behaviour - a
+    jingle window whose only "speech" was a tag - the re-read it unblocks keeps the window's own
+    bounds and can only add a mark, never move one, the same safety shape as the other empty-window
+    fallbacks.
+    </para>
+    <para>
+    Only 216 tag segments appear in the whole build-366 corpus and <b>every one is a single
+    bracketed run</b> - no segment holds two. The regex is written for that single-run shape
+    accordingly; widen it only against a counter-example.
+    </para>
+  </member>
 </doc>

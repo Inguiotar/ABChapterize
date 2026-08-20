@@ -4063,6 +4063,35 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task AnnouncementLostBehindAMusicTag_IsStillRecoveredByTheJingleReread()
+    {
+        // The same geometry as the test above, with one difference: the long window does not come
+        // back empty over the blip - it comes back "[Musik]", one of the bracketed non-speech tags
+        // Whisper inherited from the subtitle corpora it was trained on. That segment covers the
+        // VAD speech and carries no words, so the "is anything transcribed here" test read it as
+        // speech and vetoed the one re-read that recovers the chapter. PhraseMatching.CarriesWords
+        // is what tells the two apart; without it this test loses chapter 2 outright.
+        var (result, log, _) = await DetectWithLogAsync(
+            Options("--quick-marks", "--mark-before-jingle"),
+            [new(610, 613)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.AddWithin(25, 655, Seg(0, " Chapter two."));
+                // 654.8-656.8, so it covers the whole 654.8-655.3 blip.
+                s.AddBeyond(25, 654.8, Seg(0, "[Musik]"));
+            },
+            new FakeVad
+            {
+                Speech = [new(0, 610), new(613, 640), new(645, 645.3), new(654.8, 655.3), new(660, 3600)],
+            });
+
+        Assert.False(result.GapRemains);
+        AssertChapters([new(1, 0.25), new(2, 640)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("re-reading shorter"));
+    }
+
+    [Fact]
     public async Task JingleMusic_IsReadInOverlappingTiles_WhenTheAnnouncementIsDeepInsideIt()
     {
         // A 60 s jingle with the announcement spoken 35 s into it. The speech window opens 8 s
@@ -6219,7 +6248,7 @@ public sealed class ChapterDetectorTests : IDisposable
         //
         // The lighter --upgrade-model is what puts seam snapping in play at all: it is the one
         // setting that switches the shifted re-read off, and where a re-read may follow, neither
-        // attempt snaps (see TranscribeRegionAsync's snapSeams).
+        // attempt snaps (see RegionScanner._snapSeams).
         var (result, log, audio) = await DetectWithLogAsync(
             Options("--model", "large", "--upgrade-model", "tiny",
                     "--min-silence-length", "1.5"),

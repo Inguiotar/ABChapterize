@@ -507,6 +507,32 @@ internal static partial class PhraseMatching
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRuns();
 
+    /// <summary>
+    /// Whether a transcript segment carries words at all, as opposed to being one of the bracketed
+    /// non-speech tags Whisper inherited from the subtitle corpora it was trained on ("[Musik]",
+    /// "[BLANK_AUDIO]", "[Abspann]", …). Two places ask "is there speech here" of a segment and get
+    /// "yes" from a tag: <see cref="RegionProber.FindUnheardJingleSpeech"/>, where that vetoes the
+    /// re-read of a window whose announcement the recognizer dropped, and
+    /// <see cref="PreciseMarkRefiner"/>'s onset probe, where the tag is taken for the first thing
+    /// heard and the phrase behind it never looked at.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately a test of <em>shape</em> - a segment that is nothing but one bracketed run -
+    /// and not a list of known tags. The tags vary by language ("[Musik]" / "[MUSIK]" / "[Musica]" /
+    /// "[Aufregende Musik]") and by recognizer ("[BLANK_AUDIO]" is whisper.cpp's own), so a word
+    /// list would rot; and stripping brackets wherever they appear would eat a real transcript's
+    /// own, since narration may legitimately contain them. A segment mixing a tag with words is
+    /// therefore words, which is the answer both callers want.
+    /// <include file='../../notes/Detection/PhraseMatching.xml' path='doc/member[@name="CarriesWords"]/*' />
+    /// </remarks>
+    /// <param name="text">One transcript segment's text, as the recognizer wrote it.</param>
+    internal static bool CarriesWords(string? text)
+        => !string.IsNullOrWhiteSpace(text) && !NonSpeechTag().IsMatch(text);
+
+    /// <summary>A segment whose entire text is a single bracketed run.</summary>
+    [GeneratedRegex(@"^\s*\[[^\]]*\]\s*$")]
+    private static partial Regex NonSpeechTag();
+
     /// <summary>The index of the segment a character position in <see cref="Flatten"/>'s text
     /// belongs to: the last segment starting at or before it.</summary>
     /// <param name="segStartChar">Per-segment start offsets from <see cref="Flatten"/>.</param>

@@ -113,6 +113,13 @@ earn a round number.
 
 ### Fixed
 
+- **A chapter announced over music is no longer missed because the recognizer wrote
+  "[Musik]" instead of hearing it.** Speech recognizers trained on subtitles sometimes
+  label a stretch of music with a bracketed tag rather than transcribing it, and two
+  checks took such a tag for spoken words: one skipped the second look at a window whose
+  announcement had been drowned out, the other could decide an announcement was not where
+  it in fact was. Both now treat a tag as the non-speech it describes.
+
 - **A prologue or epilogue is now judged by where it sits, not by when it was heard.** A
   phrase restricted to "before the first chapter" or "after the first chapter" was measured
   against how many chapters had been found so far, which is the same thing only for a pass

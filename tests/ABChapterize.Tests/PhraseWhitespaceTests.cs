@@ -106,4 +106,38 @@ public sealed class PhraseWhitespaceTests : IDisposable
         Assert.Equal("", PhraseMatching.NormalizeWhitespace("   "));
         Assert.Equal("", PhraseMatching.NormalizeWhitespace(null));
     }
+    [Fact]
+    public void CarriesWords_RejectsTheBracketedNonSpeechTagsWhisperWrites()
+    {
+        // Every spelling counted in the corpus, plus whisper.cpp's own. Not a word list in the
+        // implementation - it is the shape that is matched - but these are the strings that
+        // actually occur, so a regex change that stopped covering one would be a regression.
+        Assert.False(PhraseMatching.CarriesWords("[Musik]"));
+        Assert.False(PhraseMatching.CarriesWords("[MUSIK]"));
+        Assert.False(PhraseMatching.CarriesWords("[Musica]"));
+        Assert.False(PhraseMatching.CarriesWords("[Aufregende Musik]"));
+        Assert.False(PhraseMatching.CarriesWords("[Abspann]"));
+        Assert.False(PhraseMatching.CarriesWords("[BLANK_AUDIO]"));
+        Assert.False(PhraseMatching.CarriesWords(" [Musik] "));
+    }
+
+    [Fact]
+    public void CarriesWords_RejectsNothingAndBlanks_AsAWhitespaceTestWould()
+    {
+        Assert.False(PhraseMatching.CarriesWords(null));
+        Assert.False(PhraseMatching.CarriesWords(""));
+        Assert.False(PhraseMatching.CarriesWords("   \t "));
+    }
+
+    [Fact]
+    public void CarriesWords_AcceptsRealSpeech_IncludingItsOwnBrackets()
+    {
+        // The reason this tests a shape rather than stripping brackets wherever they appear: a
+        // transcript may legitimately contain them, and a segment that mixes a tag with words is
+        // words - which is the answer both callers want.
+        Assert.True(PhraseMatching.CarriesWords(" Kapitel 29."));
+        Assert.True(PhraseMatching.CarriesWords("[Musik] Kapitel 29."));
+        Assert.True(PhraseMatching.CarriesWords("er sagte [unverstaendlich] und ging"));
+        Assert.True(PhraseMatching.CarriesWords("[Musik] [Abspann]"));
+    }
 }

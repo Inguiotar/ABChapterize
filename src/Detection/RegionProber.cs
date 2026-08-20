@@ -1749,7 +1749,10 @@ internal sealed class RegionProber
     /// covers a jingle it has no words for, vetoing the re-read. Loosening this to "no segment
     /// <em>starts</em> inside the region" would catch it, at the price of firing on most empty long
     /// windows in the file - the stretch is that common - so the cheap, strict test stays until
-    /// something measures that trade honestly.
+    /// something measures that trade honestly. A bracketed non-speech tag is a different case and
+    /// <em>is</em> discounted (see <see cref="PhraseMatching.CarriesWords"/>): a segment reading
+    /// "[Musik]" over a jingle is trivially identifiable as not-words, so it can be dropped on its
+    /// own evidence without the general test paying that trade.
     /// </para>
     /// </summary>
     /// <param name="start">Absolute start of the probe window.</param>
@@ -1765,7 +1768,8 @@ internal sealed class RegionProber
             .Where(b => _ctx.NonSpeechRegions.Any(
                 r => r.StartSeconds < b.StartSeconds && r.EndSeconds > b.EndSeconds))
             .Where(b => !trimmedAbs.Any(
-                s => s.StartSeconds < b.EndSeconds && s.EndSeconds > b.StartSeconds))
+                s => CarriesWords(s.Text) &&
+                     s.StartSeconds < b.EndSeconds && s.EndSeconds > b.StartSeconds))
             .Cast<SpeechSegment?>()
             .FirstOrDefault();
 

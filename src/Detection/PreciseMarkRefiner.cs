@@ -155,8 +155,10 @@ internal sealed class PreciseMarkRefiner
         var transcript = await _transcribe(samples, ct);
         // The lead-in can surface a trailing fragment of whatever preceded `start` as the first
         // segment (e.g. the jingle's own tail, or the previous chapter's last words) - the first
-        // *non-blank* segment is what actually starts at or after the checked position.
-        var first = transcript.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Text));
+        // segment carrying *words* is what actually starts at or after the checked position. A
+        // bracketed non-speech tag is that same jingle tail written as a token rather than as
+        // blank, so CarriesWords rather than a whitespace test is what skips it.
+        var first = transcript.FirstOrDefault(s => CarriesWords(s.Text));
         // Normalized for the same reason PhraseMatching.Flatten normalizes: a multi-word phrase has
         // to survive whatever spacing the recognizer wrote around and inside the segment.
         var found = first.Text != null && announcement.Matches(NormalizeWhitespace(first.Text));
