@@ -189,7 +189,7 @@ internal sealed class SuspectNumberMender
     /// where there is no reading to disagree with rather than a wrong one.
     /// <para>
     /// Worth the decodes for the same reason the Scan counterpart
-    /// (<see cref="ChapterDetector.ScanUnnumberedRetriesAsync"/>) is: the recognizer was right there
+    /// (<see cref="RegionScanner.ScanUnnumberedRetriesAsync"/>) is: the recognizer was right there
     /// and got the words, and only the notation defeated the parser - "CHAPTER XIII" instead of
     /// "Chapter 13", "chapitre ban 5" for a slurred "vingt-cinq". Which of those a given stretch of
     /// audio comes out as follows the window framing, so re-framing it is a genuinely different

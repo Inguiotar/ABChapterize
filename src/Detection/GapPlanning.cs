@@ -220,6 +220,40 @@ internal static class GapPlanning
     }
 
     /// <summary>
+    /// The stretch of the chapter sequence an announcement at <paramref name="phraseAbs"/> sits in,
+    /// read off the chapters already placed around it: the highest number before it and the lowest
+    /// after it. <see cref="RegionProber.SequenceBounds"/>'s counterpart for the passes that have a
+    /// chapter list rather than a running window sequence.
+    /// <para>
+    /// Position, not detection order, is what bounds it - which matters because neither Scan
+    /// nor <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> meets its chapters in file
+    /// order. An announcement between two known chapters can only be one of the numbers between
+    /// them, however late either of those was found.
+    /// </para>
+    /// </summary>
+    /// <param name="phraseAbs">Absolute position of the announcement.</param>
+    /// <param name="knownChapters">Chapters detected elsewhere.</param>
+    /// <param name="found">Chapters found in the current gap so far.</param>
+    /// <param name="expectedStartChapter">--expected-start-chapter, or null; supplies the lower
+    /// bound when nothing precedes the announcement at all.</param>
+    /// <param name="sequence">Which chapter sequence the announcement belongs to (see
+    /// <see cref="DetectedChapter.Sequence"/>); 0 for every announcement of an ordinary book.</param>
+    internal static NumberBounds BracketingBounds(
+        double phraseAbs, IReadOnlyList<DetectedChapter> knownChapters,
+        IReadOnlyList<DetectedChapter> found, int? expectedStartChapter, int sequence = 0)
+    {
+        // One part only. A chapter of another part is at some position relative to this
+        // announcement, but its number belongs to a different count, so letting it bound anything
+        // here would bracket part 2's chapter 3 between part 1's chapter 15 and its own chapter 4 -
+        // an empty range that rejects every reading of the audio.
+        var all = knownChapters.Concat(found).Where(c => c.Sequence == sequence).ToList();
+        var below = all.Where(c => c.TimeSeconds <= phraseAbs).Select(c => (int?)c.Number).Max();
+        var above = all.Where(c => c.TimeSeconds > phraseAbs).Select(c => (int?)c.Number).Min();
+        return new NumberBounds(
+            below ?? (StartOfSequence(sequence, expectedStartChapter) ?? 1) - 1, above);
+    }
+
+    /// <summary>
     /// How many <see cref="DetectionTuning.WhisperChunkSeconds"/> decode windows a stretch of audio
     /// of this length costs to recognize. Rounded up because a partial window is a whole one to the
     /// recognizer, which is exactly why this is the unit a short probe and a long transcription can
@@ -556,7 +590,7 @@ internal static class GapPlanning
     /// pipeline: Probe's shared-border and stand-alone window-end snaps
     /// (<see cref="PlanWindowEnd"/>), the reuse-time split (both via
     /// <see cref="FindOverlapSplitPoint"/>), and Scan's chunk borders
-    /// (<see cref="ChapterDetector.TranscribeRegionAsync"/>).
+    /// (<see cref="RegionScanner.RunAsync"/>).
     /// </summary>
     /// <param name="border">The unsnapped border the seam should stay closest to.</param>
     /// <param name="earliestExclusive">Lower bound (exclusive) for the seam.</param>

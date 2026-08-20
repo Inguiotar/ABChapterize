@@ -733,6 +733,41 @@ public sealed class ChapterDetector
             DenoiserForFileAsync);
 
     /// <summary>
+    /// The same for every <see cref="RegionScanner"/> of the current file, and built per pass for
+    /// the same reason: <see cref="_marks"/> and <see cref="_log"/> are per-file.
+    /// </summary>
+    private ScanEnvironment BuildScanEnvironment()
+        => new(_options, _audio, _vad, _log, _marks!, _upgradeTranscriber,
+            TranscribeCountingAsync, LogTranscript, FindCappedPhraseMatches);
+
+    /// <summary>
+    /// The file's measurements as <see cref="RegionScanner"/> reads them, gathered once per Scan
+    /// pass rather than threaded through every region.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ExpectedStartChapter"/> is a live property everywhere else, because a prologue
+    /// found halfway through Probe has to count from that moment on (see <see cref="_namedMarks"/>).
+    /// Reading it into the context freezes it, which is sound only because every
+    /// <see cref="RegionProber"/> - the one thing that can accept a named mark - has finished by the
+    /// time Scan begins; Scan itself records numbered chapters and nothing else. Should a later pass
+    /// ever gain a named-mark route, this is the line that has to become live again.
+    /// </remarks>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="work">Progress tracker.</param>
+    /// <param name="bytesPerSecond">The file's average byte rate, for progress reporting.</param>
+    /// <param name="allSilences">Every silence Analyze retained.</param>
+    /// <param name="nonSpeechRegions">VAD non-speech regions, empty when the pre-pass did not run.</param>
+    /// <param name="speechSegments">VAD speech segments, empty when the pre-pass did not run.</param>
+    /// <param name="profile">The language profile resolved for this file.</param>
+    private ScanContext BuildScanContext(
+        string file, MediaInfo info, WorkTracker work, double bytesPerSecond,
+        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
+        List<SpeechSegment> speechSegments, LanguageProfile profile)
+        => new(file, info, work, bytesPerSecond, allSilences, nonSpeechRegions, speechSegments,
+            profile, _jingleReachSeconds, ExpectedStartChapter);
+
+    /// <summary>
     /// The pipeline stage between Probe and Re-probe: hands
     /// <see cref="RepairSequenceOutliersAsync"/> a re-read backed by this file's decoder and
     /// recognizer, then clears out <see cref="DropNamedMarkEchoes"/>'s phantoms. Everything either
@@ -1170,6 +1205,9 @@ public sealed class ChapterDetector
         double bytesPerSecond, LanguageProfile profile, (double From, List<int> Targets)? trailingFallback,
         bool trailingScanAllowed, CancellationToken ct)
     {
+        var env = BuildScanEnvironment();
+        var ctx = BuildScanContext(file, info, work, bytesPerSecond, allSilences, nonSpeechRegions,
+            speechSegments, profile);
         var gaps = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter);
         if (gaps.Count > 0)
         {
@@ -1184,13 +1222,13 @@ public sealed class ChapterDetector
         {
             _log?.Invoke($"transcribing suspicious region " +
                          $"{FormatTimestamp(gap.FromSeconds)} - {FormatTimestamp(gap.ToSeconds)}");
-            var fills = await TranscribeRegionAsync(file, info, gap.FromSeconds, gap.ToSeconds,
+            var fills = await new RegionScanner(
+                env, ctx, gap.FromSeconds, gap.ToSeconds,
                 MissingNumbersInGap(chapters, gap, ExpectedStartChapter),
                 // Whatever this leaves open goes to the shifted re-read below, unless a downgraded
                 // --upgrade-model has switched that off - so the seams go too. See snapSeams.
                 snapSeams: _options.UpgradeModelIsWorse,
-                allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work, profile, chapters,
-                gap.Sequence, ct);
+                chapters, gap.Sequence).RunAsync(ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
             work.HighestChapters = highest;
@@ -1199,9 +1237,7 @@ public sealed class ChapterDetector
         if (gaps.Count > 0)
             _log?.Invoke("Scan finished");
 
-        chapters = await RescanShiftedAsync(
-            file, info, work, chapters, allSilences, nonSpeechRegions, speechSegments,
-            bytesPerSecond, profile, ct);
+        chapters = await RescanShiftedAsync(env, ctx, chapters, ct);
 
         // The trailing region - the one thing FindGaps above structurally cannot flag, since
         // nothing bounds a still-missing last chapter from above to compare against. Two
@@ -1225,10 +1261,10 @@ public sealed class ChapterDetector
             work.BeginPhase("Scan", (long)((info.DurationSeconds - trailing.From) * bytesPerSecond));
             if (!ReferenceEquals(_upgradeTranscriber, _transcriber))
                 _upgradeTranscriber.ChangeLanguage(profile.Language);
-            var fills = await TranscribeRegionAsync(file, info, trailing.From, info.DurationSeconds,
+            var fills = await new RegionScanner(
+                env, ctx, trailing.From, info.DurationSeconds,
                 trailing.Targets, snapSeams: !rereadPossible,
-                allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, work,
-                profile, chapters, trailing.Sequence, ct);
+                chapters, trailing.Sequence).RunAsync(ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
             var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
             work.HighestChapters = highest;
@@ -1240,8 +1276,7 @@ public sealed class ChapterDetector
                  trailing.Targets.Any(n => chapters.All(
                      c => c.Sequence != trailing.Sequence || c.Number != n))))
                 chapters = await RescanRegionShiftedAsync(
-                    file, info, work, chapters, trailing.From, info.DurationSeconds, trailing.Targets,
-                    allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, profile,
+                    env, ctx, chapters, trailing.From, info.DurationSeconds, trailing.Targets,
                     $"{what} ", trailing.Sequence, ct);
         }
         return chapters;
@@ -1269,7 +1304,7 @@ public sealed class ChapterDetector
     /// <see cref="DetectionTuning.GapChunkSeconds"/>, but past that, seam snapping could land a later
     /// chunk back on its original border and hand the re-read exactly the framing that had already
     /// failed. So neither attempt snaps its seams where the other one may run: see
-    /// <see cref="TranscribeRegionAsync"/>'s <c>snapSeams</c>, which is what turns "probably a
+    /// <see cref="RegionScanner._snapSeams"/>, which is what turns "probably a
     /// different framing" into "one shift later, every chunk".
     /// </para>
     /// <para>
@@ -1280,22 +1315,13 @@ public sealed class ChapterDetector
     /// </summary>
     /// <remarks>Notes: the chapter that vanished from a full transcription at every chunk length tried, and reappeared 15 s later.
     /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="RescanShiftedAsync"]/*' /></remarks>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="info">Probe result of the file.</param>
-    /// <param name="work">Progress tracker; begins its own phase when there is work.</param>
+    /// <param name="env">The tools a <see cref="RegionScanner"/> borrows.</param>
+    /// <param name="ctx">The file being scanned.</param>
     /// <param name="chapters">The chapters known after Scan's own transcription.</param>
-    /// <param name="allSilences">Every silence Analyze retained.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions, for the jingle anchor resolution.</param>
-    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
-    /// <param name="bytesPerSecond">The file's average byte rate, for progress reporting.</param>
-    /// <param name="profile">The language profile resolved for this file.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns><paramref name="chapters"/> plus anything the re-scan recovered.</returns>
     private async Task<List<DetectedChapter>> RescanShiftedAsync(
-        string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
-        List<SpeechSegment> speechSegments, double bytesPerSecond, LanguageProfile profile,
-        CancellationToken ct)
+        ScanEnvironment env, ScanContext ctx, List<DetectedChapter> chapters, CancellationToken ct)
     {
         if (_options.UpgradeModelIsWorse)
             return chapters;
@@ -1303,12 +1329,10 @@ public sealed class ChapterDetector
         // Recomputed rather than carried over from the loop above: a gap Scan closed only in part
         // has become one or more narrower gaps around what it did find, and those remainders - not
         // the original span - are what is left to read again.
-        foreach (var gap in FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter))
+        foreach (var gap in FindGaps(chapters, ctx.Info.DurationSeconds, ExpectedStartChapter))
             chapters = await RescanRegionShiftedAsync(
-                file, info, work, chapters, gap.FromSeconds, gap.ToSeconds,
-                MissingNumbersInGap(chapters, gap, ExpectedStartChapter),
-                allSilences, nonSpeechRegions, speechSegments, bytesPerSecond, profile, "",
-                gap.Sequence, ct);
+                env, ctx, chapters, gap.FromSeconds, gap.ToSeconds,
+                MissingNumbersInGap(chapters, gap, ExpectedStartChapter), "", gap.Sequence, ct);
         return chapters;
     }
 
@@ -1318,29 +1342,21 @@ public sealed class ChapterDetector
     /// Skips a region with no room left for the shift, where the displaced start would be at or past
     /// the end.
     /// </summary>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="info">Probe result of the file.</param>
-    /// <param name="work">Progress tracker.</param>
+    /// <param name="env">The tools a <see cref="RegionScanner"/> borrows.</param>
+    /// <param name="ctx">The file being scanned.</param>
     /// <param name="chapters">The chapters known so far.</param>
     /// <param name="fromSeconds">Start of the region as the first attempt read it.</param>
     /// <param name="toSeconds">End of the region.</param>
     /// <param name="expectedNumbers">The numbers this region is expected to yield, or null for an
     /// open-ended trailing sweep.</param>
-    /// <param name="allSilences">Every silence Analyze retained.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions.</param>
-    /// <param name="speechSegments">Raw VAD speech segments.</param>
-    /// <param name="bytesPerSecond">The file's average byte rate.</param>
-    /// <param name="profile">The language profile resolved for this file.</param>
     /// <param name="what">What the region is called in the log line, ending in a space, or empty
     /// for an ordinary gap.</param>
     /// <param name="sequence">Which chapter sequence this region lies in; see
-    /// <see cref="TranscribeRegionAsync"/>.</param>
+    /// <see cref="RegionScanner"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<List<DetectedChapter>> RescanRegionShiftedAsync(
-        string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
+        ScanEnvironment env, ScanContext ctx, List<DetectedChapter> chapters,
         double fromSeconds, double toSeconds, IReadOnlyList<int>? expectedNumbers,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
-        List<SpeechSegment> speechSegments, double bytesPerSecond, LanguageProfile profile,
         string what, int sequence, CancellationToken ct)
     {
         var from = fromSeconds + RescanShiftSeconds;
@@ -1350,21 +1366,20 @@ public sealed class ChapterDetector
         _log?.Invoke(
             $"Re-scan: {what}{FormatTimestamp(fromSeconds)} - {FormatTimestamp(toSeconds)} " +
             $"from {FormatTimestamp(from)}, half a decode window later");
-        work.BeginPhase("Re-scan", (long)((toSeconds - from) * bytesPerSecond));
+        ctx.Work.BeginPhase("Re-scan", (long)((toSeconds - from) * ctx.BytesPerSecond));
         if (!ReferenceEquals(_upgradeTranscriber, _transcriber))
-            _upgradeTranscriber.ChangeLanguage(profile.Language);
+            _upgradeTranscriber.ChangeLanguage(ctx.Profile.Language);
 
-        var fills = await TranscribeRegionAsync(
-            file, info, from, toSeconds, expectedNumbers,
+        var fills = await new RegionScanner(
+            env, ctx, from, toSeconds, expectedNumbers,
             // Never snapped here either: a re-read that snapped could land a later chunk back on the
             // border the first attempt used, which is the one framing already known to fail.
             snapSeams: false,
-            allSilences, nonSpeechRegions,
-            speechSegments, bytesPerSecond, work, profile, chapters, sequence, ct);
+            chapters, sequence).RunAsync(ct);
         chapters = Normalize(chapters.Concat(fills).ToList());
         var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-        work.HighestChapters = highest;
-        work.MissingChapters = missingNumbers.Count;
+        ctx.Work.HighestChapters = highest;
+        ctx.Work.MissingChapters = missingNumbers.Count;
         _log?.Invoke(fills.Count > 0
             ? $"Re-scan recovered {fills.Count} chapter(s)"
             : "Re-scan found nothing further");
@@ -2596,565 +2611,6 @@ public sealed class ChapterDetector
             .TranscribeAsync(samples, ct, onProgressSeconds);
         _whisperTranscribeSeconds += watch.Elapsed.TotalSeconds;
         return segments;
-    }
-
-    /// <summary>
-    /// Fully transcribes a region of the file and returns all chapter starts found in it - Scan's
-    /// way of closing sequence gaps the silence-probe fast path left. Every chunk border is snapped
-    /// to the nearest silence (or, when the VAD pre-pass ran, VAD non-speech region) mid-point
-    /// within <see cref="ScanSeamSearchSeconds"/> of its natural position; consecutive chunks then
-    /// abut exactly at that word-safe seam - no overlap, nothing decoded twice - and a phrase
-    /// straddling the seam is still found by carrying the previous chunk's trailing segments
-    /// (<see cref="ScanBridgeSeconds"/>) into the next chunk's matching. Only where no seam target
-    /// exists near a border does that joint fall back to a raw cut with
-    /// <see cref="GapChunkOverlapSeconds"/> of overlap as redundancy against a possible mid-word cut.
-    /// </summary>
-    /// <param name="snapSeams">Whether chunk borders may snap to a seam at all. False turns the
-    /// region into plain <see cref="GapChunkSeconds"/> chunks, every border taking the raw-cut
-    /// fallback above - which is what makes <see cref="RescanShiftedAsync"/>'s displacement a
-    /// guarantee rather than a hope. Snapping searches
-    /// <see cref="ScanSeamSearchSeconds"/> either way while the two attempts' natural borders lie
-    /// only <see cref="RescanShiftSeconds"/> apart, so both can snap to the same silence and the
-    /// re-read can hand a later chunk exactly the framing that already failed. Unsnapped, chunk
-    /// <em>k</em> of the re-read always starts one shift past chunk <em>k</em> of the first attempt.
-    /// The price is a border that may cut through an announcement, which is what snapping exists to
-    /// avoid - but a cut border is precisely the case the overlap covers, and the announcement it
-    /// cuts is one the shifted re-read is then certain to hear whole. Passed false by both attempts
-    /// whenever a re-read may follow; a Scan that will not be re-read keeps its seams.</param>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="info">The file's probed media info (duration, size, decoder).</param>
-    /// <param name="fromSeconds">Start of the region to transcribe, in seconds.</param>
-    /// <param name="toSeconds">End of the region to transcribe, in seconds.</param>
-    /// <param name="expectedNumbers">The chapter numbers this gap exists to recover (see
-    /// <see cref="MissingNumbersInGap"/>). Transcription stops as soon as all of them are found -
-    /// continuing would only re-scan audio that cannot yield anything new - so the caller can
-    /// advance to the next gap (or finish Scan) immediately.
-    /// <para>
-    /// Null instead runs the region <em>open-ended</em>, as the trailing scan needs: there is no
-    /// known set of numbers to satisfy, so nothing can ever be complete and the region is always
-    /// scanned through to its end. With no target list to filter by, the only thing that makes a
-    /// match new is being numbered above every chapter already known - otherwise an in-text
-    /// mention of an earlier chapter would be reported as a find and merely dropped later by
-    /// <see cref="Normalize"/>.
-    /// </para></param>
-    /// <param name="allSilences">Every silence Analyze stored, down to
-    /// <see cref="MinStoredSilenceSeconds"/> - used both as seam targets and to pinpoint each
-    /// mark at the end of the silence directly preceding its phrase.</param>
-    /// <param name="nonSpeechRegions">The VAD pre-pass's non-speech regions (empty when it did not
-    /// run), used as chunk-border seam targets alongside the silences.</param>
-    /// <param name="speechSegments">The raw VAD speech segments behind
-    /// <paramref name="nonSpeechRegions"/> (empty when VAD is off), for the jingle edge
-    /// adjustment inside <see cref="ResolveJingleAnchor"/>.</param>
-    /// <param name="bytesPerSecond">The file's average bytes per second of play time, used to
-    /// convert transcribed play time into the byte-based progress the bar counts in.</param>
-    /// <param name="work">Progress tracker for the phase/byte accounting.</param>
-    /// <param name="profile">The language profile this file resolved to.</param>
-    /// <param name="knownChapters">Chapters already detected outside this region, so the
-    /// per-mark progress numbers and still-missing log notes reflect the whole file rather
-    /// than just this region's finds.</param>
-    /// <param name="sequence">Which chapter sequence this region lies in (see
-    /// <see cref="DetectedChapter.Sequence"/>); 0 for every region of an ordinary book. Everything
-    /// recovered here is stamped with it, and every "is this number already known" test is asked of
-    /// that part alone.</param>
-    /// <param name="ct">Cancellation token.</param>
-    private async Task<List<DetectedChapter>> TranscribeRegionAsync(
-        string file, MediaInfo info, double fromSeconds, double toSeconds,
-        IReadOnlyList<int>? expectedNumbers, bool snapSeams,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions,
-        List<SpeechSegment> speechSegments, double bytesPerSecond,
-        WorkTracker work, LanguageProfile profile, IReadOnlyList<DetectedChapter> knownChapters,
-        int sequence, CancellationToken ct)
-    {
-        var found = new List<DetectedChapter>();
-        // The still-missing chapter numbers of this gap; emptied as they are found, at which
-        // point there is nothing left to recover here and transcription can stop early. Null for
-        // an open-ended trailing region, which has no such list and therefore no way to
-        // finish early - see the expectedNumbers doc above.
-        var remaining = expectedNumbers is null ? null : new HashSet<int>(expectedNumbers);
-        // Inputs to the cross-chunk bridging below: the previous chunk's transcript in absolute
-        // file time, and whether the seam it ends at was snapped (overlap-free).
-        List<TranscriptSegment> previousChunkAbs = [];
-        var previousSeamSnapped = false;
-        var chunkStart = fromSeconds;
-        while (chunkStart < toSeconds)
-        {
-            ct.ThrowIfCancellationRequested();
-            var naturalEnd = Math.Min(chunkStart + GapChunkSeconds, toSeconds);
-            var seam = snapSeams && naturalEnd < toSeconds
-                ? FindNearestSeam(naturalEnd,
-                    Math.Max(chunkStart, naturalEnd - ScanSeamSearchSeconds),
-                    Math.Min(naturalEnd + ScanSeamSearchSeconds, toSeconds),
-                    upperInclusive: true, targetStartAtOrBefore: null,
-                    allSilences, nonSpeechRegions, _vad != null)
-                : null;
-            var chunkEnd = seam ?? naturalEnd;
-
-            var chunkSeconds = chunkEnd - chunkStart;
-            var samples = await _audio.DecodePcmAsync(file, chunkStart, chunkSeconds, info.InputDecoder, ct);
-            // A chunk is minutes of audio in one recognizer call, and without this the bar stands
-            // still for all of it - on a long gap, for the better part of an hour. Whisper hands
-            // back its segments as it produces them, so its own position through the chunk is free
-            // for the taking; the transient progress is cleared by the Advance below, exactly as
-            // Analyze's decode progress is. Held to a monotonic maximum inside the chunk because
-            // neither property can be assumed of the raw ends: they are not strictly ordered once a
-            // window re-segments, and one overshooting the audio it was given is common enough to
-            // walk the bar into the next chunk's budget.
-            var reachedSeconds = 0.0;
-            var segments = await TranscribeCountingAsync(samples, ct, _upgradeTranscriber, segmentEnd =>
-            {
-                reachedSeconds = Math.Max(reachedSeconds, Math.Min(segmentEnd, chunkSeconds));
-                work.SetPhaseProgress((long)(reachedSeconds * bytesPerSecond));
-            });
-            LogTranscript($"transcribed gap chunk @{FormatTimestamp(chunkStart)}", segments);
-            var freshAbs = ShiftSegments(segments, chunkStart);
-
-            // At a snapped seam the chunks share no audio, so a phrase straddling the seam
-            // exists in neither chunk alone - bridge it by prepending the previous chunk's
-            // trailing segments to this chunk's matching input. Unsnapped borders overlap
-            // instead and need no bridge; bridging there would only duplicate the overlap's
-            // text and risk parsing a number across the duplicated join.
-            List<TranscriptSegment> carried = previousSeamSnapped
-                ? previousChunkAbs.Where(s => s.EndSeconds > chunkStart - ScanBridgeSeconds).ToList()
-                : [];
-            List<TranscriptSegment> matchSegments = carried.Count > 0 ? [.. carried, .. freshAbs] : freshAbs;
-            // Same leading silence/jingle correction Probe applies, so a phrase Whisper
-            // timestamped from the pause before it is anchored from its real onset here too.
-            matchSegments = TrimLeadingNonSpeech(matchSegments, allSilences, nonSpeechRegions, _vad != null);
-
-            // Unlike Probe there is no window-relative timing rule here, so matching simply
-            // runs in absolute file time: a match's PhraseStartSeconds is already absolute.
-            foreach (var match in FindCappedPhraseMatches(matchSegments, profile,
-                         carried.Count > 0 ? carried.Count : null,
-                         RegionProber.BareNumberReadingFor(remaining is not null)))
-            {
-                var phraseAbs = match.PhraseStartSeconds;
-                // A match entirely inside the carried tail was already found (and reported) by
-                // the previous chunk's own pass; only a seam-straddling detection is news here.
-                if (phraseAbs < chunkStart && !match.SpansMerge)
-                    continue;
-                // A chapter bounding this gap is already known and can resurface right at a chunk
-                // border, its announcement sitting just inside the scanned range, without being
-                // news. Leave its existing mark alone rather than risk Normalize preferring this
-                // re-detection's timestamp.
-                if (knownChapters.Any(k => k.Sequence == sequence && k.Number == match.Number))
-                    continue;
-                // An open-ended region has no expected-number list, so what makes a match new is
-                // topping every chapter already known. Without this an in-text mention of an
-                // earlier number would be reported as a find and then dropped by Normalize.
-                if (remaining is null &&
-                    !IsAboveEveryKnownChapter(match.Number, knownChapters, found, sequence))
-                {
-                    _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
-                                 "not above every chapter found (in-text mention?)");
-                    continue;
-                }
-                // A bounded gap knows exactly which numbers can live in it, so anything else is a
-                // mishearing or an in-text mention. Re-probe rejects those against the region's own
-                // bounds and the retry scan below tests the same set; this scan did not, so a
-                // "chapter seven" heard in the gap between chapters 1 and 3 was planted here and
-                // then cost the genuine chapter 3 its mark, Normalize dropping it to keep the
-                // sequence monotonic.
-                if (remaining is not null && !remaining.Contains(match.Number))
-                {
-                    _log?.Invoke($"skipped chapter {match.Number} at {FormatTimestamp(phraseAbs)} - " +
-                                 "not missing from this gap");
-                    continue;
-                }
-                if (match.SpansMerge)
-                    _log?.Invoke($"chapter {match.Number} detection spans a Scan chunk seam " +
-                                 "(bridged from the previous chunk) - worth a spot check");
-                // The bridged tail (see `carried` above) makes the chunk's own start no longer the
-                // earliest moment the transcript speaks for; the walk's corroboration check needs
-                // the true one (see TranscriptWindow).
-                var chunkTranscript = new TranscriptWindow(
-                    matchSegments,
-                    carried.Count > 0 ? Math.Min(chunkStart, carried.Min(s => s.StartSeconds)) : chunkStart,
-                    chunkEnd);
-                await RecordGapChapterMatch(match, chunkTranscript, found, remaining, knownChapters,
-                    allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile,
-                    sequence, ct);
-            }
-
-            // A chunk whose normal transcript still leaves some expected number(s) unaccounted
-            // for gets one more look: long inner gaps that line up with a real silence/jingle
-            // (not just an ordinary narration pause) are re-scanned in small chunks, the same
-            // fallback --verify uses for the same underlying Whisper failure mode.
-            if (remaining is null or { Count: > 0 })
-                await ScanGapRetriesAsync(file, info, chunkStart, chunkEnd, freshAbs, profile,
-                    found, remaining, knownChapters, allSilences, nonSpeechRegions, speechSegments, work,
-                    sequence, ct);
-
-            // And the other failure mode, which the scan above cannot see because the audio was
-            // transcribed perfectly well: the phrase is right there and only its number is
-            // unreadable. Reported and re-framed rather than dropped in silence.
-            if (remaining is null or { Count: > 0 })
-                await ScanUnnumberedRetriesAsync(file, info, chunkStart, chunkEnd, matchSegments, profile,
-                    found, remaining, knownChapters, allSilences, nonSpeechRegions, speechSegments, work,
-                    sequence, ct);
-
-            work.Advance((long)(chunkSeconds * bytesPerSecond));
-
-            // Everything this gap was meant to recover is found, so stop and let the caller move
-            // on. The unscanned remainder still counts as this gap's work done - advance it, or
-            // the Scan bar never reaches its budget.
-            if (remaining is { Count: 0 })
-            {
-                _log?.Invoke("gap complete - all expected chapters found");
-                if (chunkEnd < toSeconds)
-                    work.Advance((long)((toSeconds - chunkEnd) * bytesPerSecond));
-                break;
-            }
-            if (chunkEnd >= toSeconds)
-                break;
-            previousChunkAbs = freshAbs;
-            previousSeamSnapped = seam.HasValue;
-            // A snapped border needs no overlap - the next decode starts exactly at the seam;
-            // an unsnapped one keeps the redundancy overlap against its possible mid-word cut.
-            chunkStart = seam ?? chunkEnd - GapChunkOverlapSeconds;
-        }
-        return found;
-    }
-
-    /// <summary>
-    /// Second chance for a Scan chunk that heard the chapter phrase but could not read a number
-    /// from it. Unlike <see cref="ScanGapRetriesAsync"/>, which chases audio Whisper skipped
-    /// outright, here the recognition succeeded and only the notation defeated the parser - so the
-    /// retry re-decodes a window <em>framed differently</em> around the phrase rather than a
-    /// shorter one over the same span. Which numeral form Whisper picks follows the framing (see
-    /// <see cref="DetectionTuning.UnnumberedRetryLeadSeconds"/> for the measurement behind that),
-    /// so a window that starts well before the announcement genuinely can read a number where the
-    /// chunk's own transcript could not.
-    /// <para>
-    /// Every unreadable announcement is logged whether or not its retry succeeds: the cases this
-    /// cannot fix - a word ordinal past a language's parser, a number above 999 - are exactly the
-    /// ones where knowing the phrase was heard and discarded saves the next investigation.
-    /// </para>
-    /// </summary>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="info">Probe result of the file.</param>
-    /// <param name="chunkStart">Absolute start of the chunk being retried.</param>
-    /// <param name="chunkEnd">Absolute end of that chunk.</param>
-    /// <param name="matchSegments">The chunk's transcript in absolute file time, as the phrase
-    /// matching saw it.</param>
-    /// <param name="profile">The language profile resolved for this file.</param>
-    /// <param name="found">Chapters found in this gap so far; appended to.</param>
-    /// <param name="remaining">Still-missing chapter numbers, or null for an open-ended region.</param>
-    /// <param name="knownChapters">Chapters already detected outside this gap.</param>
-    /// <param name="allSilences">Every silence Analyze stored, for anchor resolution.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions, for the jingle anchor resolution.</param>
-    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
-    /// <param name="work">The file's progress tracker.</param>
-    /// <param name="sequence">Which chapter sequence this gap lies in; see
-    /// <see cref="TranscribeRegionAsync"/>.</param>
-    /// <param name="ct">Cancellation token.</param>
-    private async Task ScanUnnumberedRetriesAsync(
-        string file, MediaInfo info, double chunkStart, double chunkEnd,
-        List<TranscriptSegment> matchSegments, LanguageProfile profile,
-        List<DetectedChapter> found, HashSet<int>? remaining, IReadOnlyList<DetectedChapter> knownChapters,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
-        WorkTracker work, int sequence, CancellationToken ct)
-    {
-        var retries = 0;
-        foreach (var heard in FindUnnumberedAnnouncements(matchSegments, profile))
-        {
-            // A phrase carried in from the previous chunk's tail was already reported (and
-            // retried) there; only this chunk's own audio is news.
-            if (heard.PhraseStartSeconds < chunkStart)
-                continue;
-            _log?.Invoke(
-                $"heard the chapter phrase at {FormatTimestamp(heard.PhraseStartSeconds)} " +
-                $"but could not read a number from it: \"{heard.Text}\"");
-
-            if (remaining is { Count: 0 } || retries >= MaxUnnumberedRetriesPerChunk)
-                continue;
-            retries++;
-
-            var retryStart = Math.Max(0, heard.PhraseStartSeconds - UnnumberedRetryLeadSeconds);
-            var len = Math.Min(UnnumberedRetryWindowSeconds, info.DurationSeconds - retryStart);
-            if (len <= 0)
-                continue;
-
-            var samples = await _audio.DecodePcmAsync(file, retryStart, len, info.InputDecoder, ct);
-            var segments = await TranscribeCountingAsync(samples, ct, _upgradeTranscriber);
-            LogTranscript($"unreadable-number retry {len:0.0}s@{FormatTimestamp(retryStart)}", segments);
-            var retryAbs = TrimLeadingNonSpeech(
-                ShiftSegments(segments, retryStart), allSilences, nonSpeechRegions, _vad != null);
-
-            foreach (var match in FindCappedPhraseMatches(
-                         retryAbs, profile, null,
-                         RegionProber.BareNumberReadingFor(remaining is not null)))
-            {
-                var wanted = remaining is null
-                    ? IsAboveEveryKnownChapter(match.Number, knownChapters, found, sequence)
-                    : remaining.Contains(match.Number);
-                if (!wanted || knownChapters.Any(k => k.Sequence == sequence && k.Number == match.Number))
-                    continue;
-                await RecordGapChapterMatch(match, new TranscriptWindow(retryAbs, retryStart, retryStart + len),
-                    found, remaining, knownChapters,
-                    allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile,
-                    sequence, ct);
-                if (remaining is { Count: 0 })
-                    break;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Whether a phrase match found in an <em>open-ended</em> Scan region (see the null
-    /// <c>expectedNumbers</c> case of <see cref="TranscribeRegionAsync"/>) is genuinely new. Such a
-    /// region has no expected-number list to test against, so the only usable criterion is the one
-    /// <see cref="Normalize"/> would apply anyway: the number has to top every chapter already
-    /// known, both the ones detected elsewhere and the ones this region has found so far. Anything
-    /// at or below that is a repeat or an in-text mention, not a chapter this scan recovered.
-    /// </summary>
-    /// <param name="number">The matched chapter number.</param>
-    /// <param name="knownChapters">Chapters already detected outside this region.</param>
-    /// <param name="found">Chapters this region has found so far.</param>
-    /// <param name="sequence">Which chapter sequence this region lies in - the only part whose
-    /// numbering the match can be compared against at all.</param>
-    private static bool IsAboveEveryKnownChapter(
-        int number, IReadOnlyList<DetectedChapter> knownChapters, IReadOnlyList<DetectedChapter> found,
-        int sequence)
-        => knownChapters.Concat(found).Where(c => c.Sequence == sequence).All(c => number > c.Number);
-
-    /// <summary>
-    /// Records one phrase match found while scanning a Scan gap chunk (its normal transcript, or
-    /// <see cref="ScanGapRetriesAsync"/>'s fallback) as a detected chapter: resolves the
-    /// default-mode mark - a fixed offset before the phrase - hands it to <see cref="MarkPlacer"/>
-    /// for the corrections and statistics every pass shares, then updates <paramref name="found"/>,
-    /// <paramref name="remaining"/> and the progress bar's chapter state, and logs it. Shared
-    /// between both callers so this stays in exactly one place.
-    /// </summary>
-    /// <param name="match">The confirmed phrase match, in absolute file time.</param>
-    /// <param name="transcript">The chunk the match was found in - its segments feed the VAD edge
-    /// adjustment inside <see cref="ResolveJingleAnchor"/>, its span the jingle walk and precise
-    /// mark; see <see cref="MarkContext.Transcript"/>.</param>
-    /// <param name="found">Chapters found in this gap so far; appended to.</param>
-    /// <param name="remaining">Still-missing chapter numbers for this gap; the match's number is
-    /// removed from it. Null for an open-ended region, which keeps no such list.</param>
-    /// <param name="knownChapters">Chapters already detected outside this gap, so the progress
-    /// bar's chapter state reflects the whole file.</param>
-    /// <param name="allSilences">Every silence Analyze stored, for anchor resolution.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when the VAD pre-pass did
-    /// not run), for the jingle anchor resolution.</param>
-    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment and,
-    /// with precise marking, as its candidate positions.</param>
-    /// <param name="work">The file's progress tracker.</param>
-    /// <param name="file">Path of the audio file, for precise marking's own extra transcriptions.</param>
-    /// <param name="inputDecoder">Explicit input decoder to force, or null.</param>
-    /// <param name="profile">Language profile supplying the phrase precise marking looks for.</param>
-    /// <param name="sequence">Which chapter sequence this gap lies in (see
-    /// <see cref="DetectedChapter.Sequence"/>) - what the recovered chapter is stamped with, and
-    /// what its number is bracketed against. A gap never straddles a part boundary, so one value
-    /// answers for the whole of it.</param>
-    /// <param name="ct">Cancellation token.</param>
-    private async Task RecordGapChapterMatch(
-        PhraseMatch match, TranscriptWindow transcript,
-        List<DetectedChapter> found, HashSet<int>? remaining, IReadOnlyList<DetectedChapter> knownChapters,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
-        WorkTracker work, string file, string? inputDecoder, LanguageProfile profile, int sequence,
-        CancellationToken ct)
-    {
-        var phraseAbs = match.PhraseStartSeconds;
-        double time;
-        // The silence/jingle the mark anchored to, hoisted out of the branches below so the
-        // per-file statistics can be recorded once, uniformly (see RecordChapterStats).
-        Silence? statSilence = null;
-        NonSpeechRegion? statRegion = null;
-        if (_vad != null)
-        {
-            // Same VAD-region-primary anchor resolution as Probe, just against a fixed lookback
-            // since a gap chunk has no probe window start of its own. Feeds default-mode placement
-            // and the auto-mechanism statistics; --mark-before-jingle resolves from the
-            // default-mode mark instead and does not consume it.
-            var lookback = _jingleReachSeconds;
-            var (anchorSilence, vadRegion) = ResolveJingleAnchor(
-                phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, allSilences,
-                nonSpeechRegions, candidateVadRegion: null, speechSegments, transcript.Segments);
-            time = RefineDefaultMark(
-                Math.Max(0, ResolveDefaultPhraseOnset(phraseAbs, vadRegion, anchorSilence, speechSegments)
-                            - _options.MarkLeadSeconds),
-                speechSegments, _options.MarkLeadSeconds);
-            (statSilence, statRegion) = (anchorSilence, vadRegion);
-        }
-        else
-        {
-            // Without a VAD pre-pass, the mark always goes --mark-lead seconds before the
-            // phrase itself; the preceding silence (if any close enough) is still located
-            // purely to feed the --min-silence-length auto tightening via MarkPlacer's statistics.
-            var anchor = FindRealAnchorSilence(phraseAbs - PhraseLatestStartSeconds, phraseAbs, allSilences);
-            time = Math.Max(0, phraseAbs - _options.MarkLeadSeconds);
-            statSilence = anchor;
-        }
-        // Built before the context, because the refinement's own matcher is held to the same
-        // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
-        var check = new NumberCheck(match.Number, profile,
-            BracketingBounds(phraseAbs, knownChapters, found, ExpectedStartChapter, sequence));
-        var markCtx = new MarkContext(
-            file, inputDecoder,
-            profile.AnnouncementFor(
-                match.Wording, RegionProber.BareNumberReadingFor(remaining is not null),
-                check.AdmitsAsAnnouncement),
-            allSilences, speechSegments, transcript, profile.Language);
-        // Scan only ever reads a bare number under the wider reading where the gap it is filling
-        // has an expected-number list - the same condition RegionProber.WideBareNumberReading
-        // expresses for the probing passes - so the isolation check is asked for on exactly those.
-        if (await _marks!.PlaceAsync(
-                check,
-                time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx,
-                AnnouncementIsolation.ForChapter(match, phraseAbs, remaining is not null),
-                ct) is not { } placed)
-            return;
-        // The refinement's own probes may have re-read the number (see RefinedNumberVote), so the
-        // gap's remaining-numbers bookkeeping has to follow what they settled on.
-        time = placed.TimeSeconds;
-        var number = placed.Number!.Value;
-        found.Add(new DetectedChapter(number, time, match.Confidence, Sequence: sequence));
-        remaining?.Remove(number);
-        var (highest, missingNumbers) = ChapterProgress(knownChapters.Concat(found), ExpectedStartChapter);
-        work.HighestChapters = highest;
-        work.MissingChapters = missingNumbers.Count;
-        _log?.Invoke($"chapter {number} found in gap, mark placed at {FormatTimestamp(time)} " +
-                     $"(confidence {match.Confidence:0.00}" +
-                     await _marks.LoudnessNoteAsync(time, markCtx, ct) +
-                     $"){LowConfidenceNote(match.Confidence)}" +
-                     MissingNote(missingNumbers));
-    }
-
-    /// <summary>
-    /// The stretch of the chapter sequence an announcement at <paramref name="phraseAbs"/> sits in,
-    /// read off the chapters already placed around it: the highest number before it and the lowest
-    /// after it. <see cref="RegionProber.SequenceBounds"/>'s counterpart for the passes that have a
-    /// chapter list rather than a running window sequence.
-    /// <para>
-    /// Position, not detection order, is what bounds it - which matters because neither Scan nor
-    /// the repair below meets its chapters in file order. An announcement between two known chapters
-    /// can only be one of the numbers between them, however late either of those was found.
-    /// </para>
-    /// </summary>
-    /// <param name="phraseAbs">Absolute position of the announcement.</param>
-    /// <param name="knownChapters">Chapters detected elsewhere.</param>
-    /// <param name="found">Chapters found in the current gap so far.</param>
-    /// <param name="expectedStartChapter">--expected-start-chapter, or null; supplies the lower
-    /// bound when nothing precedes the announcement at all.</param>
-    /// <param name="sequence">Which chapter sequence the announcement belongs to (see
-    /// <see cref="DetectedChapter.Sequence"/>); 0 for every announcement of an ordinary book.</param>
-    private static NumberBounds BracketingBounds(
-        double phraseAbs, IReadOnlyList<DetectedChapter> knownChapters,
-        IReadOnlyList<DetectedChapter> found, int? expectedStartChapter, int sequence = 0)
-    {
-        // One part only. A chapter of another part is at some position relative to this
-        // announcement, but its number belongs to a different count, so letting it bound anything
-        // here would bracket part 2's chapter 3 between part 1's chapter 15 and its own chapter 4 -
-        // an empty range that rejects every reading of the audio.
-        var all = knownChapters.Concat(found).Where(c => c.Sequence == sequence).ToList();
-        var below = all.Where(c => c.TimeSeconds <= phraseAbs).Select(c => (int?)c.Number).Max();
-        var above = all.Where(c => c.TimeSeconds > phraseAbs).Select(c => (int?)c.Number).Min();
-        return new NumberBounds(
-            below ?? (StartOfSequence(sequence, expectedStartChapter) ?? 1) - 1, above);
-    }
-
-    /// <summary>
-    /// Second-chance scan for a Scan gap chunk that, after its normal transcript, still has
-    /// missing chapter numbers (<paramref name="remaining"/>). Every stored silence - and, when the
-    /// VAD pre-pass ran, every VAD non-speech region - at least <see cref="GapRetryThresholdSeconds"/>
-    /// long, entirely inside this chunk, and covered by <em>none</em> of the chunk's own fresh
-    /// segments (not the bridged tail carried in from the previous chunk, already covered by its own
-    /// pass), i.e. one Whisper produced no speech at all over, is padded by
-    /// <see cref="GapRetryPaddingSeconds"/> on each side and re-scanned in short, overlapping
-    /// <see cref="GapRetryChunkSeconds"/> sub-chunks - the same technique --verify uses to recover a
-    /// phrase Whisper silently dropped from a single call spanning a mostly non-speech stretch.
-    /// Scoped to the silence/region's own bounds rather than the whole raw stretch between the
-    /// segments bracketing it: with sparse narration that stretch can span most of a 600 s Scan
-    /// chunk, making an already time-consuming fallback far more so, whereas a genuine jingle or
-    /// scene-transition silence runs seconds to at most tens of seconds. Confirmed matches are
-    /// recorded via <see cref="RecordGapChapterMatch"/> like the chunk's normal ones; scanning
-    /// stops as soon as nothing is left to find.
-    /// </summary>
-    /// <param name="file">Path of the audio file.</param>
-    /// <param name="info">Probe result of the file, for its duration and input decoder.</param>
-    /// <param name="chunkStart">Absolute start of the Scan chunk just transcribed.</param>
-    /// <param name="chunkEnd">Absolute end of that chunk.</param>
-    /// <param name="freshAbs">That chunk's own transcript segments (absolute file time),
-    /// excluding any bridged tail from the previous chunk.</param>
-    /// <param name="profile">Language profile for phrase/number matching.</param>
-    /// <param name="found">Chapters found in this gap so far; appended to via <see
-    /// cref="RecordGapChapterMatch"/>.</param>
-    /// <param name="remaining">Still-missing chapter numbers for this gap, or null for an
-    /// open-ended region - which cannot filter by expected number, and so re-scans every candidate
-    /// stretch and accepts anything numbered above every chapter already known.</param>
-    /// <param name="knownChapters">Chapters already detected outside this gap.</param>
-    /// <param name="allSilences">Every silence Analyze stored - both for anchor resolution and as
-    /// retry candidates.</param>
-    /// <param name="nonSpeechRegions">VAD non-speech regions (empty when the VAD pre-pass did not run).</param>
-    /// <param name="speechSegments">Raw VAD speech segments, for the jingle edge adjustment.</param>
-    /// <param name="work">The file's progress tracker.</param>
-    /// <param name="sequence">Which chapter sequence this gap lies in; see
-    /// <see cref="TranscribeRegionAsync"/>.</param>
-    /// <param name="ct">Cancellation token.</param>
-    private async Task ScanGapRetriesAsync(
-        string file, MediaInfo info, double chunkStart, double chunkEnd,
-        List<TranscriptSegment> freshAbs, LanguageProfile profile,
-        List<DetectedChapter> found, HashSet<int>? remaining, IReadOnlyList<DetectedChapter> knownChapters,
-        List<Silence> allSilences, List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
-        WorkTracker work, int sequence, CancellationToken ct)
-    {
-        IEnumerable<(double Start, double End)> candidates = allSilences
-            .Where(s => s.EndSeconds - s.StartSeconds >= GapRetryThresholdSeconds &&
-                        s.StartSeconds >= chunkStart && s.EndSeconds <= chunkEnd)
-            .Select(s => (s.StartSeconds, s.EndSeconds));
-        if (_vad != null)
-            candidates = candidates.Concat(nonSpeechRegions
-                .Where(r => r.EndSeconds - r.StartSeconds >= GapRetryThresholdSeconds &&
-                            r.StartSeconds >= chunkStart && r.EndSeconds <= chunkEnd)
-                .Select(r => (r.StartSeconds, r.EndSeconds)));
-
-        foreach (var (silStart, silEnd) in candidates.OrderBy(c => c.Start))
-        {
-            if (remaining is { Count: 0 })
-                break;
-            // An ordinary sentence that merely straddles a real pause still has its own segment
-            // covering the pause and needs no second look - only a stretch with nothing
-            // transcribed over it at all is a candidate for having been dropped outright.
-            if (freshAbs.Any(s => s.StartSeconds < silEnd && s.EndSeconds > silStart))
-                continue;
-
-            var sliceStart = Math.Max(chunkStart, silStart - GapRetryPaddingSeconds);
-            var sliceEnd = Math.Min(chunkEnd, silEnd + GapRetryPaddingSeconds);
-            var subStep = GapRetryChunkSeconds - GapRetryChunkOverlapSeconds;
-            for (var subStart = sliceStart;
-                 subStart < sliceEnd && remaining is null or { Count: > 0 };
-                 subStart += subStep)
-            {
-                var len = Math.Min(
-                    Math.Min(GapRetryChunkSeconds, sliceEnd - subStart), info.DurationSeconds - subStart);
-                if (len <= 0)
-                    continue;
-
-                var subSamples = await _audio.DecodePcmAsync(file, subStart, len, info.InputDecoder, ct);
-                var subSegments = await TranscribeCountingAsync(subSamples, ct, _upgradeTranscriber);
-                LogTranscript($"gap retry {len:0.0}s@{FormatTimestamp(subStart)}", subSegments);
-                var subAbs = TrimLeadingNonSpeech(
-                    ShiftSegments(subSegments, subStart), allSilences, nonSpeechRegions, _vad != null);
-
-                foreach (var match in FindCappedPhraseMatches(
-                             subAbs, profile, null,
-                             RegionProber.BareNumberReadingFor(remaining is not null)))
-                {
-                    var wanted = remaining is null
-                        ? IsAboveEveryKnownChapter(match.Number, knownChapters, found, sequence)
-                        : remaining.Contains(match.Number);
-                    if (!wanted || knownChapters.Any(k => k.Sequence == sequence && k.Number == match.Number))
-                        continue;
-                    await RecordGapChapterMatch(match, new TranscriptWindow(subAbs, subStart, subStart + len),
-                        found, remaining, knownChapters,
-                        allSilences, nonSpeechRegions, speechSegments, work, file, info.InputDecoder, profile,
-                        sequence, ct);
-                    if (remaining is { Count: 0 })
-                        break;
-                }
-            }
-        }
     }
 
     /// <summary>

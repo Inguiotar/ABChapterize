@@ -1258,7 +1258,7 @@ internal static class DetectionTuning
     /// <summary>
     /// Minimum length for a gap between transcribed segments (or before the first/after the last)
     /// to be worth a focused re-transcription - and, for Scan's version of the same fallback
-    /// (see <see cref="ChapterDetector.ScanGapRetriesAsync"/>), for a silence or VAD non-speech
+    /// (see <see cref="RegionScanner.ScanGapRetriesAsync"/>), for a silence or VAD non-speech
     /// region overlapping that gap to count as "plausibly the real jingle/scene transition" rather
     /// than an in-narration pause. Whisper's single-shot decoding of a long window can silently
     /// skip a stretch of audio - typically silence or a jingle straddling the phrase - instead of
