@@ -119,6 +119,13 @@ earn a round number.
   that reads a book strictly forward. A prologue heard by a window that had already picked
   up the chapter behind it was refused.
 
+- **A multi-part book whose music starts partway through no longer loses the chapters in front
+  of it.** When a file is read music-first and the earliest chapter the music yields is the one
+  the book was expected to open on, everything before it is now searched without an upper limit
+  on the chapter numbers it may hold. Previously that stretch was restricted to numbers below
+  the first chapter found — of which, for a chapter 1, there are none — so a previous part's
+  closing chapters sitting in front of it could not be picked up at all.
+
 - **A mark that would have landed in the words before an announcement is now moved onto the
   announcement instead of being given up on.** Where only a short pause separates a chapter
   announcement from whatever is read just before it — a reader's credit, most often — the

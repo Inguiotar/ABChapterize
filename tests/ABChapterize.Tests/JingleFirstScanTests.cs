@@ -154,7 +154,7 @@ public sealed class JingleFirstScanTests : IDisposable
     public void WithNoChapterFound_TheWholeRegionIsUnsettled()
     {
         var region = new DetectionRegion(0, 3600, 0, null);
-        Assert.Equal([region], JingleFirstScan.UnsettledStretches([], region));
+        Assert.Equal([region], JingleFirstScan.UnsettledStretches([], region, expectedStart: 1));
     }
 
     /// <summary>A complete sequence leaves the head and the tail and nothing in between: the pauses
@@ -163,10 +163,12 @@ public sealed class JingleFirstScanTests : IDisposable
     public void AConsecutiveSequence_LeavesOnlyTheHeadAndTheTail()
     {
         var stretches = JingleFirstScan.UnsettledStretches(
-            [new(1, 100), new(2, 1000), new(3, 2000)], new DetectionRegion(0, 3600, 0, null));
+            [new(1, 100), new(2, 1000), new(3, 2000)], new DetectionRegion(0, 3600, 0, null), expectedStart: 1);
 
+        // The head is open at the top: chapter 1 is the expected start, so bounding the head by it
+        // would admit nothing while shutting out a previous part's closing chapters.
         Assert.Equal(
-            [(0.0, 100.0, 0, (int?)1), (2000.0, 3600.0, 3, null)],
+            [(0.0, 100.0, 0, (int?)null), (2000.0, 3600.0, 3, null)],
             stretches.Select(s => (s.FromSeconds, s.ToSeconds, s.LowerNumber, s.UpperNumber)));
     }
 
@@ -177,10 +179,10 @@ public sealed class JingleFirstScanTests : IDisposable
     public void AHoleInTheNumbering_BecomesItsOwnStretch()
     {
         var stretches = JingleFirstScan.UnsettledStretches(
-            [new(1, 100), new(4, 2000)], new DetectionRegion(0, 3600, 0, null));
+            [new(1, 100), new(4, 2000)], new DetectionRegion(0, 3600, 0, null), expectedStart: 1);
 
         Assert.Equal(
-            [(0.0, 100.0, 0, (int?)1), (100.0, 2000.0, 1, 4), (2000.0, 3600.0, 4, null)],
+            [(0.0, 100.0, 0, (int?)null), (100.0, 2000.0, 1, 4), (2000.0, 3600.0, 4, null)],
             stretches.Select(s => (s.FromSeconds, s.ToSeconds, s.LowerNumber, s.UpperNumber)));
     }
 
@@ -193,11 +195,52 @@ public sealed class JingleFirstScanTests : IDisposable
     public void APartBoundary_LeavesTheStretchOpenAtTheTop()
     {
         var stretches = JingleFirstScan.UnsettledStretches(
-            [new(1, 100), new(1, 2000, Sequence: 1)], new DetectionRegion(0, 3600, 0, null));
+            [new(1, 100), new(1, 2000, Sequence: 1)], new DetectionRegion(0, 3600, 0, null), expectedStart: 1);
 
         Assert.Equal(
-            [(0.0, 100.0, 0, (int?)1), (100.0, 2000.0, 1, null), (2000.0, 3600.0, 1, null)],
+            [(0.0, 100.0, 0, (int?)null), (100.0, 2000.0, 1, null), (2000.0, 3600.0, 1, null)],
             stretches.Select(s => (s.FromSeconds, s.ToSeconds, s.LowerNumber, s.UpperNumber)));
+    }
+
+    /// <summary>
+    /// The head of a book that opens where it was expected to: bounding it by that chapter would
+    /// admit nothing at all - there is no number below a chapter 1 - while forbidding the one thing
+    /// that legitimately sits in front of one, a previous part's closing chapters numbered above it.
+    /// </summary>
+    [Fact]
+    public void AHeadClosedByTheExpectedStartChapter_IsOpenAtTheTop()
+    {
+        var stretches = JingleFirstScan.UnsettledStretches(
+            [new(1, 100), new(2, 1000)], new DetectionRegion(0, 3600, 0, null), expectedStart: 1);
+
+        Assert.Null(stretches[0].UpperNumber);
+    }
+
+    /// <summary>
+    /// The bound still stands where it means something: a jingle half whose first find is chapter 5
+    /// leaves a head that really can hold chapters 1 to 4, and a window there must not accept a 5 it
+    /// re-heard or anything above it.
+    /// </summary>
+    [Fact]
+    public void AHeadClosedByALaterChapter_KeepsItsUpperBound()
+    {
+        var stretches = JingleFirstScan.UnsettledStretches(
+            [new(5, 100), new(6, 1000)], new DetectionRegion(0, 3600, 0, null), expectedStart: 1);
+
+        Assert.Equal(5, stretches[0].UpperNumber);
+    }
+
+    /// <summary>
+    /// --expected-start-chapter moves the test with it: a file that is part two of a split book and
+    /// was told so opens on chapter 12, and its head is as open as an ordinary book's is at 1.
+    /// </summary>
+    [Fact]
+    public void AHeadClosedByAnExpectedStartOfItsOwn_IsAlsoOpenAtTheTop()
+    {
+        var stretches = JingleFirstScan.UnsettledStretches(
+            [new(12, 100), new(13, 1000)], new DetectionRegion(0, 3600, 0, null), expectedStart: 12);
+
+        Assert.Null(stretches[0].UpperNumber);
     }
 
     /// <summary>Under a second there is no candidate to walk - a pause candidate is held clear of a
@@ -207,7 +250,7 @@ public sealed class JingleFirstScanTests : IDisposable
     public void AStretchTooShortToHoldACandidate_IsDropped()
     {
         var stretches = JingleFirstScan.UnsettledStretches(
-            [new(1, 0.4), new(3, 3599.8)], new DetectionRegion(0, 3600, 0, null));
+            [new(1, 0.4), new(3, 3599.8)], new DetectionRegion(0, 3600, 0, null), expectedStart: 1);
 
         // The head (0-0.4) and the tail (3599.8-3600) both fall away; only the hole is walked.
         Assert.Equal(

@@ -13,5 +13,47 @@
     and there is none at all for the books it does not, which is what <c>--jingle-first</c> is for -
     it forces the shape on so a book outside the gate can be measured without rebuilding the tool.
     </para>
+    <para>
+    <b>Why leaving the head open at the top costs nothing</b> (2026-08-20, measured over the
+    build-362 corpus run before the change shipped). The concern was that an open head could accept
+    a <em>second</em> copy of the very chapter that closes it, from a window reaching over the
+    boundary onto its announcement - which would have moved chapter 1 on every jingle book rather
+    than fixing a rare one. Two independent measurements say it cannot:
+    </para>
+    <para>
+    First, the bound had never rejected anything. <c>IsOutOfSequence</c> logs every number it turns
+    down at an upper bound, and across all seventeen books that line appears exactly twice - "at or
+    above 32" and "at or above 8", both sequence-gap re-probes. <b>Not once at a head stretch's
+    bound of 1</b>, so no head window has ever produced a numbered phrase match at all and removing
+    the bound admits nothing that was not admitted already.
+    </para>
+    <para>
+    Second, the geometry forbids it: <c>RegionProber.WindowEndFor</c> clamps a window to
+    <c>_region.ToSeconds</c>, and a head stretch ends at the closing chapter's <em>mark</em>, which
+    sits one <c>--mark-lead</c> ahead of the announcement's first word. The margins are far wider
+    than that in practice - BARDIOC's last head window ends about 4 s short of the boundary and
+    Stalker's about 2 min 45 s short. Note this rests on the region clamp in window planning, which
+    is why <c>JingleFirst_TheHeadStretchCannotReAcceptTheChapterThatClosesIt</c> pins it.
+    </para>
+    <para>
+    What the heads do hold is the shape that produced build 328's phantom chapters - Perry Rhodan
+    <em>Zeittafel</em> year lists read as bare numbers at segment starts, "3585. Die Invasionsflotte
+    der Lahren ..." at 0:07:29 of BARDIOC, "2040 bis 2329. Das Solare Imperium entsteht ..." at
+    0:01:10 of Stalker. Two independent things stop those becoming chapters: under a phrase run they
+    would have to be spoken as "Kapitel N", and they are above <c>--max-chapter-number</c>'s default
+    of 200 either way. The second is load-bearing, so this change and that cap should not be
+    reconsidered independently of one another.
+    </para>
+    <para>
+    <b>Not exercised by any corpus book.</b> The condition fires on all nine jingle-first books
+    (every one of them has the jingle half find chapter 1 first), but the defect it fixes needs a
+    file whose head holds a previous part's chapters - a multi-part book whose earlier parts carry
+    no music. None is on hand, so what is measured here is that the change is inert, not that it
+    works. Two further reads of the bound flip with it and are equally unexercised:
+    <c>RegionProber.RestartTrackingAllowed</c> switches on for the head, which is the half that
+    would actually recognise a previous part, and <c>WideBareNumberReading</c> switches off, leaving
+    the head with the narrow reading and no isolation guard - the same pairing a forward scan
+    already gets, and reachable only by a bare-number book with jingles.
+    </para>
   </member>
 </doc>

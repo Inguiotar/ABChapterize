@@ -161,12 +161,26 @@ internal static class JingleFirstScan
     /// was found at. That window costs one probe and can produce nothing: the number it holds is the
     /// one already accepted, which no longer tops the sequence.
     /// </para>
+    /// <para>
+    /// <b>The head is left open at the top when the first chapter found is the one the book was
+    /// expected to start at.</b> Bounding it by that chapter admits nothing - there is no number
+    /// below a chapter 1 to hunt - while forbidding the one thing that legitimately sits in front of
+    /// one: a previous part's closing chapters, numbered above it. Leaving it open also restores
+    /// <c>RegionProber</c>'s restart tracking, which is what would recognise them as a part of their
+    /// own rather than as in-text mentions. The head cannot re-accept the chapter that closes it,
+    /// because a window there is clamped to the stretch end and that end is the chapter's mark, one
+    /// <c>--mark-lead</c> in front of its announcement's first word; see this class's notes for the
+    /// corpus measurement behind that.
+    /// </para>
     /// </summary>
     /// <param name="found">The chapters the jingle half accepted, in any order.</param>
     /// <param name="region">The region both halves walk - the whole file, this shape being restricted
     /// to a fresh run.</param>
+    /// <param name="expectedStart">The number the book is expected to open on
+    /// (<c>--expected-start-chapter</c>, defaulting to 1), which decides whether the head keeps an
+    /// upper bound at all.</param>
     internal static List<DetectionRegion> UnsettledStretches(
-        IReadOnlyList<DetectedChapter> found, DetectionRegion region)
+        IReadOnlyList<DetectedChapter> found, DetectionRegion region, int expectedStart)
     {
         var chapters = found.OrderBy(c => c.TimeSeconds).ToList();
         if (chapters.Count == 0)
@@ -174,8 +188,11 @@ internal static class JingleFirstScan
 
         var stretches = new List<DetectionRegion>();
         // The head: bounded above by the first chapter found and below by whatever the region was
-        // seeded with, which for a fresh run's whole-file region is "nothing known yet".
-        Add(region.FromSeconds, chapters[0].TimeSeconds, region.LowerNumber, chapters[0], region.Sequence);
+        // seeded with, which for a fresh run's whole-file region is "nothing known yet" - except
+        // where that first chapter is the expected start, which bounds the head to nothing at all
+        // and shuts out a previous part's closing chapters. See the remarks.
+        Add(region.FromSeconds, chapters[0].TimeSeconds, region.LowerNumber,
+            chapters[0].Number == expectedStart ? null : chapters[0], region.Sequence);
         for (var i = 1; i < chapters.Count; i++)
         {
             var (below, above) = (chapters[i - 1], chapters[i]);

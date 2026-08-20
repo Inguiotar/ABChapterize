@@ -8129,6 +8129,47 @@ public sealed class ChapterDetectorTests : IDisposable
         AssertNamed([("prologue", "Prologue", 53)], result);
     }
 
+    /// <summary>
+    /// The head stretch is open at the top - it has to be, or a previous part's closing chapters
+    /// could never be found in front of a chapter 1 - and this is what stops that openness costing
+    /// anything: the head cannot accept a second copy of the very chapter that closes it. Nothing
+    /// about the numbering prevents it, since an open head admits chapter 1 as readily as any other
+    /// number. What prevents it is that a probe window is clamped to its region's end
+    /// (<c>RegionProber.WindowEndFor</c>), and a head stretch ends at the closing chapter's mark,
+    /// one --mark-lead ahead of its announcement's first word.
+    /// <para>
+    /// Built so the clamp is the only thing in the way, and verified to be by removing it: the
+    /// candidate at 95-98 asks for a 25 s window, which the clamp cuts to 14.8 s ending at 109.8,
+    /// just short of the announcement at 110. Pass <c>double.MaxValue</c> for the region end
+    /// instead and the window runs to 120, reads the announcement, and a second "chapter 1
+    /// detected" is logged - placed "at a silence" where the first was "at a jingle".
+    /// </para>
+    /// <para>
+    /// Asserting on the log rather than on the result is deliberate: the duplicate resolves to the
+    /// same position here, so <see cref="DetectionResult.Chapters"/> is identical either way and
+    /// would not catch it. On a real book the two positions have no reason to agree.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task JingleFirst_TheHeadStretchCannotReAcceptTheChapterThatClosesIt()
+    {
+        var (result, log, audio) = await DetectWithLogAsync(
+            Options("--verbose"),
+            [new(95, 98)],
+            s =>
+            {
+                s.Add(102, Seg(8, " Chapter one."));
+                s.Add(1002, Seg(8, " Chapter two."));
+            },
+            new FakeVad { Speech = [new(0, 100), new(110, 1000), new(1010, 3600)] });
+
+        // The head really was walked - without this the test would pass by never looking.
+        Assert.Contains(audio.DecodeStarts, d => d is >= 95 and < 109);
+        Assert.Contains(log, l => l.Contains("before every chapter found and open at the top"));
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Equal(1, log.Count(l => l.Contains("chapter 1 detected")));
+    }
+
     /// <summary>And the epilogue, which is why it walks the tail.</summary>
     [Fact]
     public async Task JingleFirst_StillFindsAnEpilogueAfterTheLastChapter()

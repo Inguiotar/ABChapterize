@@ -622,7 +622,8 @@ public sealed class ChapterDetector
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
         double bytesPerSecond, CancellationToken ct)
     {
-        var stretches = JingleFirstScan.UnsettledStretches(found, region);
+        var stretches = JingleFirstScan.UnsettledStretches(
+            found, region, _options.ExpectedStartChapter ?? 1);
         var stretchSeconds = stretches.Sum(s => s.ToSeconds - s.FromSeconds);
         _log?.Invoke(
             $"J-probe finished, {found.Count} chapter(s) out of the music - " +
