@@ -604,7 +604,9 @@ public sealed class ProgressRenderer : IDisposable
         // by the time it runs, so a count there would be a number nothing can change any more.
         var finishing = slot.Tracker.PhaseName == PhaseNames.Finish;
 
-        var spans = new List<ColoredSpan>(11);
+        // Indented by the same single space the bar line opens with, so the two lines of the block
+        // start on one column rather than the lower one hanging a step to the left of the bar.
+        var spans = new List<ColoredSpan>(12) { new(" ", null) };
         if (slot.Tracker.PhaseLabel is { Length: > 0 } phaseLabel)
         {
             spans.Add(new(phaseLabel, Palette.Phase));

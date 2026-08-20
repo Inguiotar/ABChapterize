@@ -84,7 +84,7 @@ public class ProgressRendererTests
         Assert.Equal(
             " [####################--------------------]  50% ",
             ConsoleColors.PlainText(block[0]));
-        Assert.Equal("Analyzing... | ch 6 | 0:00 | book.m4b", ConsoleColors.PlainText(block[1]));
+        Assert.Equal(" Analyzing... | ch 6 | 0:00 | book.m4b", ConsoleColors.PlainText(block[1]));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class ProgressRendererTests
         t.SetPhaseProgress(50);
         t.HighestChapters = [6];
 
-        Assert.Equal("Finishing... | 0:00 | book.m4b", Status((t, "book.m4b")));
+        Assert.Equal(" Finishing... | 0:00 | book.m4b", Status((t, "book.m4b")));
     }
 
     [Fact]
@@ -209,7 +209,7 @@ public class ProgressRendererTests
         var t = new WorkTracker();
         t.BeginPhase(PhaseNames.Scan, 100);
 
-        Assert.StartsWith("Scanning... |", Status((t, "book.m4b")));
+        Assert.StartsWith(" Scanning... |", Status((t, "book.m4b")));
     }
 
     [Fact]
@@ -220,13 +220,13 @@ public class ProgressRendererTests
         var t = new WorkTracker();
         t.BeginPhase(PhaseNames.Probe, 100);
         t.SetPhaseProgress(40);
-        Assert.StartsWith("Probing... |", Status((t, "book.m4b")));
+        Assert.StartsWith(" Probing... |", Status((t, "book.m4b")));
 
         t.PhaseRevisiting = true;
-        Assert.StartsWith("Probing... (<<) |", Status((t, "book.m4b")));
+        Assert.StartsWith(" Probing... (<<) |", Status((t, "book.m4b")));
 
         t.PhaseRevisiting = false;
-        Assert.StartsWith("Probing... |", Status((t, "book.m4b")));
+        Assert.StartsWith(" Probing... |", Status((t, "book.m4b")));
     }
 
     [Fact]
@@ -257,7 +257,7 @@ public class ProgressRendererTests
         t.Relabel(PhaseNames.SubFloorProbe);
 
         Assert.Equal(PhaseNames.SubFloorProbe, t.PhaseName);
-        Assert.StartsWith("SF-probing... |", Status((t, "book.m4b")));
+        Assert.StartsWith(" SF-probing... |", Status((t, "book.m4b")));
         Assert.Equal(0.4, t.Fraction, 6);
         Assert.Equal((10L, 20L), t.RegionSpan);
     }
@@ -322,7 +322,7 @@ public class ProgressRendererTests
 
         Assert.All(spans.Where(s => s.Text == " | "), s => Assert.Equal(ConsoleColor.DarkGray, s.Color));
         // The phase leads the status line and the file name closes it.
-        Assert.Equal("Analyzing... | ch 6 | 0:00 | book.m4b", ConsoleColors.PlainText(spans));
+        Assert.Equal(" Analyzing... | ch 6 | 0:00 | book.m4b", ConsoleColors.PlainText(spans));
     }
 
     [Fact]
