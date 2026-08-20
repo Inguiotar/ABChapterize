@@ -45,6 +45,14 @@
     reconsidered independently of one another.
     </para>
     <para>
+    <b>Confirmed inert on real audio</b> (build 365 against the build-350 reference, same machine,
+    the 30-minute <c>ddm-jf.m4b</c> head clip of "Die Dritte Macht"): both marks identical -
+    0:03:07.24 at confidence 0.57 / -65.8 dBFS and 0:23:43.05 at 0.61 / -73.7 dBFS, every digit the
+    same - on <b>14 probes against 14</b>, with the head stretch now reading "open at the top" where
+    it read "below chapter 1" and no upper-bound rejection logged anywhere. So the openness costs
+    neither a mark nor a probe on the shape it changes.
+    </para>
+    <para>
     <b>Not exercised by any corpus book.</b> The condition fires on all nine jingle-first books
     (every one of them has the jingle half find chapter 1 first), but the defect it fixes needs a
     file whose head holds a previous part's chapters - a multi-part book whose earlier parts carry
