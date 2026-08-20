@@ -948,6 +948,42 @@ Options taking a decimal number accept either separator — `-n 2.5` and
 habits produce. Numbers the tool *prints* always use `.`, on every machine,
 so that logs and reports stay comparable regardless of regional settings.
 
+### Options from a file
+
+`--config <path>`
+: Read options from a file instead of typing them every time. Each line holds
+  one option, written exactly as you would type it on the command line:
+
+  ```
+  # settings for my German science-fiction shelf
+  --lang de
+  --model turbo
+  --chapter-phrase /^kapitel ()/
+  --custom [de,before-first,once]/^zeittafel/:Zeittafel
+  ```
+
+  Everything after the option name is its argument, so a phrase or a mapping
+  needs no quoting however many spaces it contains. If you leave the quotes on
+  — pasting a line straight out of your shell history usually does — one
+  surrounding layer is stripped; `""` is therefore how you write an argument
+  that is meant to be empty. Blank lines and lines starting with `#` are
+  ignored.
+
+  An option you type on the command line always wins over the same option in a
+  file, no matter where `--config` stands among your arguments. Options that
+  are meant to be given more than once — `--custom` and `--chapter-phrase` —
+  accumulate instead of replacing each other, the file's entries first.
+
+  `--config` may be given more than once, in which case later files win over
+  earlier ones, and a config file may pull in another with a `--config` line of
+  its own; a path there is relative to the file naming it, so a set of configs
+  that reference each other keeps working wherever you run the tool from. A
+  file that ends up including itself is reported rather than followed.
+
+  Only options belong in a config file. The files and directories to process
+  stay on the command line, and a line that is not an option is an error naming
+  the line it is on.
+
 ### Target selection
 
 `<file-or-directory>...` (required, last arguments)

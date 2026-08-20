@@ -1003,6 +1003,9 @@ public sealed class CliOptions
     /// <exception cref="CliError">Thrown on any syntax or validation error.</exception>
     public static CliOptions? Parse(string[] args)
     {
+        // Before anything reads args: a --config file's options are the same options, so they are
+        // spliced in and then parsed by the code below like any others (see ConfigFile.Expand).
+        args = ConfigFile.Expand(args);
         var o = new CliOptions();
         var i = 0;
         var targetArgs = new List<string>();
@@ -1401,6 +1404,11 @@ public sealed class CliOptions
             case "--named-mark-distance": NamedMarkDistanceSeconds = ParseNamedMarkDistance(nextParam()); _namedMarkDistanceSet = true; return true;
             case "--custom": _customMappings.AddRange(CustomMappingParser.ParseSpec(nextParam())); return true;
             case "--custom-file": _customMappings.AddRange(CustomMappingParser.ParseFile(nextParam())); return true;
+            // Already applied: ConfigFile.Expand read the file and put its options in front of this
+            // command line before parsing began. Accepted here only so that the option is known -
+            // which is what subjects it to RejectTrailingOption and keeps --help answerable when the
+            // file is broken. Its parameter is consumed and discarded.
+            case ConfigFile.Option: nextParam(); return true;
             case "--filter": ParseFilter(nextParam()); return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--noise-floor": (NoiseFloorDb, AutoNoiseFloor) = ParseNoiseFloor(nextParam()); _noiseFloorSet = true; return true;
@@ -1867,6 +1875,20 @@ public sealed class CliOptions
         still only processed once.
 
         Options (must precede the file/directory arguments):
+
+              --config <path>       Read options from a file: one option per line, written
+                                    exactly as you would type it, with everything after the
+                                    option name taken as its argument - so a phrase or a
+                                    mapping needs no quoting. One layer of surrounding
+                                    double quotes is stripped if you leave it on, which is
+                                    also how an empty argument is written (""). Blank lines
+                                    and lines starting with "#" are ignored, and a config
+                                    file may name another with --config of its own (paths
+                                    then relative to the file naming it). May be given more
+                                    than once. An option you type on the command line always
+                                    wins over the same option in a file, wherever --config
+                                    stands; options that are meant to be repeated, such as
+                                    --custom and --chapter-phrase, accumulate instead.
 
         File selection:
           -r, --recurse             Recursively descend into subdirectories (directories only).

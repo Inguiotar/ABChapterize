@@ -222,6 +222,10 @@ Run `abchapterize --help` for a quick reference, or see the
 [what is kept and what is stripped](doc/manual.md#5-what-is-kept-and-what-is-stripped)
 when chapters are written. Grouped below exactly as `--help` groups them:
 
+| Option | What it does |
+| --- | --- |
+| `--config <path>` | Read options from a file, one per line, written as you would type them. Anything you also type on the command line wins. |
+
 **File selection**
 
 | Option | What it does |
