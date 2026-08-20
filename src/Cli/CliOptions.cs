@@ -500,7 +500,6 @@ public sealed class CliOptions
     /// qualifying book, that is a defect in the gate rather than an option the user should have to
     /// find.
     /// </para>
-    /// <para><b>Experimental.</b></para>
     /// </summary>
     public bool JingleFirst { get; private set; }
 
@@ -1996,13 +1995,13 @@ public sealed class CliOptions
                                     be. Without this option, the mark is always placed
                                     --mark-lead seconds before the chapter phrase, no matter
                                     what precedes it.
-              --jingle-first        [EXPERIMENTAL] Read this book's music first and its pauses
-                                    afterwards. Probe normally walks both together, in one
-                                    sweep through the file; with this it probes every jingle
-                                    first, then looks at the pauses only where the chapter
-                                    sequence still has a hole, plus before the first chapter
-                                    found and after the last - which is where a prologue and
-                                    an epilogue are. On a book that announces every chapter
+              --jingle-first        Read this book's music first and its pauses afterwards.
+                                    Probe normally walks both together, in one sweep through
+                                    the file; with this it probes every jingle first, then
+                                    looks at the pauses only where the chapter sequence
+                                    still has a hole, plus before the first chapter found
+                                    and after the last - which is where a prologue and an
+                                    epilogue are. On a book that announces every chapter
                                     after a music sting, the pauses in between can only
                                     confirm what the music already said, and skipping them
                                     saves a great deal of time. This shape is chosen by

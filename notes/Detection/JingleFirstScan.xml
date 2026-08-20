@@ -9,9 +9,21 @@
     bought no mark at all.
     </para>
     <para>
-    <b>Experimental (0.12.1).</b> The corpus evidence for the shape is strong on the books it targets
-    and there is none at all for the books it does not, which is what <c>--jingle-first</c> is for -
-    it forces the shape on so a book outside the gate can be measured without rebuilding the tool.
+    <b>What it is worth, measured on the corpus at builds 362 and 366</b> (against the frozen
+    build-341 baseline, same two command lines both times). The corpus splits cleanly and the two
+    shapes are mutually exclusive: nine of the seventeen books read their music first, eight skim
+    their longest pauses first, 17 of 17 accounted for. Across those nine this shape is worth
+    <b>-63:01 of wall clock, -32.9 %</b>, with the extremes at "Die Dritte Macht" 37:09 -&gt; 19:35
+    and BARDIOC 28:58 -&gt; 12:34 - both for marks identical to the millisecond. Exactly one mark on
+    a jingle book moved at all, Stalker chapter 24 by <b>+30 ms</b>, which is the transcript overlap
+    cache filling differently when candidates are visited out of file order (the same mechanism moved
+    Rendezvous With Rama's chapter 23 under the descending shape); under a third of one search step,
+    and it reads marginally better, so it stands in the refreshed baseline.
+    </para>
+    <para>
+    What still has no evidence behind it is the books the gate turns <em>down</em> - which is what
+    <c>--jingle-first</c> is for: it forces the shape on so such a book can be measured without
+    rebuilding the tool.
     </para>
     <para>
     <b>Why leaving the head open at the top costs nothing</b> (2026-08-20, measured over the

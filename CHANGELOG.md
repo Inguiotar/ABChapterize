@@ -54,11 +54,11 @@ earn a round number.
   being the one thing the shape would stop looking for. A mapping restricted to
   `before-first-chapter` or `after-last-chapter` costs nothing.
 
-  **Experimental.** `--jingle-first` asks for the shape on any file, including one that
-  qualifies for neither reason; it cannot be combined with `--ignore-chapter-numbers`,
-  which leaves no chapter sequence to scope the second half by. `--verbose` says which
-  shape a file ran under, and the progress bar shows the two halves as phases of their
-  own, `J-probing...` and `S-probing...`.
+  `--jingle-first` asks for the shape on any file, including one that qualifies for
+  neither reason; it cannot be combined with `--ignore-chapter-numbers`, which leaves no
+  chapter sequence to scope the second half by. `--verbose` says which shape a file ran
+  under, and the progress bar shows the two halves as phases of their own, `J-probing...`
+  and `S-probing...`.
 
 - **Books with no jingles now read their longest pauses first, which saves time on a long
   file.** Chapters are announced after a book's longer pauses, and the pauses it announces
@@ -77,8 +77,8 @@ earn a round number.
   A file takes this shape by itself when it is not already being read music-first and none
   of your own `--custom` mappings may be announced between two chapters. It is skipped
   where `--min-silence-length` was given explicitly, that being you naming the pauses worth
-  probing. **Experimental.** `--verbose` says which shape a file ran under, and the skim is a
-  phase of its own, `SD-probing...` — which is not a progress bar, having a position in the file but
+  probing. `--verbose` says which shape a file ran under, and the skim is a phase of its
+  own, `SD-probing...` — which is not a progress bar, having a position in the file but
   no notion of how far along it is. It shows a single `X` moving about the track as it reads,
   and counts the locations it has looked at where the percentage would be.
 

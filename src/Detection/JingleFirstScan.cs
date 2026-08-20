@@ -32,12 +32,13 @@ namespace ABChapterize.Detection;
 /// front matter.
 /// </para>
 /// <para>
-/// Experimental (0.12.1). The corpus evidence for the shape is strong on the books it targets and
-/// there is none at all for the books it does not, which is what <c>--jingle-first</c> is for: it
-/// forces the shape on so a book outside the gate can be measured without rebuilding the tool.
+/// What the gate admits is measured; what it turns down is not, and that asymmetry is the whole
+/// reason <c>--jingle-first</c> exists - it forces the shape on so a book outside the gate can be
+/// measured without rebuilding the tool.
 /// </para>
 /// </summary>
-/// <remarks>Notes: the two builds that proved the skipped pause windows bought nothing.
+/// <remarks>Notes: what the shape is worth on the corpus, and the two builds that proved the
+/// skipped pause windows bought nothing.
 /// <include file='../../notes/Detection/JingleFirstScan.xml' path='doc/member[@name="JingleFirstScan"]/*' /></remarks>
 internal static class JingleFirstScan
 {

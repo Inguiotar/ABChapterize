@@ -44,11 +44,33 @@
     cache and nothing else.
     </para>
     <para>
-    <b>Not yet measured on the corpus.</b> The replay above says where chapter pauses rank in a
-    ranking; it does not say what a window framed by a different neighbour turns out to read, and the
-    second half plans its windows inside a stretch rather than across the file. The next corpus run is
-    the real test, and the blast-radius grep in the VAD-drift note bounds what can move on the
-    placement side but not what a differently framed window may say.
+    <b>What it is worth, measured on the corpus at builds 362 and 366</b>, which is the answer to the
+    "not yet measured" note this replaces. Eight of the seventeen books take this shape; across the
+    seven it can help (Mort excluded) it is worth <b>-15:04 of wall clock, -11.6 %</b>, on the same
+    499 marks and with no <c>.missing-marks</c> anywhere. The relation is near-linear at <b>~1.2 s of
+    wall clock per window probe avoided</b>, and it shrinks <em>window</em> probes only - refinement
+    probes are untouched (Rendezvous With Rama 872 -&gt; 871, Corsa 1105 -&gt; 1099, and exactly
+    identical on I Shall Wear Midnight, The Philosopher's Stone and Paula Monti). So a book's saving
+    is capped by how much of its work is window probing, which is why the cheap predictor for a new
+    book is how far its candidate list collapses under the file-order gate rather than how well its
+    chapters rank.
+    </para>
+    <para>
+    <b>Both hazards the class doc named turned out real in mechanism and small in effect.</b> The
+    overlap cache did move a mark - Rendezvous With Rama chapter 23 by <b>-32 ms</b>, under a third
+    of one search step and reading marginally better, so it stands in the refreshed baseline. A
+    stretch closed on a misread number never happened. What did happen was a differently framed
+    window: De vandrande djaeknarne chapter 11 landed 4.8 s late through four mechanisms lining up,
+    none of them a misread number, fixed at build 364 (see
+    <see cref="DetectionTuning.MarkInsideSpeechSeconds"/>). Build 366 then differs from 362 by one
+    line in the whole corpus, with every per-book probe count identical.
+    </para>
+    <para>
+    <b>Mort is the one book the shape costs, and that is accepted</b> (the user's call, 2026-08-20):
+    2:24 -&gt; 4:29. The skim visits candidates out of file order, so <c>--early-abort</c>, which
+    measures play time from the file start, cannot fire until the skim gives up. About two minutes on
+    the corpus's one book with no chapter announcements at all, against 76 minutes saved across the
+    run.
     </para>
   </member>
 </doc>

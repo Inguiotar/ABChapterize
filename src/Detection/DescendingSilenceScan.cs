@@ -36,15 +36,15 @@ namespace ABChapterize.Detection;
 /// re-probe, which this shape keeps.
 /// </para>
 /// <para>
-/// Experimental (0.12.1), with no corpus run behind it yet - only a replay of the frozen build-341
-/// logs, which says where a book's chapter-bearing pauses rank in its own list and nothing about
-/// what a window turns out to read. Two things can still move a mark on a real book: a stretch
-/// closed on a misread number, and the transcript overlap cache, which a walk that visits candidates
-/// out of order fills differently - so a window may be served fresh here where it was served from
-/// cache before, or the reverse.
+/// One thing about the shape does move a mark, and it is on the record rather than forecast: the
+/// transcript overlap cache, which a walk visiting candidates out of file order fills differently,
+/// so a window may be served fresh here where it was served from cache before, or the reverse. It
+/// is worth a sub-step. The other hazard the shape carries - a stretch closed on a misread number -
+/// is what the sequence gap re-probe it keeps is there for.
 /// </para>
 /// </summary>
-/// <remarks>Notes: where the corpus's chapter pauses rank, and what the shape costs on the books it cannot help.
+/// <remarks>Notes: what the shape is worth on the corpus, where its chapter pauses rank, and what
+/// it costs on the books it cannot help.
 /// <include file='../../notes/Detection/DescendingSilenceScan.xml' path='doc/member[@name="DescendingSilenceScan"]/*' /></remarks>
 internal static class DescendingSilenceScan
 {

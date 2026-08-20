@@ -172,17 +172,17 @@ assumed.
 
 #### Reading the music first
 
-**Experimental (0.12.1).** On a book that announces every chapter after a music
-sting, the pauses in between can only ever confirm what the music already said —
-and there are thousands of them. Such a file is probed in two halves instead of
-one sweep: every jingle first, in order, and only then the pauses, and only
-where they can still be carrying something. That is any stretch of the file
-where the chapter numbering still has a hole, everything before the first
-chapter found, and everything after the last — so a prologue and an epilogue are
-still looked for exactly where they belong. The pauses between two chapters
-whose numbers already run consecutively are the ones that are skipped, and
-nothing else can be announced there: there is no number left for a chapter to
-carry, and neither a prologue nor an epilogue may sit there.
+On a book that announces every chapter after a music sting, the pauses in
+between can only ever confirm what the music already said — and there are
+thousands of them. Such a file is probed in two halves instead of one sweep:
+every jingle first, in order, and only then the pauses, and only where they
+can still be carrying something. That is any stretch of the file where the
+chapter numbering still has a hole, everything before the first chapter found,
+and everything after the last — so a prologue and an epilogue are still looked
+for exactly where they belong. The pauses between two chapters whose numbers
+already run consecutively are the ones that are skipped, and nothing else can
+be announced there: there is no number left for a chapter to carry, and
+neither a prologue nor an epilogue may sit there.
 
 A file gets this shape by itself when it has at least one jingle per hour of
 play time — unless one of your own [`--custom`](#custom-marks) mappings may be
@@ -199,14 +199,14 @@ ordinary file walks both together and stays `Probe` throughout.
 
 #### Reading the longest pauses first
 
-**Experimental (0.12.1).** A book with no chapter music announces its chapters
-after its pauses — and it has a hundred pauses that announce nothing for every
-one that does. Such a file is skimmed once through before probing proper, taking
-its pauses longest first, purely to find out roughly where its chapters are.
-`SC-probe` then reads the file in order as probing always has, but passes over
-every pause that lies between two chapters whose numbers already run consecutively:
-nothing else can be announced there, for the same reason as above. Nothing read
-during the skim is read a second time.
+A book with no chapter music announces its chapters after its pauses — and it
+has a hundred pauses that announce nothing for every one that does. Such a
+file is skimmed once through before probing proper, taking its pauses longest
+first, purely to find out roughly where its chapters are. `SC-probe` then
+reads the file in order as probing always has, but passes over every pause
+that lies between two chapters whose numbers already run consecutively:
+nothing else can be announced there, for the same reason as above. Nothing
+read during the skim is read a second time.
 
 The skim stops by itself as soon as the pauses get too short to be this book's
 chapter breaks, and on a file that announces nothing at all it gives up having
@@ -1227,17 +1227,16 @@ checkpoint remembers the command line, not the folders' contents.
   precedes it.
 
 `--jingle-first`
-: **Experimental.** Read this book's music first and its pauses afterwards, in
-  two halves rather than one sweep — see
-  [Reading the music first](#reading-the-music-first) for what the second half
-  still looks at and why the rest can be skipped. A file with at least one
-  jingle per hour of play time takes this shape by itself, unless one of your
-  own [`--custom`](#custom-marks) mappings may be announced between two
-  chapters; this option asks for it regardless, which is what makes a book
-  outside that description measurable without changing anything else. It cannot
-  be combined with `--ignore-chapter-numbers`, which leaves no chapter sequence
-  for the second half to be scoped by. `--verbose` says which shape a file ran
-  under.
+: Read this book's music first and its pauses afterwards, in two halves rather
+  than one sweep — see [Reading the music first](#reading-the-music-first) for
+  what the second half still looks at and why the rest can be skipped. A file
+  with at least one jingle per hour of play time takes this shape by itself,
+  unless one of your own [`--custom`](#custom-marks) mappings may be announced
+  between two chapters; this option asks for it regardless, which is what
+  makes a book outside that description measurable without changing anything
+  else. It cannot be combined with `--ignore-chapter-numbers`, which leaves no
+  chapter sequence for the second half to be scoped by. `--verbose` says which
+  shape a file ran under.
 
 `-k`, `--mark-lead <seconds>`
 : How far in front of the announcement a mark is placed; default 0.35.
