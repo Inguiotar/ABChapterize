@@ -271,10 +271,10 @@ Mark placement supplies one more reading of the number, at no extra cost. Unless
 (see below) means transcribing it several times over in short windows framed on
 the announcement itself, and those windows read a spoken number more reliably
 than the long one that found the chapter — the same audio can come back as
-"chapter forty" from a 45-second window and "chapter fourteen" from every window
-under seven. When those readings agree clearly with one another, disagree with
-the number in hand, and offer one that fits the sequence, the mark is recorded
-under theirs. `--verbose` reports the correction.
+"chapter forty" from a 45-second window and "chapter fourteen" from every
+window under seven seconds long. When those readings agree clearly with one
+another, disagree with the number in hand, and offer one that fits the
+sequence, the mark is recorded under theirs. `--verbose` reports the correction.
 
 Where a chapter announcement is found, the mark is placed a fixed lead-in
 before it — 0.35 seconds by default, `--mark-lead` — no matter what precedes
@@ -980,8 +980,11 @@ so that logs and reports stay comparable regardless of regional settings.
   `--config` may be given more than once, in which case later files win over
   earlier ones, and a config file may pull in another with a `--config` line of
   its own; a path there is relative to the file naming it, so a set of configs
-  that reference each other keeps working wherever you run the tool from. A
-  file that ends up including itself is reported rather than followed.
+  that reference each other keeps working wherever you run the tool from. Two
+  of them may pull in the same third one — a shared base being the usual reason
+  to nest them at all — and it is then read once rather than twice, so the
+  options in it that accumulate are not doubled. A file that ends up including
+  *itself*, directly or through another, is reported rather than followed.
 
   Only options belong in a config file. The files and directories to process
   stay on the command line, and a line that is not an option is an error naming
@@ -1127,7 +1130,10 @@ checkpoint remembers the command line, not the folders' contents.
   self-tightens the probing threshold to 75% of the *shortest* anchor
   silence observed so far as chapters are found at a pause (set at the second
   such mark, only ever lowered after that; chapters found at a jingle teach it
-  nothing — see [Probe](#probe--short-windows-where-a-chapter-could-start)), re-probing everything it skipped
+  nothing, and neither does one recovered from a gap at a pause so short that the
+  figure would land on the floor below — that one is kept for the gap passes
+  alone, a chapter the main scan missed being the least representative break in
+  the book — see [Probe](#probe--short-windows-where-a-chapter-could-start)), re-probing everything it skipped
   whenever a sequence gap turns up, so far fewer Whisper probes are needed
   without a fixed guess. Should that figure come out *below* the 1.5-second
   starting point — a narrator whose chapter breaks are shorter than the
@@ -3039,6 +3045,10 @@ that piece is picked out in dark cyan inside the bar, so a fill that stops short
 or runs backwards can be read against the stretch it belongs to. Where the whole
 bar covers one such piece, as `Scanning...` always does, all of it is dark cyan:
 the bar is then a map of that stretch and not of the book.
+
+Under `--verify` the bar shows `Verifying...` instead of the detection phases
+above: that mode reads the marks the file already carries rather than looking
+for new ones, so it steps through those rather than through the file.
 
 Once detection finishes, the bar switches to a final `Finishing...` phase while
 the chapter marks are written into the file — worth watching on a large

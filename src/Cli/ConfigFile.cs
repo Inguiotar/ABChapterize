@@ -55,10 +55,13 @@ internal static class ConfigFile
         // which needs the arity of every option - a second parser, and the one thing this design is
         // built to avoid.
         var rest = new List<string>();
-        // Full paths of the files already expanded, so a cycle is reported rather than followed.
-        // A set of files that cannot repeat also cannot nest for ever, so this is the whole of the
-        // recursion guard - no separate depth cap is needed.
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Full paths of the files already expanded, so a file reached twice is taken once. A set
+        // that cannot repeat also cannot nest for ever, so this is the whole of the depth guard -
+        // no separate cap is needed. Being reached twice is not by itself an error, though: see
+        // ExpandInto for the difference between that and a cycle.
+        var expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // The chain currently being expanded, innermost last. Only a file already on it is a cycle.
+        var chain = new List<string>();
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -68,7 +71,7 @@ internal static class ConfigFile
             if (i + 1 >= args.Length)
                 throw new CliError($"Option {Option} requires a parameter.");
             rest.Add(args[++i]);
-            ExpandInto(args[i], fromFiles, visited, Option);
+            ExpandInto(args[i], fromFiles, expanded, chain, Option);
         }
 
         return [.. fromFiles, .. rest];
@@ -78,9 +81,11 @@ internal static class ConfigFile
     /// <c>--config</c> of its own.</summary>
     /// <param name="path">Path of the file to read, as written by whoever named it.</param>
     /// <param name="into">Accumulator for the expanded option tokens.</param>
-    /// <param name="visited">Full paths already expanded; see <see cref="Expand"/>.</param>
+    /// <param name="expanded">Full paths already expanded; see <see cref="Expand"/>.</param>
+    /// <param name="chain">Full paths of the files this one is nested inside, innermost last.</param>
     /// <param name="where">How to name the including context in an error message.</param>
-    private static void ExpandInto(string path, List<string> into, HashSet<string> visited, string where)
+    private static void ExpandInto(
+        string path, List<string> into, HashSet<string> expanded, List<string> chain, string where)
     {
         string full;
         try
@@ -91,10 +96,39 @@ internal static class ConfigFile
         {
             throw new CliError($"Cannot read {where} \"{path}\": {ex.Message}");
         }
-        if (!visited.Add(full))
+        // Two different questions, and conflating them cost a real command line: a file already on
+        // the chain being expanded is a cycle and cannot be followed, while a file merely expanded
+        // somewhere else is a diamond - two configs sharing a common base - which is the ordinary
+        // way to write a set of them. The diamond is honoured by taking the base once rather than
+        // twice, so its repeatable options are not silently doubled.
+        if (chain.Contains(full, StringComparer.OrdinalIgnoreCase))
             throw new CliError(
                 $"Config file \"{path}\" includes itself, directly or through another config file.");
+        if (!expanded.Add(full))
+            return;
 
+        chain.Add(full);
+        try
+        {
+            ReadInto(full, path, into, expanded, chain, where);
+        }
+        finally
+        {
+            chain.RemoveAt(chain.Count - 1);
+        }
+    }
+
+    /// <summary>Reads one already-vetted config file, resolving any <c>--config</c> line in it.</summary>
+    /// <param name="full">The file's full path, used to resolve a nested path against its folder.</param>
+    /// <param name="path">The path as written, for error messages.</param>
+    /// <param name="into">Accumulator for the expanded option tokens.</param>
+    /// <param name="expanded">Full paths already expanded; see <see cref="Expand"/>.</param>
+    /// <param name="chain">Full paths of the files this one is nested inside, innermost last.</param>
+    /// <param name="where">How to name the including context in an error message.</param>
+    private static void ReadInto(
+        string full, string path, List<string> into,
+        HashSet<string> expanded, List<string> chain, string where)
+    {
         string[] lines;
         try
         {
@@ -122,7 +156,7 @@ internal static class ConfigFile
                         $"Option {Option} requires a parameter (config file \"{path}\", line {n + 1}).");
                 var dir = Path.GetDirectoryName(full);
                 var nested = dir is null ? tokens[1] : Path.Combine(dir, tokens[1]);
-                ExpandInto(nested, into, visited, $"config file \"{path}\", line {n + 1}");
+                ExpandInto(nested, into, expanded, chain, $"config file \"{path}\", line {n + 1}");
                 continue;
             }
             into.AddRange(tokens);

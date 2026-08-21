@@ -702,7 +702,22 @@ public sealed partial class FfmpegClient : IAudioSource
     /// <summary>Kills a process, ignoring races with normal termination.</summary>
     private static void TryKill(Process proc)
     {
-        try { proc.Kill(entireProcessTree: true); } catch { /* already exited */ }
+        try
+        {
+            // The ordinary case is a process that finished on its own between the cancellation and
+            // this callback, and asking first keeps that out of the catch entirely. What remains is
+            // a genuine failure to kill ffmpeg, which is worth not pretending is the ordinary case:
+            // a survivor holds the audiobook open, and the next run on that file is what discovers
+            // it. Still swallowed rather than thrown - this runs from a cancellation callback, on
+            // whichever thread cancelled, where an exception has nowhere to go and would replace
+            // the reason for the cancellation with a report about the cleanup.
+            if (!proc.HasExited)
+                proc.Kill(entireProcessTree: true);
+        }
+        catch (Exception)
+        {
+            /* nowhere to report it from here - see above */
+        }
     }
 
     /// <summary>Deletes a file if it exists, ignoring any error.</summary>

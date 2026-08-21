@@ -1918,6 +1918,13 @@ public sealed class CliOptions
                                     wins over the same option in a file, wherever --config
                                     stands; options that are meant to be repeated, such as
                                     --custom and --chapter-phrase, accumulate instead.
+                                    A folder can also carry its own settings with no option at
+                                    all: a ".abchapterize-config" in it, same format, applies to
+                                    every book in that folder, and a ".abchapterize-custom"
+                                    beside it is read as --custom mappings. These layer from the
+                                    outside in and the command line still wins; only folders the
+                                    run reached through are read, and only options that change
+                                    how a book is read may appear in one. See the manual.
 
         File selection:
           -r, --recurse             Recursively descend into subdirectories (directories only).

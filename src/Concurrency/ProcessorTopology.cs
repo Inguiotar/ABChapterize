@@ -181,9 +181,14 @@ internal static class ProcessorTopology
                 package = value;
             else if (key == "core id")
                 core = value;
-            if (package != null && core != null)
+            // Only "core id" is required, for the same reason LinuxCoreCount defaults a missing
+            // topology/physical_package_id to 0: a single-socket machine may name no package at
+            // all, and demanding one here counted its cores as zero and silently fell back to the
+            // logical count - one thread per hyperthread, on exactly the small single-socket ARM
+            // boards this path exists to serve.
+            if (core != null)
             {
-                cores.Add($"{package}/{core}");
+                cores.Add($"{package ?? "0"}/{core}");
                 package = core = null;
             }
         }

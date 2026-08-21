@@ -135,6 +135,35 @@ public sealed class ConfigFileTests : IDisposable
         Assert.True(o.Verbose);
     }
 
+    /// <summary>
+    /// Two config files pulling in a common base is the ordinary way to write a set of them, and
+    /// until build 375 it was refused with "includes itself" - which was not what had happened.
+    /// The base is taken once, so its repeatable options are not doubled either.
+    /// </summary>
+    [Fact]
+    public void TwoFiles_SharingABase_TakeItOnce_RatherThanReportingACycle()
+    {
+        File.WriteAllLines(Path.Combine(_dir, "base.cfg"), ["--custom /^zeittafel/:Zeittafel"]);
+        var first = Config("first.cfg", "--config base.cfg", "--mark-lead 0.5");
+        var second = Config("second.cfg", "--config base.cfg", "--verbose");
+        var o = ParseFile("--config", first, "--config", second)!;
+        Assert.Equal(0.5, o.MarkLeadSeconds);
+        Assert.True(o.Verbose);
+        Assert.Single(o.CustomMappings);
+    }
+
+    /// <summary>A cycle two files long is still a cycle, which the chain check has to see even
+    /// though neither file names itself directly.</summary>
+    [Fact]
+    public void TwoFiles_IncludingEachOther_AreReported()
+    {
+        File.WriteAllLines(Path.Combine(_dir, "ping.cfg"), ["--config pong.cfg"]);
+        File.WriteAllLines(Path.Combine(_dir, "pong.cfg"), ["--config ping.cfg"]);
+        var ex = Assert.Throws<CliError>(
+            () => ParseFile("--config", Path.Combine(_dir, "ping.cfg")));
+        Assert.Contains("includes itself", ex.Message);
+    }
+
     [Fact]
     public void AFile_ThatIncludesItself_IsReported_RatherThanFollowed()
     {

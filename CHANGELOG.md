@@ -38,7 +38,8 @@ earn a round number.
   a `--custom` mapping needs no quoting; blank lines and `#` comments are ignored. What
   you type on the command line always beats the same option in a file, wherever `--config`
   stands, while options meant to be repeated — `--custom`, `--chapter-phrase` — accumulate.
-  The option may be given more than once, and a config file may pull in another.
+  The option may be given more than once, and a config file may pull in another —
+  including one that two of them share, which is read once rather than twice.
 
 - **Books that announce every chapter after a jingle are now probed music-first, which
   saves a great deal of time.** Instead of walking a file's pauses and its music together
