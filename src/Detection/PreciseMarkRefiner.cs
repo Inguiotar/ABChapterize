@@ -865,6 +865,12 @@ internal sealed class PreciseMarkRefiner
         {
             ct.ThrowIfCancellationRequested();
             var mid = Math.Round((lo + failed) / 2, 6);
+            // The midpoint is quantized, so on an interval near that quantum it lands on an
+            // endpoint and the bisection stops splitting. Normally unreachable - the loop exits at
+            // PreciseMarkFixedStepSeconds, five orders of magnitude above it - but --set: can put
+            // that constant below the quantum, and every turn of this loop is a Whisper probe.
+            if (mid <= lo || mid >= failed)
+                break;
             if (await PreciseMarkPhraseFoundAsync(mid, file, inputDecoder, announcement, ct))
                 lo = mid;
             else
@@ -1197,6 +1203,9 @@ internal sealed class PreciseMarkRefiner
         while (firstFalse - lastTrue > PreciseMarkFixedStepSeconds)
         {
             var mid = Math.Round((lastTrue + firstFalse) / 2, 6);
+            // Same quantized-midpoint stall as the onset walk's bisection guards against.
+            if (mid <= lastTrue || mid >= firstFalse)
+                break;
             if (await SurvivesAsync(mid))
                 lastTrue = mid;
             else
