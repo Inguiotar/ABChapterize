@@ -520,7 +520,8 @@ internal sealed class RegionScanner
         }
         // Built before the context, because the refinement's own matcher is held to the same
         // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
-        var check = new NumberCheck(match.Number, _ctx.Profile,
+        var check = new NumberCheck(
+            _sequence, match.Number, _ctx.Profile,
             BracketingBounds(phraseAbs, _knownChapters, _found, _ctx.ExpectedStartChapter, _sequence));
         var markCtx = new MarkContext(
             _ctx.File, _ctx.Info.InputDecoder,

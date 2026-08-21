@@ -49,16 +49,20 @@ internal readonly record struct MarkContext(
     List<SpeechSegment> SpeechSegments, TranscriptWindow Transcript, string Language);
 
 /// <summary>
-/// The chapter number a placement is for, plus what it takes to check that number against the
+/// Which chapter a placement is for, plus what it takes to check that chapter's number against the
 /// refinement's own view of the announcement (<see cref="RefinedNumberVote"/>). Named marks have no
 /// number and pass none; everything else about their placement is identical.
 /// </summary>
+/// <param name="Sequence">Which part of the book the chapter belongs to, 0 unless the numbering
+/// restarts. Carried because a chapter's identity is the pair - a book with three parts has three
+/// chapter 1s - even though the number check itself has no use for it.</param>
 /// <param name="Number">The chapter number the detecting window read.</param>
 /// <param name="Profile">The resolved language profile, for re-reading a number from the
 /// refinement's probe transcripts.</param>
 /// <param name="Bounds">Where in the chapter sequence this announcement sits, which is what a
 /// corrected number still has to satisfy to be adopted.</param>
-internal readonly record struct NumberCheck(int Number, LanguageProfile Profile, NumberBounds Bounds)
+internal readonly record struct NumberCheck(
+    int Sequence, int Number, LanguageProfile Profile, NumberBounds Bounds)
 {
     /// <summary>
     /// Which numbers the refinement may take for this announcement when the book has no chapter
@@ -109,15 +113,24 @@ internal sealed class MarkPlacer
     /// re-implemented so a number the cap rules out during detection is ruled out here too.</summary>
     private readonly Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> _findMatches;
 
-    /// <summary>Per detected chapter number, the length of the silence that preceded its phrase
-    /// (when the VAD pre-pass ran, the silence preceding the jingle - see <see cref="Record"/>).
-    /// Keyed by number so a re-detection overwrites; filtered to the surviving chapters when the
+    /// <summary>Per detected chapter, the length of the silence that preceded its phrase (when the
+    /// VAD pre-pass ran, the silence preceding the jingle - see <see cref="Record"/>). Keyed so a
+    /// re-detection of the same chapter overwrites; filtered to the surviving chapters when the
     /// per-file minimum is computed.</summary>
-    private readonly Dictionary<int, double> _silenceSeconds = [];
+    /// <remarks>
+    /// By part <em>and</em> number, which is how the rest of the tree identifies a chapter, because
+    /// a book that counts from one again in every part has as many chapter 1s as it has parts. On
+    /// the number alone the last part's measurement replaced the first's and was then counted once
+    /// per part, which could only ever move a reported extreme - these four figures reach
+    /// <see cref="ABChapterize.Processing.RunStatistics"/> and nothing else - but reported the wrong
+    /// one when it did.
+    /// </remarks>
+    private readonly Dictionary<(int Sequence, int Number), double> _silenceSeconds = [];
 
-    /// <summary>Per detected chapter number, the length of the jingle that preceded its phrase
-    /// (only measured when the VAD pre-pass ran); feeds the per-file maximum-jingle statistic.</summary>
-    private readonly Dictionary<int, double> _jingleSeconds = [];
+    /// <summary>Per detected chapter, the length of the jingle that preceded its phrase (only
+    /// measured when the VAD pre-pass ran); feeds the per-file maximum-jingle statistic. Keyed like
+    /// <see cref="_silenceSeconds"/>.</summary>
+    private readonly Dictionary<(int Sequence, int Number), double> _jingleSeconds = [];
 
     /// <summary>Creates a placer for one file.</summary>
     /// <param name="audio">Audio source for the corrections' own decodes.</param>
@@ -225,8 +238,10 @@ internal sealed class MarkPlacer
             return null;
         if (_options.MarkBeforeJingle)
             time = await ApplyMarkBeforeJingleAsync(time, phraseHeard, ctx, ct);
-        if (number is { } chapterNumber)
-            Record(chapterNumber, statSilence, statRegion, phraseAbs);
+        // number is non-null only where chapter was: it starts life as chapter?.Number, and the
+        // refinement vote above can only replace it inside the branch that already matched chapter.
+        if (chapter is { } identified && number is { } chapterNumber)
+            Record(identified.Sequence, chapterNumber, statSilence, statRegion, phraseAbs);
         return new MarkPlacement(time, number);
     }
 
@@ -385,12 +400,12 @@ internal sealed class MarkPlacer
     /// <summary>Applies <paramref name="pick"/> to the measurements recorded for those of
     /// <paramref name="chapters"/> that have one, or returns null when none do.</summary>
     private static double? Extreme(
-        IEnumerable<DetectedChapter> chapters, Dictionary<int, double> measurements,
+        IEnumerable<DetectedChapter> chapters, Dictionary<(int Sequence, int Number), double> measurements,
         Func<List<double>, double> pick)
     {
         var values = chapters
-            .Where(c => measurements.ContainsKey(c.Number))
-            .Select(c => measurements[c.Number])
+            .Where(c => measurements.ContainsKey((c.Sequence, c.Number)))
+            .Select(c => measurements[(c.Sequence, c.Number)])
             .ToList();
         return values.Count > 0 ? pick(values) : null;
     }
@@ -455,19 +470,23 @@ internal sealed class MarkPlacer
     /// clipped at the region end so an announcement spoken inside the jingle - or a merge-inflated
     /// region end - never overstates it, matching what <see cref="JingleCensus"/> measures.
     /// </summary>
+    /// <param name="sequence">Which part of the book the chapter belongs to; 0 unless the
+    /// numbering restarts. Part of the key, see <see cref="_silenceSeconds"/>.</param>
     /// <param name="number">The detected chapter number.</param>
     /// <param name="precedingSilence">The silence the mark anchored to, or null when none.</param>
     /// <param name="jingleRegion">The jingle region preceding the phrase, or null.</param>
     /// <param name="phraseAbs">Absolute phrase start time, the clip point for the jingle length.</param>
     private void Record(
-        int number, Silence? precedingSilence, NonSpeechRegion? jingleRegion, double phraseAbs)
+        int sequence, int number, Silence? precedingSilence, NonSpeechRegion? jingleRegion,
+        double phraseAbs)
     {
         if (precedingSilence is { } s && s.EndSeconds > s.StartSeconds)
-            _silenceSeconds[number] = s.EndSeconds - s.StartSeconds;
+            _silenceSeconds[(sequence, number)] = s.EndSeconds - s.StartSeconds;
         if (jingleRegion is { } r)
         {
             var jingleStart = precedingSilence?.EndSeconds ?? r.StartSeconds;
-            _jingleSeconds[number] = Math.Max(0, Math.Min(r.EndSeconds, phraseAbs) - jingleStart);
+            _jingleSeconds[(sequence, number)] =
+                Math.Max(0, Math.Min(r.EndSeconds, phraseAbs) - jingleStart);
         }
     }
 }

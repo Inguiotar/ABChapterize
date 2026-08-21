@@ -3018,7 +3018,8 @@ internal sealed class RegionProber
         var reading = BareNumberReadingFor(WideBareNumberReading);
         // Built before the context, because the refinement's own matcher is held to the same
         // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
-        var check = new NumberCheck(match.Number, _language.Profile, SequenceBounds(windowLast));
+        var check = new NumberCheck(
+            _sequence, match.Number, _language.Profile, SequenceBounds(windowLast));
         var markCtx = new MarkContext(
             _ctx.File, _ctx.Info.InputDecoder,
             _language.Profile.AnnouncementFor(match.Wording, reading, check.AdmitsAsAnnouncement),

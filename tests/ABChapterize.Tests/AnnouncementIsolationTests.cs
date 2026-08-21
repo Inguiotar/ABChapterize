@@ -333,7 +333,8 @@ public class AnnouncementIsolationTests
     [Fact]
     public void BareNumberMatcher_StillTakesTheNumberTheWindowRead()
     {
-        var check = new NumberCheck(90, Profile(bareNumbers: true), new NumberBounds(18, 20));
+        var check = new NumberCheck(
+            Sequence: 0, Number: 90, Profile(bareNumbers: true), new NumberBounds(18, 20));
         Assert.False(check.Bounds.Admits(90));
         Assert.True(check.AdmitsAsAnnouncement(90));
         Assert.True(check.AdmitsAsAnnouncement(19));
@@ -386,7 +387,8 @@ public class AnnouncementIsolationTests
     private static AnnouncementMatcher Matcher(bool strict, NumberBounds bounds, int detected)
         => AnnouncementMatcher.ForPattern(
             Profile(bareNumbers: true).ChapterPattern, "it", Reading(strict),
-            new NumberCheck(detected, Profile(bareNumbers: true), bounds).AdmitsAsAnnouncement);
+            new NumberCheck(Sequence: 0, detected, Profile(bareNumbers: true), bounds)
+                .AdmitsAsAnnouncement);
 
     /// <summary>Which reading a Probe match respectively a gap hunt's match is refined under.</summary>
     /// <param name="strict">Whether this is a Probe match rather than a gap hunt's.</param>

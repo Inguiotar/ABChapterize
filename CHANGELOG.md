@@ -157,6 +157,13 @@ earn a round number.
 
 ### Fixed
 
+- **A multi-part book's “shortest silence” and “longest jingle” figures are measured over all
+  its chapters.** On a book whose numbering restarts, the per-chapter measurements behind those
+  two `--verbose` and `--summary` figures were filed under the chapter number alone, so every
+  part's chapter 1 shared one entry and only the last of them survived — which could report a
+  shortest or longest that was simply the last one measured. Books with a single sequence were
+  never affected, and no mark ever moved either way: these figures are reported, not acted on.
+
 - **A phrase that cannot finish no longer stops a run without saying so.** A `/regexp/`
   you write is matched against every window the run reads, and a pattern with repetition
   nested inside repetition — `(\w+\s?)*` and the like — can take effectively for ever on

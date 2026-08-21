@@ -88,6 +88,23 @@ public sealed class MarkPlacerTests : IDisposable
             (_, _, _) => throw new NotSupportedException());
     }
 
+    /// <summary>
+    /// A placer with the refinement switched off, so <c>PlaceAsync</c> runs end to end without
+    /// touching audio - which is what lets these tests reach the per-chapter measurements.
+    /// </summary>
+    private MarkPlacer QuickPlacer()
+    {
+        var options = CliOptions.Parse(["--quick-marks", _file])!;
+        return new MarkPlacer(
+            new UnusedAudio(), options, new DetectionLog(_log.Add, null),
+            (_, _) => throw new NotSupportedException(),
+            null,
+            (_, _, _) => throw new NotSupportedException());
+    }
+
+    /// <summary>The Swedish profile the other helpers here build their phrase from.</summary>
+    private LanguageProfile Profile() => CliOptions.Parse(["--lang", "sv", _file])!.DefaultProfile;
+
     /// <summary>The mark context the guard reads: only its speech segments matter here.</summary>
     /// <param name="segments">The VAD speech timeline.</param>
     private MarkContext Context(List<SpeechSegment> segments)
@@ -239,5 +256,34 @@ public sealed class MarkPlacerTests : IDisposable
         Placer().KeepOutOfSpeech(5838.66, 5840.06, 5839.06, null, Context(ReaderCreditTimeline()));
 
         Assert.Contains(_log, l => l.Contains("the named mark"));
+    }
+    /// <summary>
+    /// A book that counts from one again in every part has as many chapter 1s as it has parts, and
+    /// the per-chapter measurements have to tell them apart. Keyed on the number alone, the second
+    /// part's chapter 1 replaced the first's and was then counted once per part, so the reported
+    /// minimum was whichever measurement happened to be written last rather than the smallest.
+    /// </summary>
+    /// <remarks>
+    /// Written so it fails on the old keying rather than merely passing on the new: part 1's
+    /// chapter 1 sits on the shorter silence and is recorded first, so a dictionary keyed by number
+    /// alone ends up holding part 2's 5.0 s for both and answers 5.0 where the truth is 2.0.
+    /// </remarks>
+    [Fact]
+    public async Task ChapterMeasurements_TellTheParts_OfARestartingBookApart()
+    {
+        var placer = QuickPlacer();
+        await placer.PlaceAsync(
+            new NumberCheck(Sequence: 0, Number: 1, Profile(), new NumberBounds(0)),
+            100, 100, 101, new Silence(98, 100), null, Context([]), IsolationCheck.None,
+            CancellationToken.None);
+        await placer.PlaceAsync(
+            new NumberCheck(Sequence: 1, Number: 1, Profile(), new NumberBounds(0)),
+            200, 200, 201, new Silence(195, 200), null, Context([]), IsolationCheck.None,
+            CancellationToken.None);
+
+        List<DetectedChapter> chapters =
+            [new(Number: 1, TimeSeconds: 100, Sequence: 0), new(Number: 1, TimeSeconds: 200, Sequence: 1)];
+
+        Assert.Equal(2.0, placer.MinSilenceSeconds(chapters)!.Value, 4);
     }
 }
