@@ -160,4 +160,29 @@ public sealed class TuningOverrideTests : IDisposable
         Assert.Equal(25.0, DetectionTuning.WhisperChunkSeconds);
         Assert.Single(o.TuningChanges);
     }
+
+    /// <summary>
+    /// A duration of zero is refused by name. Measured before the rule existed:
+    /// <c>--set:DetectionTuning.NoiseProbeFrameSeconds=0</c> on a 20-second file ran to an
+    /// OutOfMemoryException, because the frame loop it feeds appends a level per iteration and a
+    /// zero-length frame never advances it.
+    /// </summary>
+    [Theory]
+    [InlineData("--set:DetectionTuning.NoiseProbeFrameSeconds=0")]
+    [InlineData("--set:DetectionTuning.WhisperChunkSeconds=-5")]
+    [InlineData("--set:VadSegmenter.MinSpeechSeconds=-1")]
+    public void ADuration_ThatIsNotAboveZero_IsRefused(string arg)
+    {
+        var ex = Assert.Throws<CliError>(() => ParseFile(arg));
+        Assert.Contains("length of time", ex.Message);
+    }
+
+    /// <summary>The rule keys on the unit in the name, so the dB constants - the only exposed ones
+    /// that are negative by default - have to stay settable to a negative value.</summary>
+    [Fact]
+    public void ADecibelConstant_MayStillBeNegative()
+    {
+        Assert.NotNull(ParseFile("--set:DetectionTuning.DefaultSilenceNoiseDb=-40"));
+        Assert.Equal(-40.0, DetectionTuning.DefaultSilenceNoiseDb);
+    }
 }

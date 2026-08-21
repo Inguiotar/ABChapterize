@@ -2560,6 +2560,11 @@ public sealed class ChapterDetector
             var sliceEnd = Math.Min(windowLen, gapEnd + GapRetryPaddingSeconds);
 
             var chunkStep = GapRetryChunkSeconds - GapRetryChunkOverlapSeconds;
+            // An overlap at or above the chunk length leaves the walk standing still, re-reading
+            // one chunk for ever. Only reachable through --set:, which validates a value for type
+            // and finiteness but not for whether it leaves a loop able to advance.
+            if (chunkStep <= 0)
+                continue;
             for (var chunkStart = sliceStart; chunkStart < sliceEnd; chunkStart += chunkStep)
             {
                 var absStart = windowStart + chunkStart;

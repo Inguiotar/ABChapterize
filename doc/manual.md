@@ -2479,7 +2479,11 @@ A constant that is *derived* from others cannot be set on its own and is not
 listed — `RescanShiftSeconds` is half of `WhisperChunkSeconds`, so setting the
 latter moves it too. An unknown class or constant is an error rather than
 being ignored, so a typo cannot leave you believing a run was tuned when it
-was not.
+was not, and so is a constant named in `Seconds` given a value that is not
+above zero: those are lengths of time, and several of the searches step
+through the file by one, so a zero would leave them unable to move at all.
+Nothing else is range-checked — the values are yours to get wrong, and a bad
+one shows up as a bad marking rather than as a complaint.
 
 Every override is echoed in a `--debug` log's header (`setting: set ...`) and
 counts towards the run's identity, so a batch interrupted under one set of

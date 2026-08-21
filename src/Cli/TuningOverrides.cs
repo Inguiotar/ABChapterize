@@ -166,8 +166,46 @@ internal static class TuningOverrides
             value = field.FieldType == typeof(float) ? (object)(float)d : d;
         }
 
+        RejectNonPositiveDuration(field, value, whole);
         field.SetValue(null, value);
         return $"{field.DeclaringType!.Name}.{field.Name}={text}";
+    }
+
+    /// <summary>
+    /// Refuses a length of time that is not one. Every exposed constant whose name ends in
+    /// <c>Seconds</c> is a duration, a window or a tolerance, and none of the 93 of them is zero or
+    /// negative by default - so a value that is says nothing this code can act on.
+    /// </summary>
+    /// <remarks>
+    /// The failure it exists to prevent is not a wrong result but a run that never ends: several
+    /// loops step by a quantity derived from one of these, and a zero leaves them standing still.
+    /// <c>SilenceThresholdProbe.AddFrameLevels</c> was measured doing it - a frame length of zero
+    /// took a 20-second file to an <c>OutOfMemoryException</c> naming nothing that led back to the
+    /// cause. Refusing it here is what turns that into a sentence saying which constant was wrong.
+    /// <para>
+    /// It does not subsume the guards at those loops, and is not meant to: a step is often the
+    /// <em>difference</em> of two of these, so two individually valid values can still produce one
+    /// that does not advance (<c>WhisperChunkSeconds</c> minus three phrase margins, an overlap at
+    /// or above its chunk length). A very small positive value can also truncate to a zero frame
+    /// count. This rule catches what is nonsense on its own; the guards catch what is only nonsense
+    /// in combination.
+    /// </para>
+    /// </remarks>
+    /// <param name="field">The constant being set.</param>
+    /// <param name="value">The parsed value, boxed as the field's own type.</param>
+    /// <param name="whole">The argument as typed, for the message.</param>
+    /// <exception cref="CliError">Thrown when a <c>...Seconds</c> constant is given a value that is
+    /// not above zero.</exception>
+    private static void RejectNonPositiveDuration(FieldInfo field, object value, string whole)
+    {
+        if (!field.Name.EndsWith("Seconds", StringComparison.Ordinal))
+            return;
+        var seconds = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+        if (seconds > 0)
+            return;
+        throw new CliError(
+            $"{whole}: {field.Name} is a length of time and has to be above zero. " +
+            "A zero or negative one leaves the searches that step by it unable to move.");
     }
 
     /// <summary>The error for a name that resolves to no constant, naming the near misses.</summary>

@@ -105,6 +105,14 @@ internal static class SilenceThresholdProbe
     internal static void AddFrameLevels(float[] samples, List<double> levels)
     {
         var frame = (int)(FfmpegClient.SampleRate * NoiseProbeFrameSeconds);
+        // A frame shorter than one sample cannot advance the loop below, and every iteration would
+        // append a level - so this returns rather than filling memory with them. Unreachable until
+        // --set: made the constant a run-time input; measured then, at
+        // --set:DetectionTuning.NoiseProbeFrameSeconds=0, which ran to an OutOfMemoryException
+        // naming nothing that would lead anyone back here. No levels leaves the caller its own
+        // "nothing audible" path, which keeps the default threshold.
+        if (frame <= 0)
+            return;
         for (var start = 0; start + frame <= samples.Length; start += frame)
         {
             // Accumulated in double regardless of the float samples, as MarkLoudness does and for

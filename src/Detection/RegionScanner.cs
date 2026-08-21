@@ -365,7 +365,22 @@ internal sealed class RegionScanner
             previousSeamSnapped = seam.HasValue;
             // A snapped border needs no overlap - the next decode starts exactly at the seam;
             // an unsnapped one keeps the redundancy overlap against its possible mid-word cut.
-            chunkStart = seam ?? chunkEnd - GapChunkOverlapSeconds;
+            var next = seam ?? chunkEnd - GapChunkOverlapSeconds;
+            // Guarded on the step rather than on the constants behind it, because two different
+            // things can produce one: an overlap at or above GapChunkSeconds, and a seam found at
+            // the chunk's own start. Both became reachable when --set: turned the tuning constants
+            // into run-time inputs - it validates a value for type and finiteness, not for whether
+            // a loop can still advance - and standing still here means re-transcribing minutes of
+            // audio for ever. Stopping leaves the region scanned as far as it got, which is the
+            // ordinary outcome of a scan that finds nothing more.
+            if (next <= chunkStart)
+            {
+                _env.Log?.Invoke(
+                    $"scan stopped at {FormatTimestamp(chunkEnd)} - the configured chunk step " +
+                    "does not advance");
+                break;
+            }
+            chunkStart = next;
         }
         return _found;
     }

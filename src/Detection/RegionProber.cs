@@ -1945,6 +1945,19 @@ internal sealed class RegionProber
             $"nothing behind the jingle at {FormatTimestamp(candidate.Start)} - tiling its music " +
             $"from {FormatTimestamp(musicFrom)} in {JingleRereadWindowSeconds:0.#} s steps");
 
+        // Same exposure as SilenceThresholdProbe's frame length: the step is derived from
+        // WhisperChunkSeconds and PhraseMarginSeconds, which --set: can drive to a step of zero
+        // (30 - 3 x 10, say), and the guard below cannot break out of that because the window it
+        // measures never moves. Tiling is a rescue that can only add a mark, so declining it costs
+        // at most the mark it might have found - against a loop that re-transcribes one window for
+        // ever.
+        if (JingleMusicTileStepSeconds <= 0)
+        {
+            _env.Log?.Invoke(
+                $"jingle music tiling skipped - the configured step is {JingleMusicTileStepSeconds:0.##} s");
+            return [];
+        }
+
         for (var from = musicFrom; from < candidate.Start; from += JingleMusicTileStepSeconds)
         {
             ct.ThrowIfCancellationRequested();
