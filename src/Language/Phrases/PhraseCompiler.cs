@@ -404,7 +404,9 @@ internal static class PhraseCompiler
         var expanded = ExpandNumberGroups(leaf.Body, language, out var hasNumberGroup);
         try
         {
-            var regex = new Regex(expanded, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var regex = new Regex(
+                expanded, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                PhrasePattern.MatchTimeout);
             return new PhraseAlternative(
                 index, regex, leaf.Body, hasNumberGroup, leaf.LeadIn, leaf.LeadOut);
         }

@@ -1406,6 +1406,13 @@ and only the trailing one around "b". They mean this at the two edges of an
 alternative and nowhere else. A match that fails the check is dropped, and
 `--verbose` says so with both measurements and both thresholds.
 
+A wording that takes longer than a second on a single transcript is abandoned
+and the run stops, naming the phrase. That is a bound on a regexp that cannot
+finish rather than on a complicated one — a working phrase answers in
+microseconds — and the usual cause is repetition nested inside repetition,
+`(\w+\s?)*` and the like, which can take effectively for ever on text it does
+not match.
+
 The built-in chapter phrases carry a `^` and no `$`. The `^` is affordable only
 because a transcript segment start satisfies it too: against a pause alone it
 would have cost a real chapter of the reference corpus, one whose announcement

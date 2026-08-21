@@ -1480,7 +1480,11 @@ public sealed class CliOptions
                 throw new CliError("Only one --filter regexp can be given.");
             try
             {
-                FilterRegex = new Regex(value[1..^1], RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                // Bounded for the same reason a phrase is (see PhrasePattern.MatchTimeout): this
+                // is a regexp the user writes, matched against every path the run considers.
+                FilterRegex = new Regex(
+                    value[1..^1], RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                    PhrasePattern.MatchTimeout);
             }
             catch (ArgumentException ex)
             {

@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using System.Text.RegularExpressions;
+using ABChapterize.Errors;
 
 namespace ABChapterize.Language.Phrases;
 
@@ -109,18 +110,59 @@ public sealed record PhrasePattern(IReadOnlyList<PhraseAlternative> Alternatives
     /// have given them.
     /// </para>
     /// </summary>
-    /// <param name="text">The window's transcript, flattened and whitespace-normalized.</param>
-    public IEnumerable<IReadOnlyList<PhraseHit>> MatchGroups(string text)
+    /// <summary>
+    /// How long one wording may spend on one transcript before the run gives up on it.
+    /// </summary>
+    /// <remarks>
+    /// Not a tuning value - a legitimate phrase answers in microseconds, and this sits six orders
+    /// of magnitude above that so it can only ever be reached by a pattern that has stopped making
+    /// progress. What it exists to prevent: a phrase is a regexp the user writes, it is run against
+    /// every probe transcript in the book, and a shape like <c>(a+)+b</c> backtracks exponentially
+    /// on text that does not match. Without a bound that is a run which simply stops advancing,
+    /// with no error and nothing in the log to say which option caused it.
+    /// </remarks>
+    internal static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Every wording's hits in one transcript, ordered by position and then by the order the
+    /// wordings were written.
+    /// </summary>
+    /// <param name="text">The transcript to match against.</param>
+    /// <returns>The hits, sorted.</returns>
+    /// <exception cref="AppError">Thrown when a wording exceeds <see cref="MatchTimeout"/>. Named
+    /// with the phrase as the user wrote it, because <see cref="RegexMatchTimeoutException"/> on
+    /// its own says only that some regexp somewhere was slow - and a run carries several.</exception>
+    private List<PhraseHit> HitsIn(string text)
     {
         var hits = new List<PhraseHit>();
-        foreach (var alternative in Alternatives)
-            if (alternative.Regex is { } regex)
-                foreach (Match match in regex.Matches(text))
-                    if (match.Length > 0)
-                        hits.Add(new PhraseHit(match, alternative));
+        try
+        {
+            foreach (var alternative in Alternatives)
+                if (alternative.Regex is { } regex)
+                    foreach (Match match in regex.Matches(text))
+                        if (match.Length > 0)
+                            hits.Add(new PhraseHit(match, alternative));
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            throw new AppError(
+                $"The phrase \"{Source}\" took longer than {MatchTimeout.TotalSeconds:0.#} s on one " +
+                "transcript and was abandoned. A regexp that can match the same text several ways - " +
+                "nested repetition such as \"(a+)+\" is the usual cause - can take effectively for " +
+                "ever on text that does not match it.");
+        }
         hits.Sort((a, b) => a.Match.Index != b.Match.Index
             ? a.Match.Index.CompareTo(b.Match.Index)
             : a.Alternative.Index.CompareTo(b.Alternative.Index));
+        return hits;
+    }
+
+    /// <param name="text">The window's transcript, flattened and whitespace-normalized.</param>
+    /// <exception cref="AppError">Thrown when a wording takes longer than
+    /// <see cref="MatchTimeout"/> on one transcript - see <see cref="HitsIn"/>.</exception>
+    public IEnumerable<IReadOnlyList<PhraseHit>> MatchGroups(string text)
+    {
+        var hits = HitsIn(text);
 
         var group = new List<PhraseHit>();
         var consumedTo = 0;

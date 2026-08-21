@@ -157,6 +157,13 @@ earn a round number.
 
 ### Fixed
 
+- **A phrase that cannot finish no longer stops a run without saying so.** A `/regexp/`
+  you write is matched against every window the run reads, and a pattern with repetition
+  nested inside repetition — `(\w+\s?)*` and the like — can take effectively for ever on
+  text it does not match. Such a wording is now given a second on each transcript and then
+  abandoned, ending the run with a message naming the phrase, instead of leaving it to sit
+  there making no progress. The same bound applies to a `--filter` regexp.
+
 - **A chapter announced over music is no longer missed because the recognizer wrote
   "[Musik]" instead of hearing it.** Speech recognizers trained on subtitles sometimes
   label a stretch of music with a bracketed tag rather than transcribing it, and two

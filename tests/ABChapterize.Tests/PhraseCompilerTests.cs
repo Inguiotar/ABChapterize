@@ -432,4 +432,24 @@ public class PhraseCompilerTests
     [InlineData("chapter/")]
     public void AHalfWrittenRegexp_IsAnError(string phrase)
         => Assert.Throws<CliError>(() => Named(phrase));
+
+    /// <summary>
+    /// A phrase is a regexp the user writes, and the run applies it to every probe transcript, so
+    /// one that backtracks exponentially stops a run dead with nothing said about why.
+    /// </summary>
+    /// <remarks>
+    /// The pattern was measured against .NET 10's engine rather than picked from a textbook, and
+    /// the textbook one would have proved nothing: "(?:[a-z]+)+" is optimized to linear and returns
+    /// in 0 ms. A capturing group defeats that optimization, and a phrase's own "()" compiles to
+    /// one - "(?&lt;num&gt;\w+\s?)*" needs 93 ms at 20 characters and over a second at 30. Without the
+    /// timeout on the compiled regex this test does not fail, it hangs.
+    /// </remarks>
+    [Fact]
+    public void APhrase_ThatBacktracksForEver_IsAbandoned_NamingItself()
+    {
+        var pattern = Named(@"/^(\w+\s?)*x$/");
+        var ex = Assert.Throws<AppError>(
+            () => pattern.MatchGroups(new string('a', 40)).ToList());
+        Assert.Contains("took longer than", ex.Message);
+    }
 }
