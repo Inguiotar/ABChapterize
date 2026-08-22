@@ -53,8 +53,9 @@ public static class LanguageRegistry
     public static IEnumerable<string> SupportedCodes => ByCode.Keys.Order();
 
     /// <summary>
-    /// The language for a two-letter code, or <see cref="Fallback"/> when it is not registered.
+    /// The language for a code, or <see cref="Fallback"/> when it is not registered.
     /// </summary>
-    /// <param name="code">Two-letter ISO 639-1 code (never "auto" - resolve that first).</param>
+    /// <param name="code">The code as <c>--lang</c> and Whisper spell it (never "auto" - resolve
+    /// that first).</param>
     public static ILanguage For(string code) => ByCode.GetValueOrDefault(code, Fallback);
 }

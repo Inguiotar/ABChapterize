@@ -13,7 +13,7 @@ namespace ABChapterize.Language.Parsers;
 /// </summary>
 public interface INumberWordParser
 {
-    /// <summary>Two-letter ISO 639-1 code of the language this parser understands.</summary>
+    /// <summary>Code of the language this parser understands, as <c>--lang</c> and Whisper spell it.</summary>
     string LanguageCode { get; }
 
     /// <summary>

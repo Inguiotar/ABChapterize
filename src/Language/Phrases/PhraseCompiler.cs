@@ -49,7 +49,7 @@ internal static class PhraseCompiler
     /// </summary>
     /// <param name="entries">The alternatives as written, already resolved for one language (see
     /// <see cref="PhraseSpec"/>): tags stripped, <c>default</c> expanded, empty entries removed.</param>
-    /// <param name="language">Two-letter code deciding what <c>()</c> expands to.</param>
+    /// <param name="language">Language code deciding what <c>()</c> expands to.</param>
     /// <param name="kind">Whether this phrase carries a chapter number; see <see cref="PhraseKind"/>.</param>
     /// <param name="what">How to name this phrase in an error message ("chapter phrase",
     /// "--custom mapping \"...\"").</param>
@@ -392,7 +392,7 @@ internal static class PhraseCompiler
     /// <summary>Compiles one leaf, expanding its <c>()</c> tokens on the way.</summary>
     /// <param name="leaf">The wording and its guards.</param>
     /// <param name="index">Its position in the phrase.</param>
-    /// <param name="language">Two-letter code deciding what <c>()</c> expands to.</param>
+    /// <param name="language">Language code deciding what <c>()</c> expands to.</param>
     /// <param name="what">How to name this phrase in an error message.</param>
     /// <exception cref="CliError">Thrown for an invalid regexp.</exception>
     private static PhraseAlternative Build(Leaf leaf, int index, string language, string what)
@@ -425,7 +425,7 @@ internal static class PhraseCompiler
     /// references them by.
     /// </summary>
     /// <param name="body">One wording.</param>
-    /// <param name="language">Two-letter code deciding what <c>()</c> expands to.</param>
+    /// <param name="language">Language code deciding what <c>()</c> expands to.</param>
     /// <param name="hasNumberGroup">Set when the wording carries at least one.</param>
     private static string ExpandNumberGroups(string body, string language, out bool hasNumberGroup)
     {

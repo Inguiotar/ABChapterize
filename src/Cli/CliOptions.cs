@@ -105,7 +105,8 @@ public sealed class CliOptions
     public CommandTemplate? RunAfter { get; private set; }
 
     /// <summary>
-    /// Two-letter ISO 639-1 language hint for Whisper, or "auto" (--lang / -l, default "auto").
+    /// Language hint for Whisper, or "auto" (--lang / -l, default "auto"); see
+    /// <see cref="LanguageCodeRegex"/> for what shapes one may take.
     /// With "auto", <see cref="ChapterDetector"/> detects each file's language from a short
     /// clip via Whisper's own language detector instead of assuming a fixed language for the
     /// whole run; see <see cref="AutoLanguage"/>.
@@ -993,6 +994,22 @@ public sealed class CliOptions
     /// <summary>Human-readable list of the supported extensions, e.g. ".m4a/.m4b/.mp3/.opus/.mka".</summary>
     public static string SupportedExtensionsText => string.Join("/", SupportedExtensions);
 
+    /// <summary>
+    /// What a language code may look like, wherever one is written: <c>--lang</c> and the
+    /// <c>[xx]</c> tag of a spec entry, which have to agree or a code the run accepts could not
+    /// scope a <c>--custom</c> mapping.
+    /// <para>
+    /// Two <em>or three</em> letters, because Whisper's own language list is not purely ISO 639-1:
+    /// Hawaiian is "haw" throughout, and large-v3 added Cantonese as "yue". A two-letter test made
+    /// those unreachable - not merely undetected, since <c>--lang</c> is also how a run pins a
+    /// language Whisper knows and this tool has no number grammar for. Shape only, never a lookup:
+    /// what codes exist is Whisper's business, and <see cref="LanguageRegistry"/> answers the
+    /// different question of which of them bring number words and localized defaults with them.
+    /// </para>
+    /// </summary>
+    internal static readonly Regex LanguageCodeRegex =
+        new("^[a-z]{2,3}$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     /// <summary>Platform-specific name of this executable, for user-facing messages.</summary>
     public static string ExeName => OperatingSystem.IsWindows() ? "abchapterize.exe" : "abchapterize";
 
@@ -1207,8 +1224,9 @@ public sealed class CliOptions
             throw new CliError("--simple-metadata requires --export or --import.");
 
         o.Language = o.Language.ToLowerInvariant();
-        if (o.Language != "auto" && !Regex.IsMatch(o.Language, "^[a-z]{2}$"))
-            throw new CliError($"Invalid language code \"{o.Language}\": expected a two-letter code like \"en\", or \"auto\".");
+        if (o.Language != "auto" && !LanguageCodeRegex.IsMatch(o.Language))
+            throw new CliError(
+                $"Invalid language code \"{o.Language}\": expected a language code like \"en\", or \"auto\".");
 
         // Both selectors were validated where they were parsed. Naming --model without --upgrade-model
         // re-points Scan at the chosen model, so `-m large` means large throughout rather than large
@@ -1734,7 +1752,7 @@ public sealed class CliOptions
     /// --lang (building <see cref="DefaultProfile"/>), and once per file by
     /// <see cref="ChapterDetector"/> when <see cref="AutoLanguage"/> is active.
     /// </summary>
-    /// <param name="language">Two-letter language code (not "auto") to resolve defaults for.</param>
+    /// <param name="language">Language code (not "auto") to resolve defaults for.</param>
     public LanguageProfile ResolveProfile(string language)
     {
         var defaults = LanguageRegistry.For(language);
@@ -1760,7 +1778,7 @@ public sealed class CliOptions
     /// </summary>
     /// <param name="spec">The option's value, or null when it was not given.</param>
     /// <param name="builtIn">This tool's own phrase for the language.</param>
-    /// <param name="language">Two-letter language code being resolved for.</param>
+    /// <param name="language">Language code being resolved for.</param>
     /// <param name="option">Long option name, for error messages.</param>
     private static IReadOnlyList<string> Alternatives(
         PhraseSpec? spec, string language, string builtIn, string option)
@@ -1946,7 +1964,9 @@ public sealed class CliOptions
                                     they are considered bogus and are discarded.
 
         Detection tuning:
-          -l, --lang <code|auto>    Two-letter language hint for Whisper, or "auto" (the
+          -l, --lang <code|auto>    Language hint for Whisper - the two-letter code, or the
+                                    three-letter one where Whisper uses one ("haw", "yue") -
+                                    or "auto" (the
                                     default): each file's language is detected from a short
                                     clip and used for that file, falling back to "en" when
                                     the detection is inconclusive. Chapter numbers

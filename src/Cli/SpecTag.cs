@@ -26,7 +26,7 @@ namespace ABChapterize.Cli;
 /// <c>ToString</c> have to describe the tag rather than the identity of a list held inside it.
 /// </para>
 /// </summary>
-/// <param name="Language">The two-letter code this entry is restricted to, or null for one that
+/// <param name="Language">The language code this entry is restricted to, or null for one that
 /// applies to every file. Checked for shape only, not against <see cref="LanguageRegistry"/>,
 /// matching <c>--lang</c>, which also accepts a code this tool has no defaults for.</param>
 /// <param name="Scope">Where in the book the phrase is accepted;
@@ -106,14 +106,19 @@ public readonly record struct SpecTag(
     /// an error, one token having been recognized.
     /// </para>
     /// <para>
-    /// A token of exactly two ASCII letters is the language code, checked for shape only - the same
-    /// test this had before hints existed, and deliberately not a lookup in
-    /// <see cref="LanguageRegistry"/>: <c>--lang</c> accepts any two-letter code Whisper knows, so a
-    /// mapping written for a language this tool has no number grammar for must be taggable too. The
-    /// residual is a literal phrase whose bracket run happens to be two letters - a character class
-    /// such as <c>[Kk]apitel</c> - which is read as a language tag. Write it as a regexp
-    /// (<c>/[Kk]apitel/</c>) and the question does not arise, the entry no longer starting with a
-    /// bracket; that is also how anyone would write it anyway.
+    /// A token of two or three ASCII letters is the language code, checked for shape only and
+    /// deliberately not looked up in <see cref="LanguageRegistry"/>: <c>--lang</c> accepts any code
+    /// Whisper knows, so a mapping written for a language this tool has no number grammar for must
+    /// be taggable too. Three letters because Whisper's own list is not purely ISO 639-1 - see
+    /// <see cref="CliOptions.LanguageCodeRegex"/> - and a code that <c>--lang</c> takes has to be
+    /// spellable here as well, or a mixed batch could not scope a mapping to it.
+    /// </para>
+    /// <para>
+    /// The residual is a literal phrase whose bracket run happens to be two or three letters - a
+    /// character class such as <c>[Kk]apitel</c> - which is read as a language tag. Write it as a
+    /// regexp (<c>/[Kk]apitel/</c>) and the question does not arise, the entry no longer starting
+    /// with a bracket; that is also how anyone would write it anyway. No keyword below is two or
+    /// three letters long, so widening the test shadowed none of them.
     /// </para>
     /// </summary>
     /// <remarks>Notes: how often Whisper writes bracketed tags into a real corpus.
@@ -138,7 +143,7 @@ public readonly record struct SpecTag(
         var unknown = new List<string>();
         foreach (var token in entry[1..close].Split(',').Select(t => t.Trim()))
         {
-            if (token.Length == 2 && char.IsAsciiLetter(token[0]) && char.IsAsciiLetter(token[1]))
+            if (CliOptions.LanguageCodeRegex.IsMatch(token))
             {
                 if (tag.Language != null)
                     throw new CliError($"{where}: the tag names more than one language.");

@@ -13,6 +13,27 @@ release is whatever felt big enough to deserve one — the program has turned in
 different animal, or a headline feature landed, or it has simply grown up enough to
 earn a round number.
 
+## [1.0.0] — unreleased
+
+### Added
+
+- **`--lang` takes Whisper's three-letter codes** as well as the usual two-letter ones, so a
+  language Whisper spells with three — Hawaiian `haw`, Cantonese `yue` — can now be named at
+  all. The same goes for the `[xx]` tag that scopes a phrase, a title or a `--custom` mapping
+  to one language of a mixed batch.
+
+### Fixed
+
+- **Text outside your console's code page no longer prints as question marks.** Windows still
+  starts a console on a legacy code page in most locales, so a Cyrillic, Greek or Japanese file
+  name — or a chapter title in one — arrived on screen as a row of `?`. What went into the audio
+  file was always right; only the report of it was wrong. The console is now switched to UTF-8
+  at startup.
+- **A run no longer stops dead on a digit it cannot read.** A transcribed word combining a
+  non-ASCII digit — Arabic-Indic, Devanagari or the full-width forms — with an ordinal ending
+  ended the entire batch with an error, rather than being passed over like any other word that
+  is not a chapter number.
+
 ## [0.12.1] — 2026-08-21
 
 ### Added

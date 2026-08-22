@@ -1068,14 +1068,19 @@ checkpoint remembers the command line, not the folders' contents.
 ### Detection behaviour
 
 `-l`, `--lang <code|auto>`
-: Two-letter ISO 639-1 language hint for Whisper, or `auto` (the default).
+: Language hint for Whisper, or `auto` (the default). A code is the language's
+  two ISO 639-1 letters (`de`, `fr`, `ja`) or, for the few Whisper spells with
+  three, those (`haw`, `yue`).
   With `auto`, each file's language is detected once from a short clip right
   after the silence scan (Whisper's own language detector, no separate model)
   and used for the rest of that file, falling back to `en` when the
   detection is inconclusive - see
   [Auto language detection](#auto-language-detection) below. An explicit
-  two-letter code pins the whole run to one language instead, skipping
-  detection entirely. Either way, for the languages listed in
+  code pins the whole run to one language instead, skipping
+  detection entirely. The code is checked for shape, not against a list: any
+  language Whisper knows can be named here, including the ones this tool has no
+  number words for, and a code Whisper does *not* know is passed on and quietly
+  gets you whatever it makes of it. Either way, for the languages listed in
   [section 7](#7-languages-and-number-recognition), the resolved language
   enables number-word parsing and localizes the defaults of
   `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--chapter-title`,
@@ -1421,8 +1426,9 @@ wrote as a segment of its own, so it passes.
 
 ##### `[xx]` — restricting an alternative to one language
 
-An alternative may open with a two-letter language tag, which is what makes a
-batch run over a mixed library workable:
+An alternative may open with a language tag — the same code `--lang` takes, two
+letters or three — which is what makes a batch run over a mixed library
+workable:
 
 ```
 --chapter-phrase "[fr]/(?:premi|1).re partie.? chapitre/;/chapter ()/"

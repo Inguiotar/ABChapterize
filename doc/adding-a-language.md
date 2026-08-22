@@ -60,6 +60,47 @@ src\Language\
 Nothing outside `src\Language\` knows how many languages exist or what they
 are called. That is deliberate, and it is why this is a small job.
 
+### Which alphabets this works for
+
+All eleven languages shipped so far are written in the Latin alphabet, but
+nothing in the machinery requires that, and it was checked rather than assumed
+(2026-08-22, build 383). Matching is case-insensitive across the whole of
+Unicode, the word boundaries the number pattern uses are the Unicode ones, and
+everything written to a file — chapter titles included — is UTF-8. So **a
+language written in Cyrillic, Greek, Hebrew, Arabic or Hangul is an ordinary
+addition**: write the class, write the parser, add the line, and nothing else
+is different. Two things to know before you do:
+
+- **Greek loses its accents when it is written in capitals** — Whisper writes
+  both `Κεφάλαιο` and `ΚΕΦΑΛΑΙΟ`, and the second does not match the first even
+  case-insensitively. Write the phrase so it accepts either: `κεφ[άα]λαιο`.
+  This is the same trick the Spanish and Turkish phrases already use for
+  dropped accents; see [The three phrases](#the-three-phrases) below. Greek
+  also writes its final sigma differently (`ς` at the end of a word, `σ`
+  elsewhere), and those two do not match each other either, so spell that as
+  `[σς]` where it can occur.
+- **Chinese, Japanese and Thai do not work yet, and not because of the
+  characters.** They do not put spaces between words, and three separate parts
+  of the tool split text on whitespace: how a number is picked out of a
+  sentence, how a segment is split into sentences, and — the blocking one —
+  the `()` token of a chapter phrase, which refuses to match a number that has
+  a letter directly in front of it. In Chinese and Japanese it always does:
+  `第3章` has no spaces anywhere. So `--chapter-phrase "/^第()章/"` finds
+  nothing. Supporting these properly means teaching those three places about a
+  script that has no word gaps; that is a real piece of work and nobody has
+  done it.
+
+  **There is a workaround, and it is a one-liner for the user rather than a
+  code change.** Writing your own capturing group instead of `()` sidesteps
+  the rule: `--chapter-phrase "/^第([0-9]+)章/"` does match `第3章`, and Korean
+  `--chapter-phrase "/^제([0-9]+)장/"` matches `제3장`. It only finds numbers
+  written as digits — spelled-out `第三章` still needs the missing work — but
+  for a book whose announcements carry digits it is enough.
+
+Language *codes* are not restricted to two letters either. Whisper's own list
+is not purely ISO 639-1 — Hawaiian is `haw` and Cantonese is `yue` — so
+`--lang`, the `[xx]` tag and `ILanguage.Code` all take two or three letters.
+
 ---
 
 ## 2. Step 1 — the language class

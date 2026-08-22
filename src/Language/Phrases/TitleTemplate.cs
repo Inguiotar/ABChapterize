@@ -64,7 +64,7 @@ public sealed partial class TitleTemplate
     /// </summary>
     /// <param name="match">The match this mark was produced from, or null when there is none - a
     /// bare-number announcement has no regex behind it, so every reference resolves to nothing.</param>
-    /// <param name="language">Two-letter language code, for reading a spoken number back out of a
+    /// <param name="language">Language code, for reading a spoken number back out of a
     /// captured group.</param>
     public string Resolve(Match? match, string language)
     {
@@ -95,7 +95,7 @@ public sealed partial class TitleTemplate
     /// </summary>
     /// <param name="text">What the group captured.</param>
     /// <param name="function">The conversion name, or "" for none.</param>
-    /// <param name="language">Two-letter language code, for reading a spoken number.</param>
+    /// <param name="language">Language code, for reading a spoken number.</param>
     private static string Convert(string text, string function, string language) => function switch
     {
         "" => text,
@@ -110,7 +110,7 @@ public sealed partial class TitleTemplate
 
     /// <summary>The number a captured group holds, or null when it holds none.</summary>
     /// <param name="text">What the group captured.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     private static int? Number(string text, string language)
         => NumberWordParser.TryExtractNumber(text, language, out var number) ? number : null;
 

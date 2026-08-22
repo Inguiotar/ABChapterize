@@ -14,7 +14,7 @@ namespace ABChapterize.Cli;
 /// <param name="Title">The raw title template, possibly with <c>${name}</c>-style references to
 /// the phrase's capturing groups (see <see cref="ABChapterize.Language.Phrases.TitleTemplate"/>; a
 /// reference by number such as <c>$1</c> is refused).</param>
-/// <param name="Language">The two-letter code of the only language this mapping applies to, from a
+/// <param name="Language">The code of the only language this mapping applies to, from a
 /// leading <c>[xx]</c> tag, or null for one that applies to every file in the run. A mixed-language
 /// batch is the whole reason for the tag: a phrase written for French narration matches nothing in
 /// a German book, but it costs a probe window's worth of matching in every one of them.</param>

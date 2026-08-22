@@ -84,7 +84,7 @@ public sealed class AnnouncementMatcher
     /// </para>
     /// </summary>
     /// <param name="pattern">The compiled phrase, for the wordings that are expressions.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     /// <param name="reading">The reading this mark's own match was found under.</param>
     /// <param name="admits">Which numbers this stretch of the chapter sequence can hold - see
     /// <see cref="ABChapterize.Detection.NumberCheck"/>, which is where the rule lives. Required
@@ -115,7 +115,7 @@ public sealed class AnnouncementMatcher
     /// <include file='../../notes/Language/AnnouncementMatcher.xml' path='doc/member[@name="ForWording"]/*' /></remarks>
     /// <param name="wording">The alternative that matched; see
     /// <see cref="ABChapterize.Detection.PhraseMatching.PhraseMatch.Wording"/>.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     /// <param name="reading">The reading this mark's own match was found under.</param>
     /// <param name="admits">Which numbers this stretch of the chapter sequence can hold; consulted
     /// only by a bare-number wording, an expression already saying what it is looking for.</param>
@@ -131,7 +131,7 @@ public sealed class AnnouncementMatcher
     /// with a lead-in, so the transcript routinely opens with a fragment of whatever preceded the
     /// announcement and the number lands in the second sentence rather than the first.</summary>
     /// <param name="text">The probe's transcribed text.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     /// <param name="reading">The reading this mark's own match was found under.</param>
     /// <param name="admits">Which numbers this stretch of the chapter sequence can hold.</param>
     private static bool BareNumberIn(

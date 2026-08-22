@@ -134,6 +134,6 @@ internal sealed class LocalizedOption
     /// The value to use for one language, or null when this option says nothing about it - in which
     /// case the caller falls back to the language's built-in default.
     /// </summary>
-    /// <param name="language">Two-letter language code (never "auto" - resolve that first).</param>
+    /// <param name="language">Language code (never "auto" - resolve that first).</param>
     internal string? For(string language) => _byLanguage.GetValueOrDefault(language) ?? _fallback;
 }

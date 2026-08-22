@@ -36,6 +36,27 @@ public class NumberWordParserTests
         Assert.False(NumberWordParser.TryExtractNumber(text, "en", out _));
     }
 
+    /// <summary>
+    /// A digit the parser cannot read must be turned down, not thrown over. The digit-ordinal
+    /// pattern used to say <c>\d</c>, which in .NET is every Unicode decimal digit, while the
+    /// int.Parse behind it reads ASCII only - so a full-width or Arabic-Indic digit carrying one of
+    /// the ordinal suffixes matched and then raised FormatException. Nothing catches that per file:
+    /// it leaves through Program.Main's catch-all and ends the whole batch. The suffixes are shared
+    /// across languages, so "e" (French) is only the widest door, not the only one.
+    /// </summary>
+    [Theory]
+    [InlineData("３e", "fr")]
+    [InlineData("٣e", "fr")]
+    [InlineData("３rd", "en")]
+    [InlineData("٣rd", "en")]
+    [InlineData("३te", "de")]
+    public void DigitsOutsideAscii_AreRejectedRatherThanThrown(string text, string language)
+    {
+        Assert.False(NumberWordParser.TryExtractNumber(text, language, out _));
+        Assert.False(NumberWordParser.TryExtractNumberBefore(text, language, out _));
+        Assert.False(NumberWordParser.TryParseWholeText(text, language, out _));
+    }
+
     [Theory]
     [InlineData("und zwanzig", "de")]
     [InlineData("die Geschichte", "de")]

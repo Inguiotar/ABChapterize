@@ -24,7 +24,7 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     /// Loads the given model and creates a processor with the given language hint.
     /// </summary>
     /// <param name="modelPath">Full path of the GGML model file.</param>
-    /// <param name="language">Two-letter language hint for Whisper.</param>
+    /// <param name="language">Language hint for Whisper.</param>
     /// <param name="threads">
     /// CPU threads given to this processor. The tool always passes what --whisper-threads resolved
     /// to (see <see cref="ABChapterize.Cli.CliOptions.EffectiveWhisperThreads"/>, one per physical

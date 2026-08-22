@@ -31,7 +31,9 @@ namespace ABChapterize.Language;
 /// </summary>
 public interface ILanguage
 {
-    /// <summary>Two-letter ISO 639-1 code, matching what <c>--lang</c> and Whisper use.</summary>
+    /// <summary>The code <c>--lang</c> and Whisper name this language by - ISO 639-1's two letters
+    /// for all eleven registered so far, though Whisper's own list also holds three-letter codes
+    /// ("haw", "yue") and <c>--lang</c> accepts those, so nothing here assumes a width.</summary>
     string Code { get; }
 
     /// <summary>

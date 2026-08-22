@@ -56,7 +56,7 @@ internal sealed record PhraseSpec(IReadOnlyList<PhraseEntry> Entries, string Raw
     /// The alternatives that apply to one language, with <see cref="DefaultWord"/> expanded into
     /// whatever <paramref name="fallback"/> resolves to.
     /// </summary>
-    /// <param name="language">Two-letter language code (never "auto" - resolve that first).</param>
+    /// <param name="language">Language code (never "auto" - resolve that first).</param>
     /// <param name="fallback">This tool's own alternatives for the language, consulted both for a
     /// <c>default</c> entry and for a value that says nothing about this language at all.</param>
     internal IReadOnlyList<string> For(string language, Func<IReadOnlyList<string>> fallback)
@@ -99,7 +99,7 @@ internal sealed record PhraseSpec(IReadOnlyList<PhraseEntry> Entries, string Raw
 }
 
 /// <summary>One alternative of a <see cref="PhraseSpec"/>.</summary>
-/// <param name="Language">The two-letter code it is restricted to, or null when it applies to every
+/// <param name="Language">The code it is restricted to, or null when it applies to every
 /// language.</param>
 /// <param name="Body">The alternative itself: a word, a <c>/regexp/</c>, <c>none</c> or
 /// <see cref="PhraseSpec.DefaultWord"/>.</param>

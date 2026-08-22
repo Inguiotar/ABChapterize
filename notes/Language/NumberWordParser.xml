@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Externalized doc-comment notes for src\Language\NumberWordParser.cs. -->
 <doc>
+  <member name="BuildDigitOrdinalRegex">
+    <para>
+    <b>Which digits \d admits.</b> Measured 2026-08-22 on .NET 10: <c>\d</c> matches Arabic-Indic
+    "٣", Devanagari "३" and full-width "３", and does not match the ideographic "三". Fed through
+    the real parser, <c>TryExtractNumber("３e", "fr")</c>, <c>("٣e", "fr")</c> and
+    <c>("３rd", "fr")</c> all threw FormatException; the French "e" suffix is the widest way in,
+    but every language's suffix opens the same door. Found while investigating non-Latin alphabet
+    support rather than by a report, so nothing says how often a recognizer really writes such a
+    token - only that when it does, the run ends rather than the file.
+    </para>
+  </member>
+
   <member name="SpokenAloneAtSegmentStart">
     <para>
     <b>What each reading finds over a whole book.</b> Over the 15345 transcript segments one 18-hour

@@ -38,14 +38,28 @@ public static class NumberWordParser
     /// </summary>
     private static readonly Regex DigitOrdinalRegex = BuildDigitOrdinalRegex();
 
-    /// <summary>Builds <see cref="DigitOrdinalRegex"/> from every registered parser's suffix fragment.</summary>
+    /// <summary>
+    /// Builds <see cref="DigitOrdinalRegex"/> from every registered parser's suffix fragment.
+    /// <para>
+    /// The digit run is <c>[0-9]</c> rather than <c>\d</c>, and must stay that way. Outside
+    /// <see cref="RegexOptions.ECMAScript"/> .NET's <c>\d</c> is every Unicode decimal digit -
+    /// Arabic-Indic, Devanagari and the full-width forms among them - while
+    /// <see cref="int.Parse(string, IFormatProvider)"/> reads none of them, so the two together
+    /// turned a transcript token into an unhandled <see cref="FormatException"/>. There is no
+    /// per-file recovery from one: it leaves through <c>Program.Main</c>'s catch-all and ends the
+    /// whole batch. Writing the class the parser can actually read is what keeps the
+    /// <c>int.Parse</c> below sound, the width bound ruling out the only other way it could fail.
+    /// </para>
+    /// </summary>
+    /// <remarks>Notes: which digits \d admits, and the tokens that reached the exception.
+    /// <include file='../../notes/Language/NumberWordParser.xml' path='doc/member[@name="BuildDigitOrdinalRegex"]/*' /></remarks>
     private static Regex BuildDigitOrdinalRegex()
     {
         var fragments = LanguageRegistry.Languages
             .Select(l => l.NumberParser.DigitOrdinalSuffixPattern)
             .Where(p => p.Length > 0)
             .Distinct();
-        var pattern = $@"^(\d{{1,3}})(?:{string.Join('|', fragments)})$";
+        var pattern = $@"^([0-9]{{1,3}})(?:{string.Join('|', fragments)})$";
         return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
@@ -54,7 +68,7 @@ public static class NumberWordParser
     /// which is the transcribed text immediately following the chapter phrase.
     /// </summary>
     /// <param name="text">Text following the matched chapter phrase.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     /// <param name="number">Receives the extracted number on success.</param>
     /// <returns>True when a number could be extracted.</returns>
     public static bool TryExtractNumber(string text, string language, out int number)
@@ -85,7 +99,7 @@ public static class NumberWordParser
     /// the phrase, so a number that merely occurs earlier in the sentence does not count.
     /// </summary>
     /// <param name="text">Text preceding the matched chapter phrase.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     /// <param name="number">Receives the extracted number on success.</param>
     /// <returns>True when a number could be extracted.</returns>
     public static bool TryExtractNumberBefore(string text, string language, out int number)
@@ -127,7 +141,7 @@ public static class NumberWordParser
     /// <em>begin</em> with a number because a chapter phrase already established what it is.
     /// </summary>
     /// <param name="text">The text to test, typically one whole transcript segment.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     /// <param name="number">Receives the parsed number on success.</param>
     /// <returns>True when the text is nothing but a number.</returns>
     public static bool TryParseWholeText(string text, string language, out int number)
@@ -248,7 +262,7 @@ public static class NumberWordParser
     /// <remarks>Notes: what the old segment-wide rule cost on one book.
     /// <include file='../../notes/Language/NumberWordParser.xml' path='doc/member[@name="FindBareNumberAnnouncement"]/*' /></remarks>
     /// <param name="text">One transcript segment's text.</param>
-    /// <param name="language">Two-letter language code steering number-word parsing.</param>
+    /// <param name="language">Language code steering number-word parsing.</param>
     /// <param name="reading">How much of the segment counts; see <see cref="BareNumberReading"/>.</param>
     /// <param name="admits">Which numbers may be taken for an announcement here, or null for any.
     /// The mark refinement passes the chapter sequence's own view of what can sit at this point

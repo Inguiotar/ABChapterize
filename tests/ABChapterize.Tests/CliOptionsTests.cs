@@ -85,6 +85,20 @@ public sealed class CliOptionsTests : IDisposable
         Assert.True(o.AutoLanguage);
     }
 
+    /// <summary>
+    /// Whisper's language list is not purely ISO 639-1 - Hawaiian is "haw" and large-v3 added
+    /// Cantonese as "yue" - so a two-letter test would put those books out of reach entirely,
+    /// <c>--lang</c> being the only way to pin a language this tool has no number grammar for.
+    /// The code is checked for shape, never against the registry, which is why an unregistered
+    /// one is accepted here and simply falls back to English for the number words.
+    /// </summary>
+    [Theory]
+    [InlineData("yue")]
+    [InlineData("haw")]
+    [InlineData("YUE")]
+    public void Lang_ThreeLetterCode_IsAccepted(string value)
+        => Assert.Equal(value.ToLowerInvariant(), ParseFile("--lang", value)!.Language);
+
     [Fact]
     public void Lang_Auto_WithExplicitOverrides_StillWinsOverEnglishFallback()
     {
@@ -330,6 +344,18 @@ public sealed class CliOptionsTests : IDisposable
         var options = ParseFile("--chapter-phrase", "[fr]/chapitre/;/kapitel/;[fr]/partie/")!;
 
         Assert.Equal("/chapitre/;/kapitel/;/partie/", options.ResolveProfile("fr").ChapterPhrase);
+        Assert.Equal("/kapitel/", options.ResolveProfile("de").ChapterPhrase);
+    }
+
+    /// <summary>A tag has to be able to name every code <c>--lang</c> accepts, three-letter ones
+    /// included, or a mixed batch could pin a book to "yue" and then have no way to scope a phrase
+    /// to it. No tag keyword is two or three letters, so nothing was shadowed by widening it.</summary>
+    [Fact]
+    public void PerLanguage_AThreeLetterTag_ScopesToThatLanguage()
+    {
+        var options = ParseFile("-c", "/kapitel/", "-c", "[yue]/chapter/")!;
+
+        Assert.Equal("/kapitel/;/chapter/", options.ResolveProfile("yue").ChapterPhrase);
         Assert.Equal("/kapitel/", options.ResolveProfile("de").ChapterPhrase);
     }
 
@@ -1425,13 +1451,22 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseFile("--recurse"));
     }
 
+    /// <summary>
+    /// Shape only, and never more than that. "deu" was in this list while the check demanded two
+    /// letters, and is accepted now that Whisper's own three-letter codes ("haw", "yue") have to
+    /// get through - so ISO 639-2 spellings join the codes that were always accepted and then
+    /// quietly fell back to English ("xy", "zz"). That is the same trade as before rather than a
+    /// new one: the width was never a validity test, and which codes exist is Whisper's business.
+    /// </summary>
     [Theory]
     [InlineData("xx1")]
     [InlineData("e")]
-    [InlineData("deu")]
+    [InlineData("engl")]
+    [InlineData("de-DE")]
     public void InvalidLanguageCodes_AreRejected(string lang)
     {
-        Assert.Throws<CliError>(() => ParseFile("--lang", lang));
+        Assert.Contains("Invalid language code",
+            Assert.Throws<CliError>(() => ParseFile("--lang", lang)).Message);
     }
 
     [Fact]

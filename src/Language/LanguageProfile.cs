@@ -14,7 +14,7 @@ namespace ABChapterize.Language;
 /// With auto-detection (the default) a fresh profile is resolved per file from its detected
 /// (or English-fallback) language via <see cref="CliOptions.ResolveProfile"/>.
 /// </summary>
-/// <param name="Language">Two-letter language code actually used for transcription and number parsing.</param>
+/// <param name="Language">Language code actually used for transcription and number parsing.</param>
 /// <param name="ChapterPhrase">The chapter phrase as written - one or more alternatives, each a
 /// word, a "/regexp/" or "none". Kept alongside the compiled form for the debug log and the run
 /// fingerprint.</param>

@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
 
+using System.Security;
+using System.Text;
 using ABChapterize.Errors;
 using ABChapterize.Gpu;
 using ABChapterize.Processing;
@@ -22,6 +24,8 @@ public static class Program
     /// <returns>0 on success (warnings included), 1 on fatal errors, 2 on usage errors, 130 on Ctrl+C.</returns>
     public static async Task<int> Main(string[] args)
     {
+        UseUtf8Console();
+
         // --version wins over everything else on the command line and needs no target path.
         if (args.Contains("--version"))
         {
@@ -90,6 +94,38 @@ public static class Program
             // Any unexpected error also stops the run immediately, but with a readable message.
             Console.Error.WriteLine($"Error: {ex.GetType().Name}: {ex.Message}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Puts the console into UTF-8, so that text this tool did not invent survives being printed.
+    /// <para>
+    /// Windows still starts a console on a legacy code page in most locales - 850 across Western
+    /// Europe - and .NET encodes through it, so a file name, a chapter title or a
+    /// <c>--chapter-phrase</c> outside that page arrives on screen as a row of question marks.
+    /// The argument itself is never at risk (Windows hands .NET UTF-16) and neither is anything
+    /// written to disk (the sidecar, the ffmetadata and the logs all name their own UTF-8), which
+    /// is why the damage stayed invisible for so long: the marks were right and only the report
+    /// of them was wrong. Nothing this tool draws is at risk either - the progress bar is
+    /// <c>#</c>, <c>-</c> and <c>X</c> - so there is no legacy-console rendering to trade away.
+    /// </para>
+    /// <para>
+    /// First statement of the run, ahead of <c>--version</c> and the usage text, because a
+    /// command line rejected by name is one of the places that echoes what the user typed.
+    /// </para>
+    /// </summary>
+    private static void UseUtf8Console()
+    {
+        try
+        {
+            Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        }
+        catch (Exception ex) when (ex is IOException or SecurityException or NotSupportedException)
+        {
+            // The one catch in this codebase with nothing to do. A host that refuses the code page
+            // leaves every ASCII character - which is all of this tool's own output - printing
+            // exactly as before, so there is nothing to report and nothing to fall back to.
+            // Ending a run over the encoding of its progress display would be the worse failure.
         }
     }
 

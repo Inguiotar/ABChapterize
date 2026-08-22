@@ -82,7 +82,7 @@ internal static class NumberPattern
     /// The expansion of <c>()</c> for one language, as a bare fragment with no capturing group of
     /// its own - <see cref="PhraseCompiler"/> wraps it in the named group.
     /// </summary>
-    /// <param name="language">Two-letter language code; an unregistered one falls back to English,
+    /// <param name="language">Language code; an unregistered one falls back to English,
     /// exactly as the number parsing itself does.</param>
     internal static string For(string language)
         => Cache.GetOrAdd(LanguageRegistry.For(language).Code, Build);
