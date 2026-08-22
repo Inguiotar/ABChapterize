@@ -93,7 +93,9 @@ Prebuilt binaries for Windows and Linux are available on the
   `.m4b` is recommended: `.m4a` and `.m4b` are identical containers, but
   players may pick their exact behavior based on which extension they see, and
   chapters in `.mp3`/`.opus` files are honored by comparatively few players.
-- **Windows and Linux**, single self-contained executable.
+- **Windows and Linux**, single self-contained executable. Linux ARM64 and
+  Apple Silicon build from source as well, untested and unreleased — see
+  [Building from source](#building-from-source).
 
 ## Getting started
 
@@ -108,6 +110,7 @@ If you don't have it yet:
   the exe or in your user profile, in Program Files, or wherever `FFMPEG_DIR` points — at the unpacked
   folder or at the binaries themselves, either works.
 - **Linux:** `sudo apt install ffmpeg` (or your distribution's equivalent).
+- **macOS:** `brew install ffmpeg` (or MacPorts' `sudo port install ffmpeg`).
 
 ### 2. Get ABChapterize
 
@@ -602,6 +605,27 @@ dotnet publish -c Release                 # Windows build -> bin/publish/win-x64
 dotnet publish -c Release -r linux-x64    # Linux build   -> bin/publish/linux-x64
 dotnet test tests/ABChapterize.Tests        # run the unit tests
 ```
+
+### Other platforms
+
+Two more targets build from source. Neither is released, and neither has ever
+been run by anyone here — they are offered on the understanding that you are
+the one finding out whether they work.
+
+```sh
+dotnet publish -c Release -r linux-arm64  # -> bin/publish/linux-arm64
+dotnet publish -c Release -r osx-arm64    # -> bin/publish/osx-arm64
+```
+
+**Linux ARM64** (a Raspberry Pi or similar acting as a small home server) is
+CPU-only: the GPU backends have no ARM64 build, so the existing
+CUDA → Vulkan → CPU fallback simply lands on CPU. Expect it to be slow rather
+than broken, and prefer a small model.
+
+**Apple Silicon** has more caveats than fit here, including one that will stop
+you before you start — build it on the Mac itself, not from another machine.
+They are all in [Building on macOS](doc/building-on-macos.md). Intel Macs are
+out of scope permanently, for a reason spelled out there.
 
 ## License
 

@@ -47,13 +47,13 @@ public static class OnnxRuntimeNative
         }
     }
 
-    /// <summary>Loads "onnxruntime" from <c>runtimes\&lt;rid&gt;\</c> when it's there (the published
-    /// layout, see the csproj's PruneForeignRuntimes target); otherwise returns
-    /// <see cref="IntPtr.Zero"/> to fall back to the default search (an unpublished build output,
-    /// where the native still sits flat next to the assembly). Any other library name also falls
-    /// through unchanged - "onnxruntime_providers_shared", the only other native OnnxRuntime ships,
-    /// is never P/Invoked from managed code; onnxruntime itself loads it from its own directory, so
-    /// moving both together is enough without a second entry here.</summary>
+    /// <summary>Loads "onnxruntime" from the published <c>runtimes/&lt;rid&gt;/</c> layout (see the
+    /// csproj's PruneForeignRuntimes target); otherwise returns <see cref="IntPtr.Zero"/> to fall
+    /// back to the default search, which is what an unpublished build output needs - there the
+    /// native still sits flat next to the assembly. Any other library name also falls through
+    /// unchanged: "onnxruntime_providers_shared", the only other native OnnxRuntime ships on the
+    /// platforms that have one, is never P/Invoked from managed code; onnxruntime itself loads it
+    /// from its own directory, so moving both together is enough without a second entry here.</summary>
     /// <param name="libraryName">The native library the runtime is asking for.</param>
     /// <param name="assembly">The assembly making the request; unused, the name decides.</param>
     /// <param name="searchPath">The caller's search path hint; unused for the same reason.</param>
@@ -61,9 +61,53 @@ public static class OnnxRuntimeNative
     {
         if (libraryName != "onnxruntime")
             return IntPtr.Zero;
-        var fileName = OperatingSystem.IsWindows() ? "onnxruntime.dll" : "libonnxruntime.so";
-        var path = Path.Combine(
-            AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, fileName);
-        return File.Exists(path) && NativeLibrary.TryLoad(path, out var handle) ? handle : IntPtr.Zero;
+
+        foreach (var runtimeIdentifier in CandidateRuntimeIdentifiers())
+        {
+            var path = Path.Combine(
+                AppContext.BaseDirectory, "runtimes", runtimeIdentifier, NativeFileName);
+            if (File.Exists(path) && NativeLibrary.TryLoad(path, out var handle))
+                return handle;
+        }
+        return IntPtr.Zero;
+    }
+
+    /// <summary>Platform file name of the OnnxRuntime native.</summary>
+    internal static string NativeFileName =>
+        OperatingSystem.IsWindows() ? "onnxruntime.dll"
+        : OperatingSystem.IsMacOS() ? "libonnxruntime.dylib"
+        : "libonnxruntime.so";
+
+    /// <summary>
+    /// Folder names under <c>runtimes/</c> to try, in order: the identifier this runtime reports,
+    /// then the plain <c>&lt;os&gt;-&lt;arch&gt;</c> spelling the publish actually used.
+    /// </summary>
+    /// <remarks>
+    /// The second candidate exists because the first is not guaranteed to be the folder name.
+    /// <see cref="RuntimeInformation.RuntimeIdentifier"/> reports what the *runtime* was built for,
+    /// which historically could carry an OS version ("osx.15-arm64") where the publish wrote a
+    /// plain "osx-arm64". Getting that wrong is not a degradation here: the correctly-published
+    /// native has been moved out of the root, so default probing finds nothing either and the VAD
+    /// pre-pass - which cannot be skipped - fails the run outright. One extra File.Exists on a path
+    /// that is usually the same string is a cheap price for removing that failure mode from a
+    /// platform nobody on this project can test.
+    /// <include file='../../notes/Onnx/OnnxRuntimeNative.xml' path='doc/member[@name="CandidateRuntimeIdentifiers"]/*' />
+    /// </remarks>
+    internal static IEnumerable<string> CandidateRuntimeIdentifiers()
+    {
+        var reported = RuntimeInformation.RuntimeIdentifier;
+        yield return reported;
+
+        var operatingSystem =
+            OperatingSystem.IsWindows() ? "win"
+            : OperatingSystem.IsMacOS() ? "osx"
+            : OperatingSystem.IsLinux() ? "linux"
+            : null;
+        if (operatingSystem == null)
+            yield break;
+
+        var canonical = $"{operatingSystem}-{RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}";
+        if (canonical != reported)
+            yield return canonical;
     }
 }

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Onnx\OnnxRuntimeNative.cs. -->
+<doc>
+  <member name="CandidateRuntimeIdentifiers">
+    <para>
+    <b>Why the fallback is guesswork rather than a measurement.</b> The macOS branch was written
+    2026-08-22 without a Mac to run it on, and the project deliberately ships no macOS binaries and
+    added no CI, so nothing here has ever observed what
+    <see cref="System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier"/> returns on
+    Apple Silicon. The concern is inherited from .NET Core's portable-RID era, where a runtime built
+    against a specific macOS release reported a version-stamped identifier; with an explicit
+    <c>-r osx-arm64</c> publish it should report exactly that RID, and on this project's own two
+    platforms it demonstrably does. The second candidate is therefore expected to be dead code on
+    every machine anyone here can check. It stays because the cost of being wrong is asymmetric:
+    the failure is not "no GPU acceleration", it is the Silero load throwing and the run ending.
+    </para>
+    <para>
+    <b>What the publish layout actually looks like</b>, cross-published from Windows and listed
+    2026-08-22 at Whisper.net 1.9.1 / Microsoft.ML.OnnxRuntime 1.27.1. macOS is the one target where
+    the two native trees disagree about the folder name, so both spellings appear side by side:
+    Whisper's dylibs land in <c>runtimes/macos-arm64/</c> and the ONNX dylib in
+    <c>runtimes/osx-arm64/</c>. Only the second is this resolver's business - Whisper.net probes for
+    its own by a mechanism of its own - which is why the naming trap costs nothing here and has to
+    be handled in the csproj instead.
+    </para>
+    <para>
+    <b>The Intel Mac is not merely untested.</b> Microsoft.ML.OnnxRuntime 1.27.1 ships android, ios,
+    linux-arm64, linux-x64, osx-arm64, win-arm64 and win-x64, and no osx-x64 at all. No ONNX Runtime
+    means no Silero, and since 0.12.0 the VAD pre-pass runs on every file with a load failure being
+    fatal rather than a degradation - so on an Intel Mac the tool would not run at all rather than
+    run without jingle geometry.
+    </para>
+    <para>
+    <b>osx-arm64 has no providers_shared native</b>, unlike every other platform in the package:
+    <c>runtimes/osx-arm64/native/</c> holds <c>libonnxruntime.dylib</c> and nothing else. That is
+    why the csproj's move step names one file on macOS and two everywhere else, and why this
+    resolver's "onnxruntime itself loads its companion from its own directory" reasoning has
+    nothing to load there.
+    </para>
+  </member>
+</doc>

@@ -2837,6 +2837,14 @@ GPU free for other work or to sidestep a flaky/unsupported GPU backend. The
 Silero VAD pre-pass always runs on CPU regardless, so this option only
 changes Whisper's own backend.
 
+On macOS none of this applies. There is no Vulkan loader there and no CUDA
+either, so `--use-gpu` and `--list-gpus` have nothing to work with and say so
+rather than pretending otherwise; the startup line reports the CPU backend.
+Whisper may still reach Apple's Metal backend from inside it, which
+ABChapterize neither chooses nor names — see
+[Building on macOS](building-on-macos.md), which also explains why there is no
+macOS release to run this on in the first place.
+
 ### Picking a GPU on a multi-GPU machine
 
 On a machine with exactly one discrete GPU next to an integrated one,

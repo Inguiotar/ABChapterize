@@ -73,6 +73,37 @@ public static class VulkanDeviceEnumerator
     }
 
     /// <summary>
+    /// What an empty <see cref="Enumerate"/> result means on the platform this is running on, as a
+    /// standalone sentence for a user-facing message.
+    /// </summary>
+    /// <remarks>
+    /// Split into two <c>internal</c> texts rather than a ternary so that both can be asserted from
+    /// any host: the macOS wording is unreachable on the two platforms this project can actually
+    /// run, and an empty device list is the one thing a Mac user is guaranteed to meet.
+    /// </remarks>
+    public static string AbsenceNote =>
+        OperatingSystem.IsMacOS() ? MacAbsenceNote : DefaultAbsenceNote;
+
+    /// <summary>What an empty device list means on macOS.</summary>
+    /// <remarks>
+    /// Its own wording because the emptiness there is categorical rather than circumstantial.
+    /// Everywhere else "no devices" describes a machine that could have some - install a driver,
+    /// pass a GPU through to the container - so the message can point at the alternative backends.
+    /// On macOS there is no Vulkan loader to install, Whisper.net publishes neither a Vulkan nor a
+    /// CUDA native for the platform, and ggml reaches Metal from inside the CPU runtime without
+    /// exposing a device list anything here could enumerate or filter. Offering a Mac user the
+    /// usual remedies would send them after something that does not exist, so this says the feature
+    /// is absent rather than merely unavailable - and says what is running instead, because a user
+    /// who reads "no GPU" will otherwise assume the run is wasting one.
+    /// </remarks>
+    internal static string MacAbsenceNote =>
+        "macOS has no Vulkan loader, so GPU selection does not apply there. Whisper runs on "
+        + "Apple's Metal backend where ggml offers one, which this tool neither chooses nor names.";
+
+    /// <summary>What an empty device list means anywhere Vulkan could have been present.</summary>
+    internal static string DefaultAbsenceNote => "Whisper will use CUDA or the CPU backend.";
+
+    /// <summary>
     /// Lists the GPUs Vulkan reports, in enumeration order, or an empty list if Vulkan is
     /// unavailable for any reason.
     /// </summary>

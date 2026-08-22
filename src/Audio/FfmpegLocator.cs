@@ -36,19 +36,54 @@ public static class FfmpegLocator
                 return (ffmpeg, ffprobe);
         }
 
-        throw new AppError(OperatingSystem.IsWindows()
-            ? "ffmpeg/ffprobe could not be found. Searched %FFMPEG_DIR%\\bin and %FFMPEG_DIR% " +
-              "itself, PATH, an \"ffmpeg\" folder in the current directory, next to " +
-              "abchapterize.exe and in %USERPROFILE%, and Program Files.\n" +
-              "Hint: set the environment variable FFMPEG_DIR to ffmpeg's base directory or " +
-              "straight to the directory holding the binaries - both work, e.g. " +
-              "set FFMPEG_DIR=C:\\Tools\\ffmpeg"
-            : "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR/bin and $FFMPEG_DIR " +
-              "itself, PATH, ./ffmpeg, ~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg/bin, " +
-              "/opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.\n" +
-              "Hint: install ffmpeg with your package manager (e.g. sudo apt install ffmpeg) " +
-              "or set the environment variable FFMPEG_DIR to the directory containing the binaries.");
+        throw new AppError(NotFoundMessage());
     }
+
+    /// <summary>
+    /// The "not found" text for the platform this is running on.
+    /// </summary>
+    /// <remarks>
+    /// Three separate texts rather than one generic sentence because this message is the only help
+    /// a user gets at this point: it has to list what <see cref="CandidateDirectories"/> actually
+    /// just searched, and name an installation route that exists on their machine. A hint naming
+    /// apt on a Mac reads as the tool not knowing what it is running on.
+    /// <para>
+    /// They are separate <c>internal</c> members rather than branches inside one method so that all
+    /// three can be asserted from any host. That is the point: the macOS text is unreachable on the
+    /// two platforms this project can run, so without it the wrong-package-manager bug could only
+    /// be found by a Mac user hitting it.
+    /// </para>
+    /// </remarks>
+    private static string NotFoundMessage()
+        => OperatingSystem.IsWindows() ? WindowsNotFoundMessage
+         : OperatingSystem.IsMacOS() ? MacNotFoundMessage
+         : LinuxNotFoundMessage;
+
+    /// <summary>Windows "not found" text.</summary>
+    internal static string WindowsNotFoundMessage =>
+        "ffmpeg/ffprobe could not be found. Searched %FFMPEG_DIR%\\bin and %FFMPEG_DIR% " +
+        "itself, PATH, an \"ffmpeg\" folder in the current directory, next to " +
+        "abchapterize.exe and in %USERPROFILE%, and Program Files.\n" +
+        "Hint: set the environment variable FFMPEG_DIR to ffmpeg's base directory or " +
+        "straight to the directory holding the binaries - both work, e.g. " +
+        "set FFMPEG_DIR=C:\\Tools\\ffmpeg";
+
+    /// <summary>macOS "not found" text.</summary>
+    internal static string MacNotFoundMessage =>
+        "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR/bin and $FFMPEG_DIR " +
+        "itself, PATH, ./ffmpeg, ~/ffmpeg, /opt/homebrew/bin, /usr/local/bin, " +
+        "/opt/local/bin, /usr/bin, ~/bin and ~/.local/bin.\n" +
+        "Hint: install ffmpeg with Homebrew (brew install ffmpeg) or MacPorts " +
+        "(sudo port install ffmpeg), or set the environment variable FFMPEG_DIR to the " +
+        "directory containing the binaries.";
+
+    /// <summary>Linux (and any other Unix) "not found" text.</summary>
+    internal static string LinuxNotFoundMessage =>
+        "ffmpeg/ffprobe could not be found. Searched $FFMPEG_DIR/bin and $FFMPEG_DIR " +
+        "itself, PATH, ./ffmpeg, ~/ffmpeg, /usr/bin, /usr/local/bin, /opt/ffmpeg/bin, " +
+        "/opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.\n" +
+        "Hint: install ffmpeg with your package manager (e.g. sudo apt install ffmpeg) " +
+        "or set the environment variable FFMPEG_DIR to the directory containing the binaries.";
 
     /// <summary>Enumerates all candidate directories in search order (duplicates possible, harmless).</summary>
     private static IEnumerable<string> CandidateDirectories()
@@ -107,9 +142,27 @@ public static class FfmpegLocator
                 yield return Path.Combine(folder, "ffmpeg");
             }
         }
+        else if (OperatingSystem.IsMacOS())
+        {
+            // 3b. macOS has no system ffmpeg, so every install is somebody's package manager:
+            //     Homebrew's prefix is /opt/homebrew on Apple Silicon and /usr/local on Intel,
+            //     MacPorts uses /opt/local. All of them put their prefix on PATH for an
+            //     interactive shell, so this list only earns its keep where PATH is not the
+            //     user's - a launchd agent, or a run started from an app that inherited a bare
+            //     environment.
+            yield return "/opt/homebrew/bin";
+            yield return "/usr/local/bin";
+            yield return "/opt/local/bin";
+            yield return "/usr/bin";
+            if (!string.IsNullOrEmpty(profile))
+            {
+                yield return Path.Combine(profile, "bin");
+                yield return Path.Combine(profile, ".local", "bin");
+            }
+        }
         else
         {
-            // 3b. Common Linux locations: package managers install flat into /usr/bin,
+            // 3c. Common Linux locations: package managers install flat into /usr/bin,
             //     manual installs go to /usr/local/bin, static builds are often unpacked
             //     to /opt/ffmpeg, snap exposes /snap/bin.
             yield return "/usr/bin";

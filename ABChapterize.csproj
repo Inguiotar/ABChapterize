@@ -158,48 +158,83 @@
     <None Include="licenses\**\*" CopyToPublishDirectory="PreserveNewest" Link="licenses\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
-  <!-- Whisper.net copies native libraries for all platforms; only the ones matching the
-       published runtime identifier are needed, so prune the foreign ones. -->
+  <!-- Whisper.net.Runtime and Microsoft.ML.OnnxRuntime both copy natives for platforms this
+       publish will never run on, in two different layouts, and both need cleaning up afterwards.
+       Nothing below is keyed on a hardcoded list of *supported* targets: the target RID names what
+       to keep and everything else is foreign, so adding a platform needs no new branch here. That
+       matters more than it looks - this is the one macOS/ARM change that cannot degrade gracefully.
+       Get it wrong and it deletes the natives the build needs, which is why the layout was
+       verified by cross-publishing every RID from Windows and listing the folder (2026-08-22,
+       Whisper.net 1.9.1 / Microsoft.ML.OnnxRuntime 1.27.1). -->
   <Target Name="PruneForeignRuntimes" AfterTargets="Publish">
+
+    <!-- Mind the naming trap: Whisper.net calls the Apple Silicon folder macos-arm64 while the
+         .NET RID is osx-arm64, so both spellings coexist in one publish and only one of them is
+         foreign. Every other platform's folder happens to be spelled like its RID. -->
+    <PropertyGroup>
+      <_WhisperNativeDir Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">macos-arm64</_WhisperNativeDir>
+      <_WhisperNativeDir Condition="'$(_WhisperNativeDir)' == ''">$(RuntimeIdentifier)</_WhisperNativeDir>
+    </PropertyGroup>
+
     <ItemGroup>
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\linux-arm" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\linux-arm64" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\macos-arm64" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\macos-x64" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\win-arm64" />
-      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\win-x86" />
-      <_ForeignRuntimeDir Condition="'$(RuntimeIdentifier)' == 'win-x64'"
-                          Include="$(PublishDir)runtimes\linux-x64;$(PublishDir)runtimes\cuda\linux-x64;$(PublishDir)runtimes\vulkan\linux-x64" />
-      <_ForeignRuntimeDir Condition="'$(RuntimeIdentifier)' == 'linux-x64'"
-                          Include="$(PublishDir)runtimes\win-x64;$(PublishDir)runtimes\cuda\win-x64;$(PublishDir)runtimes\vulkan\win-x64" />
+      <!-- Whisper.net.Runtime's runtimes\&lt;platform&gt;\ layout: its .targets copies all eight of
+           these for any plain (non-OS-specific) target framework, regardless of RuntimeIdentifier. -->
+      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\linux-arm;$(PublishDir)runtimes\linux-arm64;$(PublishDir)runtimes\linux-x64;$(PublishDir)runtimes\macos-arm64;$(PublishDir)runtimes\macos-x64;$(PublishDir)runtimes\win-arm64;$(PublishDir)runtimes\win-x64;$(PublishDir)runtimes\win-x86"
+                          Exclude="$(PublishDir)runtimes\$(_WhisperNativeDir)" />
+      <!-- The GPU-backend packages exist for two platforms only, so every other target keeps
+           neither tree. That is not a gap to fill later: the Cuda-&gt;Vulkan-&gt;Cpu fallback in
+           WhisperTranscriber already handles their absence, which is what makes a CPU-only
+           platform a supported outcome rather than a broken one. -->
+      <_ForeignRuntimeDir Include="$(PublishDir)runtimes\cuda\win-x64;$(PublishDir)runtimes\cuda\linux-x64;$(PublishDir)runtimes\vulkan\win-x64;$(PublishDir)runtimes\vulkan\linux-x64"
+                          Exclude="$(PublishDir)runtimes\cuda\$(RuntimeIdentifier);$(PublishDir)runtimes\vulkan\$(RuntimeIdentifier)" />
     </ItemGroup>
     <RemoveDir Directories="@(_ForeignRuntimeDir)" />
+
+    <!-- Unlike Whisper.net's runtimes\&lt;platform&gt;\ layout above, Microsoft.ML.OnnxRuntime drops
+         natives loose in the publish root, from two independent mechanisms:
+         * the RID-specific runtime asset, which is always the right one for this publish
+           (verified by hash: a linux-arm64 publish gets the linux-arm64 libonnxruntime.so, not
+           the linux-x64 one);
+         * its own .props, which copies the *Windows* DLLs keyed on $(PlatformTarget) - the
+           architecture, not the operating system. That is why a linux-arm64 publish carries a
+           win-arm64 onnxruntime.dll and an osx-arm64 publish carries one too.
+         The *.lib import libraries are Windows build-time-only artifacts, never needed at run
+         time, so they go regardless of target. -->
     <ItemGroup>
-      <_ForeignPublishFile Include="$(PublishDir)ggml-metal.metal;$(PublishDir)abchapterize.pdb" />
-      <!-- Unlike Whisper.net's runtimes\<rid>\ layout above, Microsoft.ML.OnnxRuntime copies
-           its native libraries flat into the publish root for every platform it supports,
-           not just the target RuntimeIdentifier (confirmed by publishing both targets: the
-           linux-x64 output also carried onnxruntime.dll/onnxruntime_providers_shared.dll).
-           The *.lib import libraries are Windows build-time-only artifacts, never needed at
-           run time, so they are always pruned regardless of target. -->
-      <_ForeignPublishFile Include="$(PublishDir)onnxruntime.lib;$(PublishDir)onnxruntime_providers_shared.lib" />
-      <_ForeignPublishFile Condition="'$(RuntimeIdentifier)' == 'win-x64'"
-                           Include="$(PublishDir)libonnxruntime.so;$(PublishDir)libonnxruntime_providers_shared.so" />
-      <_ForeignPublishFile Condition="'$(RuntimeIdentifier)' == 'linux-x64'"
-                           Include="$(PublishDir)onnxruntime.dll;$(PublishDir)onnxruntime_providers_shared.dll" />
+      <!-- What this target keeps, moved into runtimes\&lt;rid&gt;\ below. macOS is the odd one out:
+           the 1.27.1 package ships osx-arm64/native/libonnxruntime.dylib and nothing else, with no
+           providers_shared counterpart, so naming one here would fail the Move task. -->
+      <_OnnxRuntimeNativeFile Condition="$(RuntimeIdentifier.StartsWith('win-'))"
+                              Include="$(PublishDir)onnxruntime.dll;$(PublishDir)onnxruntime_providers_shared.dll" />
+      <_OnnxRuntimeNativeFile Condition="$(RuntimeIdentifier.StartsWith('linux-'))"
+                              Include="$(PublishDir)libonnxruntime.so;$(PublishDir)libonnxruntime_providers_shared.so" />
+      <_OnnxRuntimeNativeFile Condition="$(RuntimeIdentifier.StartsWith('osx-'))"
+                              Include="$(PublishDir)libonnxruntime.dylib" />
+
+      <!-- Every loose ONNX native this target does not keep. Listing all three platforms' names
+           and subtracting the keepers is deliberate: which of them actually turn up depends on the
+           publishing architecture, and a name that never appears simply makes Delete a no-op. -->
+      <_ForeignPublishFile Include="$(PublishDir)onnxruntime.dll;$(PublishDir)onnxruntime_providers_shared.dll;$(PublishDir)libonnxruntime.so;$(PublishDir)libonnxruntime_providers_shared.so;$(PublishDir)libonnxruntime.dylib;$(PublishDir)onnxruntime.lib;$(PublishDir)onnxruntime_providers_shared.lib"
+                           Exclude="@(_OnnxRuntimeNativeFile)" />
+      <_ForeignPublishFile Include="$(PublishDir)abchapterize.pdb" />
+
+      <!-- Whisper.net.Runtime.Metal - a transitive dependency of Whisper.net.Runtime, not
+           referenced here - copies ggml-metal.metal (450 KB) into the publish *root* for any plain
+           target framework, so every target pays for it. It is the Metal compute-shader source
+           libggml-metal-whisper.dylib may fall back to at run time when it cannot use a
+           precompiled library, and ggml looks for it beside the executable rather than in
+           runtimes\, which is why it stays in the root rather than moving next to the dylib.
+           Unverifiable from here (see doc\building-on-macos.md), so it is kept on the one platform
+           that could possibly want it and pruned on the two that provably cannot. -->
+      <_ForeignPublishFile Condition="!$(RuntimeIdentifier.StartsWith('osx-'))"
+                           Include="$(PublishDir)ggml-metal.metal" />
     </ItemGroup>
     <Delete Files="@(_ForeignPublishFile)" />
 
     <!-- Move the correct-platform OnnxRuntime natives out of the publish root and into
-         runtimes\<rid>\ alongside the Whisper natives, instead of leaving them loose next to
-         the exe. SileroWorker registers a DllImportResolver that loads "onnxruntime" from
+         runtimes\&lt;rid&gt;\ alongside the Whisper natives, instead of leaving them loose next to
+         the exe. OnnxRuntimeNative registers a DllImportResolver that loads "onnxruntime" from
          this exact location, so the two must be kept in sync. -->
-    <ItemGroup>
-      <_OnnxRuntimeNativeFile Condition="'$(RuntimeIdentifier)' == 'win-x64'"
-                              Include="$(PublishDir)onnxruntime.dll;$(PublishDir)onnxruntime_providers_shared.dll" />
-      <_OnnxRuntimeNativeFile Condition="'$(RuntimeIdentifier)' == 'linux-x64'"
-                              Include="$(PublishDir)libonnxruntime.so;$(PublishDir)libonnxruntime_providers_shared.so" />
-    </ItemGroup>
     <Move SourceFiles="@(_OnnxRuntimeNativeFile)" DestinationFolder="$(PublishDir)runtimes\$(RuntimeIdentifier)\" />
   </Target>
 

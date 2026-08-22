@@ -1892,6 +1892,9 @@ public sealed class CliOptions
     private const string Conversions = "$roman{}, $digits{}, $upper{}, $lower{} or $capital{}";
 
     /// <summary>OS-specific note about where ffmpeg/ffprobe are searched (part of the usage info).</summary>
+    /// <remarks>Three branches rather than "Windows and everything else" because the search order
+    /// itself differs: macOS has no system ffmpeg at all, so the list that matters there is the
+    /// Homebrew and MacPorts prefixes, and a hint naming apt would send a Mac user nowhere.</remarks>
     private static string FfmpegNote => OperatingSystem.IsWindows()
         ? """
           ffmpeg/ffprobe are required. They are searched in %FFMPEG_DIR%\bin and %FFMPEG_DIR%
@@ -1899,10 +1902,17 @@ public sealed class CliOptions
           directory, next to abchapterize.exe or in the user profile, and common Program Files
           locations.
           """
+        : OperatingSystem.IsMacOS()
+        ? """
+          ffmpeg/ffprobe are required. They are searched in $FFMPEG_DIR and $FFMPEG_DIR/bin
+          (highest priority; point FFMPEG_DIR at either), PATH, ./ffmpeg, ~/ffmpeg,
+          /opt/homebrew/bin, /usr/local/bin, /opt/local/bin, /usr/bin, ~/bin and ~/.local/bin.
+          Install e.g. with: brew install ffmpeg
+          """
         : """
           ffmpeg/ffprobe are required. They are searched in $FFMPEG_DIR and $FFMPEG_DIR/bin
           (highest priority; point FFMPEG_DIR at either), PATH, ./ffmpeg, ~/ffmpeg, /usr/bin,
-          /usr/local/bin, /opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.
+          /usr/local/bin, /opt/ffmpeg/bin, /opt/ffmpeg, /snap/bin, ~/bin and ~/.local/bin.
           Install e.g. with: sudo apt install ffmpeg
           """;
 
@@ -2489,8 +2499,8 @@ public sealed class CliOptions
                                     discrete GPU is preferred automatically, so it is normally
                                     needed only to force the integrated one, or to choose among
                                     several discrete cards. The chosen GPU is named in the
-                                    startup line either way. Vulkan only; the CUDA backend keeps
-                                    its own device 0.
+                                    startup line either way. Vulkan only: the CUDA backend keeps
+                                    its own device 0, and macOS has no Vulkan loader at all.
               --vad-threads <n|auto>
                                     Threads for the voice-activity pre-pass of Analyze (default:
                                     auto - one per physical CPU core). Each thread holds about

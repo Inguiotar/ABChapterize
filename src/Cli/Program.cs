@@ -139,7 +139,8 @@ public static class Program
         var devices = VulkanDeviceEnumerator.Enumerate();
         if (devices.Count == 0)
         {
-            Console.WriteLine("No Vulkan GPUs found (Whisper will use CUDA or the CPU backend).");
+            Console.WriteLine("No Vulkan GPUs found.");
+            Console.WriteLine(VulkanDeviceEnumerator.AbsenceNote);
             return 0;
         }
 

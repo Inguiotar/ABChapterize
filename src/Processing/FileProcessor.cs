@@ -380,7 +380,9 @@ public sealed class FileProcessor
 
         var selection = GpuSelector.Select(devices, _options.UseGpu);
         if (selection.Error != null)
-            throw new AppError(selection.Error);
+            // GpuSelector stays free of platform knowledge, so the "why is the list empty here"
+            // half of the message is appended at the one place that already knows the machine.
+            throw new AppError($"{selection.Error}. {VulkanDeviceEnumerator.AbsenceNote}");
 
         // Naming the device even when nothing was selected is the whole point of the banner: the
         // backend's own default is index 0, and a machine with a single Vulkan device can still be

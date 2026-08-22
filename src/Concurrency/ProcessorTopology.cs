@@ -20,12 +20,12 @@ namespace ABChapterize.Concurrency;
 /// can say so with the options.
 /// </para>
 /// <para>
-/// There is no BCL API for this, so both platforms are read directly. The platform split is a
+/// There is no BCL API for this, so every platform is read directly. The platform split is a
 /// runtime branch rather than conditional compilation: this project is a single target framework
 /// with no per-OS builds, and a runtime guard is also what keeps the CA1416 platform analyzer
-/// happy about the Windows-only P/Invoke below - a <c>DllImport</c> for an entry point that only
+/// happy about the OS-specific P/Invokes below - a <c>DllImport</c> for an entry point that only
 /// exists on Windows is inert on Linux as long as it is never called, since native resolution is
-/// lazy.
+/// lazy, and the same is what lets the libSystem import sit beside it.
 /// </para>
 /// </summary>
 internal static class ProcessorTopology
@@ -50,13 +50,17 @@ internal static class ProcessorTopology
     {
         try
         {
-            var count = OperatingSystem.IsWindows() ? WindowsCoreCount() : LinuxCoreCount();
+            var count =
+                OperatingSystem.IsWindows() ? WindowsCoreCount()
+                : OperatingSystem.IsMacOS() ? MacCoreCount()
+                : LinuxCoreCount();
             return count > 0 ? count : Environment.ProcessorCount;
         }
         catch (Exception)
         {
             // A thread-count default is not worth failing a run over, whatever went wrong down
-            // there - a missing sysfs tree, a P/Invoke surprise on an exotic Windows edition.
+            // there - a missing sysfs tree, a P/Invoke surprise on an exotic Windows edition, a
+            // sysctl name Apple retired.
             return Environment.ProcessorCount;
         }
     }
@@ -120,6 +124,58 @@ internal static class ProcessorTopology
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetLogicalProcessorInformationEx(
         int relationshipType, IntPtr buffer, ref int returnedLength);
+
+    /// <summary>
+    /// Asks Darwin for <c>hw.perflevel0.physicalcpu</c>: the physical core count of performance
+    /// level 0, which is always the fastest core cluster on the package.
+    /// </summary>
+    /// <remarks>
+    /// <c>hw.physicalcpu</c> is the obvious name and the wrong one, which is the whole reason this
+    /// method is not one line. It counts efficiency cores in with the performance cores, and those
+    /// are not interchangeable workers: an 8-core Apple Silicon part with four of each would size
+    /// both thread pools for eight peers, half of which run at a fraction of the speed. That is the
+    /// same oversubscription this class exists to avoid on a hyperthreaded x86 box, wearing
+    /// different clothes. It stays as the fallback because a machine with one uniform cluster - an
+    /// Intel Mac, or a kernel predating perflevel - publishes no perflevel keys at all, and there
+    /// <c>hw.physicalcpu</c> is exactly right.
+    /// <para>
+    /// Untestable from this project: nobody here has a Mac and no CI runs on one, so this is
+    /// written to the documented sysctl contract rather than to an observation. It is shaped so
+    /// that being wrong costs nothing - every failure returns 0, and the caller reads that as
+    /// "cannot say" and falls back to <see cref="Environment.ProcessorCount"/>.
+    /// </para>
+    /// </remarks>
+    [SupportedOSPlatform("macos")]
+    private static int MacCoreCount()
+    {
+        var performanceCores = ReadSysctlInt32("hw.perflevel0.physicalcpu");
+        return performanceCores > 0 ? performanceCores : ReadSysctlInt32("hw.physicalcpu");
+    }
+
+    /// <summary>Reads an integer-valued sysctl by name; 0 when it does not exist or is not an
+    /// <see cref="int"/>.</summary>
+    /// <param name="name">Dotted sysctl name, e.g. <c>hw.physicalcpu</c>.</param>
+    /// <remarks>The width check is not a formality: sysctl reports a value's size back through the
+    /// same parameter, and several neighbouring <c>hw.*</c> keys are 64-bit (<c>hw.memsize</c>, for
+    /// one). A key that silently changed width would otherwise be read as a truncated int.</remarks>
+    [SupportedOSPlatform("macos")]
+    private static int ReadSysctlInt32(string name)
+    {
+        var value = 0;
+        var length = (nuint)sizeof(int);
+        return SysctlByName(name, ref value, ref length, IntPtr.Zero, 0) == 0
+               && length == (nuint)sizeof(int)
+            ? value
+            : 0;
+    }
+
+    [SupportedOSPlatform("macos")]
+    // No SetLastError: the return code alone decides here, and marking it would imply errno is
+    // read somewhere. The kernel32 import above does read its error, which is why it sets it.
+    [DllImport("libSystem.dylib", EntryPoint = "sysctlbyname")]
+    private static extern int SysctlByName(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+        ref int oldValue, ref nuint oldLength, IntPtr newValue, nuint newLength);
 
     /// <summary>
     /// Counts distinct (package, core) pairs under

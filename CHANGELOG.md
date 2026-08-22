@@ -22,6 +22,20 @@ earn a round number.
   all. The same goes for the `[xx]` tag that scopes a phrase, a title or a `--custom` mapping
   to one language of a mixed batch.
 
+- **Two more platforms build from source: Linux ARM64 and Apple Silicon.** Neither is
+  released, and neither has ever been run by anyone on this project — the Windows and
+  Linux x64 builds on the Releases page remain the only ones anybody can vouch for. Linux
+  ARM64 suits a small ARM home server and is CPU-only, the GPU backends having no ARM64
+  build of their own. Apple Silicon gets a page to itself,
+  [doc/building-on-macos.md](doc/building-on-macos.md): what should work, what is a coin
+  flip, and the one thing that will stop you before you start. Intel Macs are out of scope
+  permanently, for a reason spelled out there.
+
+- **macOS is no longer handed Linux's advice.** Where ffmpeg is looked for, what `--help`
+  says about it, and what the `could not be found` error suggests installing now name
+  Homebrew and MacPorts and their directories rather than apt and Linux's. `--list-gpus`
+  says plainly that GPU selection does not apply on a Mac, instead of offering it CUDA.
+
 ### Fixed
 
 - **Text outside your console's code page no longer prints as question marks.** Windows still
