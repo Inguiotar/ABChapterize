@@ -17,6 +17,29 @@ earn a round number.
 
 ### Added
 
+- **Audiobookshelf, directly.** With `--abs` (`-A`), books are named by what an
+  [Audiobookshelf](https://www.audiobookshelf.org/) server calls them rather than by path:
+  `library:Discworld`, `series:Tiffany Aching`, `collection:Favourites`, `item:<id>`, a bare
+  title, or `all`. Each selected book is downloaded to a temporary copy, marked exactly as a
+  local file would be, and its finished chapters are sent back to the server; the copy is then
+  deleted. Nothing on the server changes but the chapter list. Books the server already has
+  chapters for are skipped without `--force`, and books held as more than one audio file are
+  reported and passed over. `--no-op` lists what a selector picked without fetching anything,
+  which is worth doing before a selector that turns out to name a hundred books.
+
+- **`--push-only` sends chapters a book already has to Audiobookshelf**, detecting nothing and
+  changing no file. With `--abs` the selected books are fetched and read; without it, the local
+  files you name are matched against the server's libraries by their album tag, their title tag,
+  the folder they sit in, or their file name, in that order. Useful for putting a shelf you
+  marked long ago onto a server that never saw the marks.
+
+- **The server is named by `--abs-url`** — `http://host:13378`, `host:13378`, or just `host` —
+  and the credentials by `--abs-key`, or `--abs-user` with `--abs-password`. All of them,
+  along with `--abs-temp` for where the downloads land, can come from the environment instead
+  (`ABCHAPTERIZE_ABS_URL`, `ABCHAPTERIZE_ABS_KEY`, `ABCHAPTERIZE_ABS_USER`,
+  `ABCHAPTERIZE_ABS_PASSWORD`, `ABCHAPTERIZE_ABS_TEMP`), which keeps a key or a password out
+  of your shell history and out of the process list.
+
 - **`--lang` takes Whisper's three-letter codes** as well as the usual two-letter ones, so a
   language Whisper spells with three — Hawaiian `haw`, Cantonese `yue` — can now be named at
   all. The same goes for the `[xx]` tag that scopes a phrase, a title or a `--custom` mapping

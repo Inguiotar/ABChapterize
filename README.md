@@ -93,6 +93,12 @@ Prebuilt binaries for Windows and Linux are available on the
   `.m4b` is recommended: `.m4a` and `.m4b` are identical containers, but
   players may pick their exact behavior based on which extension they see, and
   chapters in `.mp3`/`.opus` files are honored by comparatively few players.
+- **Works straight off an Audiobookshelf server** — with `--abs`, books are named
+  by library, series, collection or title instead of by path: each one is fetched,
+  marked, and its chapters sent back to the server, with the temporary copy deleted
+  afterwards. Nothing on the server changes but the chapter list. `--push-only`
+  sends marks a book already has, either way round — books on the server, or local
+  files matched to it by their tags.
 - **Windows and Linux**, single self-contained executable. Linux ARM64 and
   Apple Silicon build from source as well, untested and unreleased — see
   [Building from source](#building-from-source).
@@ -169,6 +175,15 @@ abchapterize --mark-before-jingle hoerbuch.m4b
 # Redo files that already have (wrong) chapter marks:
 abchapterize --force badly-marked.m4b
 
+# Books on an Audiobookshelf server, by library, series, collection or title.
+# Check what a selector actually picked before committing to the downloads:
+export ABCHAPTERIZE_ABS_URL=books.lan:13378 ABCHAPTERIZE_ABS_KEY=...
+abchapterize --abs --no-op --summary "library:Discworld"
+abchapterize --abs "series:Tiffany Aching"
+
+# Books you already marked locally, whose chapters the server has not got:
+abchapterize --push-only --recurse "D:\Audiobooks"
+
 # Marks that should be one per numbered chapter (say, from an earlier run),
 # but you're not sure they all landed right? Check each against the audio;
 # only the ones that don't check out get redone:
@@ -238,6 +253,18 @@ when chapters are written. Grouped below exactly as `--help` groups them:
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
+
+**Audiobookshelf**
+
+| Option | What it does |
+| --- | --- |
+| `-A`, `--abs` | Work on books held by an Audiobookshelf server rather than files on this machine. Each selected book is fetched to a temporary copy, processed as usual, and its finished marks sent back; the copy is then deleted. The trailing arguments become selectors — `library:NAME`, `series:NAME`, `collection:NAME`, `item:ID`, `title:NAME`, `all` — and anything unprefixed is read as a title. A book the server already has chapters for is skipped without `--force`, and a book held as more than one audio file is passed over. See the [manual](doc/manual.md#audiobookshelf). |
+| `--push-only` | Send the server the marks a book already carries, detecting nothing. With `--abs` the selected books are fetched and read; without it, the local files named are matched to the server's libraries by their album tag, title tag, folder name or file name. |
+| `--abs-url <url>` | Which server: `http://host:13378`, `host:13378`, or just `host`. |
+| `--abs-key <key>` | An API key to authenticate with... |
+| `--abs-user <name>`, `--abs-password <pw>` | ...or an account to log in as. |
+| `--abs-temp <dir>` | Where the temporary downloads go (system temp by default). |
+| (none) | All five can come from the environment instead — `ABCHAPTERIZE_ABS_URL`, `ABCHAPTERIZE_ABS_KEY`, `ABCHAPTERIZE_ABS_USER`, `ABCHAPTERIZE_ABS_PASSWORD`, `ABCHAPTERIZE_ABS_TEMP` — which keeps a key or password out of your shell history and out of the process list. |
 
 **Detection tuning**
 

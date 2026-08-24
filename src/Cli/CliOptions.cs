@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using ABChapterize.Abs;
 using ABChapterize.Concurrency;
 using ABChapterize.Detection;
 using ABChapterize.Errors;
@@ -819,6 +820,54 @@ public sealed class CliOptions
     private readonly List<Target> _targets = [];
 
     /// <summary>
+    /// ABS mode (<c>--abs</c>, <c>-A</c>): the trailing arguments name books on an Audiobookshelf
+    /// server rather than paths on this machine. Each selected book is fetched to a temporary copy,
+    /// processed exactly as a local file would be, and the marks a successful run produces are sent
+    /// back to the server; the copy is then removed.
+    /// </summary>
+    public bool Abs { get; private set; }
+
+    /// <summary>
+    /// <c>--push-only</c>: send Audiobookshelf the marks a book already carries, detecting nothing.
+    /// In ABS mode that means fetching each selected book and reading its file; without it, the
+    /// files named on the command line are matched against the server's libraries instead.
+    /// </summary>
+    public bool PushOnly { get; private set; }
+
+    /// <summary>Whether this run talks to an Audiobookshelf server at all.</summary>
+    public bool UsesAbs => Abs || PushOnly;
+
+    // The connection as typed, kept only until Parse resolves it: what is missing here is filled
+    // in from the environment, so neither half is complete on its own.
+    private string? _absUrl, _absKey, _absUser, _absPassword;
+
+    /// <summary>
+    /// The Audiobookshelf server and credentials this run resolved, or null when it talks to no
+    /// server. Resolved during <see cref="Parse"/> rather than on first use, so a missing server or
+    /// credential is a command line error with the usage hint instead of a failure an hour into a
+    /// batch.
+    /// </summary>
+    /// <remarks>
+    /// Safe to print: <see cref="AbsConnection"/> overrides <c>ToString</c> with the redacted
+    /// description precisely because this property is public and reflected over by
+    /// <see cref="FolderConfig"/>.
+    /// </remarks>
+    public AbsConnection? AbsServer { get; private set; }
+
+    /// <summary>Where ABS mode puts its temporary downloads, or null for the system temporary
+    /// folder. An audiobook is a gigabyte, so the drive holding it is worth being able to
+    /// choose.</summary>
+    public string? AbsTemp { get; private set; }
+
+    /// <summary>
+    /// What ABS mode is to work on: the trailing arguments read as book selectors rather than as
+    /// paths. Empty when the run is not in ABS mode.
+    /// </summary>
+    public IReadOnlyList<AbsSelector> AbsSelectors => _absSelectors;
+
+    private readonly List<AbsSelector> _absSelectors = [];
+
+    /// <summary>
     /// The profile resolved at parse time: for an explicit --lang, this is used for every file;
     /// with <see cref="AutoLanguage"/>, it is the English fallback profile used only when a
     /// file's own detection is inconclusive or skipped - see <see cref="ResolveProfile"/>, which
@@ -855,7 +904,7 @@ public sealed class CliOptions
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
         ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
-        ['o'] = "--log-file",
+        ['o'] = "--log-file", ['A'] = "--abs",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -906,6 +955,36 @@ public sealed class CliOptions
     private bool UsesBareNumberPhrase
         => _phraseSpec is { } spec &&
            spec.Bodies.Any(p => p.Equals(PhraseCompiler.BareNumberWord, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when any option was given that only means something for a run that actually listens to
+    /// the audio: the language, the phrases, the model, the thresholds, where a mark lands, and the
+    /// titles detected marks are written under.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the two modes that produce chapter marks without detecting them, <c>--import</c>
+    /// and <c>--push-only</c>. One list rather than one each, because the promise their error
+    /// messages make - "these have no effect here" - has to go on being true for both as options
+    /// are added, and two copies of it would not.
+    /// </remarks>
+    private bool AnyDetectionSettingGiven
+        => _langSet || _phraseSpec != null || _prologuePhraseSpec != null || _epiloguePhraseSpec != null
+           || _customMappings.Count > 0 || IgnoreChapterNumbers || _modelSet || _upgradeModelSet
+           || _minSilenceSet || _noiseFloorSet || _markLeadSet || _earlyAbortSet || _expectedStartSet
+           || _maxChapterNumberSet || _chapterCountSet || _namedMarkDistanceSet
+           || MarkBeforeJingle || JingleFirst || QuickMarks || !TrailingScan || !Denoise || Verify
+           || _titleSpec != null || _partTitleSpec != null || _introSpec != null
+           || _prologueTitleSpec != null || _epilogueTitleSpec != null;
+
+    /// <summary>How <see cref="AnyDetectionSettingGiven"/> reads out loud, for the two error
+    /// messages that reject it.</summary>
+    private const string DetectionSettingOptions =
+        "--lang, --chapter-phrase, --prologue-phrase, --epilogue-phrase, --custom, --custom-file, "
+        + "--ignore-chapter-numbers, --model, --upgrade-model, --mark-before-jingle, --jingle-first, "
+        + "--quick-marks, --mark-lead, --min-silence-length, --noise-floor, --early-abort, "
+        + "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, "
+        + "--no-denoise, --verify, --named-mark-distance, --chapter-title, --part-title, "
+        + "--intro-title, --prologue-title and --epilogue-title";
 
     /// <summary>
     /// True when any option was given that only means something for a run that actually detects
@@ -977,6 +1056,9 @@ public sealed class CliOptions
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
+                // Without these, a --push-only sweep over a folder would record its files as done
+                // and the detection run afterwards would skip every one of them.
+                $"abs={Abs}/{PushOnly}", $"absserver={AbsServer?.Root}",
                 $"runbefore={RunBefore?.Raw}", $"runafter={RunAfter?.Raw}",
                 $"set={string.Join('|', _tuningOverrides)}",
             ]);
@@ -1128,7 +1210,7 @@ public sealed class CliOptions
         if (o.AssumeYes && !o.Cleanup)
             throw new CliError("--yes answers --cleanup's confirmation prompt and has no meaning without it.");
 
-        if (o.NoOp && o.FilterRegex == null && o.FilterExtensions == null)
+        if (o.NoOp && !o.Abs && o.FilterRegex == null && o.FilterExtensions == null)
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
         if (o.NoOp && (o.Revert || o.Cleanup || o.AnyProcessingOptionGiven))
@@ -1144,17 +1226,10 @@ public sealed class CliOptions
         // detection settings, but an imported mark carries the title the sidecar wrote for it and no
         // intro mark is ever prepended, so naming one is just as much an expectation this run cannot
         // meet. Rejecting beats silently ignoring, same as for --ignore-chapter-numbers below.
-        if (o.Import && (o._langSet || o._phraseSpec != null || o._prologuePhraseSpec != null || o._epiloguePhraseSpec != null || o._customMappings.Count > 0 || o.IgnoreChapterNumbers || o._modelSet || o._upgradeModelSet || o._minSilenceSet || o._noiseFloorSet || o._markLeadSet || o._earlyAbortSet || o._expectedStartSet || o._maxChapterNumberSet || o._chapterCountSet || o._namedMarkDistanceSet || o.MarkBeforeJingle || o.JingleFirst || o.QuickMarks || !o.TrailingScan || !o.Denoise || o.Verify || o._titleSpec != null || o._partTitleSpec != null || o._introSpec != null || o._prologueTitleSpec != null || o._epilogueTitleSpec != null))
+        if (o.Import && o.AnyDetectionSettingGiven)
             throw new CliError(
-                "--import skips detection entirely, so --lang, --chapter-phrase, --prologue-phrase, " +
-                "--epilogue-phrase, --custom, --custom-file, --ignore-chapter-numbers, --model, --upgrade-model, " +
-                "--mark-before-jingle, --jingle-first, --quick-marks, --mark-lead, --min-silence-length, " +
-                "--noise-floor, --early-abort, " +
-                "--expected-start-chapter, --max-chapter-number, --chapter-count, --no-trailing-scan, " +
-                "--no-denoise, --verify, " +
-                "--named-mark-distance, " +
-                "--chapter-title, --part-title, --intro-title, --prologue-title and --epilogue-title " +
-                "have no effect and cannot be combined with it.");
+                $"--import skips detection entirely, so {DetectionSettingOptions} "
+                + "have no effect and cannot be combined with it.");
 
         // --ignore-chapter-numbers removes the chapter-number sequence detection is otherwise built
         // around, and with it every option that reasons in those numbers. Rejecting them outright
@@ -1223,6 +1298,48 @@ public sealed class CliOptions
         if (o.SimpleMetadata && !o.Export && !o.Import)
             throw new CliError("--simple-metadata requires --export or --import.");
 
+        // Audiobookshelf. All of it ahead of the target resolution below, because in ABS mode the
+        // trailing arguments are book selectors rather than paths, and ResolveTargets would report
+        // every one of them as a file that does not exist.
+        if (o.Revert && o.UsesAbs)
+            throw new CliError(
+                "--revert restores backups on this machine and has nothing to do with an Audiobookshelf server.");
+        if (o.Cleanup && o.UsesAbs)
+            throw new CliError(
+                "--cleanup works on folders on this machine and has nothing to do with an Audiobookshelf server.");
+        if (!o.UsesAbs && (o._absUrl ?? o._absKey ?? o._absUser ?? o._absPassword ?? o.AbsTemp) != null)
+            throw new CliError(
+                "The --abs-... options describe an Audiobookshelf server, so one of --abs (-A), which "
+                + "works on books held by one, or --push-only, which sends it the marks local files "
+                + "already carry, has to be given as well.");
+        // Both write a sidecar beside the audio file, and in ABS mode that file is a temporary copy
+        // in a folder about to be deleted - so the sidecar would be written and then thrown away.
+        if (o.Abs && (o.Import || o.Export))
+            throw new CliError(
+                "--import and --export read and write a sidecar beside the audio file, which in ABS "
+                + "mode is a temporary copy that is deleted again; neither can be combined with --abs.");
+        if (o.Abs && o.Backup)
+            throw new CliError(
+                "--backup keeps the file as it was beside the one it changed, which in ABS mode is a "
+                + "temporary download; it cannot be combined with --abs. The book on the server is "
+                + "left as it is until the run succeeds either way.");
+        if (o.PushOnly && (o.Import || o.Export || o.Fix || o.Force || o.Backup))
+            throw new CliError(
+                "--push-only sends the marks a book already carries and changes no file, so --import, "
+                + "--export, --fix, --force and --backup have nothing to act on and cannot be "
+                + "combined with it.");
+        if (o.PushOnly && o.AnyDetectionSettingGiven)
+            throw new CliError(
+                $"--push-only detects nothing, so {DetectionSettingOptions} have no effect and cannot "
+                + "be combined with it.");
+        if (o.UsesAbs)
+        {
+            o.AbsServer = AbsConnection.Resolve(o._absUrl, o._absKey, o._absUser, o._absPassword);
+            o.AbsTemp ??= Environment.GetEnvironmentVariable(AbsWorkspace.TempVariable) is { Length: > 0 } dir
+                ? ExpandHomeDirectory(dir)
+                : null;
+        }
+
         o.Language = o.Language.ToLowerInvariant();
         if (o.Language != "auto" && !LanguageCodeRegex.IsMatch(o.Language))
             throw new CliError(
@@ -1255,16 +1372,26 @@ public sealed class CliOptions
         if (o._epilogueTitleSpec is { } epilogues && epilogues.Values.Any(t => t.Length == 0))
             throw new CliError("The epilogue title must not be empty (use --epilogue-phrase \"\" to switch epilogue detection off).");
 
-        o.ResolveTargets(targetArgs);
+        if (o.Abs)
+            o.ResolveSelectors(targetArgs);
+        else
+            o.ResolveTargets(targetArgs);
 
         // A statement about one book cannot be made about a whole folder of them, and silently
         // applying "this book has 20 chapters" to every file of a library would tag most of them as
         // incomplete. Checked after the targets are resolved, so that naming a directory is caught
         // here rather than becoming a run that hunts for chapters no file has.
-        if (o.ChapterCount != null && (o._targets.Count != 1 || o._targets[0].IsDirectory))
+        if (o.ChapterCount != null && !o.Abs && (o._targets.Count != 1 || o._targets[0].IsDirectory))
             throw new CliError(
                 "--chapter-count states how many chapters one particular book has, so it takes " +
                 "exactly one file - not a directory, and not several files.");
+        // The same statement about a selector, which cannot be resolved yet: one selector is
+        // necessary but not sufficient, a title being able to match a shelf full of books. What the
+        // one selector turned out to match is checked once the server has answered.
+        if (o.ChapterCount != null && o.Abs && o._absSelectors.Count != 1)
+            throw new CliError(
+                "--chapter-count states how many chapters one particular book has, so it takes "
+                + "exactly one book selector.");
 
         // With an explicit --lang this localizes the chapter phrase, title word and intro title
         // (unless given explicitly) for every file; with auto-detection it is only the English
@@ -1337,6 +1464,31 @@ public sealed class CliOptions
             throw new CliError("--recurse can only be used with a directory, and none was given.");
     }
 
+    /// <summary>
+    /// Reads the trailing arguments as Audiobookshelf book selectors, with duplicates removed.
+    /// </summary>
+    /// <param name="selectorArgs">The trailing arguments, as typed.</param>
+    /// <exception cref="CliError">Thrown for a malformed selector, or for an option that only means
+    /// something about a folder on this machine.</exception>
+    private void ResolveSelectors(List<string> selectorArgs)
+    {
+        // --recurse is refused rather than ignored for the same reason the mode exists at all: what
+        // it asks for - "and everything below this" - is a real question against a server too, and
+        // there the answer is a library, series or collection selector rather than a flag.
+        if (Recurse)
+            throw new CliError(
+                "--recurse descends into subdirectories, which an Audiobookshelf server has none of. "
+                + $"Name a set of books instead: {AbsSelector.Syntax}.");
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var argument in selectorArgs)
+        {
+            var selector = AbsSelector.Parse(argument);
+            if (seen.Add($"{selector.Kind}/{selector.Value}"))
+                _absSelectors.Add(selector);
+        }
+    }
+
     /// <summary>Reduces a path to the absolute, separator-normalized form two spellings of the
     /// same target share, so they can be recognized as one.</summary>
     /// <param name="path">The path as given on the command line.</param>
@@ -1388,6 +1540,8 @@ public sealed class CliOptions
             case "--fix": Fix = true; return true;
             case "--ignore-progress": IgnoreProgress = true; return true;
             case "--ignore-chapter-numbers": IgnoreChapterNumbers = true; return true;
+            case "--abs": Abs = true; return true;
+            case "--push-only": PushOnly = true; return true;
             default: return false;
         }
     }
@@ -1479,6 +1633,13 @@ public sealed class CliOptions
             case "--run-after": RunAfter = CommandTemplate.Parse(nextParam(), name); return true;
             case "--log-file": LogFilePath = ParseLogFilePath(nextParam()); return true;
             case "--color": Color = ParseColorMode(nextParam()); return true;
+            // The four connection options are stored as typed and resolved in Parse, where the
+            // environment fills in whatever the command line left out - see AbsConnection.Resolve.
+            case "--abs-url": _absUrl = nextParam(); return true;
+            case "--abs-key": _absKey = nextParam(); return true;
+            case "--abs-user": _absUser = nextParam(); return true;
+            case "--abs-password": _absPassword = nextParam(); return true;
+            case "--abs-temp": AbsTemp = ExpandHomeDirectory(nextParam()); return true;
             default: return false;
         }
     }
@@ -1926,6 +2087,8 @@ public sealed class CliOptions
 
         Usage:
           abchapterize [options] <file-or-directory>...
+          abchapterize -A|--abs [options] <selector>...
+          abchapterize --push-only [options] <file-or-directory>...
           abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
@@ -1967,11 +2130,56 @@ public sealed class CliOptions
                                     they also select which backups --revert restores - where
                                     the regexp is matched against the backup's own path, the
                                     one still ending in ".bak", so do not anchor it at the
-                                    audio extension.
+                                    audio extension. In ABS mode the regexp is matched against
+                                    "<item folder>/<book title>" instead, there being no local
+                                    path to match yet.
           -f, --force               Discard pre-existing chapter marks. Without --force, files
                                     that already have chapter marks are skipped.
           -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter marks,
                                     they are considered bogus and are discarded.
+
+        Audiobookshelf:
+          -A, --abs                 Work on books held by an Audiobookshelf server instead of
+                                    files on this machine. Each selected book is downloaded to a
+                                    temporary copy, processed exactly as a local file would be,
+                                    and the marks a successful run produces are sent back to the
+                                    server; the copy is then deleted. The server's own chapter
+                                    list is what counts as "this book is already marked", so a
+                                    book it has chapters for is skipped unless --force is given.
+                                    A book held as more than one audio file is reported and
+                                    passed over.
+                                    The trailing arguments are book selectors rather than paths:
+                                    "library:NAME", "series:NAME", "collection:NAME", "item:ID",
+                                    "title:NAME", or "all" ("*", "everything"); anything without
+                                    one of those prefixes is read as a title. Titles match
+                                    loosely - case and punctuation are ignored and part of a
+                                    title is enough - and select every book they match unless one
+                                    matches exactly. Give several selectors to add them together.
+                                    Not combinable with --import, --export, --backup, --revert,
+                                    --cleanup or --recurse.
+              --push-only           Send Audiobookshelf the chapter marks a book already has,
+                                    detecting nothing and changing no file. With --abs, the
+                                    selected books are fetched and read; without it, the files
+                                    named on the command line are matched against the server's
+                                    libraries - by album tag, then title tag, then folder name,
+                                    then file name - and one that matches nothing, or matches
+                                    several books, is skipped with a note.
+              --abs-url <url>       Which server: "http://host:13378", "host:13378", or just
+                                    "host" - http and Audiobookshelf's own port 13378 stand in
+                                    for whatever you leave out. https and a reverse-proxy
+                                    sub-path both work.
+              --abs-key <key>       API key to authenticate with (in Audiobookshelf: settings,
+                                    users, API keys).
+              --abs-user <name>     Log in as this account instead of using an API key.
+              --abs-password <pw>   That account's password.
+              --abs-temp <dir>      Where the temporary downloads go; the system temporary folder
+                                    by default. An audiobook is a large file, so which drive
+                                    holds it is worth being able to choose.
+                                    All five can be given in the environment instead, which keeps
+                                    a key or a password out of the command line and out of the
+                                    process list: ABCHAPTERIZE_ABS_URL, ABCHAPTERIZE_ABS_KEY,
+                                    ABCHAPTERIZE_ABS_USER, ABCHAPTERIZE_ABS_PASSWORD and
+                                    ABCHAPTERIZE_ABS_TEMP. A --config file does the same job.
 
         Detection tuning:
           -l, --lang <code|auto>    Language hint for Whisper - the two-letter code, or the
@@ -2421,8 +2629,10 @@ public sealed class CliOptions
                                     exit without loading a Whisper model, invoking ffmpeg or
                                     touching any file. A quick way to check that a --filter
                                     regexp or extension list actually matches the intended files
-                                    before a real run. Requires --filter; combinable with
-                                    --recurse and the output options, but nothing else.
+                                    before a real run. Requires --filter, except in ABS mode,
+                                    where it lists the books the selectors picked and what would
+                                    become of each without downloading anything. Combinable with
+                                    --recurse, --abs and the output options, but nothing else.
               --run-before <cmd>    Run a shell command for each file just before it is worked
                                     on, and only for a file this run actually works on: a
                                     file skipped (e.g. for already carrying marks) runs

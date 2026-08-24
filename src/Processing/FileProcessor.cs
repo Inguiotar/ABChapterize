@@ -4,6 +4,7 @@
 
 using System.Diagnostics;
 using System.Text;
+using ABChapterize.Abs;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Concurrency;
@@ -37,6 +38,14 @@ public sealed class FileProcessor
 {
     private readonly CliOptions _options;
     private readonly ProgressRenderer _progress;
+
+    /// <summary>
+    /// The Audiobookshelf side of the run, or null when the run talks to no server. Set by
+    /// <see cref="RunAsync"/> rather than by the constructor because it owns a connection and a
+    /// temporary folder, and both have to be released before the run returns - so the one place
+    /// that can hold it in a <c>using</c> is the one that also assigns it.
+    /// </summary>
+    private AbsFileFlow? _abs;
 
     /// <summary>Number of files for which processing was aborted with a warning.</summary>
     private int _warnings;
@@ -82,13 +91,77 @@ public sealed class FileProcessor
             RunRevert(ct);
             return;
         }
-        if (_options.NoOp)
+        if (_options.NoOp && !_options.Abs)
         {
             RunNoOp();
             return;
         }
+        if (!_options.UsesAbs)
+        {
+            await RunABChapterizeAsync(ct);
+            return;
+        }
+
+        // Everything from here on has a server behind it. The using is what removes the run's
+        // downloads, so a Ctrl+C or a failure part way through a library leaves nothing behind.
+        using var abs = new AbsFileFlow(_options, _progress);
+        _abs = abs;
+        await abs.ConnectAsync(ct);
+        if (_options.NoOp)
+        {
+            await RunAbsNoOpAsync(ct);
+            return;
+        }
         await RunABChapterizeAsync(ct);
     }
+
+    /// <summary>
+    /// --no-op in ABS mode: lists the books the selectors and --filter picked out, saying of each
+    /// what would happen to it, and returns without fetching a single byte of audio.
+    /// <para>
+    /// Worth rather more here than it is over a folder. A selector can name a hundred books without
+    /// looking as though it does, and each of them is a download; checking first costs one request.
+    /// </para>
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task RunAbsNoOpAsync(CancellationToken ct)
+    {
+        var books = await _abs!.SelectAsync(ct);
+        if (books.Count == 0)
+        {
+            Console.WriteLine("No books matching the given selectors found.");
+            return;
+        }
+        if (!_options.Quiet)
+            foreach (var book in books)
+                Console.WriteLine($"{book.Describe} - {DescribeAbsPlan(book)}");
+        if (_options.Summary)
+            Console.WriteLine(
+                $"Summary: {books.Count(WouldProcess)} of {books.Count} book(s) would be processed");
+    }
+
+    /// <summary>What a --no-op listing says would become of one book.</summary>
+    /// <param name="book">The selected book.</param>
+    private string DescribeAbsPlan(AbsBook book)
+    {
+        if (!book.IsSingleFile)
+            return $"skipped, {book.AudioFileCount} audio files";
+        if (WouldProcess(book))
+            return _options.PushOnly ? "existing marks sent to the server" : "processed";
+        return $"skipped, {book.ChapterCount} chapter mark(s) (use --force to redo)";
+    }
+
+    /// <summary>
+    /// Whether a --no-op listing would count this book as one the run works on - asked of the same
+    /// rule that decides it for real, so the listing and the summary under it cannot disagree.
+    /// </summary>
+    /// <param name="book">The selected book.</param>
+    /// <remarks>
+    /// It can only ever be an estimate: what a book really carries is settled by the probe of the
+    /// downloaded file, and a --push-only book with no marks at all is skipped there rather than
+    /// here. But it is the estimate the run itself works from.
+    /// </remarks>
+    private bool WouldProcess(AbsBook book) => _abs!.WouldProcess(book);
 
     /// <summary>
     /// --no-op mode: lists every file --filter (and --recurse) would select, then returns
@@ -168,22 +241,9 @@ public sealed class FileProcessor
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     private async Task RunABChapterizeAsync(CancellationToken ct)
     {
-        var groups = EnumerateTargetGroups(_options.EffectiveExtensions);
-        if (groups.Sum(g => g.Files.Count) == 0)
-        {
-            _progress.Announce(_options.FilterRegex != null || _options.FilterExtensions != null
-                ? "No audio files matching --filter found."
-                : $"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
+        var files = _options.Abs ? await SelectAbsBooksAsync(ct) : SelectLocalFiles();
+        if (files == null)
             return;
-        }
-
-        var files = ApplyBatchProgress(groups);
-        if (files.Count == 0)
-        {
-            _progress.Announce("Every selected file was already processed by an earlier, " +
-                              "interrupted run; nothing left to do (--ignore-progress redoes them).");
-            return;
-        }
 
         var (ffmpegPath, ffprobePath) = FfmpegLocator.Locate();
         var ffmpeg = new FfmpegClient(ffmpegPath, ffprobePath);
@@ -191,6 +251,8 @@ public sealed class FileProcessor
 
         if (_options.Import)
             await RunImportAsync(files, ffmpeg, ct);
+        else if (_options.PushOnly)
+            await RunPushOnlyAsync(files, ffmpeg, ct);
         else
             await RunDetectionAsync(files, ffmpeg, ct);
 
@@ -199,17 +261,95 @@ public sealed class FileProcessor
     }
 
     /// <summary>
+    /// The ordinary file selection: every command line target enumerated, minus what an earlier
+    /// interrupted run already finished.
+    /// </summary>
+    /// <returns>The files to process, or null when there are none - in which case the reason has
+    /// already been reported.</returns>
+    private List<PendingFile>? SelectLocalFiles()
+    {
+        var groups = EnumerateTargetGroups(_options.EffectiveExtensions);
+        if (groups.Sum(g => g.Files.Count) == 0)
+        {
+            _progress.Announce(_options.FilterRegex != null || _options.FilterExtensions != null
+                ? "No audio files matching --filter found."
+                : $"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
+            return null;
+        }
+
+        var files = ApplyBatchProgress(groups);
+        if (files.Count == 0)
+        {
+            _progress.Announce("Every selected file was already processed by an earlier, " +
+                              "interrupted run; nothing left to do (--ignore-progress redoes them).");
+            return null;
+        }
+        return files;
+    }
+
+    /// <summary>
+    /// The ABS mode file selection: the selectors resolved against the server, each book standing
+    /// in for a file that does not exist yet.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The books to process, or null when there are none.</returns>
+    /// <remarks>
+    /// No <see cref="BatchProgress"/> here, and none is missing. That checkpoint lives in the
+    /// directory being worked through, and ABS mode has no such directory - what it has instead is
+    /// a server that already knows which books carry chapters, so an interrupted run resumed by
+    /// repeating the command skips what it finished for the ordinary reason: the marks are there.
+    /// </remarks>
+    private async Task<List<PendingFile>?> SelectAbsBooksAsync(CancellationToken ct)
+    {
+        var books = await _abs!.SelectAsync(ct);
+        if (books.Count == 0)
+        {
+            _progress.Announce("No books matching the given selectors found.");
+            return null;
+        }
+        // The command line could only check that exactly one selector was given; what it actually
+        // matched is knowable no earlier than here.
+        if (_options.ChapterCount != null && books.Count != 1)
+            throw new AppError(
+                $"--chapter-count states how many chapters one particular book has, but the "
+                + $"selector matched {books.Count} books.");
+        if (!_options.Quiet)
+            _progress.Announce($"{books.Count} book(s) selected on Audiobookshelf.");
+        return [.. books.Select(b => new PendingFile("", null, "", b))];
+    }
+
+    /// <summary>
+    /// The --push-only pipeline: no model is loaded and nothing is detected, so each file is an
+    /// ffprobe, a look-up on the server and one request.
+    /// </summary>
+    /// <param name="files">The files, or the books, to send marks for.</param>
+    /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
+    private async Task RunPushOnlyAsync(List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
+    {
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            await ProcessOneAsync(file, ffmpeg, detectorFor: null, ct);
+        }
+    }
+
+    /// <summary>
     /// One file waiting to be processed, together with the checkpoint to report it to when it is
     /// finished (null for a file named directly on the command line, or when checkpointing is off
     /// - see <see cref="ApplyBatchProgress"/>).
     /// </summary>
-    /// <param name="Path">Full path of the file.</param>
+    /// <param name="Path">Full path of the file; the empty string for a book not fetched yet.</param>
     /// <param name="Progress">Batch checkpoint of the directory the file came from, if any.</param>
     /// <param name="TargetRoot">The command line target this file was found through - the directory
     /// that was named, or the file itself. It bounds how far up <see cref="FolderConfig"/> looks for
     /// a per-folder settings file, so a run never reads one from outside what it was asked to
     /// process.</param>
-    private readonly record struct PendingFile(string Path, BatchProgress? Progress, string TargetRoot);
+    /// <param name="Book">The Audiobookshelf book this file is a copy of, or null for a local
+    /// file. Set before <see cref="Path"/> is: in ABS mode the book is what the run selected and
+    /// the path only exists once it has been downloaded.</param>
+    private readonly record struct PendingFile(
+        string Path, BatchProgress? Progress, string TargetRoot, AbsBook? Book = null);
 
     /// <summary>
     /// Opens each directory target's <see cref="BatchProgress"/>, drops the files a previous,
@@ -317,10 +457,17 @@ public sealed class FileProcessor
             foreach (var file in files)
             {
                 ct.ThrowIfCancellationRequested();
-                var options = FolderConfig.ResolveForFile(_options, file.Path, file.TargetRoot);
-                var detector = new ChapterDetector(options, ffmpeg, transcriber, vad, upgrade);
-                await ProcessOneAsync(file, ffmpeg, detector, ct);
+                // A factory rather than a detector, because in ABS mode the path a folder's
+                // settings would be resolved from does not exist until the book has been fetched -
+                // which happens inside ProcessOneAsync, where the file has a progress block to
+                // download into.
+                await ProcessOneAsync(file, ffmpeg, ResolveDetector, ct);
             }
+            ChapterDetector ResolveDetector(string file, string targetRoot)
+                // A book from a server sits in a temporary folder that no .abchapterize-config
+                // could sensibly be put in, so ABS mode takes the run's own options as they are.
+                => new(_options.Abs ? _options : FolderConfig.ResolveForFile(_options, file, targetRoot),
+                    ffmpeg, transcriber, vad, upgrade);
         }
         finally
         {
@@ -639,9 +786,13 @@ public sealed class FileProcessor
     /// a per-folder <c>.abchapterize-config</c> changed how the book is read (see
     /// <see cref="FolderConfig"/>) - so anything describing what detection did takes it from here
     /// rather than from the run.</param>
+    /// <param name="Abs">The Audiobookshelf book this file is a temporary copy of, or null for a
+    /// local file. Carried in the context rather than passed alongside it because the two places
+    /// that need it - the merge that settles which marks the book already has, and the write that
+    /// sends the finished ones back - sit at opposite ends of the pipeline.</param>
     private readonly record struct FileContext(
         string File, string Name, WorkTracker Work, DetectionLog Logs, MediaInfo Info,
-        FfmpegClient Ffmpeg, CliOptions Options);
+        FfmpegClient Ffmpeg, CliOptions Options, AbsLocalCopy? Abs = null);
 
     /// <summary>
     /// Processes a single audiobook file, prints its summary line and - once it is finished for
@@ -650,18 +801,34 @@ public sealed class FileProcessor
     /// </summary>
     /// <param name="pending">The file to process and the checkpoint it belongs to.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
-    /// <param name="detector">The run's single detector, reused for every file: there is one
-    /// per run rather than one per file, and files are processed strictly one at a time.</param>
+    /// <param name="detectorFor">Builds the detector for this file once its path is known, or null
+    /// for a mode that detects nothing (--push-only).</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ProcessOneAsync(
-        PendingFile pending, FfmpegClient ffmpeg, ChapterDetector detector, CancellationToken ct)
+        PendingFile pending, FfmpegClient ffmpeg, DetectorFactory? detectorFor, CancellationToken ct)
     {
-        var name = Path.GetFileName(pending.Path);
+        // A book from a server is named by its title rather than by the file it happens to be
+        // stored in: the title is what the user picked it out by and what the server calls it.
+        var name = pending.Book?.Title ?? Path.GetFileName(pending.Path);
         var work = new WorkTracker();
         _progress.Start(name, work);
+        AbsLocalCopy? copy = null;
         try
         {
-            var renamedTo = await ProcessOneCoreAsync(pending.Path, name, work, ffmpeg, detector, ct);
+            if (pending.Book is { } book)
+            {
+                var (fetched, refusal) = await _abs!.FetchAsync(book, work, ct);
+                if (fetched == null)
+                {
+                    ReportSkipped(work, name, refusal, hint: "");
+                    return;
+                }
+                copy = fetched;
+                pending = pending with { Path = fetched.Path };
+            }
+            var renamedTo = await ProcessOneCoreAsync(
+                pending.Path, name, work, ffmpeg,
+                detectorFor?.Invoke(pending.Path, pending.TargetRoot), copy, ct);
             pending.Progress?.MarkDone(pending.Path, renamedTo);
         }
         catch (OperationCanceledException)
@@ -674,7 +841,22 @@ public sealed class FileProcessor
             _progress.FinishWithSummary(work, $"{name}: ERROR - {ex.Message}", important: true);
             throw;
         }
+        finally
+        {
+            // In the finally, so a book whose processing threw does not leave a gigabyte behind -
+            // and before the exception propagates out of the run, where nothing would be looking.
+            if (copy != null)
+                _abs!.Discard(copy);
+        }
     }
+
+    /// <summary>
+    /// Builds the detector for one file, once the run knows where that file is.
+    /// </summary>
+    /// <param name="file">Path of the file about to be processed.</param>
+    /// <param name="targetRoot">The command line target it was reached through, which the
+    /// per-folder settings are resolved along.</param>
+    private delegate ChapterDetector DetectorFactory(string file, string targetRoot);
 
     /// <summary>
     /// The per-file pipeline's opening and closing: probe, decoder resolution, the two hooks, the
@@ -685,14 +867,15 @@ public sealed class FileProcessor
     /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
     /// <param name="work">Its progress tracker, already started.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
-    /// <param name="detector">The run's single detector, reused for every file: there is one
-    /// per run rather than one per file, and files are processed strictly one at a time.</param>
+    /// <param name="detector">This file's detector, or null for a mode that detects nothing
+    /// (--push-only).</param>
+    /// <param name="abs">The Audiobookshelf book this file was fetched for, or null.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The name the file was renamed to (a ".missing-marks" tag added or dropped), or
     /// null when it kept its own.</returns>
     private async Task<string?> ProcessOneCoreAsync(
-        string file, string name, WorkTracker work, FfmpegClient ffmpeg, ChapterDetector detector,
-        CancellationToken ct)
+        string file, string name, WorkTracker work, FfmpegClient ffmpeg, ChapterDetector? detector,
+        AbsLocalCopy? abs, CancellationToken ct)
     {
         var watch = Stopwatch.StartNew();
         // The ordinary log sink; every message is prefixed with the file name.
@@ -701,7 +884,8 @@ public sealed class FileProcessor
         // what the probe found - so the probe, the decoder resolution and --run-before log to the
         // ordinary sink alone. Nothing is lost by that: the header restates everything the first
         // two carry, and a log opened before the hook would describe a file the hook then replaced.
-        if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, detector.Options, ct) is not { } opened)
+        var options = detector?.Options ?? _options;
+        if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, options, abs, ct) is not { } opened)
             return null;
         var (probed, plan) = opened;
 
@@ -714,7 +898,7 @@ public sealed class FileProcessor
             // Skipped under --dry-run, where nothing ran and so nothing can have changed.
             if (!_options.DryRun)
             {
-                if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, detector.Options, ct) is not { } reopened)
+                if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, options, abs, ct) is not { } reopened)
                     return null;
                 (probed, plan) = reopened;
             }
@@ -765,12 +949,22 @@ public sealed class FileProcessor
 
         /// <summary>Leave the file alone: it is already marked and nothing says to redo it.</summary>
         Skip,
+
+        /// <summary>Send the marks it already carries to Audiobookshelf and change nothing
+        /// (--push-only).</summary>
+        Push,
     }
 
     /// <summary>Applies the "what happens to this file" policy - see <see cref="FilePlan"/>.</summary>
     /// <param name="ctx">The file's context, carrying its probe result.</param>
     private FilePlan PlanFor(FileContext ctx)
     {
+        // First, and unconditional: --push-only forms no opinion about a book beyond what marks it
+        // has, so none of the policy below - the resume tag, the pre-existing marks, --verify - has
+        // anything to decide. A book with no marks at all is caught where they are read.
+        if (_options.PushOnly)
+            return FilePlan.Push;
+
         // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
         // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed marks
         // are trusted as-is. --force means "redo the whole file from scratch" and takes priority,
@@ -799,16 +993,26 @@ public sealed class FileProcessor
     /// <param name="log">Its ordinary log sink, or null when nothing is listening.</param>
     /// <param name="options">The settings this file is detected under; see
     /// <see cref="FileContext.Options"/>.</param>
+    /// <param name="abs">The Audiobookshelf book this file was fetched for, or null.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The file's context and what is to be done with it, or null when it is not going to
     /// be worked on at all - in which case it has already been counted and reported.</returns>
     private async Task<(FileContext Ctx, FilePlan Plan)?> OpenAndPlanAsync(
         string file, string name, WorkTracker work, FfmpegClient ffmpeg, Action<string>? log,
-        CliOptions options, CancellationToken ct)
+        CliOptions options, AbsLocalCopy? abs, CancellationToken ct)
     {
         var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
+        // Between the probe and every decision that reads it, because "what marks does this book
+        // already have" is a question the server has the better answer to - see AbsChapterMerge.
+        if (abs != null)
+        {
+            var (merged, note) = _abs!.Merge(info, abs);
+            info = merged;
+            if (note.Length > 0)
+                log?.Invoke(note);
+        }
         if (await ResolveXheAacDecoderAsync(
-                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, options),
+                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, options, abs),
                 ct)
             is not { } probed)
             return null;
@@ -832,8 +1036,13 @@ public sealed class FileProcessor
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The name the file was renamed to, or null when it kept its own.</returns>
     private async Task<string?> CommitOneAsync(
-        FileContext ctx, ChapterDetector detector, FilePlan plan, Stopwatch watch, CancellationToken ct)
+        FileContext ctx, ChapterDetector? detector, FilePlan plan, Stopwatch watch, CancellationToken ct)
     {
+        // Also the null-detector case, and not by coincidence: --push-only is the one mode that
+        // loads no model, and FilePlan.Push is the only plan PlanFor gives it.
+        if (plan is FilePlan.Push || detector == null)
+            return await PushExistingMarksAsync(ctx, watch, ct);
+
         if (plan is FilePlan.Resume)
             return await ProcessResumeAsync(ctx, detector, watch, ct);
 
@@ -853,6 +1062,50 @@ public sealed class FileProcessor
             return null;
         }
         return await WriteDetectedChaptersAsync(ctx, result, dropped, note, ct);
+    }
+
+    /// <summary>
+    /// The --push-only outcome for one file: send Audiobookshelf the marks the file already
+    /// carries, having first worked out which book they belong to.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Always null: nothing is written and nothing is renamed.</returns>
+    /// <remarks>
+    /// The two refusals are skips rather than failures, deliberately. A folder pushed to a server
+    /// will hold books the server does not have and books nobody has marked yet, and neither is a
+    /// reason to stop a batch - they are exactly what the --summary listing of skipped files is
+    /// for.
+    /// </remarks>
+    private async Task<string?> PushExistingMarksAsync(
+        FileContext ctx, Stopwatch watch, CancellationToken ct)
+    {
+        // In ABS mode the book is already known; outside it, the file has to be recognized.
+        var book = ctx.Abs?.Book;
+        if (book == null)
+        {
+            var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
+            if (match.Book == null)
+            {
+                ReportSkipped(ctx.Work, ctx.Name, match.Reason, hint: "");
+                return null;
+            }
+            book = match.Book;
+            ctx.Logs.Write(match.Reason);
+        }
+
+        var chapters = ctx.Info.ExistingChapters;
+        if (chapters.Count == 0)
+        {
+            ReportSkipped(ctx.Work, ctx.Name, "has no chapter marks to send", hint: "");
+            return null;
+        }
+
+        RecordProcessed(watch);
+        var note = await _abs!.PushAsync(book, chapters, ctx.Info.DurationSeconds, ct);
+        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: \"{book.Title}\"{note}");
+        return null;
     }
 
     /// <summary>Probes a file and emits the one-line --verbose note describing what came back.
@@ -1587,7 +1840,16 @@ public sealed class FileProcessor
         var earlierBakKept = await ctx.Ffmpeg.WriteChaptersAsync(
             ctx.File, chapters, ctx.Info.DurationSeconds, _options.Backup,
             BeginFinishPhase(ctx.Work, ctx.Info), ct);
-        return (RenameCommitted(ctx.File, renameTo), FormatBackupNote(_options.Backup, earlierBakKept));
+        // The server is told here rather than at the six places that reach this method, and after
+        // the write rather than before it: what goes to Audiobookshelf is then exactly what the
+        // file received, including a partial write left by an unresolved gap - which is worth
+        // having on the server, since the alternative is nothing at all. A file the run declined to
+        // write never gets here and so never sends anything.
+        var pushNote = ctx.Abs is { } abs
+            ? await _abs!.PushAsync(abs.Book, chapters, ctx.Info.DurationSeconds, ct)
+            : "";
+        return (RenameCommitted(ctx.File, renameTo),
+            FormatBackupNote(_options.Backup, earlierBakKept) + pushNote);
     }
 
     /// <summary>

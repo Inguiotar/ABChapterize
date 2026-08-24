@@ -28,10 +28,15 @@ public readonly record struct Chapter(double StartSeconds, string Title);
 /// file was never probed for chapters at all (the xHE-AAC-without-decoder early return, and the
 /// instances the unit tests construct by hand), which <see cref="ExistingChapters"/> flattens to an
 /// empty list. A successful probe always supplies a list, empty or not.</param>
+/// <param name="TitleTag">The container title tag, or null where the file has none.</param>
+/// <param name="AlbumTag">The container album tag, or null where the file has none. For an
+/// audiobook this is usually the book, the title tag naming the part - which is why both are read
+/// rather than either being trusted.</param>
 public readonly record struct MediaInfo(
     double DurationSeconds, long SizeBytes, int ChapterCount,
     string AudioCodec = "", string AudioProfile = "", string? InputDecoder = null,
-    IReadOnlyList<Chapter>? ExistingChapterList = null)
+    IReadOnlyList<Chapter>? ExistingChapterList = null,
+    string? TitleTag = null, string? AlbumTag = null)
 {
     /// <summary>True when the audio stream uses the xHE-AAC (USAC) profile of AAC.</summary>
     public bool IsXheAac => AudioProfile.Contains("xHE", StringComparison.OrdinalIgnoreCase);
@@ -142,8 +147,38 @@ public sealed partial class FfmpegClient : IAudioSource
             if (stream.TryGetProperty("profile", out var pr))
                 profile = pr.GetString() ?? "";
         }
+        // The container tags are read for one caller only - matching a local file against a
+        // library on an Audiobookshelf server, where a file name is often the least reliable thing
+        // about a book. Nothing in detection looks at them.
+        string? titleTag = null, albumTag = null;
+        if (root.TryGetProperty("format", out var tagged) && tagged.TryGetProperty("tags", out var formatTags))
+        {
+            titleTag = TagValue(formatTags, "title");
+            albumTag = TagValue(formatTags, "album");
+        }
         var size = new FileInfo(file).Length;
-        return new MediaInfo(duration, size, existingChapters.Count, codec, profile, ExistingChapterList: existingChapters);
+        return new MediaInfo(duration, size, existingChapters.Count, codec, profile,
+            ExistingChapterList: existingChapters, TitleTag: titleTag, AlbumTag: albumTag);
+    }
+
+    /// <summary>
+    /// One container tag, or null when it is absent or empty.
+    /// </summary>
+    /// <param name="tags">The "tags" object of an ffprobe format section.</param>
+    /// <param name="name">The tag to read.</param>
+    /// <remarks>
+    /// Case-insensitive, because the spelling depends on the container: mp4 reports lower-case
+    /// names, Matroska upper-case ones, and ID3 whatever the tagger wrote.
+    /// </remarks>
+    private static string? TagValue(JsonElement tags, string name)
+    {
+        foreach (var tag in tags.EnumerateObject())
+            if (string.Equals(tag.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                var value = tag.Value.ValueKind == JsonValueKind.String ? tag.Value.GetString() : null;
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        return null;
     }
 
     /// <summary>Cached result of the libfdk_aac decoder availability check.</summary>

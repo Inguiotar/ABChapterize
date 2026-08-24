@@ -104,6 +104,9 @@ internal static class FolderConfig
         ["TuningChanges"] = "--set:",
         ["UpgradeModelIsBetter"] = "--upgrade-model", ["UpgradeModelIsWorse"] = "--upgrade-model",
         ["Targets"] = "the file arguments",
+        ["Abs"] = "--abs", ["UsesAbs"] = "--abs", ["PushOnly"] = "--push-only",
+        ["AbsServer"] = "--abs-url", ["AbsTemp"] = "--abs-temp",
+        ["AbsSelectors"] = "the book selectors",
     };
 
     /// <summary>

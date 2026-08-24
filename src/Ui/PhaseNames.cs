@@ -19,6 +19,13 @@ namespace ABChapterize.Ui;
 /// </summary>
 public static class PhaseNames
 {
+    /// <summary>
+    /// Fetching a book from an Audiobookshelf server, ahead of everything else a file goes
+    /// through. The one phase that is not about audio at all - its bar fills with bytes off the
+    /// network rather than with play time.
+    /// </summary>
+    public const string Download = "Download";
+
     /// <summary>The silence/VAD pre-pass over the whole file.</summary>
     public const string Analyze = "Analyze";
 
@@ -71,7 +78,7 @@ public static class PhaseNames
     /// <summary>Every phase name, for the tests that hold <see cref="Display"/> complete.</summary>
     public static IReadOnlyList<string> All =>
     [
-        Analyze, Probe, ChronologicalProbe, JingleProbe, SilenceProbe, DescendingProbe,
+        Download, Analyze, Probe, ChronologicalProbe, JingleProbe, SilenceProbe, DescendingProbe,
         SubFloorProbe, Reprobe, Scan, Rescan, Verify, Finish,
     ];
 
@@ -83,12 +90,13 @@ public static class PhaseNames
     /// not know - a phase is better shown under its bare name than not at all.</returns>
     /// <remarks>
     /// Spelled out rather than derived from the name. English forms a participle four different ways
-    /// across these twelve words alone (drop the "e", double the "n", "y" to "ying", plain suffix),
+    /// across these thirteen words alone (drop the "e", double the "n", "y" to "ying", plain suffix),
     /// so a rule general enough to cover them would be more machinery - and more ways to be subtly
     /// wrong - than the table it replaces.
     /// </remarks>
     public static string Display(string phase) => phase switch
     {
+        Download => "Downloading...",
         Analyze => "Analyzing...",
         Probe => "Probing...",
         ChronologicalProbe => "SC-probing...",

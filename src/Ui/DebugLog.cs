@@ -190,6 +190,12 @@ public sealed class DebugLog : IDisposable
         // --run-before may hand detection a different file from the one named on the command
         // line (joining a split book, re-encoding it), so a header that does not mention the
         // hook cannot explain the audio its own probe line goes on to describe.
+        // Which server a book came from, and as whom - never the key or the password, which
+        // AbsConnection.Describe is written not to render. An ABS run probes a temporary copy in a
+        // folder named after a guid, so without this the log does not say what book it is about.
+        if (o.AbsServer is { } server)
+            yield return $"audiobookshelf {server.Describe}"
+                         + (o.PushOnly ? ", push-only" : o.Abs ? ", ABS mode" : "");
         if (o.RunBefore is { } before)
             yield return $"run-before {before.Raw}";
         if (o.RunAfter is { } after)

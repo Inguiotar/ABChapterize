@@ -47,6 +47,11 @@ processed (with `--recurse`, subdirectories too). Files that already have
 chapter marks are skipped unless `--force`, `--max-chapters` or `--verify`
 says otherwise.
 
+Books held by an [Audiobookshelf](https://www.audiobookshelf.org/) server can be
+worked on directly instead, with `--abs`: each selected book is fetched, processed
+as any other file, and its finished marks are sent back. See
+[Audiobookshelf](#audiobookshelf).
+
 ## 2. Supported file formats
 
 | Extension | Container | Chapter format |
@@ -89,6 +94,7 @@ the one that is running — as something in progress, so `Probe` shows as
 
 | Pass | What it does | When it runs |
 | --- | --- | --- |
+| `Download` | Fetches the book from an Audiobookshelf server. Its bar fills with bytes off the network rather than with play time. | Only in [ABS mode](#audiobookshelf) |
 | `Analyze` | Measures the file — silences, speech, music. Recognizes nothing. | Always |
 | `Probe` | Transcribes a short window everywhere a chapter could start. | Always |
 | `SC-probe` | The same, on a file with no chapter music: all it has to read is pauses, in chronological order. | Instead of `Probe`, whenever there is no music to read |
@@ -1064,6 +1070,167 @@ checkpoint remembers the command line, not the folders' contents.
   so do not anchor it at the audio extension; `--cleanup` matches it against the
   audio file's path instead. A single file named directly
   as the target is *also* subject to the filter.
+
+### Audiobookshelf
+
+ABChapterize can work straight off an [Audiobookshelf](https://www.audiobookshelf.org/)
+server instead of files on this machine. In *ABS mode* each selected book is
+downloaded to a temporary copy, processed exactly as a local file would be, and
+the chapter marks the run produces are sent back to the server; the copy is then
+deleted. Nothing on the server changes except the book's chapter list — title,
+author, cover, tags and the audio file itself are never touched.
+
+```
+abchapterize -A --abs-url books.lan:13378 --abs-key <key> "library:Discworld"
+```
+
+**Try `--no-op` first.** A selector can name a hundred books without looking as
+though it does, and each of them is a download and an hour of transcription.
+`abchapterize -A -O --summary "library:Discworld"` lists what would be processed
+and what would be skipped, and fetches no audio at all.
+
+#### Selecting books
+
+In ABS mode the trailing arguments are *selectors* rather than paths. Give as
+many as you like; their books are added together and each book is processed once.
+
+| Selector | Selects |
+| --- | --- |
+| `library:NAME` | every book of one library |
+| `series:NAME` | every book of one series, in any library |
+| `collection:NAME` | every book of one collection |
+| `item:ID` | one book, by its Audiobookshelf item id |
+| `title:NAME` | every book whose title matches |
+| `all`, `*`, `everything` | every book on the server |
+| *anything else* | read as `title:` |
+
+Names are matched loosely: case and punctuation are ignored, and part of a name
+is enough — `"title:Colour of Magic"` finds *DW01 - The Colour of Magic*. A
+title selector deliberately yields **every** book it matches, which is how a run
+of them is named at all when library titles carry their series and number
+("Silber Edition 087: Das Spiel des Laren"). A title that matches exactly wins
+outright, so naming one book gets one book. A `library:`, `series:` or
+`collection:` selector names one thing by definition, so an ambiguous name there
+is an error listing the candidates rather than a set.
+
+A colon only starts a selector when a known keyword stands in front of it, so a
+title may contain one: `"Perry Rhodan Silber Edition 001: Die Dritte Macht"` is
+a book, not a request for something in a container.
+
+`--filter` narrows what the selectors picked. Its regexp form is matched against
+`<item folder>/<book title>` — there being no local path to match yet — and its
+extension form against the book's audio file. `--recurse` has no meaning against
+a server and is refused; a library, series or collection selector is what asks
+for "and everything below this".
+
+#### What is skipped
+
+- **Books held as more than one audio file.** ABChapterize marks one file at a
+  time, and a split book's chapter list addresses the whole book's timeline,
+  which no single-file run can see. Such a book is reported and passed over
+  rather than ending the run.
+- **Books the server already has chapters for**, unless `--force`, `--max-chapters`
+  or `--verify` says otherwise — the same rule local files follow, only applied one
+  step earlier, so a library that is already marked is not downloaded in full just to
+  be passed over book by book. (`--max-chapters` and `--verify` both need the audio in
+  hand to decide, so a book either of them has an opinion about *is* fetched.)
+- **Formats chapter marks cannot be written to.** Only .m4a/.m4b/.mp3/.opus/.mka
+  are fetched; anything else is reported and passed over before it is downloaded.
+
+#### Which marks a book "already has"
+
+A book can have two chapter lists that disagree: the one Audiobookshelf keeps in
+its database, and whatever is embedded in the audio file it sends. **The server's
+list wins where it has one, and the file fills in where it has none.** The
+server's list is the one you see, edit and share between devices, and it is also
+the one this run is going to replace, so it is what the skip decision, `--force`
+and `--verify` all reason about.
+
+The two disagreeing is normal rather than a fault — Audiobookshelf reads chapters
+when it scans a book and keeps them independently ever after, so any edit made in
+its web interface puts them out of step by design. `--verbose` says so and the run
+carries on.
+
+#### Sending marks a book already has
+
+`--push-only`
+: Send Audiobookshelf the chapter marks a book already carries, detecting
+  nothing and changing no file. No Whisper model is loaded.
+
+  With `--abs`, the selected books are fetched and read. Without it, the files
+  named on the command line are matched against the server's libraries — by
+  album tag, then title tag, then the folder the file sits in, then its file
+  name, in that order, since a tag survives being copied about and a file name
+  is whatever the last tool to touch it decided. A file that matches nothing, or
+  matches several books, is skipped with a note; `--abs item:<id>` is how one
+  book is named exactly.
+
+  A book with no marks in it is skipped too: the update replaces the server's
+  chapter list rather than merging into it, so sending an empty one would delete
+  what is there.
+
+  Because nothing is detected, `--push-only` cannot be combined with the
+  detection options, nor with `--import`, `--export`, `--force` or `--backup`.
+  `--dry-run` works and reports what would be sent.
+
+#### Connecting
+
+`--abs-url <url>`
+: Which server. `http://host:13378`, `host:13378`, or just `host` — http and
+  Audiobookshelf's own port 13378 stand in for whatever you leave out. A scheme
+  spelled out is taken at its word, so `https://books.example.com` is port 443;
+  a reverse-proxy sub-path works too.
+
+`--abs-key <key>`
+: An API key to authenticate with, made in Audiobookshelf under settings →
+  users → API keys.
+
+`--abs-user <name>`, `--abs-password <pw>`
+: Log in with an account instead. Either a key or a username, not both.
+
+`--abs-temp <dir>`
+: Where the temporary downloads go; the system temporary folder by default. An
+  audiobook is a large file, so which drive holds it is worth being able to
+  choose. Each book gets a folder of its own, removed as soon as the run has
+  finished with it, and the whole lot goes when the run ends — including after a
+  Ctrl+C or a failure.
+
+All five can be given in the environment instead:
+`ABCHAPTERIZE_ABS_URL`, `ABCHAPTERIZE_ABS_KEY`, `ABCHAPTERIZE_ABS_USER`,
+`ABCHAPTERIZE_ABS_PASSWORD` and `ABCHAPTERIZE_ABS_TEMP`. Each value falls back
+separately, so a server and key exported once still let a single command name a
+different account. **Prefer this to typing a key or a password on the command
+line**, where it is visible to anything that can list processes; a
+[`--config` file](#options-from-a-file) does the same job.
+
+The account's rights are checked before the first book is downloaded: one that
+may not update items is refused straight away rather than an hour into a run,
+unless `--dry-run` or `--no-op` means nothing would be written anyway.
+
+#### The rest of the run
+
+Everything else works as it does on local files, because by the time detection
+starts, a fetched book *is* a local file. `--dry-run`, `--verbose`, `--summary`,
+`--debug`, `--verify`, `--force`, the phrase and language options, `--run-before`
+and `--run-after` all apply unchanged. `--dry-run` means what it always means: books
+are fetched and detected, and nothing is sent. Two further consequences worth naming:
+
+- Marks are sent whenever the run writes any, which includes the partial set a book
+  left with an [unresolved chapter-sequence gap](#detection-safety-nets) gets: having
+  most of a book marked on the server beats having none of it. Such a book is reported
+  the same way a local one is, tag and all, except that the tag lives on a temporary
+  copy and goes with it - so a later run picks the book up from the beginning rather
+  than resuming the gap.
+- A `--debug` log would be written beside the audio file, which here is a folder
+  about to be deleted, so it is moved into the current directory instead.
+- Per-folder settings files are not read: a temporary download sits in a folder
+  no `.abchapterize-config` could sensibly be put in, so ABS mode uses the run's
+  own options as given.
+
+`--import`, `--export` and `--backup` all write a file beside the audio, which in
+ABS mode is that same doomed folder, so they cannot be combined with `--abs`.
+`--revert` and `--cleanup` work on folders on this machine and have nothing to do
+with a server.
 
 ### Detection behaviour
 
