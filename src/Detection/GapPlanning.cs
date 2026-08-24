@@ -205,18 +205,42 @@ internal static class GapPlanning
     /// found no leading gap at all is always safe.</param>
     internal static List<int> MissingNumbersInGap(List<DetectedChapter> chapters, GapRegion gap, int? expectedStartChapter = null)
     {
+        // First at the top end and last at the bottom, which is not an inconsistency but the two
+        // halves of one rule: take the chapter FindGaps itself paired across. Its gap runs from
+        // chapters[i - 1] to chapters[i], and a list ordered by time and then by number puts the
+        // lowest-numbered mark of a colliding pair at chapters[i] and the highest at chapters[i-1].
         var upper = chapters.First(c => c.TimeSeconds == gap.ToSeconds).Number;
-        // A leading gap starts at 0 with no chapter there; FirstOrDefault yields a default
-        // DetectedChapter (Number 0), the signal to fall back to the sequence's expected start
-        // (or 1, when there is no expectation) so the set becomes expectedStart..upper-1.
-        var boundChapter = chapters.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds);
-        var lower = boundChapter.Number != 0 && boundChapter.Sequence == gap.Sequence
-            ? boundChapter.Number
-            : (StartOfSequence(gap.Sequence, expectedStartChapter) ?? 1) - 1;
+        var lower = LowerBoundNumber(chapters, gap, expectedStartChapter);
         var missing = new List<int>();
         for (var n = lower + 1; n < upper; n++)
             missing.Add(n);
         return missing;
+    }
+
+    /// <summary>
+    /// The number a gap is bounded from below by, one below which its first missing chapter sits:
+    /// the mark standing at its start, or - for a leading gap, and for one opened by a restart -
+    /// one below where the sequence is expected to begin. Shared by
+    /// <see cref="MissingNumbersInGap"/> and by the resume path that rebuilds detection regions out
+    /// of a file's committed marks, which have to answer this identically or a resumed run hunts a
+    /// different set of numbers than the run that tagged the file.
+    /// </summary>
+    /// <param name="chapters">The currently known chapters, in chronological order.</param>
+    /// <param name="gap">A gap produced by <see cref="FindGaps"/> over these chapters.</param>
+    /// <param name="expectedStartChapter">The same value <see cref="FindGaps"/> was called
+    /// with.</param>
+    /// <returns>The bounding number, or one below the sequence's expected start where nothing
+    /// bounds the gap from below.</returns>
+    internal static int LowerBoundNumber(
+        List<DetectedChapter> chapters, GapRegion gap, int? expectedStartChapter)
+    {
+        // A leading gap starts at 0 with no chapter there; LastOrDefault yields a default
+        // DetectedChapter (Number 0), the signal to fall back to the sequence's expected start
+        // (or 1, when there is no expectation) so the set becomes expectedStart..upper-1.
+        var boundChapter = chapters.LastOrDefault(c => c.TimeSeconds == gap.FromSeconds);
+        return boundChapter.Number != 0 && boundChapter.Sequence == gap.Sequence
+            ? boundChapter.Number
+            : (StartOfSequence(gap.Sequence, expectedStartChapter) ?? 1) - 1;
     }
 
     /// <summary>
@@ -252,6 +276,36 @@ internal static class GapPlanning
         return new NumberBounds(
             below ?? (StartOfSequence(sequence, expectedStartChapter) ?? 1) - 1, above);
     }
+
+    /// <summary>
+    /// The number of the chapter already marked within
+    /// <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> of <paramref name="markSeconds"/>,
+    /// or null where no mark sits that close - <see cref="RefinedNumberVote"/>'s one licence to
+    /// overrule <see cref="BracketingBounds"/>, and computed the same way for both passes so the two
+    /// cannot come to different views of the same geometry.
+    /// <para>
+    /// The nearest such mark wins where several qualify, which on a real file means the only one
+    /// there is: <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> sits far below the
+    /// shortest chapter anyone writes, so two marks inside it are already the anomaly this exists
+    /// to name.
+    /// </para>
+    /// </summary>
+    /// <param name="markSeconds">Where the mark being placed sits, before refinement - which is
+    /// close enough, the threshold being seconds wide and a refinement moving a mark by
+    /// hundredths.</param>
+    /// <param name="chapters">Every chapter marked so far, from whichever accumulators the calling
+    /// pass keeps them in.</param>
+    /// <param name="sequence">Which chapter sequence the announcement belongs to; a mark in another
+    /// part is another announcement whatever its spacing, exactly as it is for
+    /// <see cref="ChapterDetector.SettleCollidingMarksAsync"/>.</param>
+    internal static int? CollidingChapterNumber(
+        double markSeconds, IEnumerable<DetectedChapter> chapters, int sequence = 0)
+        => chapters
+            .Where(c => c.Sequence == sequence &&
+                        Math.Abs(c.TimeSeconds - markSeconds) < CollidingChapterMarkSeconds)
+            .OrderBy(c => Math.Abs(c.TimeSeconds - markSeconds))
+            .Select(c => (int?)c.Number)
+            .FirstOrDefault();
 
     /// <summary>
     /// How many <see cref="DetectionTuning.WhisperChunkSeconds"/> decode windows a stretch of audio
@@ -420,7 +474,7 @@ internal static class GapPlanning
     /// shown to be wrong.
     /// </para>
     /// </summary>
-    /// <remarks>Notes: the book where a greedy scan discarded fifteen correctly placed chapters.
+    /// <remarks>Notes: the book where a greedy scan discarded fifteen correctly placed chapters, and what "the earliest survives" cost when a phantom was planted first.
     /// <include file='../../notes/Detection/GapPlanning.xml' path='doc/member[@name="Normalize"]/*' /></remarks>
     /// <param name="found">The raw detections, in any order.</param>
     internal static List<DetectedChapter> Normalize(List<DetectedChapter> found)

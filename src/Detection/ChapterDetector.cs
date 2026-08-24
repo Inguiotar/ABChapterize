@@ -263,19 +263,13 @@ public sealed class ChapterDetector
         // actual content right now. ExpectedStartChapter is passed through so a leading
         // missing-marks tag resolves to the same gap as the run that produced it.
         var regions = FindGaps(confirmed, info.DurationSeconds, ExpectedStartChapter)
-            .Select(gap =>
-            {
-                var boundChapter = confirmed.FirstOrDefault(c => c.TimeSeconds == gap.FromSeconds);
-                // A gap opened by a restart is bounded below by the previous part's last chapter,
-                // which is no lower bound at all for this part's numbering - the same reading
-                // MissingNumbersInGap takes of the identical shape.
-                var lowerNumber = boundChapter.Number != 0 && boundChapter.Sequence == gap.Sequence
-                    ? boundChapter.Number
-                    : (StartOfSequence(gap.Sequence, ExpectedStartChapter) ?? 1) - 1;
-                return new DetectionRegion(
-                    gap.FromSeconds, gap.ToSeconds, lowerNumber,
-                    confirmed.First(c => c.TimeSeconds == gap.ToSeconds).Number, gap.Sequence);
-            })
+            .Select(gap => new DetectionRegion(
+                gap.FromSeconds, gap.ToSeconds,
+                // Literally the rule MissingNumbersInGap reasons in, called rather than restated:
+                // a gap opened by a restart is bounded below by the previous part's last chapter,
+                // which is no lower bound at all for this part's numbering.
+                LowerBoundNumber(confirmed, gap, ExpectedStartChapter),
+                confirmed.First(c => c.TimeSeconds == gap.ToSeconds).Number, gap.Sequence))
             .ToList();
 
         return await DetectCoreAsync(
@@ -487,6 +481,10 @@ public sealed class ChapterDetector
                 probeCtx, found, namedFound, language, measuredBreakSeconds, ct);
 
         var chapters = await ReconcileSequenceAsync(found, namedFound, probeCtx, language.Profile, ct);
+        // The stage drops marks as well as renumbering them, and what it leaves is what gap planning
+        // is about to measure the book against - so the bar should be showing that sequence and not
+        // the one the last mark placement reported.
+        RefreshChapterProgress(work, chapters);
         _log?.Invoke("Probe finished");
 
         // The Re-probe and Scan passes exist only to close holes in the chapter-number sequence, so with
@@ -504,12 +502,17 @@ public sealed class ChapterDetector
             chapters = await RunScanAsync(file, info, work, chapters, allSilences, nonSpeechRegions,
                 speechSegments, bytesPerSecond, language.Profile, trailingFallback, probeCompleted, ct);
 
-            // Last, because it is the only step that can compare what every pass made of the same
-            // announcement: two passes reading one announcement under two different numbers leave
-            // two marks on top of each other, and only now are both of them in the same list.
+            // Again here, having already run at the end of Probe (see ReconcileSequenceAsync):
+            // this is the only point that can compare what every pass made of the same
+            // announcement, and two passes reading one announcement under two different numbers
+            // leave two marks on top of each other that are only now both in the same list.
             chapters = await ReconcileCollidingMarksAsync(
                 chapters, namedFound, probeCtx, language.Profile, ct);
         }
+        // Last of all, because settling a collision removes a mark and the numbers under it may
+        // have become missing: nothing after this point reports progress, so without it the bar's
+        // final reading would be the one taken before the sequence was whole.
+        RefreshChapterProgress(work, chapters);
 
         // The ONNX session belongs to this file: a batch would otherwise carry one file's session
         // through every later file that never asks for one.
@@ -782,9 +785,26 @@ public sealed class ChapterDetector
             profile, _jingleReachSeconds, ExpectedStartChapter);
 
     /// <summary>
-    /// The pipeline stage between Probe and Re-probe: hands
-    /// <see cref="RepairSequenceOutliersAsync"/> a re-read backed by this file's decoder and
-    /// recognizer, then clears out <see cref="DropNamedMarkEchoes"/>'s phantoms. Everything either
+    /// Re-reads the progress line's two chapter counts off the sequence as it now stands. Every
+    /// step that can change which chapter numbers exist ends in this call, which is the point of
+    /// its being one: the counts are derived from the sequence rather than tallied as marks arrive,
+    /// so a step that removes or renumbers a mark and forgets to refresh leaves the bar reporting a
+    /// book that no longer exists - and a mark <em>removed</em> after the last refresh cannot be
+    /// noticed at all, the display having nothing to count down from.
+    /// </summary>
+    /// <param name="work">The file's progress tracker.</param>
+    /// <param name="chapters">The chapter sequence as it now stands.</param>
+    private void RefreshChapterProgress(WorkTracker work, List<DetectedChapter> chapters)
+    {
+        var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
+        work.HighestChapters = highest;
+        work.MissingChapters = missingNumbers.Count;
+    }
+
+    /// <summary>
+    /// The pipeline stage between Probe and Re-probe: settles the marks that landed on top of each
+    /// other, hands <see cref="RepairSequenceOutliersAsync"/> a re-read backed by this file's decoder
+    /// and recognizer, then clears out <see cref="DropNamedMarkEchoes"/>'s phantoms. Everything each
     /// step actually decides lives there.
     /// <para>
     /// The echo sweep runs here as well as after Scan because this is the last moment it is free:
@@ -792,7 +812,23 @@ public sealed class ChapterDetector
     /// and one implausible number is enough to commit Re-probe and Scan to transcribing everything
     /// behind it.
     /// </para>
+    /// <para>
+    /// <b>Collisions are settled here as well as after Scan for a stronger reason than cost, and
+    /// settled first within this stage.</b> One Probe window can produce two marks on its own - a
+    /// recognizer that repeats an announcement under the next number leaves both at the same onset -
+    /// and from that moment the phantom holds a chapter number the real chapter still has to be
+    /// found under. It bars that chapter from Probe ("not above the last accepted"), from Scan (the
+    /// number is already known), and from <see cref="GapPlanning.Normalize"/>, whose filter must drop
+    /// one of two marks carrying the same number and resolves the tie toward the earlier one. Waiting
+    /// until after Scan means every one of those has already happened. Settling before
+    /// <see cref="RepairSequenceOutliersAsync"/> matters for the same reason: the repair passes over
+    /// a dropped mark whose number a kept one still holds, so with the phantom gone first it is the
+    /// real chapter that survives the filter rather than the one that has to be repaired back in.
+    /// </para>
     /// </summary>
+    /// <remarks>Notes: the book that lost a chapter to a hallucinated duplicate, and the three
+    /// rescues the duplicate defeated.
+    /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="ReconcileSequenceAsync"]/*' /></remarks>
     /// <param name="found">Probe's raw detections, in any order.</param>
     /// <param name="named">The file's prologue/epilogue/--custom marks, complete once Probe has
     /// finished every region.</param>
@@ -807,8 +843,17 @@ public sealed class ChapterDetector
         List<DetectedChapter> found, IReadOnlyList<DetectedMark> named, ProbeContext ctx,
         LanguageProfile? profile, CancellationToken ct)
     {
+        // Bound once and shared: both rules ask the audio the same question through the same
+        // mender, and building a second one per stage would decode with a second set of state.
+        var reread = ReReadAtMark(ctx, profile);
+        // Ordered rather than normalized, because settling has to happen before anything filters:
+        // ordering is all SettleCollidingMarksAsync needs, and by the same key Normalize uses, so
+        // a colliding pair meets it in the order it would meet the filter in.
+        var settled = await SettleCollidingMarksAsync(
+            found.OrderBy(c => c.TimeSeconds).ThenBy(c => c.Number).ToList(),
+            ExpectedStartChapter, _log, reread, ct);
         var repaired = await RepairSequenceOutliersAsync(
-            found, ExpectedStartChapter, _log, ReReadAtMark(ctx, profile), ct);
+            settled, ExpectedStartChapter, _log, reread, ct);
         return DropNamedMarkEchoes(repaired, named, ExpectedStartChapter, _log);
     }
 
@@ -882,23 +927,29 @@ public sealed class ChapterDetector
     /// neighbours as the acceptance rule.
     /// </para>
     /// <para>
-    /// When the re-read settles nothing, the higher-confidence reading survives. That is a tiebreak
-    /// and not evidence, and it is documented as one - but it beats keeping both, which leaves a
-    /// player two chapter entries at the same position and hands the file a chapter number the rest
-    /// of the book then has to live with.
+    /// When the re-read settles nothing, the pair's own bounds are asked first: where they admit one
+    /// of the two numbers and not the other, the pair is not two readings of one announcement but a
+    /// real chapter with something spurious beside it, and the answer is the number the book can
+    /// hold. Only when both are admissible - the shape this rule exists for, since both sit between
+    /// the same neighbours - does the higher-confidence reading survive. That last step is a tiebreak
+    /// and not evidence, and it is documented as one, but it beats keeping both: that leaves a player
+    /// two chapter entries at the same position and hands the file a chapter number the rest of the
+    /// book then has to live with.
     /// </para>
     /// <para>
     /// The one step that touches audio is a delegate rather than a call, so the rule itself can be
     /// tested without a decoder, a recognizer or a file. Internal for that reason.
     /// </para>
     /// </summary>
-    /// <param name="chapters">The chapter sequence after every pass, ascending in time.</param>
+    /// <param name="chapters">The chapter sequence in time order - as Probe leaves it, and again
+    /// as every pass leaves it (see <see cref="ReconcileSequenceAsync"/> for why both).</param>
     /// <param name="expectedStartChapter">--expected-start-chapter, or null; the lower bound for a
     /// collision with no chapter before it.</param>
     /// <param name="log">Sink for --verbose log messages, or null when not verbose.</param>
     /// <param name="reread">Asks the audio which number the announcement at the given mark really
     /// carries, holding the answer to the given bounds; called at most
-    /// <see cref="DetectionTuning.MaxSequenceRepairsPerFile"/> times.</param>
+    /// <see cref="DetectionTuning.MaxSequenceRepairsPerFile"/> times per invocation - the budget
+    /// is per call, and a file runs this twice.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The sequence with every collision reduced to one mark.</returns>
     internal static async Task<List<DetectedChapter>> SettleCollidingMarksAsync(
@@ -942,6 +993,20 @@ public sealed class ChapterDetector
             DetectedChapter winner;
             if (settledNumber is { } number && (number == first.Number || number == second.Number))
                 winner = number == first.Number ? first : second;
+            // Before the confidence tiebreak, and ahead of it because it is evidence rather than a
+            // coin toss: where the rest of the book leaves room for one of the two numbers and not
+            // the other, the pair is not two readings of one announcement at all but a real chapter
+            // with something spurious beside it - an in-text mention, a misheard year - and the
+            // spurious one is the one nothing can hold. This is also the reading
+            // <see cref="GapPlanning.Normalize"/> would arrive at, which matters now that this runs
+            // ahead of it (see ReconcileSequenceAsync): without it the weaker rule could discard a
+            // mark the stronger one would have kept.
+            else if (bounds.Admits(first.Number) != bounds.Admits(second.Number))
+            {
+                winner = bounds.Admits(first.Number) ? first : second;
+                log?.Invoke($"re-reading settled nothing - keeping chapter {winner.Number}, " +
+                            $"the only one of the two {bounds.Describe()} can hold");
+            }
             else
             {
                 winner = second.Confidence > first.Confidence ? second : first;
@@ -1244,9 +1309,7 @@ public sealed class ChapterDetector
                 snapSeams: _options.UpgradeModelIsWorse,
                 chapters, gap.Sequence).RunAsync(ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
-            var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-            work.HighestChapters = highest;
-            work.MissingChapters = missingNumbers.Count;
+            RefreshChapterProgress(work, chapters);
         }
         if (gaps.Count > 0)
             _log?.Invoke("Scan finished");
@@ -1280,9 +1343,7 @@ public sealed class ChapterDetector
                 trailing.Targets, snapSeams: !rereadPossible,
                 chapters, trailing.Sequence).RunAsync(ct);
             chapters = Normalize(chapters.Concat(fills).ToList());
-            var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-            work.HighestChapters = highest;
-            work.MissingChapters = missingNumbers.Count;
+            RefreshChapterProgress(work, chapters);
             _log?.Invoke("Scan finished (trailing)");
 
             if (rereadPossible &&
@@ -1391,9 +1452,7 @@ public sealed class ChapterDetector
             snapSeams: false,
             chapters, sequence).RunAsync(ct);
         chapters = Normalize(chapters.Concat(fills).ToList());
-        var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-        ctx.Work.HighestChapters = highest;
-        ctx.Work.MissingChapters = missingNumbers.Count;
+        RefreshChapterProgress(ctx.Work, chapters);
         _log?.Invoke(fills.Count > 0
             ? $"Re-scan recovered {fills.Count} chapter(s)"
             : "Re-scan found nothing further");
@@ -1621,9 +1680,7 @@ public sealed class ChapterDetector
 
         var recovered = found.Count - knownCount;
         chapters = Normalize(found);
-        var (highest, missingNumbers) = ChapterProgress(chapters, ExpectedStartChapter);
-        work.HighestChapters = highest;
-        work.MissingChapters = missingNumbers.Count;
+        RefreshChapterProgress(work, chapters);
         _log?.Invoke(recovered > 0
             ? $"Re-probe finished - recovered {recovered} chapter(s) without a full transcription"
             : "Re-probe finished - nothing recovered, falling through to the Scan pass");
@@ -2414,9 +2471,7 @@ public sealed class ChapterDetector
             else
                 confirmedChapters.Add(new DetectedChapter(
                     expected, corrected ?? mark.StartSeconds, Sequence: part));
-            var (highest, missingNumbers) = ChapterProgress(confirmedChapters, ExpectedStartChapter);
-            work.HighestChapters = highest;
-            work.MissingChapters = missingNumbers.Count;
+            RefreshChapterProgress(work, confirmedChapters);
             work.Advance(1);
         }
 

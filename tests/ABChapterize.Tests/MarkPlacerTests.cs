@@ -273,11 +273,11 @@ public sealed class MarkPlacerTests : IDisposable
     {
         var placer = QuickPlacer();
         await placer.PlaceAsync(
-            new NumberCheck(Sequence: 0, Number: 1, Profile(), new NumberBounds(0)),
+            new NumberCheck(Sequence: 0, Number: 1, Profile(), new NumberBounds(0), null),
             100, 100, 101, new Silence(98, 100), null, Context([]), IsolationCheck.None,
             CancellationToken.None);
         await placer.PlaceAsync(
-            new NumberCheck(Sequence: 1, Number: 1, Profile(), new NumberBounds(0)),
+            new NumberCheck(Sequence: 1, Number: 1, Profile(), new NumberBounds(0), null),
             200, 200, 201, new Silence(195, 200), null, Context([]), IsolationCheck.None,
             CancellationToken.None);
 

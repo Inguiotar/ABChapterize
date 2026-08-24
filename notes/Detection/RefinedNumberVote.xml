@@ -8,5 +8,14 @@
     40" at p=0.59, while all ten refinement probes over the same audio read "Kapitel 14", one of them
     at p=0.99.
     </para>
+    <para>
+    <b>The case the sequence guard had to make an exception for.</b> "Atlan" (build 392,
+    2026-08-24): one probe window produced two chapter matches on one announcement, the second of
+    them a segment whose timestamps ran ten seconds past the window's end, and both were marked at
+    2:28:25.26. All three refinement probes over the phantom read "Kapitel 5" - the right answer,
+    and refused, because chapter 5 had been accepted one second earlier at that same position. The
+    book then lost its chapter 6 entirely; see
+    <see cref="ChapterDetector.ReconcileSequenceAsync"/>'s notes for the rest of that run.
+    </para>
   </member>
 </doc>

@@ -1742,6 +1742,21 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([4, 5], GapPlanning.MissingNumbersInGap(chapters, gaps[1])); // 3 -> 6: 4, 5
     }
 
+    /// <summary>
+    /// Two marks at one position leave the gap's start timestamp naming both of them, and the one
+    /// that bounds the gap is the one <see cref="GapPlanning.FindGaps"/> paired across - the higher
+    /// number, a list ordered by time and then by number putting it last. Reading the lower one
+    /// instead reports a number as missing that the sequence is holding a mark for, which is how a
+    /// gap comes to hunt a chapter it already has.
+    /// </summary>
+    [Fact]
+    public void MissingNumbersInGap_TakesTheHigherOfTwoMarksSharingTheGapStart()
+    {
+        var chapters = new List<DetectedChapter> { new(2, 500), new(3, 500), new(6, 2000) };
+        var gaps = GapPlanning.FindGaps(chapters, Duration);
+        Assert.Equal([4, 5], GapPlanning.MissingNumbersInGap(chapters, Assert.Single(gaps)));
+    }
+
     [Fact]
     public void ChapterProgress_ReportsNoMissingLeadingChapters_WithoutAnExpectedStartChapter()
     {
@@ -6759,11 +6774,19 @@ public sealed class ChapterDetectorTests : IDisposable
 
     /// <summary>Runs <see cref="RefinedNumberVote.Recount"/> against the run's default (English)
     /// profile and uncapped phrase matching.</summary>
-    private int? Recount(IReadOnlyList<List<TranscriptSegment>> readings, int heard, NumberBounds bounds)
+    /// <param name="readings">The refinement's probe transcripts.</param>
+    /// <param name="heard">The number the detecting window read.</param>
+    /// <param name="bounds">Where in the sequence the announcement sits.</param>
+    /// <param name="collidingNumber">The number of a mark within
+    /// <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> of this one, or null for the
+    /// ordinary case of nothing standing that close.</param>
+    private int? Recount(
+        IReadOnlyList<List<TranscriptSegment>> readings, int heard, NumberBounds bounds,
+        int? collidingNumber = null)
         => RefinedNumberVote.Recount(
             readings, Options().DefaultProfile,
             (segments, profile, merge) => PhraseMatching.FindPhraseMatches(segments, profile, merge),
-            heard, bounds, phraseAbs: 100, log: null);
+            heard, bounds, collidingNumber, phraseAbs: 100, log: null);
 
     [Fact]
     public void RefinedNumberVote_OverrulesTheWindow_WhenItsOwnProbesAgreeOnAnotherNumber()
@@ -6823,6 +6846,51 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Null(Recount(readings, heard: 40, new NumberBounds(13, 15)));
     }
 
+    /// <summary>
+    /// The "Atlan" shape (2026-08-24), and the one number the sequence guard above has to let
+    /// through. A window that hallucinates a second announcement leaves two marks on one onset, and
+    /// the phantom's own refinement probes read the real number - which the sequence has just
+    /// accepted for the mark beside it, and therefore rejects. Refusing here refuses the only
+    /// reading that could ever be right.
+    /// </summary>
+    [Fact]
+    public void RefinedNumberVote_AdoptsTheNeighboursNumber_WhenItsProbesSayTheyAreOneAnnouncement()
+    {
+        var readings = Enumerable.Repeat(Reading("Chapter five."), 3).ToList();
+        // Without the collision the sequence has the last word, exactly as above.
+        Assert.Null(Recount(readings, heard: 6, new NumberBounds(5, null)));
+        // With a chapter 5 marked within CollidingChapterMarkSeconds of this mark, it does not.
+        Assert.Equal(5, Recount(readings, heard: 6, new NumberBounds(5, null), collidingNumber: 5));
+    }
+
+    /// <summary>
+    /// And the exception is exactly one number wide: a colliding mark licenses the vote to repeat
+    /// <em>that</em> number, never to hand the sequence any other number it has already refused.
+    /// </summary>
+    [Fact]
+    public void RefinedNumberVote_StillRefusesAnUnrelatedNumber_WhenAMarkCollides()
+    {
+        var readings = Enumerable.Repeat(Reading("Chapter twenty."), 5).ToList();
+        Assert.Null(Recount(readings, heard: 40, new NumberBounds(13, 15), collidingNumber: 14));
+    }
+
+    [Fact]
+    public void CollidingChapterNumber_NamesTheMarkStandingOnThisOne()
+    {
+        List<DetectedChapter> chapters = [new(4, 100), new(5, 200), new(8, 900)];
+        // Nothing within CollidingChapterMarkSeconds of a mark of its own.
+        Assert.Null(GapPlanning.CollidingChapterNumber(600, chapters));
+        Assert.Null(GapPlanning.CollidingChapterNumber(
+            200 + CollidingChapterMarkSeconds, chapters));
+        // A mark landing on chapter 5's own position, which is what a duplicate does.
+        Assert.Equal(5, GapPlanning.CollidingChapterNumber(200.01, chapters));
+        // The nearest wins where two qualify.
+        Assert.Equal(8, GapPlanning.CollidingChapterNumber(
+            899, [.. chapters, new DetectedChapter(9, 901)]));
+        // Another part's mark is another announcement whatever its spacing.
+        Assert.Null(GapPlanning.CollidingChapterNumber(200.01, chapters, sequence: 1));
+    }
+
     /// <summary>Runs the colliding-mark settling with a scripted re-read, recording what it was
     /// asked.</summary>
     /// <param name="chapters">The finished sequence, ascending in time.</param>
@@ -6841,6 +6909,48 @@ public sealed class ChapterDetectorTests : IDisposable
             },
             CancellationToken.None);
         return (settled, log, asked);
+    }
+
+    /// <summary>
+    /// The "Atlan" regression, end to end (2026-08-24): one probe window produced two chapter
+    /// matches on one announcement, and from that moment the phantom held chapter 3's number while
+    /// the real chapter 3 was still to be found. It was then refused as "not above the last
+    /// accepted" - so the book kept a chapter 3 in the wrong place and lost the one in the right
+    /// place, which is a worse outcome than either mark alone.
+    /// </summary>
+    [Fact]
+    public async Task DuplicateAnnouncement_DoesNotCostTheRealChapterCarryingThatNumber()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            OptionsInOneSweep(),
+            [new(595, 600), new(700, 702), new(800, 802)],
+            s =>
+            {
+                s.Add(600, Seg(0.5, " Chapter one."));
+                s.Add(702, Seg(0.5, " Chapter two."));
+                // The recognizer repeating the announcement under the next number, inside the very
+                // window that read it correctly - and only there. AddBeyond is what makes this the
+                // artefact rather than a second announcement: the wide probe window hears it, and
+                // the refinement's own short probes over the same audio never do.
+                s.AddBeyond(20, 702, Seg(3.5, " Chapter three."));
+                s.Add(802, Seg(0.5, " Chapter three."));
+            });
+
+        AssertChapters(
+            [new DetectedChapter(1, 600.25), new DetectedChapter(2, 702.25),
+             new DetectedChapter(3, 802.25)],
+            result.Chapters);
+        Assert.False(result.GapRemains);
+        // The refinement's own probes never heard the phantom, so they read the number of the
+        // announcement that is really there - which the sequence rejects, and which the mark beside
+        // this one licenses anyway.
+        Assert.Contains(log, l => l.Contains("refinement read chapter 3") &&
+                                  l.Contains("one announcement read twice"));
+        // And the pair was settled while Probe's finding was still worth something, rather than
+        // after every pass that could have used the answer had already run.
+        Assert.InRange(
+            log.FindIndex(l => l.Contains("one announcement read two ways")),
+            0, log.IndexOf("Probe finished"));
     }
 
     [Fact]
@@ -6887,6 +6997,24 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal([11, 13, 14], chapters.Select(c => c.Number));
         Assert.Contains(log, l => l.Contains("re-reading settled nothing") &&
                                   l.Contains("keeping chapter 13"));
+    }
+
+    /// <summary>
+    /// And where the re-read settles nothing but the book leaves room for only one of the two
+    /// numbers, that is the answer rather than a coin toss: a pair like this is a real chapter with
+    /// something spurious beside it, not one announcement read twice. Load-bearing since the rule
+    /// runs ahead of <see cref="GapPlanning.Normalize"/>, which would keep the same mark and must
+    /// not find it already thrown away.
+    /// </summary>
+    [Fact]
+    public async Task CollidingMarks_KeepTheNumberTheBookCanHold_WhenOnlyOneOfThemFits()
+    {
+        var (chapters, log, _) = await SettleAsync(
+            [new(11, 100), new(3, 200, 0.9), new(12, 200.01, 0.4), new(14, 300)]);
+
+        Assert.Equal([11, 12, 14], chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("keeping chapter 12") &&
+                                  l.Contains("the only one of the two"));
     }
 
     [Fact]

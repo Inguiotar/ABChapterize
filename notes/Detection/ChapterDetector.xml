@@ -3,6 +3,51 @@
      Measurements, dated case studies, rejected alternatives and removed-feature
      histories live here; contract, behaviour and usage stay in the source. -->
 <doc>
+  <member name="ReconcileSequenceAsync">
+    <para>
+    <b>The book that lost a chapter to a hallucinated duplicate.</b> "Atlan" (build 392,
+    2026-08-24), 14:19:43, German, run with <c>-fs</c>. One 30 s probe window at 2:28:17.79 came
+    back with two segments and both matched the chapter phrase: "Kapitel 5" at 0.0-12.0 (p=0.58)
+    and "Kapitel 6" at 12.0-40.0 (p=0.60). The second is a recognizer artefact - its timestamps run
+    ten seconds past the end of the window they were decoded from, and every other read of that
+    audio (three survival probes, seven onset probes, a 45 s re-read, the gap transcription) hears
+    one announcement followed by "Auserhalb des von Einstein definierten Raumzeitkontinuums…" - but
+    both matches anchored to the same jingle-end silence at 2:28:25.44, so both refined to the same
+    onset and both were marked at 2:28:25.26.
+    </para>
+    <para>
+    The refinement vote read the phantom correctly: "refinement read chapter 6 at 2:28:29.79 as 5
+    (3 of 3 readings), outside the sequence after chapter 5 - keeping 6". Three of three, and
+    refused, because 5 does not continue a sequence that had accepted chapter 5 one second earlier
+    at that same position. That is the guard exception added here.
+    </para>
+    <para>
+    <b>What the phantom then cost.</b> The real chapter 6 at 2:47:23 was found three times and
+    discarded three times. Probe read it twice ("Kapitel 6" at 2:47:15.80, plain and on the
+    one-pass re-read) and skipped both as "not above last accepted 6". Re-probe placed it properly
+    at 2:47:23.42 with p=0.77 - and <see cref="GapPlanning.Normalize"/>, having to choose between
+    two marks numbered 6, kept the earlier one. Scan then transcribed the region and heard it a
+    third time (gap chunk from 2:38:15.26, segment at 548.1 s = 2:47:23.4, p=0.78), where the
+    "already a known chapter" guard dropped it without a log line. The collision was settled
+    correctly at the very end - re-read at 2:28:23.61, "Kapitel 5", phantom removed - by which point
+    the book's only remaining chapter 6 had been thrown away twice, so it ended with none.
+    </para>
+    <para>
+    <b>And the display could not say so.</b> The status line read "(-1)" for the whole 45-minute
+    run: <see cref="GapPlanning.ChapterProgress"/> counts the numbers a sequence holds, and the
+    phantom held 6, so only 7 was ever missing. The collision settle that removed it ran after the
+    last progress refresh, so even the final reading was the one taken while the sequence was still
+    wrong. Both halves of that are fixed here; the file's own ".missing-marks-6-7" tag was correct
+    throughout, being recomputed from the finished sequence.
+    </para>
+    <para>
+    Chapter 7 is a separate matter and not this defect: no "Kapitel 7" appears in any transcript of
+    the run, over a region transcribed twice at different framings plus 75 sub-floor pauses probed,
+    and the jingle census finds no music at all between 2:47:06 and 4:11:41 while all 33 detected
+    chapters of the book begin at music.
+    </para>
+  </member>
+
   <member name="DropNamedMarkEchoes">
     <para>
     <b>The epilogue heading that became a chapter.</b> "Corsa nello spazio" (build 251, 2026-08-06),

@@ -61,8 +61,13 @@ internal readonly record struct MarkContext(
 /// refinement's probe transcripts.</param>
 /// <param name="Bounds">Where in the chapter sequence this announcement sits, which is what a
 /// corrected number still has to satisfy to be adopted.</param>
+/// <param name="CollidingNumber">The number of the chapter already marked within
+/// <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> of this mark, or null where none is -
+/// the one number <see cref="Bounds"/> may be overruled for, because a duplicate's correct number
+/// is by construction one the sequence has just accepted. Read off the marks already placed rather
+/// than off <see cref="Bounds"/>, which carries numbers and not positions.</param>
 internal readonly record struct NumberCheck(
-    int Sequence, int Number, LanguageProfile Profile, NumberBounds Bounds)
+    int Sequence, int Number, LanguageProfile Profile, NumberBounds Bounds, int? CollidingNumber)
 {
     /// <summary>
     /// Which numbers the refinement may take for this announcement when the book has no chapter
@@ -231,7 +236,7 @@ internal sealed class MarkPlacer
             if (chapter is { } check &&
                 RefinedNumberVote.Recount(
                     refined.PhraseReadings, check.Profile, _findMatches, check.Number, check.Bounds,
-                    phraseAbs, _log) is { } recounted)
+                    check.CollidingNumber, phraseAbs, _log) is { } recounted)
                 number = recounted;
         }
         if (!IsolationHolds(onset, isolation, number, ctx))

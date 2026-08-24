@@ -79,6 +79,13 @@ earn a round number.
 
 ### Fixed
 
+- **A chapter is no longer lost when one announcement is heard as two.** Where a single reading
+  came back as the chapter plus a phantom carrying the next number, the phantom claimed that
+  number, and the real chapter bearing it was turned away every time it later came up — while the
+  progress line went on counting it as found. Such a pair is now recognised as soon as it is made,
+  rather than after every pass that could have used the answer.
+- **The count of chapters still missing is refreshed once more before a file is written**, so the
+  figure the progress line finishes on matches what the file actually got.
 - **Text outside your console's code page no longer prints as question marks.** Windows still
   starts a console on a legacy code page in most locales, so a Cyrillic, Greek or Japanese file
   name — or a chapter title in one — arrived on screen as a row of `?`. What went into the audio

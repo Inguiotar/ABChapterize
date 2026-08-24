@@ -10,5 +10,14 @@
     refined and correctly placed - then failed "greater than 40" one after another and were
     discarded: a 17 h audiobook came out marked as far as 6:21 and no further.
     </para>
+    <para>
+    <b>What "the earliest survives" costs when something plants a phantom first.</b> "Atlan" (build
+    392, 2026-08-24): a hallucinated second match on chapter 5's announcement was marked as chapter
+    6 at 2:28:25.26, and when Re-probe later placed the real chapter 6 at 2:47:23.42 the filter had
+    two marks numbered 6 to choose between and kept the earlier one - the phantom. The tie-break is
+    not the defect (it is what keeps an in-text mention from displacing a real chapter, and nothing
+    in this filter can tell the two apart), which is why the fix was to settle the collision before
+    the filter ever sees it rather than to change how it resolves ties.
+    </para>
   </member>
 </doc>

@@ -32,11 +32,23 @@ namespace ABChapterize.Detection;
 /// would have done unaided.
 /// </para>
 /// <para>
+/// <b>The second guard has one exception, and it is the shape it would otherwise be blind to.</b>
+/// A winner the sequence cannot hold is normally a refinement drifting - except where that winner
+/// is the number of the chapter already marked within
+/// <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> of this one. Then "outside the
+/// sequence" is the symptom rather than the objection: one announcement has been read twice, and
+/// the reading that repeats the neighbour is the correct one precisely because the neighbour is
+/// that same announcement. Refusing it here is refusing the only reading that could ever be right,
+/// since a duplicate's correct number is by construction not above the last accepted. Adopting it
+/// turns a phantom chapter into a mark <see cref="ChapterDetector.SettleCollidingMarksAsync"/> and
+/// <see cref="GapPlanning.Normalize"/> can recognize as the duplicate it is.
+/// </para>
+/// <para>
 /// Nothing but the number is affected. The mark's position comes from the onset search and is
 /// already settled by the time this runs.
 /// </para>
 /// </summary>
-/// <remarks>Notes: the window framing that read one number and the ten refinement probes that read another.
+/// <remarks>Notes: the window framing that read one number and the ten refinement probes that read another; the duplicate the sequence guard had to make an exception for.
 /// <include file='../../notes/Detection/RefinedNumberVote.xml' path='doc/member[@name="RefinedNumberVote"]/*' /></remarks>
 internal static class RefinedNumberVote
 {
@@ -55,6 +67,10 @@ internal static class RefinedNumberVote
     /// so a cap that ruled a number out during detection rules it out here too.</param>
     /// <param name="heard">The number the detecting window read.</param>
     /// <param name="bounds">Where in the chapter sequence this announcement sits.</param>
+    /// <param name="collidingNumber">The number of the chapter already marked within
+    /// <see cref="DetectionTuning.CollidingChapterMarkSeconds"/> of this mark, or null where no
+    /// mark sits that close; see the class remarks for why it is the one number
+    /// <paramref name="bounds"/> may be overruled for.</param>
     /// <param name="phraseAbs">Absolute position of the announcement, for the log line.</param>
     /// <param name="log">This file's log sink, or null when nothing is listening.</param>
     /// <returns>The number to use instead, or null when the readings agree, cannot muster a
@@ -62,7 +78,7 @@ internal static class RefinedNumberVote
     internal static int? Recount(
         IReadOnlyList<List<TranscriptSegment>> readings, LanguageProfile profile,
         Func<List<TranscriptSegment>, LanguageProfile, int?, IEnumerable<PhraseMatch>> findMatches,
-        int heard, NumberBounds bounds, double phraseAbs, Action<string>? log)
+        int heard, NumberBounds bounds, int? collidingNumber, double phraseAbs, Action<string>? log)
     {
         var votes = new Dictionary<int, int>();
         foreach (var reading in readings)
@@ -82,7 +98,8 @@ internal static class RefinedNumberVote
         if (winner == heard || count * 2 <= total)
             return null;
 
-        if (!bounds.Admits(winner))
+        var duplicate = winner == collidingNumber;
+        if (!bounds.Admits(winner) && !duplicate)
         {
             log?.Invoke(
                 $"refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as {winner} " +
@@ -93,7 +110,11 @@ internal static class RefinedNumberVote
         log?.Invoke(
             $"refinement read chapter {heard} at {FormatTimestamp(phraseAbs)} as {winner} " +
             $"({count} of {total} readings, framed on the announcement) - number corrected, " +
-            "mark unchanged");
+            "mark unchanged" +
+            (duplicate && !bounds.Admits(winner)
+                ? $"; {winner} is the chapter already marked here, so this is one announcement " +
+                  "read twice"
+                : ""));
         return winner;
     }
 }

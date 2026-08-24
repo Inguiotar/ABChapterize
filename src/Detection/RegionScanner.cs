@@ -296,7 +296,20 @@ internal sealed class RegionScanner
                 // news. Leave its existing mark alone rather than risk Normalize preferring this
                 // re-detection's timestamp.
                 if (_knownChapters.Any(k => k.Sequence == _sequence && k.Number == match.Number))
+                {
+                    // Silent for the border case above, which is routine. Not silent when the gap
+                    // is hunting this very number: "6 is missing here" and "6 is already known" is
+                    // contradictory state, and the announcement being dropped is then the one the
+                    // pass was opened to find. The state is reachable - a phantom mark carrying a
+                    // real chapter's number puts the number in both lists at once - and it cost a
+                    // book its chapter 6 while leaving no trace at all in the log.
+                    if (_remaining?.Contains(match.Number) == true)
+                        _env.Log?.Invoke(
+                            $"chapter {match.Number} at {FormatTimestamp(phraseAbs)} is missing " +
+                            "from this gap and already marked elsewhere - leaving the existing " +
+                            "mark alone, but one of the two is wrong");
                     continue;
+                }
                 // An open-ended region has no expected-number list, so what makes a match new is
                 // topping every chapter already known. Without this an in-text mention of an
                 // earlier number would be reported as a find and then dropped by Normalize.
@@ -522,7 +535,8 @@ internal sealed class RegionScanner
         // sequence bounds the number re-read is (see NumberCheck.AdmitsAsAnnouncement).
         var check = new NumberCheck(
             _sequence, match.Number, _ctx.Profile,
-            BracketingBounds(phraseAbs, _knownChapters, _found, _ctx.ExpectedStartChapter, _sequence));
+            BracketingBounds(phraseAbs, _knownChapters, _found, _ctx.ExpectedStartChapter, _sequence),
+            CollidingChapterNumber(time, _knownChapters.Concat(_found), _sequence));
         var markCtx = new MarkContext(
             _ctx.File, _ctx.Info.InputDecoder,
             _ctx.Profile.AnnouncementFor(
