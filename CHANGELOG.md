@@ -33,6 +33,11 @@ earn a round number.
   the folder they sit in, or their file name, in that order. Useful for putting a shelf you
   marked long ago onto a server that never saw the marks.
 
+- **`--abs` takes any format ffmpeg can read**, not only the ones chapter marks can be written
+  into. A `.flac` or `.ogg` book on a server is now marked like any other: the marks go into
+  Audiobookshelf's own database, so the container's inability to carry them never comes up.
+  Outside `--abs` nothing changes — there the file itself is the destination.
+
 - **The server is named by `--abs-url`** — `http://host:13378`, `host:13378`, or just `host` —
   and the credentials by `--abs-key`, or `--abs-user` with `--abs-password`. All of them,
   along with `--abs-temp` for where the downloads land, can come from the environment instead

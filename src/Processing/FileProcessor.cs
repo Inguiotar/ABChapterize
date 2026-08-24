@@ -273,7 +273,7 @@ public sealed class FileProcessor
         {
             _progress.Announce(_options.FilterRegex != null || _options.FilterExtensions != null
                 ? "No audio files matching --filter found."
-                : $"No supported audio files ({CliOptions.SupportedExtensionsText}) found.");
+                : $"No supported audio files ({AudioFormats.ChapterCapableText}) found.");
             return null;
         }
 
@@ -1837,9 +1837,7 @@ public sealed class FileProcessor
     private async Task<(string Path, string Note)> CommitChaptersAsync(
         FileContext ctx, List<Chapter> chapters, string? renameTo, CancellationToken ct)
     {
-        var earlierBakKept = await ctx.Ffmpeg.WriteChaptersAsync(
-            ctx.File, chapters, ctx.Info.DurationSeconds, _options.Backup,
-            BeginFinishPhase(ctx.Work, ctx.Info), ct);
+        var writeNote = await WriteChaptersIfTheContainerHoldsThemAsync(ctx, chapters, ct);
         // The server is told here rather than at the six places that reach this method, and after
         // the write rather than before it: what goes to Audiobookshelf is then exactly what the
         // file received, including a partial write left by an unresolved gap - which is worth
@@ -1848,8 +1846,45 @@ public sealed class FileProcessor
         var pushNote = ctx.Abs is { } abs
             ? await _abs!.PushAsync(abs.Book, chapters, ctx.Info.DurationSeconds, ct)
             : "";
-        return (RenameCommitted(ctx.File, renameTo),
-            FormatBackupNote(_options.Backup, earlierBakKept) + pushNote);
+        return (RenameCommitted(ctx.File, renameTo), writeNote + pushNote);
+    }
+
+    /// <summary>
+    /// Writes the marks into the file, unless its container cannot carry them.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="chapters">The titled chapters to write.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The clause the summary line closes with about the write, empty when there was none.</returns>
+    /// <remarks>
+    /// <para>
+    /// Only ABS mode can reach the second branch, and only because it is the one mode where the
+    /// file is not the destination: local targets are refused at the command line and local
+    /// enumeration never yields anything but a chapter-capable container, while a book off a
+    /// server is fetched whatever its format because its marks are going into the server's
+    /// database. Remuxing that temporary copy would cost a full pass over it to produce a file
+    /// with no chapters in it - ffmpeg's muxers for those containers accept chapters and drop
+    /// them - and then delete it.
+    /// </para>
+    /// <para>
+    /// Keyed on the container alone rather than on ABS mode, so that a future path which does let
+    /// such a file through says nothing was written instead of quietly writing nothing.
+    /// </para>
+    /// </remarks>
+    private async Task<string> WriteChaptersIfTheContainerHoldsThemAsync(
+        FileContext ctx, List<Chapter> chapters, CancellationToken ct)
+    {
+        if (!AudioFormats.CanHoldChapters(ctx.File))
+        {
+            ctx.Logs.Write($"{Path.GetExtension(ctx.File)} cannot hold chapter marks - the copy is "
+                           + "left as it was downloaded and the marks go to the server only");
+            return "";
+        }
+
+        var earlierBakKept = await ctx.Ffmpeg.WriteChaptersAsync(
+            ctx.File, chapters, ctx.Info.DurationSeconds, _options.Backup,
+            BeginFinishPhase(ctx.Work, ctx.Info), ct);
+        return FormatBackupNote(_options.Backup, earlierBakKept);
     }
 
     /// <summary>

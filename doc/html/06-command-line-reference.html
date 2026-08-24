@@ -161,7 +161,9 @@ numbers, so &quot;Track 2.mp3&quot; comes before &quot;Track 10.mp3&quot;.</p>
 case-insensitively against the <strong>whole path</strong> of each candidate file.
 Example: <code>--filter &quot;/brandon sanderson/&quot;</code>.</li>
 <li><code>&quot;ext1,ext2&quot;</code> — a comma-separated list of extensions (with or without
-dots), e.g. <code>--filter mp3,m4b</code>. Only supported extensions are allowed.</li>
+dots), e.g. <code>--filter mp3,m4b</code>. Only supported extensions are allowed —
+except with <code>--abs</code>, where any extension may be named, since that mode is
+not restricted to formats chapter marks can be written to.</li>
 </ul>
 <p>The filter also applies to <code>--revert</code> and <code>--cleanup</code> (it selects which backups are
 restored) and to directory scans in general. Under <code>--revert</code> the regexp form
@@ -249,9 +251,12 @@ rather than ending the run.</li>
 or <code>--verify</code> says otherwise — the same rule local files follow, only applied one
 step earlier, so a library that is already marked is not downloaded in full just to
 be passed over book by book. (<code>--max-chapters</code> and <code>--verify</code> both need the audio in
-hand to decide, so a book either of them has an opinion about <em>is</em> fetched.)</li>
-<li><strong>Formats chapter marks cannot be written to.</strong> Only .m4a/.m4b/.mp3/.opus/.mka
-are fetched; anything else is reported and passed over before it is downloaded.</li>
+hand to decide, so a book either of them has an opinion about <em>is</em> fetched.)
+Formats are <em>not</em> a reason to skip a book here. The
+<a href="02-supported-file-formats.html#2-supported-file-formats">table in section 2</a> governs writing marks into a
+file, and this mode does not: any format ffmpeg can decode is fetched and
+processed, <code>.flac</code> and <code>.ogg</code> included. A file ffmpeg cannot read at all fails
+that one book with ffprobe's own complaint, and the run carries on.</li>
 </ul>
 <h3 id="which-marks-a-book-already-has">Which marks a book &quot;already has&quot;<a class="anchor" href="#which-marks-a-book-already-has" aria-label="Permalink to this heading">#</a></h3>
 <p>A book can have two chapter lists that disagree: the one Audiobookshelf keeps in

@@ -98,10 +98,13 @@ internal sealed class AbsFileFlow : IDisposable
         if (AlreadyMarked(book))
             return (null, $"has {book.ChapterCount} chapter mark(s) on the server (use --force to redo)");
 
+        // No format restriction here, deliberately. What a run against local files can work on is
+        // limited by which containers hold chapter marks; nothing on this path writes marks into a
+        // file, so that limit does not apply - the marks go into Audiobookshelf's own database and
+        // the copy is deleted. Detection only ever needs a decode, and a book listed as an audio
+        // file by the server is one ffmpeg reads. A file it cannot read fails this one book with
+        // ffprobe's own complaint, which says far more than a guess from the extension could.
         var source = await _workspace.DescribeFileAsync(book, ct);
-        if (!CliOptions.SupportedExtensions.Contains(source.Extension))
-            return (null, $"{source.Extension} is not a format chapter marks can be written to "
-                          + $"(only {CliOptions.SupportedExtensionsText})");
         if (_options.FilterExtensions is { } extensions && !extensions.Contains(source.Extension))
             return (null, $"{source.Extension} does not match --filter");
 

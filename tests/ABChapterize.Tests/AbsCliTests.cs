@@ -198,6 +198,26 @@ public sealed class AbsCliTests : IDisposable
     }
 
     /// <summary>
+    /// A book whose container cannot hold chapter marks is still workable in ABS mode, so a
+    /// <c>--filter</c> naming one of those formats has to be accepted.
+    /// </summary>
+    /// <remarks>
+    /// The same command line without <c>--abs</c> is refused, and rightly so: there the marks
+    /// have nowhere to go. Both halves are asserted here rather than only the new one, because
+    /// what makes this correct is the difference between them.
+    /// </remarks>
+    [Fact]
+    public void FilterExtensionList_MayNameAFormatChapterMarksCannotBeWrittenTo()
+    {
+        var abs = Parse("--abs", "--filter", "flac,ogg", "all");
+
+        Assert.Equal([".flac", ".ogg"], abs.FilterExtensions!);
+
+        var ex = Assert.Throws<CliError>(() => CliOptions.Parse(["--filter", "flac", _dir]));
+        Assert.Contains(".flac", ex.Message);
+    }
+
+    /// <summary>
     /// The usage text is where <c>--abs</c> is discovered, and it is also the only place the
     /// environment variables are written down - so a rename that missed one of them would leave the
     /// documented name pointing at nothing.

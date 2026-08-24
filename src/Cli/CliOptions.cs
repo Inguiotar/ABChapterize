@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using ABChapterize.Abs;
+using ABChapterize.Audio;
 using ABChapterize.Concurrency;
 using ABChapterize.Detection;
 using ABChapterize.Errors;
@@ -799,8 +800,12 @@ public sealed class CliOptions
     /// </summary>
     public string[]? FilterExtensions { get; private set; }
 
-    /// <summary>The file extensions to process: --filter's list, or all supported ones.</summary>
-    public string[] EffectiveExtensions => FilterExtensions ?? SupportedExtensions;
+    /// <summary>
+    /// The file extensions to process when enumerating local files: --filter's list, or every
+    /// container chapter marks can be written into. Not consulted in ABS mode, which selects
+    /// books by name rather than by scanning a folder.
+    /// </summary>
+    public string[] EffectiveExtensions => FilterExtensions ?? AudioFormats.ChapterCapable;
 
     /// <summary>
     /// One file or directory named at the end of the command line.
@@ -1066,15 +1071,6 @@ public sealed class CliOptions
         }
     }
 
-    /// <summary>
-    /// File extensions of the container formats that ffmpeg can both read and write chapter
-    /// marks for (verified empirically: mp4/ipod, ID3v2 mp3, Ogg Opus, Matroska). Notably
-    /// absent: .ogg (Vorbis) and .flac - ffmpeg's muxers silently drop chapters for those.
-    /// </summary>
-    public static readonly string[] SupportedExtensions = [".m4a", ".m4b", ".mp3", ".opus", ".mka"];
-
-    /// <summary>Human-readable list of the supported extensions, e.g. ".m4a/.m4b/.mp3/.opus/.mka".</summary>
-    public static string SupportedExtensionsText => string.Join("/", SupportedExtensions);
 
     /// <summary>
     /// What a language code may look like, wherever one is written: <c>--lang</c> and the
@@ -1372,6 +1368,19 @@ public sealed class CliOptions
         if (o._epilogueTitleSpec is { } epilogues && epilogues.Values.Any(t => t.Length == 0))
             throw new CliError("The epilogue title must not be empty (use --epilogue-phrase \"\" to switch epilogue detection off).");
 
+        // A run that writes into files can only work on containers that hold chapter marks, so a
+        // --filter naming any other extension asks for something that cannot happen. ABS mode is
+        // exempt: there the marks go into the server's database and the file is a temporary copy,
+        // which is why the same --filter is a perfectly reasonable thing to write there.
+        if (!o.Abs && o.FilterExtensions is { } filtered)
+        {
+            var unusable = filtered.Where(e => !AudioFormats.ChapterCapable.Contains(e)).ToList();
+            if (unusable.Count > 0)
+                throw new CliError(
+                    $"Unsupported extension(s) in --filter: {string.Join(", ", unusable)} " +
+                    $"(supported: {AudioFormats.ChapterCapableText}).");
+        }
+
         if (o.Abs)
             o.ResolveSelectors(targetArgs);
         else
@@ -1445,9 +1454,9 @@ public sealed class CliOptions
             if (File.Exists(path))
             {
                 var ext = Path.GetExtension(path).ToLowerInvariant();
-                if (!Revert && !SupportedExtensions.Contains(ext))
+                if (!Revert && !AudioFormats.ChapterCapable.Contains(ext))
                     throw new CliError(
-                        $"Unsupported file type \"{ext}\" ({path}): only {SupportedExtensionsText} are supported.");
+                        $"Unsupported file type \"{ext}\" ({path}): only {AudioFormats.ChapterCapableText} are supported.");
                 _targets.Add(new Target(path, IsDirectory: false));
             }
             else if (Directory.Exists(path))
@@ -1680,11 +1689,8 @@ public sealed class CliOptions
             .ToArray();
         if (extensions.Length == 0)
             throw new CliError("The --filter extension list must not be empty.");
-        var unsupported = extensions.Where(e => !SupportedExtensions.Contains(e)).ToList();
-        if (unsupported.Count > 0)
-            throw new CliError(
-                $"Unsupported extension(s) in --filter: {string.Join(", ", unsupported)} " +
-                $"(supported: {SupportedExtensionsText}).");
+        // Which extensions are usable depends on --abs, which may not have been seen yet - the
+        // check is in Parse, once the whole command line is known.
         FilterExtensions = extensions;
     }
 
@@ -2083,7 +2089,8 @@ public sealed class CliOptions
     public static string UsageText => $"""
         abchapterize {Version} - mark chapter starts in audiobooks using Whisper speech recognition
         Copyright (c) 2026 Jan O. Gretza - MIT license - written with Claude (Anthropic)
-        Supported formats: {SupportedExtensionsText} (formats whose containers can hold chapter marks)
+        Supported formats: {AudioFormats.ChapterCapableText} (containers that can hold chapter marks;
+        with --abs, any format ffmpeg can decode, the marks going to the server instead)
 
         Usage:
           abchapterize [options] <file-or-directory>...

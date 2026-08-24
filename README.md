@@ -89,14 +89,17 @@ Prebuilt binaries for Windows and Linux are available on the
   [doc/adding-a-language.md](doc/adding-a-language.md).
 - **All chapter-capable audio formats** — MP4 audiobooks (`.m4a`/`.m4b`), MP3,
   Opus and Matroska audio (`.mka`). (`.ogg` and `.flac` are out, through no
-  fault of their own: ffmpeg cannot write chapter marks into those containers.)
+  fault of their own: ffmpeg cannot write chapter marks into those containers —
+  but `--abs` takes them anyway, since there the marks go to the server.)
   `.m4b` is recommended: `.m4a` and `.m4b` are identical containers, but
   players may pick their exact behavior based on which extension they see, and
   chapters in `.mp3`/`.opus` files are honored by comparatively few players.
 - **Works straight off an Audiobookshelf server** — with `--abs`, books are named
   by library, series, collection or title instead of by path: each one is fetched,
   marked, and its chapters sent back to the server, with the temporary copy deleted
-  afterwards. Nothing on the server changes but the chapter list. `--push-only`
+  afterwards. Nothing on the server changes but the chapter list. This mode takes
+  any format ffmpeg can decode, `.flac` and `.ogg` included, because the marks are
+  going into the server's database rather than into the file. `--push-only`
   sends marks a book already has, either way round — books on the server, or local
   files matched to it by their tags.
 - **Windows and Linux**, single self-contained executable. Linux ARM64 and
@@ -260,7 +263,7 @@ document that long. Grouped below exactly as `--help` groups them:
 
 | Option | What it does |
 | --- | --- |
-| `-A`, `--abs` | Work on books held by an Audiobookshelf server rather than files on this machine. Each selected book is fetched to a temporary copy, processed as usual, and its finished marks sent back; the copy is then deleted. The trailing arguments become selectors — `library:NAME`, `series:NAME`, `collection:NAME`, `item:ID`, `title:NAME`, `all` — and anything unprefixed is read as a title. A book the server already has chapters for is skipped without `--force`, and a book held as more than one audio file is passed over. See the [manual](doc/manual.md#audiobookshelf). |
+| `-A`, `--abs` | Work on books held by an Audiobookshelf server rather than files on this machine. Each selected book is fetched to a temporary copy, processed as usual, and its finished marks sent back; the copy is then deleted. The trailing arguments become selectors — `library:NAME`, `series:NAME`, `collection:NAME`, `item:ID`, `title:NAME`, `all` — and anything unprefixed is read as a title. A book the server already has chapters for is skipped without `--force`, and a book held as more than one audio file is passed over. Any format ffmpeg can decode is accepted here, not just the ones chapter marks can be written into. See the [manual](doc/manual.md#audiobookshelf). |
 | `--push-only` | Send the server the marks a book already carries, detecting nothing. With `--abs` the selected books are fetched and read; without it, the local files named are matched to the server's libraries by their album tag, title tag, folder name or file name. |
 | `--abs-url <url>` | Which server: `http://host:13378`, `host:13378`, or just `host`. |
 | `--abs-key <key>` | An API key to authenticate with... |

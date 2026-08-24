@@ -88,6 +88,13 @@ the backend. Files with these extensions are not processed.</li>
 </ul>
 <p>Files with unsupported extensions are simply skipped during directory scans;
 naming one directly as the target is an error.</p>
+<p><strong><code>--abs</code> is not bound by this table.</strong> The list above is about writing marks
+<em>into a file</em>; against an <a href="06-command-line-reference.html#audiobookshelf">Audiobookshelf</a> server they go into
+the server's database instead, and the downloaded copy is deleted afterwards. So
+a run in that mode works on any format ffmpeg can decode — <code>.flac</code> and <code>.ogg</code>
+included — and the copy is simply left as it was downloaded. What that costs you
+is that the marks live on the server only: the file on the server's disk is not
+changed either way.</p>
 <nav class="pagenav" aria-label="Previous and next page">
 <a class="prev" href="01-what-abchapterize-does.html" rel="prev"><span>Previous</span>1. What ABChapterize does</a>
 <a class="next" href="03-how-detection-works.html" rel="next"><span>Next</span>3. How detection works</a>

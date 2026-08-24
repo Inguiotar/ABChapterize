@@ -4,6 +4,7 @@
 
 using System.Text.RegularExpressions;
 using Xunit;
+using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Errors;
 using ABChapterize.Language;
@@ -1486,6 +1487,8 @@ public sealed class CliOptionsTests : IDisposable
     [Fact]
     public void FilterExtensionList_UnsupportedExtension_IsAnError()
     {
+        // Only for a run that writes into files. ABS mode is exempt - see
+        // AbsCliTests.FilterExtensionList_MayNameAFormatChapterMarksCannotBeWrittenTo.
         var ex = Assert.Throws<CliError>(() => ParseDir("--filter", "mp3,wav"));
         Assert.Contains(".wav", ex.Message);
     }
@@ -1513,11 +1516,11 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
-    public void WithoutFilter_AllSupportedExtensions_AreEffective()
+    public void WithoutFilter_EveryChapterCapableExtension_IsEffective()
     {
         var o = ParseDir()!;
         Assert.Null(o.FilterExtensions);
-        Assert.Equal(CliOptions.SupportedExtensions, o.EffectiveExtensions);
+        Assert.Equal(AudioFormats.ChapterCapable, o.EffectiveExtensions);
     }
 
     [Fact]

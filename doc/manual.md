@@ -87,6 +87,14 @@ Notably absent:
 Files with unsupported extensions are simply skipped during directory scans;
 naming one directly as the target is an error.
 
+**`--abs` is not bound by this table.** The list above is about writing marks
+*into a file*; against an [Audiobookshelf](#audiobookshelf) server they go into
+the server's database instead, and the downloaded copy is deleted afterwards. So
+a run in that mode works on any format ffmpeg can decode — `.flac` and `.ogg`
+included — and the copy is simply left as it was downloaded. What that costs you
+is that the marks live on the server only: the file on the server's disk is not
+changed either way.
+
 ## 3. How detection works
 
 Detection opens with one pass over the whole file that transcribes nothing, and
@@ -1066,7 +1074,9 @@ checkpoint remembers the command line, not the folders' contents.
     case-insensitively against the **whole path** of each candidate file.
     Example: `--filter "/brandon sanderson/"`.
   - `"ext1,ext2"` — a comma-separated list of extensions (with or without
-    dots), e.g. `--filter mp3,m4b`. Only supported extensions are allowed.
+    dots), e.g. `--filter mp3,m4b`. Only supported extensions are allowed —
+    except with `--abs`, where any extension may be named, since that mode is
+    not restricted to formats chapter marks can be written to.
 
   The filter also applies to `--revert` and `--cleanup` (it selects which backups are
   restored) and to directory scans in general. Under `--revert` the regexp form
@@ -1138,8 +1148,11 @@ for "and everything below this".
   step earlier, so a library that is already marked is not downloaded in full just to
   be passed over book by book. (`--max-chapters` and `--verify` both need the audio in
   hand to decide, so a book either of them has an opinion about *is* fetched.)
-- **Formats chapter marks cannot be written to.** Only .m4a/.m4b/.mp3/.opus/.mka
-  are fetched; anything else is reported and passed over before it is downloaded.
+Formats are *not* a reason to skip a book here. The
+[table in section 2](#2-supported-file-formats) governs writing marks into a
+file, and this mode does not: any format ffmpeg can decode is fetched and
+processed, `.flac` and `.ogg` included. A file ffmpeg cannot read at all fails
+that one book with ffprobe's own complaint, and the run carries on.
 
 #### Which marks a book "already has"
 
