@@ -15,7 +15,8 @@ namespace ABChapterize.Abs;
 public readonly record struct AbsMatch(AbsBook? Book, string Reason);
 
 /// <summary>
-/// Finds the Audiobookshelf book a local audio file belongs to, for <c>--push-only</c> outside ABS
+/// Finds the Audiobookshelf book a local audio file belongs to, for the two modes that work on
+/// local files and talk to a server - <c>--abs-push</c> and <c>--abs-push-only</c> outside ABS
 /// mode - where the files are named on the command line and the server has to be searched for each.
 /// </summary>
 /// <remarks>

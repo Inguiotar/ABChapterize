@@ -88,7 +88,7 @@ public sealed class AbsItemMatcherTests
 
     /// <summary>
     /// A book this tool itself parked under a ".missing-marks" name is the same book, and a
-    /// --push-only sweep over the folder afterwards has to go on recognizing it.
+    /// --abs-push-only sweep over the folder afterwards has to go on recognizing it.
     /// </summary>
     [Fact]
     public void FileName_IgnoresAMissingMarksTag()

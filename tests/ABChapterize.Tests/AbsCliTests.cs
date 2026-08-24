@@ -114,11 +114,11 @@ public sealed class AbsCliTests : IDisposable
     }
 
     [Fact]
-    public void PushOnly_WorksWithoutAbsModeAndKeepsItsPaths()
+    public void AbsPushOnly_WorksWithoutAbsModeAndKeepsItsPaths()
     {
-        var options = CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "--push-only", _file])!;
+        var options = CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "--abs-push-only", _file])!;
 
-        Assert.True(options.PushOnly);
+        Assert.True(options.AbsPushOnly);
         Assert.False(options.Abs);
         Assert.True(options.UsesAbs);
         Assert.Single(options.Targets);
@@ -136,7 +136,7 @@ public sealed class AbsCliTests : IDisposable
     [InlineData("--revert")]
     [InlineData("--cleanup")]
     public void LocalOnlyModes_RefuseAServer(string mode)
-        => Assert.Throws<CliError>(() => CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", mode, "--push-only", "x"]));
+        => Assert.Throws<CliError>(() => CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", mode, "--abs-push-only", "x"]));
 
     [Theory]
     [InlineData("--force")]
@@ -146,19 +146,73 @@ public sealed class AbsCliTests : IDisposable
     // Reached through the shared detection-setting list rather than named on its own.
     [InlineData("--verify")]
     [InlineData("--lang")]
-    public void PushOnly_RefusesWhatItWouldIgnore(string option)
+    public void AbsPushOnly_RefusesWhatItWouldIgnore(string option)
     {
         var line = option == "--lang"
-            ? new[] { "--push-only", "--lang", "de", "x" }
-            : ["--push-only", option, "x"];
+            ? new[] { "--abs-push-only", "--lang", "de", "x" }
+            : ["--abs-push-only", option, "x"];
         Assert.Throws<CliError>(() => CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", .. line]));
     }
 
-    /// <summary>The options describe a server, so one of the two modes that talks to one has to be
-    /// there - otherwise they would quietly do nothing at all.</summary>
+    /// <summary>The options describe a server, so one of the three modes that talks to one has to
+    /// be there - otherwise they would quietly do nothing at all.</summary>
     [Fact]
     public void ConnectionOptionsWithoutAMode_AreRefused()
         => Assert.Throws<CliError>(() => CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "x"]));
+
+    [Fact]
+    public void AbsPush_IsAnOrdinaryLocalRunThatAlsoTalksToAServer()
+    {
+        var options = CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "--abs-push", _file])!;
+
+        Assert.True(options.AbsPush);
+        Assert.False(options.Abs);
+        Assert.False(options.AbsPushOnly);
+        // The targets stay paths, and the detection options stay usable - that is the whole
+        // difference from --abs-push-only, which detects nothing.
+        Assert.Single(options.Targets);
+        Assert.True(options.UsesAbs);
+        Assert.NotNull(CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-push", "--lang", "de", "--force", _file]));
+    }
+
+    /// <summary>
+    /// The three modes each answer "where do the marks go" differently, and no two of those
+    /// answers can hold at once.
+    /// </summary>
+    [Theory]
+    [InlineData("--abs")]
+    [InlineData("--abs-push-only")]
+    public void AbsPush_RefusesTheOtherModes(string other)
+        => Assert.Throws<CliError>(
+            () => CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "--abs-push", other, "all"]));
+
+    /// <summary>
+    /// A listing that exits has nothing to send. <c>--abs</c> stays the exception, its --no-op
+    /// being the listing of what the selectors picked.
+    /// </summary>
+    [Theory]
+    [InlineData("--abs-push")]
+    [InlineData("--abs-push-only")]
+    public void NoOp_RefusesThePushModes(string mode)
+    {
+        Assert.Throws<CliError>(() => CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--no-op", "--filter", "m4b", mode, _file]));
+        Assert.NotNull(Parse("-A", "--no-op", "all"));
+    }
+
+    /// <summary>
+    /// A plain run leaves a file marked but unsent, so an --abs-push run over the same folder must
+    /// not mistake the checkpoint that plain run left for work of its own that is already done.
+    /// </summary>
+    [Fact]
+    public void RunFingerprint_TellsAnAbsPushRunFromAPlainOne()
+    {
+        var pushing = CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "--abs-push", _file])!;
+        var plain = CliOptions.Parse([_file])!;
+
+        Assert.NotEqual(plain.RunFingerprint, pushing.RunFingerprint);
+    }
 
     [Fact]
     public void NoOp_NeedsNoFilterInAbsMode()
@@ -176,13 +230,13 @@ public sealed class AbsCliTests : IDisposable
     }
 
     /// <summary>
-    /// Without this, a --push-only sweep over a folder would record its files in the directory
+    /// Without this, an --abs-push-only sweep over a folder would record its files in the directory
     /// checkpoint as done, and the detection run afterwards would skip every one of them.
     /// </summary>
     [Fact]
-    public void RunFingerprint_TellsAPushOnlySweepFromADetectionRun()
+    public void RunFingerprint_TellsAnAbsPushOnlySweepFromADetectionRun()
     {
-        var pushing = CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "--push-only", _file])!;
+        var pushing = CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", "--abs-push-only", _file])!;
         var detecting = CliOptions.Parse([_file])!;
 
         Assert.NotEqual(detecting.RunFingerprint, pushing.RunFingerprint);
@@ -191,8 +245,8 @@ public sealed class AbsCliTests : IDisposable
     [Fact]
     public void RunFingerprint_TellsTwoServersApart()
     {
-        var here = CliOptions.Parse(["--abs-url", "host-a:9", "--abs-key", "k", "--push-only", _file])!;
-        var there = CliOptions.Parse(["--abs-url", "host-b:9", "--abs-key", "k", "--push-only", _file])!;
+        var here = CliOptions.Parse(["--abs-url", "host-a:9", "--abs-key", "k", "--abs-push-only", _file])!;
+        var there = CliOptions.Parse(["--abs-url", "host-b:9", "--abs-key", "k", "--abs-push-only", _file])!;
 
         Assert.NotEqual(here.RunFingerprint, there.RunFingerprint);
     }
@@ -227,7 +281,7 @@ public sealed class AbsCliTests : IDisposable
     {
         var usage = CliOptions.UsageText;
         Assert.Contains("-A, --abs", usage);
-        Assert.Contains("--push-only", usage);
+        Assert.Contains("--abs-push-only", usage);
         foreach (var variable in Variables)
             Assert.Contains(variable, usage);
     }

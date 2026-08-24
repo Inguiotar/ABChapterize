@@ -184,6 +184,11 @@ author, cover, tags and the audio file itself are never touched.</p>
 though it does, and each of them is a download and an hour of transcription.
 <code>abchapterize -A -O --summary &quot;library:Discworld&quot;</code> lists what would be processed
 and what would be skipped, and fetches no audio at all.</p>
+<p>Three modes talk to a server, and they differ in where the marks end up. <code>--abs</code>
+works on the server's own books, which is the whole of this section. The other
+two work on files on this machine: <code>--abs-push</code> marks them as usual and tells
+the server as well, and <code>--abs-push-only</code> sends the server the marks they
+already carry without detecting anything. No two of them can be combined.</p>
 <h3 id="selecting-books">Selecting books<a class="anchor" href="#selecting-books" aria-label="Permalink to this heading">#</a></h3>
 <p>In ABS mode the trailing arguments are <em>selectors</em> rather than paths. Give as
 many as you like; their books are added together and each book is processed once.</p>
@@ -269,8 +274,28 @@ and <code>--verify</code> all reason about.</p>
 when it scans a book and keeps them independently ever after, so any edit made in
 its web interface puts them out of step by design. <code>--verbose</code> says so and the run
 carries on.</p>
+<h3 id="marking-local-files-and-telling-the-server">Marking local files and telling the server<a class="anchor" href="#marking-local-files-and-telling-the-server" aria-label="Permalink to this heading">#</a></h3>
+<p><code>--abs-push</code>
+: Do an ordinary run over local files — detection, and the marks written into
+each file as usual — and send the finished chapter list to Audiobookshelf as
+well. The file stays the primary destination; the server is told in addition.
+Use this for a shelf you keep on this machine and also serve from
+Audiobookshelf, where marks in the file and marks in the server's database are
+both worth having.</p>
+<p>Each file is matched against the server's libraries the same way
+<code>--abs-push-only</code> matches them (below). A file that matches nothing, or
+matches several books, is still written — only the push is skipped, and the
+summary line says so. Nothing about the server can fail a file that was
+marked successfully.</p>
+<p><strong>Only a complete chapter set is sent.</strong> A file left with an unresolved gap
+keeps its partial marks and is not pushed: the server's list would otherwise
+be replaced by a worse one and stay that way. Finish the file — see
+<a href="#resuming-an-interrupted-run">Resuming an interrupted run</a> — and run
+<code>--abs-push</code> again. <code>--dry-run</code> writes nothing and sends nothing.</p>
+<p>For books the server itself holds, use <a href="#audiobookshelf"><code>--abs</code></a> instead. The
+two cannot be combined, being two different answers to where the marks live.</p>
 <h3 id="sending-marks-a-book-already-has">Sending marks a book already has<a class="anchor" href="#sending-marks-a-book-already-has" aria-label="Permalink to this heading">#</a></h3>
-<p><code>--push-only</code>
+<p><code>--abs-push-only</code>
 : Send Audiobookshelf the chapter marks a book already carries, detecting
 nothing and changing no file. No Whisper model is loaded.</p>
 <p>With <code>--abs</code>, the selected books are fetched and read. Without it, the files
@@ -283,7 +308,7 @@ book is named exactly.</p>
 <p>A book with no marks in it is skipped too: the update replaces the server's
 chapter list rather than merging into it, so sending an empty one would delete
 what is there.</p>
-<p>Because nothing is detected, <code>--push-only</code> cannot be combined with the
+<p>Because nothing is detected, <code>--abs-push-only</code> cannot be combined with the
 detection options, nor with <code>--import</code>, <code>--export</code>, <code>--force</code> or <code>--backup</code>.
 <code>--dry-run</code> works and reports what would be sent.</p>
 <h3 id="connecting">Connecting<a class="anchor" href="#connecting" aria-label="Permalink to this heading">#</a></h3>

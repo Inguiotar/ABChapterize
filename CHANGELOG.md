@@ -27,11 +27,18 @@ earn a round number.
   reported and passed over. `--no-op` lists what a selector picked without fetching anything,
   which is worth doing before a selector that turns out to name a hundred books.
 
-- **`--push-only` sends chapters a book already has to Audiobookshelf**, detecting nothing and
-  changing no file. With `--abs` the selected books are fetched and read; without it, the local
-  files you name are matched against the server's libraries by their album tag, their title tag,
-  the folder they sit in, or their file name, in that order. Useful for putting a shelf you
-  marked long ago onto a server that never saw the marks.
+- **`--abs-push` marks your own files and tells the server as well.** An ordinary run — the
+  marks go into each file exactly as they always have — that then sends the finished chapter
+  list to Audiobookshelf, for a shelf you keep on this machine and also serve from there. Each
+  file is matched to a book on the server the same way `--abs-push-only` matches it; one that
+  matches nothing is still marked and simply not sent. Only a complete chapter set is sent, so a
+  file left with a gap keeps its partial marks and goes to the server once it has been finished.
+
+- **`--abs-push-only` sends chapters a book already has to Audiobookshelf**, detecting nothing
+  and changing no file. With `--abs` the selected books are fetched and read; without it, the
+  local files you name are matched against the server's libraries by their album tag, their
+  title tag, the folder they sit in, or their file name, in that order. Useful for putting a
+  shelf you marked long ago onto a server that never saw the marks.
 
 - **`--abs` takes any format ffmpeg can read**, not only the ones chapter marks can be written
   into. A `.flac` or `.ogg` book on a server is now marked like any other: the marks go into

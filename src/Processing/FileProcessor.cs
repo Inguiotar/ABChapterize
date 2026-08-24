@@ -147,7 +147,7 @@ public sealed class FileProcessor
         if (!book.IsSingleFile)
             return $"skipped, {book.AudioFileCount} audio files";
         if (WouldProcess(book))
-            return _options.PushOnly ? "existing marks sent to the server" : "processed";
+            return _options.AbsPushOnly ? "existing marks sent to the server" : "processed";
         return $"skipped, {book.ChapterCount} chapter mark(s) (use --force to redo)";
     }
 
@@ -158,7 +158,7 @@ public sealed class FileProcessor
     /// <param name="book">The selected book.</param>
     /// <remarks>
     /// It can only ever be an estimate: what a book really carries is settled by the probe of the
-    /// downloaded file, and a --push-only book with no marks at all is skipped there rather than
+    /// downloaded file, and a --abs-push-only book with no marks at all is skipped there rather than
     /// here. But it is the estimate the run itself works from.
     /// </remarks>
     private bool WouldProcess(AbsBook book) => _abs!.WouldProcess(book);
@@ -251,8 +251,8 @@ public sealed class FileProcessor
 
         if (_options.Import)
             await RunImportAsync(files, ffmpeg, ct);
-        else if (_options.PushOnly)
-            await RunPushOnlyAsync(files, ffmpeg, ct);
+        else if (_options.AbsPushOnly)
+            await RunAbsPushOnlyAsync(files, ffmpeg, ct);
         else
             await RunDetectionAsync(files, ffmpeg, ct);
 
@@ -319,13 +319,13 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// The --push-only pipeline: no model is loaded and nothing is detected, so each file is an
+    /// The --abs-push-only pipeline: no model is loaded and nothing is detected, so each file is an
     /// ffprobe, a look-up on the server and one request.
     /// </summary>
     /// <param name="files">The files, or the books, to send marks for.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
-    private async Task RunPushOnlyAsync(List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
+    private async Task RunAbsPushOnlyAsync(List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
     {
         foreach (var file in files)
         {
@@ -802,7 +802,7 @@ public sealed class FileProcessor
     /// <param name="pending">The file to process and the checkpoint it belongs to.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="detectorFor">Builds the detector for this file once its path is known, or null
-    /// for a mode that detects nothing (--push-only).</param>
+    /// for a mode that detects nothing (--abs-push-only).</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ProcessOneAsync(
         PendingFile pending, FfmpegClient ffmpeg, DetectorFactory? detectorFor, CancellationToken ct)
@@ -868,7 +868,7 @@ public sealed class FileProcessor
     /// <param name="work">Its progress tracker, already started.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="detector">This file's detector, or null for a mode that detects nothing
-    /// (--push-only).</param>
+    /// (--abs-push-only).</param>
     /// <param name="abs">The Audiobookshelf book this file was fetched for, or null.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The name the file was renamed to (a ".missing-marks" tag added or dropped), or
@@ -951,7 +951,7 @@ public sealed class FileProcessor
         Skip,
 
         /// <summary>Send the marks it already carries to Audiobookshelf and change nothing
-        /// (--push-only).</summary>
+        /// (--abs-push-only).</summary>
         Push,
     }
 
@@ -959,10 +959,10 @@ public sealed class FileProcessor
     /// <param name="ctx">The file's context, carrying its probe result.</param>
     private FilePlan PlanFor(FileContext ctx)
     {
-        // First, and unconditional: --push-only forms no opinion about a book beyond what marks it
+        // First, and unconditional: --abs-push-only forms no opinion about a book beyond what marks it
         // has, so none of the policy below - the resume tag, the pre-existing marks, --verify - has
         // anything to decide. A book with no marks at all is caught where they are read.
-        if (_options.PushOnly)
+        if (_options.AbsPushOnly)
             return FilePlan.Push;
 
         // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
@@ -1038,7 +1038,7 @@ public sealed class FileProcessor
     private async Task<string?> CommitOneAsync(
         FileContext ctx, ChapterDetector? detector, FilePlan plan, Stopwatch watch, CancellationToken ct)
     {
-        // Also the null-detector case, and not by coincidence: --push-only is the one mode that
+        // Also the null-detector case, and not by coincidence: --abs-push-only is the one mode that
         // loads no model, and FilePlan.Push is the only plan PlanFor gives it.
         if (plan is FilePlan.Push || detector == null)
             return await PushExistingMarksAsync(ctx, watch, ct);
@@ -1065,7 +1065,7 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// The --push-only outcome for one file: send Audiobookshelf the marks the file already
+    /// The --abs-push-only outcome for one file: send Audiobookshelf the marks the file already
     /// carries, having first worked out which book they belong to.
     /// </summary>
     /// <param name="ctx">The file's context.</param>
@@ -1206,7 +1206,7 @@ public sealed class FileProcessor
                 important: true);
             return null;
         }
-        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, retarget, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, retarget, complete: false, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - resume incomplete, still missing: {stillMissing}; wrote " +
             $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")}" +
@@ -1239,7 +1239,7 @@ public sealed class FileProcessor
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
-        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, complete: true, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: resume complete - {written}" +
             $"{RenameNote(restored, finalPath)}{backupNote}"
@@ -1478,7 +1478,7 @@ public sealed class FileProcessor
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
-        var (_, backupNote) = await CommitChaptersAsync(ctx, chapters, null, ct);
+        var (_, backupNote) = await CommitChaptersAsync(ctx, chapters, null, complete: true, ct);
         _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {what}{backupNote}"
             + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds));
         return null;
@@ -1547,7 +1547,7 @@ public sealed class FileProcessor
                 important: true);
             return null;
         }
-        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, target, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, target, complete: false, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: WARNING - unresolved chapter sequence gap (missing: {missingList}); " +
             $"wrote {FormatWrittenCount(result, chapters, "partial mark(s)")}" +
@@ -1670,7 +1670,7 @@ public sealed class FileProcessor
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}", important);
             return null;
         }
-        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, ct);
+        var (finalPath, backupNote) = await CommitChaptersAsync(ctx, chapters, restored, complete: true, ct);
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: {DescribeDropped(dropped, prospective: false)}{what}" +
             $"{notes}{RenameNote(restored, finalPath)}{backupNote}"
@@ -1831,11 +1831,18 @@ public sealed class FileProcessor
     /// <param name="ctx">The file's context.</param>
     /// <param name="chapters">The chapters to write.</param>
     /// <param name="renameTo">Path to move the written file to, or null to leave its name alone.</param>
+    /// <param name="complete">
+    /// Whether the chapter sequence has no gaps left in it. Only <c>--abs-push</c> reads it, and
+    /// only to decide whether to send anything - see <see cref="PushLocalFileAsync"/>. Stated by
+    /// the caller rather than derived here because the two paths that reach this with a gap are
+    /// exactly the two that re-tag the file as still missing marks, and that is a fact about the
+    /// outcome each of them has already worked out.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Where the file ended up - see <see cref="RenameCommitted"/> - and the backup note
     /// for its summary line.</returns>
     private async Task<(string Path, string Note)> CommitChaptersAsync(
-        FileContext ctx, List<Chapter> chapters, string? renameTo, CancellationToken ct)
+        FileContext ctx, List<Chapter> chapters, string? renameTo, bool complete, CancellationToken ct)
     {
         var writeNote = await WriteChaptersIfTheContainerHoldsThemAsync(ctx, chapters, ct);
         // The server is told here rather than at the six places that reach this method, and after
@@ -1845,8 +1852,48 @@ public sealed class FileProcessor
         // write never gets here and so never sends anything.
         var pushNote = ctx.Abs is { } abs
             ? await _abs!.PushAsync(abs.Book, chapters, ctx.Info.DurationSeconds, ct)
-            : "";
+            : _options.AbsPush
+                ? await PushLocalFileAsync(ctx, chapters, complete, ct)
+                : "";
         return (RenameCommitted(ctx.File, renameTo), writeNote + pushNote);
+    }
+
+    /// <summary>
+    /// The <c>--abs-push</c> half: finds the book this local file belongs to and sends it the
+    /// marks the file has just been given.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="chapters">The chapters just written into the file.</param>
+    /// <param name="complete">Whether the chapter sequence has no gaps left in it.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The clause the summary line closes with about the push.</returns>
+    /// <remarks>
+    /// <para>
+    /// Waits for a complete set where ABS mode sends a partial one, and the difference is which
+    /// copy of the marks is the good one. In ABS mode the server holds the only copy, so a partial
+    /// list beats nothing at all; here the file holds them and can be resumed later, and sending a
+    /// gapped list would replace whatever the server already has with something worse - then leave
+    /// it that way, since finishing the file afterwards would not push again by itself.
+    /// </para>
+    /// <para>
+    /// Nothing here can fail the file. The marks are in the file by the time this runs, which is
+    /// what the user asked for first; a book that cannot be matched, or a server that has gone
+    /// away, is reported in the summary line and nowhere else. Failing a written file over a
+    /// push that did not happen would be the one outcome nobody wants.
+    /// </para>
+    /// </remarks>
+    private async Task<string> PushLocalFileAsync(
+        FileContext ctx, List<Chapter> chapters, bool complete, CancellationToken ct)
+    {
+        if (!complete)
+            return ", not sent to Audiobookshelf while chapters are missing";
+
+        var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
+        if (match.Book == null)
+            return $", not sent to Audiobookshelf ({match.Reason})";
+
+        ctx.Logs.Write(match.Reason);
+        return await _abs.PushAsync(match.Book, chapters, ctx.Info.DurationSeconds, ct);
     }
 
     /// <summary>
@@ -2103,7 +2150,8 @@ public sealed class FileProcessor
         }
 
         var (_, backupNote) = await CommitChaptersAsync(
-            new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, _options), chapters, null, ct);
+            new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, _options),
+            chapters, null, complete: true, ct);
         _progress.FinishWithSummary(work,
             $"{name}: {DescribeDropped(dropped, prospective: false)}{chapters.Count} chapter(s) " +
             $"imported from {Path.GetFileName(sidecarPath)}{backupNote}"

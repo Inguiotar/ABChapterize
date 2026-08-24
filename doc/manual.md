@@ -1103,6 +1103,12 @@ though it does, and each of them is a download and an hour of transcription.
 `abchapterize -A -O --summary "library:Discworld"` lists what would be processed
 and what would be skipped, and fetches no audio at all.
 
+Three modes talk to a server, and they differ in where the marks end up. `--abs`
+works on the server's own books, which is the whole of this section. The other
+two work on files on this machine: `--abs-push` marks them as usual and tells
+the server as well, and `--abs-push-only` sends the server the marks they
+already carry without detecting anything. No two of them can be combined.
+
 #### Selecting books
 
 In ABS mode the trailing arguments are *selectors* rather than paths. Give as
@@ -1168,9 +1174,34 @@ when it scans a book and keeps them independently ever after, so any edit made i
 its web interface puts them out of step by design. `--verbose` says so and the run
 carries on.
 
+#### Marking local files and telling the server
+
+`--abs-push`
+: Do an ordinary run over local files — detection, and the marks written into
+  each file as usual — and send the finished chapter list to Audiobookshelf as
+  well. The file stays the primary destination; the server is told in addition.
+  Use this for a shelf you keep on this machine and also serve from
+  Audiobookshelf, where marks in the file and marks in the server's database are
+  both worth having.
+
+  Each file is matched against the server's libraries the same way
+  `--abs-push-only` matches them (below). A file that matches nothing, or
+  matches several books, is still written — only the push is skipped, and the
+  summary line says so. Nothing about the server can fail a file that was
+  marked successfully.
+
+  **Only a complete chapter set is sent.** A file left with an unresolved gap
+  keeps its partial marks and is not pushed: the server's list would otherwise
+  be replaced by a worse one and stay that way. Finish the file — see
+  [Resuming an interrupted run](#resuming-an-interrupted-run) — and run
+  `--abs-push` again. `--dry-run` writes nothing and sends nothing.
+
+  For books the server itself holds, use [`--abs`](#audiobookshelf) instead. The
+  two cannot be combined, being two different answers to where the marks live.
+
 #### Sending marks a book already has
 
-`--push-only`
+`--abs-push-only`
 : Send Audiobookshelf the chapter marks a book already carries, detecting
   nothing and changing no file. No Whisper model is loaded.
 
@@ -1186,7 +1217,7 @@ carries on.
   chapter list rather than merging into it, so sending an empty one would delete
   what is there.
 
-  Because nothing is detected, `--push-only` cannot be combined with the
+  Because nothing is detected, `--abs-push-only` cannot be combined with the
   detection options, nor with `--import`, `--export`, `--force` or `--backup`.
   `--dry-run` works and reports what would be sent.
 

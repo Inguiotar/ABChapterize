@@ -195,7 +195,9 @@ public sealed class DebugLog : IDisposable
         // folder named after a guid, so without this the log does not say what book it is about.
         if (o.AbsServer is { } server)
             yield return $"audiobookshelf {server.Describe}"
-                         + (o.PushOnly ? ", push-only" : o.Abs ? ", ABS mode" : "");
+                         + (o.AbsPushOnly ? ", abs-push-only"
+                            : o.Abs ? ", ABS mode"
+                            : o.AbsPush ? ", abs-push" : "");
         if (o.RunBefore is { } before)
             yield return $"run-before {before.Raw}";
         if (o.RunAfter is { } after)

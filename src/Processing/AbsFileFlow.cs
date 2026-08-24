@@ -32,8 +32,9 @@ internal sealed class AbsFileFlow : IDisposable
     private readonly ProgressRenderer _progress;
     private readonly AbsWorkspace _workspace;
 
-    /// <summary>Every book on the server, fetched once and only when <c>--push-only</c> outside ABS
-    /// mode actually needs it (see <see cref="MatchAsync"/>).</summary>
+    /// <summary>Every book on the server, fetched once and only when a local file actually has to be
+    /// matched against it - <c>--abs-push</c>, or <c>--abs-push-only</c> outside ABS mode (see
+    /// <see cref="MatchAsync"/>).</summary>
     private IReadOnlyList<AbsBook>? _everyBook;
 
     /// <summary>Opens the ABS side of a run. Nothing is sent until <see cref="ConnectAsync"/>.</summary>
@@ -150,7 +151,7 @@ internal sealed class AbsFileFlow : IDisposable
     /// </remarks>
     private bool AlreadyMarked(AbsBook book)
         => book.ChapterCount > 0
-           && !_options.Force && !_options.Verify && !_options.PushOnly
+           && !_options.Force && !_options.Verify && !_options.AbsPushOnly
            && _options.MaxChapters == null;
 
     /// <summary>
@@ -161,12 +162,12 @@ internal sealed class AbsFileFlow : IDisposable
     /// <param name="copy">The local copy and where it came from.</param>
     /// <returns>The media info to carry on with, and the note for <c>--verbose</c>.</returns>
     /// <remarks>
-    /// Deliberately skipped for <c>--push-only</c>, which exists to send the server what the
+    /// Deliberately skipped for <c>--abs-push-only</c>, which exists to send the server what the
     /// <em>file</em> carries: merging first would replace the file's marks with the server's own and
     /// send them straight back, turning the mode into an expensive no-op.
     /// </remarks>
     public (MediaInfo Info, string Note) Merge(MediaInfo info, AbsLocalCopy copy)
-        => _options.PushOnly ? (info, "") : AbsChapterMerge.Apply(info, copy.Source);
+        => _options.AbsPushOnly ? (info, "") : AbsChapterMerge.Apply(info, copy.Source);
 
     /// <summary>
     /// Sends a book's finished marks to the server.
@@ -186,7 +187,8 @@ internal sealed class AbsFileFlow : IDisposable
     }
 
     /// <summary>
-    /// Finds the book a local file belongs to, for <c>--push-only</c> outside ABS mode.
+    /// Finds the book a local file belongs to, for <c>--abs-push</c> and for <c>--abs-push-only</c>
+    /// outside ABS mode.
     /// </summary>
     /// <param name="localPath">Path of the local audio file.</param>
     /// <param name="info">What ffprobe found in it.</param>

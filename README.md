@@ -99,9 +99,10 @@ Prebuilt binaries for Windows and Linux are available on the
   marked, and its chapters sent back to the server, with the temporary copy deleted
   afterwards. Nothing on the server changes but the chapter list. This mode takes
   any format ffmpeg can decode, `.flac` and `.ogg` included, because the marks are
-  going into the server's database rather than into the file. `--push-only`
-  sends marks a book already has, either way round — books on the server, or local
-  files matched to it by their tags.
+  going into the server's database rather than into the file. For a shelf you keep
+  here *and* serve from Audiobookshelf, `--abs-push` marks the local files as usual
+  and tells the server too, while `--abs-push-only` sends marks a book already has,
+  either way round — books on the server, or local files matched to it by their tags.
 - **Windows and Linux**, single self-contained executable. Linux ARM64 and
   Apple Silicon build from source as well, untested and unreleased — see
   [Building from source](#building-from-source).
@@ -184,8 +185,11 @@ export ABCHAPTERIZE_ABS_URL=books.lan:13378 ABCHAPTERIZE_ABS_KEY=...
 abchapterize --abs --no-op --summary "library:Discworld"
 abchapterize --abs "series:Tiffany Aching"
 
+# Mark your own files as usual, and put the chapters on the server as well:
+abchapterize --abs-push --recurse "D:\Audiobooks"
+
 # Books you already marked locally, whose chapters the server has not got:
-abchapterize --push-only --recurse "D:\Audiobooks"
+abchapterize --abs-push-only --recurse "D:\Audiobooks"
 
 # Marks that should be one per numbered chapter (say, from an earlier run),
 # but you're not sure they all landed right? Check each against the audio;
@@ -264,7 +268,8 @@ document that long. Grouped below exactly as `--help` groups them:
 | Option | What it does |
 | --- | --- |
 | `-A`, `--abs` | Work on books held by an Audiobookshelf server rather than files on this machine. Each selected book is fetched to a temporary copy, processed as usual, and its finished marks sent back; the copy is then deleted. The trailing arguments become selectors — `library:NAME`, `series:NAME`, `collection:NAME`, `item:ID`, `title:NAME`, `all` — and anything unprefixed is read as a title. A book the server already has chapters for is skipped without `--force`, and a book held as more than one audio file is passed over. Any format ffmpeg can decode is accepted here, not just the ones chapter marks can be written into. See the [manual](doc/manual.md#audiobookshelf). |
-| `--push-only` | Send the server the marks a book already carries, detecting nothing. With `--abs` the selected books are fetched and read; without it, the local files named are matched to the server's libraries by their album tag, title tag, folder name or file name. |
+| `--abs-push` | Mark local files as usual — writing the marks into each file — and send the finished list to the server as well. Each file is matched to the server's libraries as below; one that matches nothing is written anyway and simply not sent. Only a complete chapter set is sent, so a file left with a gap keeps its partial marks and is pushed once it is finished. Not combinable with `--abs`. |
+| `--abs-push-only` | Send the server the marks a book already carries, detecting nothing. With `--abs` the selected books are fetched and read; without it, the local files named are matched to the server's libraries by their album tag, title tag, folder name or file name. |
 | `--abs-url <url>` | Which server: `http://host:13378`, `host:13378`, or just `host`. |
 | `--abs-key <key>` | An API key to authenticate with... |
 | `--abs-user <name>`, `--abs-password <pw>` | ...or an account to log in as. |

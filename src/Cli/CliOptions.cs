@@ -833,14 +833,27 @@ public sealed class CliOptions
     public bool Abs { get; private set; }
 
     /// <summary>
-    /// <c>--push-only</c>: send Audiobookshelf the marks a book already carries, detecting nothing.
+    /// <c>--abs-push-only</c>: send Audiobookshelf the marks a book already carries, detecting nothing.
     /// In ABS mode that means fetching each selected book and reading its file; without it, the
     /// files named on the command line are matched against the server's libraries instead.
     /// </summary>
-    public bool PushOnly { get; private set; }
+    public bool AbsPushOnly { get; private set; }
+
+    /// <summary>
+    /// <c>--abs-push</c>: an ordinary run over local files that also sends its finished marks to
+    /// Audiobookshelf, the file itself still being written as usual.
+    /// </summary>
+    /// <remarks>
+    /// The complement of <see cref="Abs"/> rather than a variant of it, and refused together with
+    /// it: there the server holds the only copy of the marks, here the file does and the server is
+    /// told as well. That is also why this one waits for a complete chapter set where ABS mode
+    /// sends a partial one - see
+    /// <see cref="ABChapterize.Processing.FileProcessor.CommitChaptersAsync"/>.
+    /// </remarks>
+    public bool AbsPush { get; private set; }
 
     /// <summary>Whether this run talks to an Audiobookshelf server at all.</summary>
-    public bool UsesAbs => Abs || PushOnly;
+    public bool UsesAbs => Abs || AbsPushOnly || AbsPush;
 
     // The connection as typed, kept only until Parse resolves it: what is missing here is filled
     // in from the environment, so neither half is complete on its own.
@@ -968,7 +981,7 @@ public sealed class CliOptions
     /// </summary>
     /// <remarks>
     /// Shared by the two modes that produce chapter marks without detecting them, <c>--import</c>
-    /// and <c>--push-only</c>. One list rather than one each, because the promise their error
+    /// and <c>--abs-push-only</c>. One list rather than one each, because the promise their error
     /// messages make - "these have no effect here" - has to go on being true for both as options
     /// are added, and two copies of it would not.
     /// </remarks>
@@ -1061,9 +1074,11 @@ public sealed class CliOptions
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
-                // Without these, a --push-only sweep over a folder would record its files as done
-                // and the detection run afterwards would skip every one of them.
-                $"abs={Abs}/{PushOnly}", $"absserver={AbsServer?.Root}",
+                // Without these, an --abs-push-only sweep over a folder would record its files as done
+                // and the detection run afterwards would skip every one of them. --abs-push is in for
+                // the mirror image: a plain run leaves files marked but unsent, and the --abs-push run
+                // meant to send them must not mistake them for work it has already finished.
+                $"abs={Abs}/{AbsPushOnly}/{AbsPush}", $"absserver={AbsServer?.Root}",
                 $"runbefore={RunBefore?.Raw}", $"runafter={RunAfter?.Raw}",
                 $"set={string.Join('|', _tuningOverrides)}",
             ]);
@@ -1212,6 +1227,14 @@ public sealed class CliOptions
         if (o.NoOp && (o.Revert || o.Cleanup || o.AnyProcessingOptionGiven))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
 
+        // --abs is the exception above and stays one: there --no-op is the listing of what the
+        // selectors picked. The two push modes are not - both exist to send something, and a mode
+        // that lists and exits would never send it.
+        if (o.NoOp && (o.AbsPush || o.AbsPushOnly))
+            throw new CliError(
+                "--no-op lists what a run would work on and exits, so it has nothing to send and "
+                + "cannot be combined with --abs-push or --abs-push-only.");
+
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
 
@@ -1305,9 +1328,21 @@ public sealed class CliOptions
                 "--cleanup works on folders on this machine and has nothing to do with an Audiobookshelf server.");
         if (!o.UsesAbs && (o._absUrl ?? o._absKey ?? o._absUser ?? o._absPassword ?? o.AbsTemp) != null)
             throw new CliError(
-                "The --abs-... options describe an Audiobookshelf server, so one of --abs (-A), which "
-                + "works on books held by one, or --push-only, which sends it the marks local files "
-                + "already carry, has to be given as well.");
+                "The --abs-... options describe an Audiobookshelf server, so one of the modes that "
+                + "talks to one has to be given as well: --abs (-A) works on books held by it, "
+                + "--abs-push marks local files and sends the result to it, and --abs-push-only "
+                + "sends it the marks local files already carry.");
+        // Two answers to "where do the marks go", and they are not compatible: --abs has the server
+        // hold the only copy, --abs-push writes the file and tells the server as well. Silently
+        // preferring one would make the other look like it had been honoured.
+        if (o.Abs && o.AbsPush)
+            throw new CliError(
+                "--abs-push adds a push to a run over local files; --abs (-A) works on the server's "
+                + "own books and already sends what it finds. Use one or the other.");
+        if (o.AbsPush && o.AbsPushOnly)
+            throw new CliError(
+                "--abs-push-only sends the marks a file already carries and detects nothing, which is "
+                + "the opposite of --abs-push. Use one or the other.");
         // Both write a sidecar beside the audio file, and in ABS mode that file is a temporary copy
         // in a folder about to be deleted - so the sidecar would be written and then thrown away.
         if (o.Abs && (o.Import || o.Export))
@@ -1319,14 +1354,14 @@ public sealed class CliOptions
                 "--backup keeps the file as it was beside the one it changed, which in ABS mode is a "
                 + "temporary download; it cannot be combined with --abs. The book on the server is "
                 + "left as it is until the run succeeds either way.");
-        if (o.PushOnly && (o.Import || o.Export || o.Fix || o.Force || o.Backup))
+        if (o.AbsPushOnly && (o.Import || o.Export || o.Fix || o.Force || o.Backup))
             throw new CliError(
-                "--push-only sends the marks a book already carries and changes no file, so --import, "
+                "--abs-push-only sends the marks a book already carries and changes no file, so --import, "
                 + "--export, --fix, --force and --backup have nothing to act on and cannot be "
                 + "combined with it.");
-        if (o.PushOnly && o.AnyDetectionSettingGiven)
+        if (o.AbsPushOnly && o.AnyDetectionSettingGiven)
             throw new CliError(
-                $"--push-only detects nothing, so {DetectionSettingOptions} have no effect and cannot "
+                $"--abs-push-only detects nothing, so {DetectionSettingOptions} have no effect and cannot "
                 + "be combined with it.");
         if (o.UsesAbs)
         {
@@ -1550,7 +1585,8 @@ public sealed class CliOptions
             case "--ignore-progress": IgnoreProgress = true; return true;
             case "--ignore-chapter-numbers": IgnoreChapterNumbers = true; return true;
             case "--abs": Abs = true; return true;
-            case "--push-only": PushOnly = true; return true;
+            case "--abs-push-only": AbsPushOnly = true; return true;
+            case "--abs-push": AbsPush = true; return true;
             default: return false;
         }
     }
@@ -2095,7 +2131,7 @@ public sealed class CliOptions
         Usage:
           abchapterize [options] <file-or-directory>...
           abchapterize -A|--abs [options] <selector>...
-          abchapterize --push-only [options] <file-or-directory>...
+          abchapterize --abs-push-only [options] <file-or-directory>...
           abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
@@ -2164,7 +2200,16 @@ public sealed class CliOptions
                                     matches exactly. Give several selectors to add them together.
                                     Not combinable with --import, --export, --backup, --revert,
                                     --cleanup or --recurse.
-              --push-only           Send Audiobookshelf the chapter marks a book already has,
+              --abs-push            Mark local files as usual - writing the marks into each file -
+                                    and send the finished list to Audiobookshelf as well. Each
+                                    file is matched against the server's libraries the way
+                                    --abs-push-only matches them, and one that matches nothing, or
+                                    matches several books, is written and simply not sent. Only a
+                                    complete chapter set is sent: a file left with a gap keeps its
+                                    partial marks and is not pushed, so resuming it later and
+                                    running this again sends the finished list. For books the
+                                    server itself holds, use --abs instead.
+              --abs-push-only       Send Audiobookshelf the chapter marks a book already has,
                                     detecting nothing and changing no file. With --abs, the
                                     selected books are fetched and read; without it, the files
                                     named on the command line are matched against the server's
