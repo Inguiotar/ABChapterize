@@ -1103,8 +1103,11 @@ public sealed class FileProcessor
         }
 
         RecordProcessed(watch);
+        // The push clause names the book itself, so this line no longer opens with it - printing
+        // the title twice in one line was what naming it in the clause replaced. Its leading
+        // separator comes off with it, the clause being the only thing this line has to say.
         var note = await _abs!.PushAsync(book, chapters, ctx.Info.DurationSeconds, ct);
-        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: \"{book.Title}\"{note}");
+        _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {note.TrimStart(',', ' ')}");
         return null;
     }
 
@@ -1886,11 +1889,11 @@ public sealed class FileProcessor
         FileContext ctx, List<Chapter> chapters, bool complete, CancellationToken ct)
     {
         if (!complete)
-            return ", not sent to Audiobookshelf while chapters are missing";
+            return ", not sent to ABS while chapters are missing";
 
         var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
         if (match.Book == null)
-            return $", not sent to Audiobookshelf ({match.Reason})";
+            return $", not sent to ABS ({match.Reason})";
 
         ctx.Logs.Write(match.Reason);
         return await _abs.PushAsync(match.Book, chapters, ctx.Info.DurationSeconds, ct);

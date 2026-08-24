@@ -177,13 +177,20 @@ internal sealed class AbsFileFlow : IDisposable
     /// <param name="durationSeconds">The book's play time, which the last chapter ends at.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The clause the file's summary line closes with.</returns>
+    /// <remarks>
+    /// The clause names the book it went to, because under <c>--abs-push</c> the summary line is
+    /// headed by the local file name and the server may well call the same book something else -
+    /// "I Shall Wear Midnight.m4b" against "DW38 - I Shall Wear Midnight". Saying which book
+    /// received the marks is the difference between a line that reports a push and one that can
+    /// be checked.
+    /// </remarks>
     public async Task<string> PushAsync(
         AbsBook book, IReadOnlyList<Chapter> chapters, double durationSeconds, CancellationToken ct)
     {
         if (_options.DryRun)
-            return $", would send {chapters.Count} chapter(s) to Audiobookshelf";
+            return $", would send {chapters.Count} chapter(s) to ABS ({book.Title})";
         await _workspace.PushAsync(book, chapters, durationSeconds, ct);
-        return $", {chapters.Count} chapter(s) sent to Audiobookshelf";
+        return $", {chapters.Count} chapter(s) sent to ABS ({book.Title})";
     }
 
     /// <summary>
