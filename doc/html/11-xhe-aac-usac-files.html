@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>11. xHE-AAC (USAC) files - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li class="current"><a href="11-xhe-aac-usac-files.html" aria-current="page">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="11-xhe-aac-usac-files">11. xHE-AAC (USAC) files<a class="anchor" href="#11-xhe-aac-usac-files" aria-label="Permalink to this heading">#</a></h1>
+<p>Some recent audiobooks (notably from certain store apps) use the xHE-AAC
+(USAC) profile of AAC. ffmpeg's native AAC decoder cannot handle this profile
+reliably; the Fraunhofer <code>libfdk_aac</code> decoder can, but it is
+license-restricted (&quot;nonfree&quot;) and therefore <strong>not included in any official
+ffmpeg download or distribution package</strong>.</p>
+<p>ABChapterize detects xHE-AAC files (even with an ffmpeg build that cannot probe
+them at all) and:</p>
+<ul>
+<li>if the installed ffmpeg has <code>libfdk_aac</code>, transparently decodes with it and
+processes the file normally;</li>
+<li>otherwise skips the file with a warning explaining the situation.</li>
+</ul>
+<p>To process such files, build ffmpeg with <code>--enable-libfdk-aac --enable-nonfree</code> (on Windows e.g. via the
+<a href="https://github.com/m-ab-s/media-autobuild_suite">media-autobuild suite</a>)
+and point <code>FFMPEG_DIR</code> at the result. Since the audio is only stream-copied
+when writing chapters, the nonfree build is needed for <em>reading</em> the audio;
+the written file keeps the original xHE-AAC stream untouched.</p>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="10-ffmpeg-requirements-and-discovery.html" rel="prev"><span>Previous</span>10. ffmpeg: requirements and discovery</a>
+<a class="next" href="12-output-progress-and-logging.html" rel="next"><span>Next</span>12. Output, progress and logging</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

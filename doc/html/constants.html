@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>Tuning constants - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li class="current"><a href="constants.html" aria-current="page">Tuning constants</a>
+<ul class="subsections">
+<li><a href="#detectiontuning">DetectionTuning</a></li>
+<li><a href="#vadsegmenter">VadSegmenter</a></li>
+<li><a href="#silerovaddetector">SileroVadDetector</a></li>
+<li><a href="#audiofidelity">AudioFidelity</a></li>
+</ul>
+</li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="tuning-constants">Tuning constants<a class="anchor" href="#tuning-constants" aria-label="Permalink to this heading">#</a></h1>
+<p>Every number ABChapterize's detection is calibrated with, and what each one means.
+<code>--set:&lt;class&gt;.&lt;constant&gt;=&lt;value&gt;</code> overrides one for a run; see
+<a href="06-command-line-reference.html#tuning-constants">the manual</a> for the option itself, what it is for, and the
+warnings that come with it.</p>
+<p><strong>Read the warning in the manual before changing anything here.</strong> These values are not
+arbitrary: nearly all of them were measured against real audiobooks, and the reasoning behind
+each one lives in its own doc comment in the source (and, where the evidence is long, in the
+<code>notes/</code> tree beside it). Changing one without reading that is how a book quietly loses
+chapters.</p>
+<p>A constant that is <em>derived</em> from others — <code>RescanShiftSeconds</code> is half
+<code>WhisperChunkSeconds</code>, for instance — is not listed and cannot be set on its own. It follows
+whatever its inputs are set to.</p>
+<p><em>This file is generated from the source's own documentation; <code>ConstantsDocTests</code> fails the
+test suite when it no longer matches.</em></p>
+<h2 id="detectiontuning">DetectionTuning<a class="anchor" href="#detectiontuning" aria-label="Permalink to this heading">#</a></h2>
+<p>Chapter detection: window sizes, thresholds, retry budgets and mark placement.</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DefaultSilenceNoiseDb</code></td>
+<td><code>-35</code></td>
+<td>Level below which ffmpeg's silencedetect counts audio as silence, in dBFS - the default of --noise-floor, and the value SilenceThresholdProbe's automatic mode keeps unless a master's own levels argue against it.</td>
+</tr>
+<tr>
+<td><code>NoiseProbeExcerpts</code></td>
+<td><code>8</code></td>
+<td>How many excerpts SilenceThresholdProbe decodes to judge a file's levels, spread evenly between the 5% and 95% marks of its play time - a book's opening label jingle and closing credits are not what its body sounds like.</td>
+</tr>
+<tr>
+<td><code>NoiseProbeExcerptSeconds</code></td>
+<td><code>20</code></td>
+<td>Length of one NoiseProbeExcerpts excerpt, in seconds.</td>
+</tr>
+<tr>
+<td><code>NoiseProbeFrameSeconds</code></td>
+<td><code>0.05</code></td>
+<td>Length of one RMS frame in the level histogram.</td>
+</tr>
+<tr>
+<td><code>NoiseProbeFloorPercentile</code></td>
+<td><code>5</code></td>
+<td>Percentile of the frame levels taken for the master's room tone.</td>
+</tr>
+<tr>
+<td><code>NoiseProbeSpeechPercentile</code></td>
+<td><code>75</code></td>
+<td>Percentile of the frame levels taken for &quot;sustained speech&quot; - a level continuous narration reliably exceeds.</td>
+</tr>
+<tr>
+<td><code>NoiseFloorHeadroomDb</code></td>
+<td><code>14</code></td>
+<td>How far above the measured room tone the silence threshold must sit, in dB.</td>
+</tr>
+<tr>
+<td><code>SpeechHeadroomDb</code></td>
+<td><code>8</code></td>
+<td>How far below sustained speech the silence threshold must sit, in dB.</td>
+</tr>
+<tr>
+<td><code>MinAutoSilenceNoiseDb</code></td>
+<td><code>-60</code></td>
+<td>The range an automatically chosen silence threshold is confined to, whatever the measurement says.</td>
+</tr>
+<tr>
+<td><code>MaxAutoSilenceNoiseDb</code></td>
+<td><code>-20</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>MinStoredSilenceSeconds</code></td>
+<td><code>0.5</code></td>
+<td>The shortest silence Analyze keeps (see the allSilences/silences split in DetectAsync), regardless of --min-silence-length.</td>
+</tr>
+<tr>
+<td><code>WindowEndSnapSearchSeconds</code></td>
+<td><code>5.0</code></td>
+<td>How far past a Probe window's natural end PlanWindowEnd looks for a seam when that end has no next window to share a border with: the nearest silence - or VAD non-speech region, where the pre-pass ran - mid-point within this range becomes the window's end, so even a stand-alone window stops at a word-safe cut (a mid-word tail is exactly what makes Whisper garble a window's final phrase).</td>
+</tr>
+<tr>
+<td><code>PhraseLatestStartSeconds</code></td>
+<td><code>5.0</code></td>
+<td>Without a VAD pre-pass, the phrase must start within this many seconds after the silence that triggered its probe (or a closer anchor silence still inside the window) to count as a real announcement rather than an in-text mention.</td>
+</tr>
+<tr>
+<td><code>ExpectedAnnouncementSeconds</code></td>
+<td><code>22.0</code></td>
+<td>How far past the point where Probe's primary scan expects an announcement its probe window reaches - after the silence for a plain pause, after the music for a jingle (see BuildCandidates).</td>
+</tr>
+<tr>
+<td><code>SilenceLeadInSeconds</code></td>
+<td><code>3.0</code></td>
+<td>How much of the silence before an expected announcement a probe window opens with, so Whisper has a run-up rather than starting hard on the first syllable.</td>
+</tr>
+<tr>
+<td><code>SandwichedAnnouncementSeconds</code></td>
+<td><code>3.5</code></td>
+<td>How much speech may sit between a sub-threshold pause and the candidate pause behind it for SandwichedSilences to read the two as bracketing an announcement and promote the first to a candidate of its own.</td>
+</tr>
+<tr>
+<td><code>FidelityExcerpts</code></td>
+<td><code>8</code></td>
+<td>levels.</td>
+</tr>
+<tr>
+<td><code>FidelityExcerptSeconds</code></td>
+<td><code>30.0</code></td>
+<td>How much audio each of those excerpts covers.</td>
+</tr>
+<tr>
+<td><code>JingleLeadInSeconds</code></td>
+<td><code>8.0</code></td>
+<td>The same run-up for a jingle candidate, taken from inside the music, and deliberately longer: the point it is measured back from is a VAD speech onset rather than a silencedetect edge, so it carries the detector's own latency plus whatever timeline drift survives Analyze's resync (see PcmResyncToleranceSeconds - seconds of it were measured across the corpus before that fix).</td>
+</tr>
+<tr>
+<td><code>PhraseMarginSeconds</code></td>
+<td><code>5.0</code></td>
+<td>Flat margin added to a measured jingle length so the phrase after the jingle still fits into the probe window.</td>
+</tr>
+<tr>
+<td><code>RecoveryLeadInTrimSeconds</code></td>
+<td><code>2.0</code></td>
+<td>How much of its lead-in a recovery pass's window gives up against the primary scan's (SilenceLeadInSeconds, JingleLeadInSeconds), and RecoveryReachTrimSeconds how much of its reach past the expectation.</td>
+</tr>
+<tr>
+<td><code>RecoveryReachTrimSeconds</code></td>
+<td><code>5.0</code></td>
+<td>How much of its reach past the expected announcement a recovery pass's window gives up against ExpectedAnnouncementSeconds; see RecoveryLeadInTrimSeconds for why either is trimmed at all.</td>
+</tr>
+<tr>
+<td><code>JingleWalkFallbackLeadSeconds</code></td>
+<td><code>0.5</code></td>
+<td>The fallback lead ComputeMarkBeforeJingle's step 5 backs off by when its backward walk runs out of VAD data before finding the previous chapter's real trailing narration - typically a jingle at the very start of the file, before chapter 1.</td>
+</tr>
+<tr>
+<td><code>DefaultMarkLeadSeconds</code></td>
+<td><code>0.35</code></td>
+<td>Default for MarkLeadSeconds (--mark-lead): without --mark-before-jingle, the mark goes this many seconds before the detected phrase, whatever precedes it - no silence/jingle anchor is consulted for the timestamp at all, only for the --min-silence-length auto threshold and the per-file jingle statistics --summary reports.</td>
+</tr>
+<tr>
+<td><code>JinglePhraseMatchToleranceSeconds</code></td>
+<td><code>0.5</code></td>
+<td>Slack when matching a VAD non-speech region (the jingle) to a Whisper phrase.</td>
+</tr>
+<tr>
+<td><code>LeadingSilenceStartToleranceSeconds</code></td>
+<td><code>1.5</code></td>
+<td>How far a candidate LeadingSilence may start after its VAD non-speech region's own start and still count as leading it, rather than being an unrelated silence deep inside a long region (see that method's remarks).</td>
+</tr>
+<tr>
+<td><code>PreJingleSpeechToleranceSeconds</code></td>
+<td><code>0.5</code></td>
+<td>How far past a jingle's own musical start a VAD speech blip swallowed into its region must begin before ResolveDefaultPhraseOnset will take it for the announcement rather than for the previous chapter's trailing words.</td>
+</tr>
+<tr>
+<td><code>JingleGlueMaxSeconds</code></td>
+<td><code>3.0</code></td>
+<td>Longest stretch of VAD-speech &quot;glue&quot; the anchor-time jingle edge adjustment (see AdjustJingleRegion) steps across at the jingle's leading edge - both when trimming trailing-narration blips off a merged region's front and when bridging backward across an untranscribed music vocal to an earlier region the jingle was split into.</td>
+</tr>
+<tr>
+<td><code>SmearedPhraseMinOverlapSeconds</code></td>
+<td><code>2.0</code></td>
+<td>Minimum overlap between a VAD non-speech region and the matched phrase's transcript-segment span for the smeared-phrase rescue (see FindSmearedJingleRegion) to accept that region as the jingle.</td>
+</tr>
+<tr>
+<td><code>SegmentLeadTrimToleranceSeconds</code></td>
+<td><code>0.5</code></td>
+<td>Slack when deciding a Whisper segment starts with a stored silence or VAD non-speech region (see TrimLeadingNonSpeech).</td>
+</tr>
+<tr>
+<td><code>MinJingleObservationSeconds</code></td>
+<td><code>2.0</code></td>
+<td>The shortest span this codebase treats as &quot;plausibly a real jingle&quot;, used three ways.</td>
+</tr>
+<tr>
+<td><code>JingleFirstMinPerHour</code></td>
+<td><code>1.0</code></td>
+<td>How much music a file must have, per hour of play time, before Probe reads its jingles first and its pauses only where the chapter sequence still wants one (see JingleFirstScan).</td>
+</tr>
+<tr>
+<td><code>MergeShortSpeechGapSeconds</code></td>
+<td><code>1.0</code></td>
+<td>With the VAD pre-pass, a &quot;speech&quot; segment shorter than this between two non-speech regions does not end the surrounding jingle - the regions are merged and the blip treated as VAD noise.</td>
+</tr>
+<tr>
+<td><code>TransientSpeechFloorSeconds</code></td>
+<td><code>0.4</code></td>
+<td>The speech-duration floor AdvancePastNonSpeech uses to tell a genuine spoken onset from a jingle's musical/vocal transients (or a Whisper hallucination inside one) that VAD still calls &quot;speech&quot;.</td>
+</tr>
+<tr>
+<td><code>AnnouncementLeadInSeconds</code></td>
+<td><code>0.85</code></td>
+<td>Non-speech an announcement must have in front of it before AnnouncementIsolation accepts it: the pause (or jingle) separating it from the previous section's narration.</td>
+</tr>
+<tr>
+<td><code>AnnouncementLeadOutSeconds</code></td>
+<td><code>0.3</code></td>
+<td>Non-speech an announcement must have behind it where a wording's $ asks for one, and what a bare number is held to on top of its lead-in (Both).</td>
+</tr>
+<tr>
+<td><code>OnsetSegmentToleranceSeconds</code></td>
+<td><code>0.1</code></td>
+<td>How far past a VAD speech segment's end an announcement onset may still be counted as belonging to it (Measure).</td>
+</tr>
+<tr>
+<td><code>MarkInsideSpeechSeconds</code></td>
+<td><code>0.5</code></td>
+<td>How far a finished mark may sit inside a VAD speech segment before the refinement that put it there is disbelieved (DepthInsideSpeech, applied in KeepOutOfSpeech).</td>
+</tr>
+<tr>
+<td><code>MinPlausibleSpeechCharsPerSecond</code></td>
+<td><code>3.0</code></td>
+<td>Minimum letters-plus-digits per second a transcript segment must average for JingleGeometry's corroboration checks (IsGenuineSpeech) to accept it as evidence that a VAD blip is real narration rather than jingle music.</td>
+</tr>
+<tr>
+<td><code>MaxPaceScrutinizedBlipSeconds</code></td>
+<td><code>2.0</code></td>
+<td>Ceiling on a VAD speech blip's duration for MinPlausibleSpeechCharsPerSecond's pace check to apply at all: only a blip this short could plausibly be the brief transient that check exists to unmask - the premise behind TransientSpeechFloorSeconds, from the other side.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkCheckWindowSeconds</code></td>
+<td><code>4.0</code></td>
+<td>Length of the decode precise marking transcribes to check whether a mark's chapter phrase is really the first thing heard there (see RefinePreciseMarkAsync).</td>
+</tr>
+<tr>
+<td><code>PreciseMarkLeadInSeconds</code></td>
+<td><code>0.1</code></td>
+<td>Real audio lead-in precise marking decodes before every position it checks, widening the window backward rather than shifting it so no PreciseMarkCheckWindowSeconds of fresh audio is lost off the tail.</td>
+</tr>
+<tr>
+<td><code>MarkLoudnessWindowSeconds</code></td>
+<td><code>0.25</code></td>
+<td>How much audio MeasureDbfsAsync averages when reporting a finished mark's level under --verbose.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkFixedStepSeconds</code></td>
+<td><code>0.1</code></td>
+<td>The finest granularity precise marking probes at: the resolution both of its bisections - FindOnsetEdgeAsync and FindPhraseSurvivalEdgeAsync - narrow their bracket down to, and the step VerifyMarkBeforeJingleAsync's backward scan advances by.</td>
+</tr>
+<tr>
+<td><code>PlateauWalkLimitSeconds</code></td>
+<td><code>60</code></td>
+<td>How far FindOnsetEdgeAsync's plateau walk may run from the position it set out from, counting resumes.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkPlateauResumeLimit</code></td>
+<td><code>2</code></td>
+<td>How many times FindOnsetEdgeAsync may restart its walk after finding the plateau resuming past an edge (see PreciseMarkPlateauProbesSeconds).</td>
+</tr>
+<tr>
+<td><code>PreciseMarkMinSurvivalSeconds</code></td>
+<td><code>6.0</code></td>
+<td>The shortest stretch of audio PhraseSurvivesFromAsync will put in front of Whisper, however little is left between the probe position and the search's end anchor.</td>
+</tr>
+<tr>
+<td><code>WhisperChunkSeconds</code></td>
+<td><code>30.0</code></td>
+<td>The stride whisper.cpp decodes in: it converts audio to a mel spectrogram of exactly this length at a time, so a window at or above it is transcribed as several passes whose results are stitched together, while a shorter one is a single pass over the whole thing.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkQuietSnapRadiusSeconds</code></td>
+<td><code>0.15</code></td>
+<td>How far before a confirmed or left-as-is mark SnapToQuietestPointAsync may search for a quieter point to move it to.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkQuietWindowSeconds</code></td>
+<td><code>0.01</code></td>
+<td>Width of the sliding RMS window SnapToQuietestPointAsync scans across PreciseMarkQuietSnapRadiusSeconds.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkQuietSnapMinImprovementDb</code></td>
+<td><code>6.0</code></td>
+<td>Minimum power-ratio improvement, in dB, a backward candidate within PreciseMarkQuietSnapRadiusSeconds must offer before SnapToQuietestPointAsync nudges the mark to it.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkSilenceAnchorSeconds</code></td>
+<td><code>1.0</code></td>
+<td>How far behind a refined onset PrecedingSilenceEnd will look for the silence AnchorOnsetToSoundAsync scans forward from, i.e.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkOnsetFloorDb</code></td>
+<td><code>25</code></td>
+<td>How far below the loudest thing in its window AnchorOnsetToSoundAsync still counts audio as the pause rather than as the announcement.</td>
+</tr>
+<tr>
+<td><code>PreciseMarkOnsetSustainSeconds</code></td>
+<td><code>0.05</code></td>
+<td>How long audio must stay above PreciseMarkOnsetFloorDb before AnchorOnsetToSoundAsync accepts it as the announcement beginning rather than as a click inside the pause.</td>
+</tr>
+<tr>
+<td><code>SequenceRestartRunLength</code></td>
+<td><code>3</code></td>
+<td>How many announcements must be rejected as below the sequence, their own numbers ascending, before SequenceRestartSkips reports the file as one whose chapter numbering restarts (see NoteOutOfSequence).</td>
+</tr>
+<tr>
+<td><code>AdaptiveTightenFactor</code></td>
+<td><code>0.75</code></td>
+<td>With --min-silence-length auto, the Probe probing threshold is this factor times a mark's anchor silence length, i.e.</td>
+</tr>
+<tr>
+<td><code>AdaptiveSilenceFloorSeconds</code></td>
+<td><code>0.8</code></td>
+<td>How short a chapter break --min-silence-length auto may end up believing in (ProposeThreshold), independent of the length the run starts at.</td>
+</tr>
+<tr>
+<td><code>SuspectGapMinMissing</code></td>
+<td><code>3</code></td>
+<td>How many chapters a single announcement may leave missing before its number is treated as suspect and re-read (SuspectNumberMender).</td>
+</tr>
+<tr>
+<td><code>RefinedNumberVoteMinimum</code></td>
+<td><code>3</code></td>
+<td>How many numbered readings a mark refinement's own probes must yield between them before their verdict may overrule the detecting window's (RefinedNumberVote).</td>
+</tr>
+<tr>
+<td><code>MaxSequenceRepairsPerFile</code></td>
+<td><code>8</code></td>
+<td>How many outliers RepairSequenceOutliersAsync may spend audio re-reads on in one file.</td>
+</tr>
+<tr>
+<td><code>MaxUnnumberedMendsPerRegion</code></td>
+<td><code>8</code></td>
+<td>How many unreadable-number re-reads (ReadUnnumberedAsync) one RegionProber region may run.</td>
+</tr>
+<tr>
+<td><code>SubFloorSweepBandCount</code></td>
+<td><code>5</code></td>
+<td>How many sub-floor silence bands Re-probe sweeps through before giving a gap up to Scan, and how wide each band is (see SubFloorSweepBands).</td>
+</tr>
+<tr>
+<td><code>SubFloorSweepBandSeconds</code></td>
+<td><code>0.1</code></td>
+<td>Width of one SubFloorSweepBandCount band, in seconds.</td>
+</tr>
+<tr>
+<td><code>SubFloorSweepBudgetFraction</code></td>
+<td><code>0.75</code></td>
+<td>How much of Scan's own cost the sub-floor sweep may spend on a gap before giving it up (SweepSubFloorSilencesAsync), measured in WhisperChunkSeconds decode windows on both sides.</td>
+</tr>
+<tr>
+<td><code>GapChunkSeconds</code></td>
+<td><code>600</code></td>
+<td>Chunk length in seconds for full transcription of gap regions.</td>
+</tr>
+<tr>
+<td><code>GapChunkOverlapSeconds</code></td>
+<td><code>10</code></td>
+<td>Overlap between gap transcription chunks so no phrase is cut in half.</td>
+</tr>
+<tr>
+<td><code>ScanSeamSearchSeconds</code></td>
+<td><code>30</code></td>
+<td>How far around a Scan chunk's natural border the seam search reaches in each direction: the border snaps to the nearest silence - or VAD non-speech region, where the pre-pass ran - mid-point in range, and the next chunk starts exactly there, with nothing decoded twice.</td>
+</tr>
+<tr>
+<td><code>ScanBridgeSeconds</code></td>
+<td><code>15</code></td>
+<td>At a snapped (overlap-free) Scan seam, segments of the previous chunk ending within this many seconds before it are carried into the next chunk's phrase matching, so an announcement straddling the seam - the narrator pausing right where the seam silence sits, e.g.</td>
+</tr>
+<tr>
+<td><code>LowConfidenceThreshold</code></td>
+<td><code>0.5</code></td>
+<td>Whisper segment probability below which a chapter detection is flagged as low-confidence rather than silently trusted: the point below which Whisper itself is, on average, more unsure than sure about the words it heard.</td>
+</tr>
+<tr>
+<td><code>MaxSettledWindowSkip</code></td>
+<td><code>10</code></td>
+<td>How many consecutive candidates one confident mark may settle in SkipSettledWindows.</td>
+</tr>
+<tr>
+<td><code>MaxCustomMarksPerFile</code></td>
+<td><code>100</code></td>
+<td>The most --custom marks one file may produce before the rest are dropped.</td>
+</tr>
+<tr>
+<td><code>NamedMarkDedupeSeconds</code></td>
+<td><code>10</code></td>
+<td>How close two matches of the same repeatable phrase must be to count as the same announcement heard twice rather than two announcements.</td>
+</tr>
+<tr>
+<td><code>AutoLanguageProbabilityThreshold</code></td>
+<td><code>0.6</code></td>
+<td>Whisper language-detection probability at or above which a single probe settles the file's language outright, with --lang auto.</td>
+</tr>
+<tr>
+<td><code>AutoLanguageProbeAttempts</code></td>
+<td><code>5</code></td>
+<td>How many language-detection samples one file may take before the vote decides it.</td>
+</tr>
+<tr>
+<td><code>AutoLanguageProbeSeconds</code></td>
+<td><code>30</code></td>
+<td>Length of one language-detection sample.</td>
+</tr>
+<tr>
+<td><code>AutoLanguageExistingMarkOffsetSeconds</code></td>
+<td><code>20</code></td>
+<td>How far past an existing chapter mark a language-detection sample starts, on the --verify and resume paths.</td>
+</tr>
+<tr>
+<td><code>MinLeadingGapSeconds</code></td>
+<td><code>10</code></td>
+<td>Minimum length of the leading region (file start to the first detected chapter) for Scan to transcribe it in search of earlier chapters when the first detection is not chapter 1.</td>
+</tr>
+<tr>
+<td><code>VerifyMarginBeforeSeconds</code></td>
+<td><code>10</code></td>
+<td>How far before a pre-existing chapter mark's own timestamp --verify starts probing - the mark may sit slightly after the phrase actually started.</td>
+</tr>
+<tr>
+<td><code>VerifyWindowSeconds</code></td>
+<td><code>60</code></td>
+<td>Total length of the --verify probe window, starting VerifyMarginBeforeSeconds before the mark.</td>
+</tr>
+<tr>
+<td><code>VerifyFixMinShiftSeconds</code></td>
+<td><code>0.25</code></td>
+<td>How far off a confirmed mark has to be before --verify --fix bothers moving it.</td>
+</tr>
+<tr>
+<td><code>VerifyFixMaxShiftSeconds</code></td>
+<td><code>30</code></td>
+<td>The largest correction --verify --fix will apply.</td>
+</tr>
+<tr>
+<td><code>GapRetryThresholdSeconds</code></td>
+<td><code>3.0</code></td>
+<td>Minimum length for a gap between transcribed segments (or before the first/after the last) to be worth a focused re-transcription - and, for Scan's version of the same fallback (see ScanGapRetriesAsync), for a silence or VAD non-speech region overlapping that gap to count as &quot;plausibly the real jingle/scene transition&quot; rather than an in-narration pause.</td>
+</tr>
+<tr>
+<td><code>GapRetryPaddingSeconds</code></td>
+<td><code>2.0</code></td>
+<td>Context padding added to each side of a gap before re-transcribing it, so the phrase is not cut off if it starts or ends right at the boundary.</td>
+</tr>
+<tr>
+<td><code>UnnumberedRetryLeadSeconds</code></td>
+<td><code>8.0</code></td>
+<td>How far before the phrase a Scan &quot;heard it, could not number it&quot; retry starts its decode.</td>
+</tr>
+<tr>
+<td><code>UnnumberedRetryWindowSeconds</code></td>
+<td><code>45.0</code></td>
+<td>Length of a Scan &quot;heard it, could not number it&quot; retry decode, chosen to match the framing that produced a readable number in the case UnnumberedRetryLeadSeconds documents, rather than the short sub-chunks GapRetryChunkSeconds uses - those recover audio Whisper skipped, which is the opposite problem and wants the opposite window.</td>
+</tr>
+<tr>
+<td><code>MaxUnnumberedRetriesPerChunk</code></td>
+<td><code>3</code></td>
+<td>How many unreadable-number retries one Scan chunk may run.</td>
+</tr>
+<tr>
+<td><code>GapRetryChunkSeconds</code></td>
+<td><code>8.0</code></td>
+<td>Length of each sub-chunk a padded gap is scanned in, rather than re-transcribing it in one call.</td>
+</tr>
+<tr>
+<td><code>GapRetryChunkOverlapSeconds</code></td>
+<td><code>2.0</code></td>
+<td>Overlap between consecutive gap-retry sub-chunks, so a phrase straddling a chunk boundary is still fully contained in at least one of them.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="vadsegmenter">VadSegmenter<a class="anchor" href="#vadsegmenter" aria-label="Permalink to this heading">#</a></h2>
+<p>Turning the voice-activity detector's per-frame probabilities into speech segments.</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Threshold</code></td>
+<td><code>0.6f</code></td>
+<td>Frame speech probability at/above this counts as speech.</td>
+</tr>
+<tr>
+<td><code>MinSpeechSeconds</code></td>
+<td><code>0.25</code></td>
+<td>A candidate speech run must persist at least this long to be kept (Silero's own default for min_speech_duration_ms).</td>
+</tr>
+<tr>
+<td><code>MinSilenceSeconds</code></td>
+<td><code>0.1</code></td>
+<td>Non-speech must persist at least this long to end a speech run (Silero's own default for min_silence_duration_ms).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="silerovaddetector">SileroVadDetector<a class="anchor" href="#silerovaddetector" aria-label="Permalink to this heading">#</a></h2>
+<p>How the voice-activity pre-pass is scheduled over a long file.</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BlockSeconds</code></td>
+<td><code>600</code></td>
+<td>Audio per block, before its warm-up prefix.</td>
+</tr>
+<tr>
+<td><code>WarmupSeconds</code></td>
+<td><code>60</code></td>
+<td>Audio prepended to each block purely to converge its recurrent state before the block's own frames start counting.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="audiofidelity">AudioFidelity<a class="anchor" href="#audiofidelity" aria-label="Permalink to this heading">#</a></h2>
+<p>The measurement that decides whether a file is dull enough to be worth denoising.</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Threshold</code></td>
+<td><code>0.02</code></td>
+<td>Below this ratio a file may be denoised.</td>
+</tr>
+</tbody>
+</table>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="building-on-macos.html" rel="prev"><span>Previous</span>Building on macOS</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

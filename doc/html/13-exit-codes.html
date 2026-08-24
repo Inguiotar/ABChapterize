@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>13. Exit codes - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li class="current"><a href="13-exit-codes.html" aria-current="page">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="13-exit-codes">13. Exit codes<a class="anchor" href="#13-exit-codes" aria-label="Permalink to this heading">#</a></h1>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Success. Files skipped or finished with warnings still count as success.</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Fatal error — a file could not be processed (the run stops), or a <code>--cleanup</code> finished with failed steps.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Command line usage error.</td>
+</tr>
+<tr>
+<td>130</td>
+<td>Aborted with Ctrl+C.</td>
+</tr>
+</tbody>
+</table>
+<p>Ctrl+C is handled gracefully: child processes are terminated and temporary
+files are cleaned up on the way out.</p>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="12-output-progress-and-logging.html" rel="prev"><span>Previous</span>12. Output, progress and logging</a>
+<a class="next" href="14-troubleshooting.html" rel="next"><span>Next</span>14. Troubleshooting</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

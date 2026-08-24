@@ -3,6 +3,8 @@
 This is the complete reference for ABChapterize. For a quick start, see the
 [README](../README.md).
 
+<!-- docgen:contents -->
+
 Contents:
 
 1. [What ABChapterize does](#1-what-abchapterize-does)
@@ -20,6 +22,8 @@ Contents:
 12. [Output, progress and logging](#12-output-progress-and-logging)
 13. [Exit codes](#13-exit-codes)
 14. [Troubleshooting](#14-troubleshooting)
+
+<!-- /docgen:contents -->
 
 ---
 

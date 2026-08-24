@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="abchapterize-manual">ABChapterize manual<a class="anchor" href="#abchapterize-manual" aria-label="Permalink to this heading">#</a></h1>
+<p>This is the complete reference for ABChapterize. For a quick start, see the
+<a href="https://github.com/Inguiotar/ABChapterize/blob/main/README.md">README</a>.</p>
+<h2 id="contents">Contents<a class="anchor" href="#contents" aria-label="Permalink to this heading">#</a></h2>
+<ul class="toc">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a>
+<ul>
+<li><a href="03-how-detection-works.html#analyze--silences-speech-and-music">Analyze — silences, speech and music</a></li>
+<li><a href="03-how-detection-works.html#probe--short-windows-where-a-chapter-could-start">Probe — short windows where a chapter could start</a></li>
+<li><a href="03-how-detection-works.html#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model">Re-probe — a cheap second try at a gap (only with a heavier --upgrade-model)</a></li>
+<li><a href="03-how-detection-works.html#scan--reading-a-gap-in-full-only-when-needed">Scan — reading a gap in full (only when needed)</a></li>
+<li><a href="03-how-detection-works.html#re-scan--the-shifted-second-reading">Re-scan — the shifted second reading</a></li>
+<li><a href="03-how-detection-works.html#prologue-and-epilogue">Prologue and epilogue</a></li>
+<li><a href="03-how-detection-works.html#custom-marks">Custom marks</a></li>
+<li><a href="03-how-detection-works.html#named-marks-that-land-beside-a-chapter">Named marks that land beside a chapter</a></li>
+<li><a href="03-how-detection-works.html#detecting-chapters-without-believing-their-numbers">Detecting chapters without believing their numbers</a></li>
+<li><a href="03-how-detection-works.html#books-that-count-from-one-again-in-every-part">Books that count from one again in every part</a></li>
+<li><a href="03-how-detection-works.html#the-intro-chapter">The intro chapter</a></li>
+</ul>
+</li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a>
+<ul>
+<li><a href="06-command-line-reference.html#options-from-a-file">Options from a file</a></li>
+<li><a href="06-command-line-reference.html#target-selection">Target selection</a></li>
+<li><a href="06-command-line-reference.html#audiobookshelf">Audiobookshelf</a></li>
+<li><a href="06-command-line-reference.html#detection-behaviour">Detection behaviour</a></li>
+<li><a href="06-command-line-reference.html#phrases-and-titles">Phrases and titles</a></li>
+<li><a href="06-command-line-reference.html#auto-language-detection">Auto language detection</a></li>
+<li><a href="06-command-line-reference.html#handling-of-pre-existing-chapters">Handling of pre-existing chapters</a></li>
+<li><a href="06-command-line-reference.html#detection-safety-nets">Detection safety nets</a></li>
+<li><a href="06-command-line-reference.html#safety-and-undo">Safety and undo</a></li>
+<li><a href="06-command-line-reference.html#running-your-own-commands-around-each-file">Running your own commands around each file</a></li>
+<li><a href="06-command-line-reference.html#cleaning-up-after-a-run">Cleaning up after a run</a></li>
+<li><a href="06-command-line-reference.html#resuming-an-interrupted-run">Resuming an interrupted run</a></li>
+<li><a href="06-command-line-reference.html#output">Output</a></li>
+<li><a href="06-command-line-reference.html#chapter-exportimport">Chapter export/import</a></li>
+<li><a href="06-command-line-reference.html#performance">Performance</a></li>
+<li><a href="06-command-line-reference.html#tuning-constants">Tuning constants</a></li>
+<li><a href="06-command-line-reference.html#miscellaneous">Miscellaneous</a></li>
+</ul>
+</li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a>
+<ul>
+<li><a href="08-whisper-models.html#memory-requirements">Memory requirements</a></li>
+<li><a href="08-whisper-models.html#using-your-own-model">Using your own model</a></li>
+<li><a href="08-whisper-models.html#download-integrity-verification">Download integrity verification</a></li>
+</ul>
+</li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a>
+<ul>
+<li><a href="09-gpu-acceleration.html#picking-a-gpu-on-a-multi-gpu-machine">Picking a GPU on a multi-GPU machine</a></li>
+<li><a href="09-gpu-acceleration.html#a-note-on-cuda">A note on CUDA</a></li>
+</ul>
+</li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<h2 id="more-documentation">More documentation<a class="anchor" href="#more-documentation" aria-label="Permalink to this heading">#</a></h2>
+<ul class="toc">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+<hr />
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="next" href="01-what-abchapterize-does.html" rel="next"><span>Next</span>1. What ABChapterize does</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

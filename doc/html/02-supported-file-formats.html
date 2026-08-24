@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>2. Supported file formats - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li class="current"><a href="02-supported-file-formats.html" aria-current="page">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="2-supported-file-formats">2. Supported file formats<a class="anchor" href="#2-supported-file-formats" aria-label="Permalink to this heading">#</a></h1>
+<table>
+<thead>
+<tr>
+<th>Extension</th>
+<th>Container</th>
+<th>Chapter format</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.m4a</code>, <code>.m4b</code></td>
+<td>MP4 / iTunes audiobook</td>
+<td>MP4 chapter atoms</td>
+</tr>
+<tr>
+<td><code>.mp3</code></td>
+<td>MPEG audio</td>
+<td>ID3v2 <code>CHAP</code> frames</td>
+</tr>
+<tr>
+<td><code>.opus</code></td>
+<td>Ogg Opus</td>
+<td>Vorbis-comment chapter tags</td>
+</tr>
+<tr>
+<td><code>.mka</code></td>
+<td>Matroska audio</td>
+<td>Matroska chapter edition</td>
+</tr>
+</tbody>
+</table>
+<p>The set is determined by what ffmpeg can both read <em>and write</em> chapter marks
+for; each of these formats has been verified to round-trip chapters through
+the exact remux command ABChapterize uses.</p>
+<p><code>.m4b</code> is the recommended format. <code>.m4a</code> and <code>.m4b</code> are identical containers —
+the extension is purely a naming convention (<code>.m4b</code> for audiobooks/podcasts,
+<code>.m4a</code> for other audio) — but players may choose their exact behavior (e.g.
+remembering playback position) based on which one it actually sees, so it is
+worth naming audiobooks <code>.m4b</code>. <code>.mp3</code> and <code>.opus</code> chapter support, while
+written correctly by ABChapterize, is honored by comparatively few players —
+expect inconsistent or missing chapter navigation with those two formats.</p>
+<p>Notably absent:</p>
+<ul>
+<li><strong><code>.ogg</code> (Vorbis) and <code>.flac</code></strong> — ffmpeg's muxers for these containers
+silently drop chapter marks, so writing them is impossible with ffmpeg as
+the backend. Files with these extensions are not processed.</li>
+<li>Everything that is not an audio container (video files etc.).</li>
+</ul>
+<p>Files with unsupported extensions are simply skipped during directory scans;
+naming one directly as the target is an error.</p>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="01-what-abchapterize-does.html" rel="prev"><span>Previous</span>1. What ABChapterize does</a>
+<a class="next" href="03-how-detection-works.html" rel="next"><span>Next</span>3. How detection works</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

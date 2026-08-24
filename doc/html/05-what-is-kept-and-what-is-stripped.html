@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>5. What is kept and what is stripped - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li class="current"><a href="05-what-is-kept-and-what-is-stripped.html" aria-current="page">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="5-what-is-kept-and-what-is-stripped">5. What is kept and what is stripped<a class="anchor" href="#5-what-is-kept-and-what-is-stripped" aria-label="Permalink to this heading">#</a></h1>
+<p>Chapter writing remuxes the file with ffmpeg, mapping streams explicitly.
+<strong>Read this if your files carry more than audio and a cover image.</strong></p>
+<p>Kept:</p>
+<ul>
+<li><strong>All audio streams</strong>, bit-for-bit (stream copy, no re-encoding).</li>
+<li><strong>All video streams</strong>, which in audio files means <strong>embedded cover art</strong>
+(verified to survive for mp3; MP4 cover art is stored as metadata and is
+also kept).</li>
+<li><strong>Global metadata/tags</strong>: title, artist, album, year, genre, comments and
+all other container-level tags.</li>
+<li>Per-stream metadata of the kept streams (e.g. the audio stream's language
+tag).</li>
+</ul>
+<p>Replaced:</p>
+<ul>
+<li><strong>The chapter list.</strong> Pre-existing chapter marks do not survive — that is
+the point of the tool. (Without <code>--force</code>/<code>--max-chapters</code>, files with
+existing chapters are skipped entirely and remain untouched.)</li>
+</ul>
+<p>Stripped:</p>
+<ul>
+<li><strong>Subtitle streams</strong> (e.g. lyrics or transcript tracks).</li>
+<li><strong>Data and timed-text streams</strong>, including QuickTime-style chapter <em>text
+tracks</em> in MP4 files. This is deliberate: such a track duplicates the
+chapter information and would clash with the newly written chapter marks.</li>
+<li><strong>Attachments</strong> (Matroska attachment streams other than cover art).</li>
+</ul>
+<p>Audiobook files virtually never carry these extra streams, but if yours do:
+run with <code>--backup</code> so the original is kept, or add the streams back with
+ffmpeg afterwards.</p>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="04-how-chapters-are-written--file-safety.html" rel="prev"><span>Previous</span>4. How chapters are written — file safety</a>
+<a class="next" href="06-command-line-reference.html" rel="next"><span>Next</span>6. Command line reference</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

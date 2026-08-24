@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>8. Whisper models - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li class="current"><a href="08-whisper-models.html" aria-current="page">8. Whisper models</a>
+<ul class="subsections">
+<li><a href="#memory-requirements">Memory requirements</a></li>
+<li><a href="#using-your-own-model">Using your own model</a></li>
+<li><a href="#download-integrity-verification">Download integrity verification</a></li>
+</ul>
+</li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="8-whisper-models">8. Whisper models<a class="anchor" href="#8-whisper-models" aria-label="Permalink to this heading">#</a></h1>
+<table>
+<thead>
+<tr>
+<th>Selector</th>
+<th>Model file</th>
+<th>Download size</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tiny</code></td>
+<td>ggml-tiny.bin</td>
+<td>~75 MB</td>
+<td>fastest; not suitable for real audiobooks</td>
+</tr>
+<tr>
+<td><code>base</code></td>
+<td>ggml-base.bin</td>
+<td>~140 MB</td>
+<td>still error-prone; not recommended</td>
+</tr>
+<tr>
+<td><code>small</code></td>
+<td>ggml-small.bin</td>
+<td>~465 MB</td>
+<td><strong><code>--model</code> default</strong> — the best prober, see below</td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td>ggml-medium.bin</td>
+<td>~1.5 GB</td>
+<td></td>
+</tr>
+<tr>
+<td><code>turbo</code></td>
+<td>ggml-large-v3-turbo.bin</td>
+<td>~1.6 GB</td>
+<td><strong><code>--upgrade-model</code> default</strong> — near-large accuracy, much faster</td>
+</tr>
+<tr>
+<td><code>large</code></td>
+<td>ggml-large-v3.bin</td>
+<td>~3.1 GB</td>
+<td>most accurate, slowest</td>
+</tr>
+</tbody>
+</table>
+<p>The two options are set to different models on purpose, and the pairing matters
+more than either value on its own.</p>
+<p><code>--model</code> does the finding, and it works in short windows — a pause, perhaps a
+jingle, an announcement, a few seconds in all. Whisper always processes audio in
+30-second chunks and pads anything shorter out to fill one, and the large models
+handle that padding badly: they tend to hand back the whole window as a single
+run-on sentence with the announcement missing from it altogether. Smaller models
+do not do this. On one French audiobook the difference was six chapters out of
+twenty-five, lost by the larger model and found by <code>small</code> in the very same
+windows. <code>small</code> is also several times faster, so it is the default for the
+probing and there is nothing being traded away.</p>
+<p><code>--upgrade-model</code> does the reading-out-loud: long, naturally framed stretches of
+audio, where the usual ranking does hold and a heavier model genuinely hears
+more. So it defaults to <code>turbo</code>, which is loaded only if a chapter actually
+goes missing — and, being heavier than the probing model, also brings
+<a href="03-how-detection-works.html#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model">Re-probe</a> and
+Probe's second reading of an implausible chapter number into play.</p>
+<p>A word of warning about the small end of the scale: chapter detection hinges
+on the recognizer catching one short, isolated phrase per chapter — there is
+no surrounding context to recover from a misheard word, and a single missed
+announcement leaves a sequence gap or a mismarked chapter. <code>tiny</code> mishears
+or drops chapter announcements far too often for that to be reliable; its
+support exists mostly for completeness — quick experiments, toy examples,
+or extremely constrained machines. <code>base</code> fares somewhat better but is
+still error-prone, especially for non-English audio. For real audiobooks, do not
+go below <code>small</code>.</p>
+<p>Raising <code>--model</code> is worth trying on a book whose narrator is genuinely hard to
+make out, but check the result rather than assuming it improved — and note that
+naming <code>--model</code> alone moves the upgrade model with it, so <code>-m large</code> gives you
+large in both roles. <code>-M large</code> on its own is the safer way to spend more time:
+one last, best-effort attempt at the chapters that went missing, and nothing
+changed about the ones that did not.</p>
+<h2 id="memory-requirements">Memory requirements<a class="anchor" href="#memory-requirements" aria-label="Permalink to this heading">#</a></h2>
+<p>A loaded model needs somewhat more memory than its file on disk. whisper.cpp,
+the engine underneath ABChapterize, publishes its own
+<a href="https://github.com/ggml-org/whisper.cpp#memory-usage">memory usage</a> figures:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Disk</th>
+<th>Memory</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tiny</code></td>
+<td>75 MiB</td>
+<td>~273 MB</td>
+</tr>
+<tr>
+<td><code>base</code></td>
+<td>142 MiB</td>
+<td>~388 MB</td>
+</tr>
+<tr>
+<td><code>small</code></td>
+<td>466 MiB</td>
+<td>~852 MB</td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td>1.5 GiB</td>
+<td>~2.1 GB</td>
+</tr>
+<tr>
+<td><code>large</code></td>
+<td>2.9 GiB</td>
+<td>~3.9 GB</td>
+</tr>
+</tbody>
+</table>
+<p>That table has no <code>turbo</code> row — it predates the model. Expect roughly 2.2 GB
+for it, consistent with <code>turbo</code> having about as many parameters as <code>medium</code>
+(809 M against 769 M) on a larger file. Treat that one as an estimate rather than
+a published number. A default run holds <code>small</code>'s ~852 MB throughout and adds
+<code>turbo</code>'s share only once Re-probe or Scan actually runs.</p>
+<p>Be aware that figures quoted for Whisper elsewhere are often much higher —
+OpenAI's
+<a href="https://github.com/openai/whisper#available-models-and-languages">available models</a>
+table says ~5 GB for <code>medium</code> and ~10 GB for <code>large</code>. Those describe OpenAI's
+own Python implementation, not the GGML build used here, which is roughly two
+to three times leaner. Read them for the model lineup and the speed/accuracy
+tradeoff, not for sizing your machine.</p>
+<p>On a GPU backend (CUDA or Vulkan) this comes out of video memory, on a CPU
+backend out of system RAM. Either way exactly one copy is loaded, whatever the
+run's size: files are processed one at a time. Specifying a different
+<code>--upgrade-model</code> adds one further copy, loaded only once something actually asks
+for it — Scan, or one of the second opinions Probe asks a heavier model for.</p>
+<p>The voice-activity pre-pass wants memory of its own on top, and unlike the model
+that amount is yours to choose: about 40 MB per <code>--vad-threads</code> thread, so around
+480 MB with the default of one per physical core on a 12-core machine. See
+<a href="06-command-line-reference.html#performance">performance options</a>.</p>
+<p>ABChapterize does not check any of this up front. If the memory is not there,
+you will find out from the model loader or the operating system rather than
+from a friendly message, so on a memory-constrained machine pick the model
+deliberately: <code>small</code> is the smallest size that gives dependable results.</p>
+<p>Audio is decoded and transcribed in bounded windows rather than a file at a
+time, so memory does not grow with the length of the audiobook — a 30-hour
+book costs no more than a 3-hour one.</p>
+<p>Models live in the <code>models</code> folder next to the executable. A missing model is
+downloaded automatically on first use from the
+<a href="https://huggingface.co/ggerganov/whisper.cpp/tree/main">ggerganov/whisper.cpp</a>
+repository on Hugging Face, with a progress display; partial downloads never
+count as installed. If the download fails (offline machine, write-protected
+folder), the error message contains step-by-step instructions for installing
+the model manually.</p>
+<h2 id="using-your-own-model">Using your own model<a class="anchor" href="#using-your-own-model" aria-label="Permalink to this heading">#</a></h2>
+<p><code>--model custom:&lt;path&gt;</code> (and <code>--upgrade-model custom:&lt;path&gt;</code>) points at a GGML
+Whisper model file anywhere on disk instead of one from the table above — a
+fine-tune for a particular narrator or language, a quantized build, or simply
+a model kept outside the <code>models</code> folder:</p>
+<pre><code>abchapterize -m custom:~/models/ggml-my-finetune.bin book.m4b
+abchapterize -m small -M &quot;custom:D:\models\ggml-large-v3-q5_0.bin&quot; book.m4b
+</code></pre>
+<p>A leading <code>~</code> is expanded to your home directory, on Windows too. The path is
+checked when the command line is parsed, so a typo fails immediately rather
+than after the first hours of a batch run.</p>
+<p>Such a file is used exactly as it is: nothing is downloaded, and nothing is
+checked against a pinned digest — it is yours, so vouching for it is yours too
+(see <a href="#download-integrity-verification">Download integrity verification</a> for
+what that check does and does not cover). It also has to be a model the
+whisper.cpp engine underneath can load; if it is not, the failure comes from
+that loader.</p>
+<p>ABChapterize forms an opinion about a custom model in exactly two places:
+<a href="03-how-detection-works.html#re-probe--a-cheap-second-try-at-a-gap-only-with-a-heavier---upgrade-model">Re-probe</a>,
+which needs to know whether <code>--upgrade-model</code> is an upgrade over <code>--model</code>, and
+<a href="03-how-detection-works.html#re-scan--the-shifted-second-reading">Re-scan</a>, which needs to know whether it is a
+downgrade. That comparison is made by <strong>file size</strong>, for custom and built-in
+models alike — within the Whisper family the bigger file has always been the
+more capable model. A custom model smaller than <code>--model</code>'s therefore behaves
+like naming a lighter built-in one: Re-probe and Re-scan stay off, Scan
+still uses it.</p>
+<h2 id="download-integrity-verification">Download integrity verification<a class="anchor" href="#download-integrity-verification" aria-label="Permalink to this heading">#</a></h2>
+<p>Every downloaded model file is checked against a SHA-256 and a SHA3-256
+digest pinned in the executable, computed while the file streams in (no
+second pass over the multi-gigabyte file is needed). Both must match. This
+guards against the model repository itself being compromised: if an attacker
+ever took over the Hugging Face repository and swapped a model file for
+something else, that something else would also need to satisfy two
+independently-designed hash algorithms simultaneously to be accepted -
+something not achievable in practice, unlike defeating a single hash. A file
+that fails either check is rejected and deleted, never loaded by the native
+Whisper model loader. On success, the startup message reads
+&quot;Model downloaded and verified at ...&quot;.</p>
+<p>If a platform's cryptography stack has no SHA3-256 support (a possibility on
+older or minimal Linux systems, depending on the OpenSSL version installed),
+only SHA-256 is enforced and a note is printed; this has not been observed
+on any system tested so far (Windows 11 and current WSL2/Ubuntu both support
+SHA3-256 natively). Manually installed model files (see above) are not
+verified automatically - if you install one by hand, check its SHA-256
+yourself against the digest shown in the manual-installation error message
+or listed here:</p>
+<table>
+<thead>
+<tr>
+<th>Selector</th>
+<th>SHA-256</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tiny</code></td>
+<td><code>be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21</code></td>
+</tr>
+<tr>
+<td><code>base</code></td>
+<td><code>60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe</code></td>
+</tr>
+<tr>
+<td><code>small</code></td>
+<td><code>1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b</code></td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td><code>6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208</code></td>
+</tr>
+<tr>
+<td><code>turbo</code></td>
+<td><code>1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69</code></td>
+</tr>
+<tr>
+<td><code>large</code></td>
+<td><code>64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2</code></td>
+</tr>
+</tbody>
+</table>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="07-languages-and-number-recognition.html" rel="prev"><span>Previous</span>7. Languages and number recognition</a>
+<a class="next" href="09-gpu-acceleration.html" rel="next"><span>Next</span>9. GPU acceleration</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

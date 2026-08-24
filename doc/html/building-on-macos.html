@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>Building on macOS - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li><a href="adding-a-language.html">Adding a language</a></li>
+<li class="current"><a href="building-on-macos.html" aria-current="page">Building on macOS</a>
+<ul class="subsections">
+<li><a href="#what-you-need">What you need</a></li>
+<li><a href="#building-it">Building it</a></li>
+<li><a href="#what-the-publish-folder-should-look-like">What the publish folder should look like</a></li>
+<li><a href="#what-works-what-is-a-coin-flip">What works, what is a coin flip</a></li>
+<li><a href="#if-it-works-or-if-it-does-not">If it works, or if it does not</a></li>
+</ul>
+</li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="building-abchapterize-on-macos">Building ABChapterize on macOS<a class="anchor" href="#building-abchapterize-on-macos" aria-label="Permalink to this heading">#</a></h1>
+<p><strong>Read this first:</strong> there is no macOS release, and there is no macOS support.
+What exists is a source tree that should compile and run on Apple Silicon,
+written by someone who has never run it there. Nobody on this project owns a
+Mac, no CI builds one, and not one chapter mark has ever been placed by this
+tool on macOS. Everything below is &quot;this is what it is supposed to do&quot;; if it
+turns out to be wrong, that is a bug and not a surprise.</p>
+<p>If you would rather not be the person finding out, use the Windows or Linux
+build from the <a href="https://github.com/Inguiotar/ABChapterize/releases">Releases</a> page instead.</p>
+<h2 id="what-you-need">What you need<a class="anchor" href="#what-you-need" aria-label="Permalink to this heading">#</a></h2>
+<ul>
+<li><strong>Apple Silicon.</strong> Intel Macs are out of scope permanently, not merely
+untested — see <a href="#why-not-intel">Why not Intel</a> at the bottom.</li>
+<li><strong>The <a href="https://dotnet.microsoft.com/download">.NET 10 SDK</a></strong>, arm64 build.</li>
+<li><strong>ffmpeg and ffprobe.</strong> <code>brew install ffmpeg</code>, or MacPorts'
+<code>sudo port install ffmpeg</code>. ABChapterize looks in <code>PATH</code>, then in
+<code>/opt/homebrew/bin</code>, <code>/usr/local/bin</code>, <code>/opt/local/bin</code>, <code>/usr/bin</code>, <code>~/bin</code>
+and <code>~/.local/bin</code>, and <code>$FFMPEG_DIR</code> overrides all of it.</li>
+<li><strong>About 7 GB free</strong> wherever the speech models land, if you use the larger
+ones. They are downloaded on first use, not shipped.</li>
+</ul>
+<h2 id="building-it">Building it<a class="anchor" href="#building-it" aria-label="Permalink to this heading">#</a></h2>
+<pre><code class="language-sh">git clone https://github.com/Inguiotar/ABChapterize.git
+cd ABChapterize
+dotnet publish -c Release -r osx-arm64
+</code></pre>
+<p>The result lands in <code>bin/publish/osx-arm64/</code>. Run it from there:</p>
+<pre><code class="language-sh">./bin/publish/osx-arm64/abchapterize --version
+</code></pre>
+<p><strong>Build on the Mac, not from another machine.</strong> That is not a preference, it
+removes both of the things that would otherwise stand between you and a binary
+that runs:</p>
+<ul>
+<li>Apple Silicon refuses to execute an unsigned binary. <code>dotnet publish</code> ad-hoc
+signs the apphost by itself, but only when it is running <em>on</em> macOS. A copy
+cross-published from Windows or Linux arrives unsigned and will not start.</li>
+<li>A file you built yourself was never downloaded, so it carries no
+<code>com.apple.quarantine</code> attribute and Gatekeeper has nothing to object to.
+A binary someone sent you would need <code>xattr -d</code> first.</li>
+</ul>
+<p>Run the tests too, because they are the only part of this that anyone can
+actually check:</p>
+<pre><code class="language-sh">dotnet test tests/ABChapterize.Tests
+</code></pre>
+<p><code>SileroVadDetectorTests</code> is the interesting one: it loads the real ONNX Runtime
+and runs the actual VAD model. If that passes, the native library resolution
+described below is working on your machine, which is the single most likely
+thing to be wrong.</p>
+<h2 id="what-the-publish-folder-should-look-like">What the publish folder should look like<a class="anchor" href="#what-the-publish-folder-should-look-like" aria-label="Permalink to this heading">#</a></h2>
+<p>macOS is the one platform where the two bundles of native libraries disagree
+about how to spell the platform, so both spellings turn up side by side:</p>
+<pre><code>bin/publish/osx-arm64/
+  abchapterize
+  ggml-metal.metal
+  runtimes/macos-arm64/     &lt;- Whisper's natives (Whisper.net's spelling)
+    libwhisper.dylib, libggml-*.dylib including -metal- and -blas-
+  runtimes/osx-arm64/       &lt;- ONNX Runtime's native (the .NET RID spelling)
+    libonnxruntime.dylib
+</code></pre>
+<p>If <code>runtimes/</code> is missing or holds a <code>win-x64</code> or <code>linux-x64</code> folder instead,
+the prune step in <code>ABChapterize.csproj</code> went wrong — that is the one place in
+this whole port that cannot fail gracefully, so it is worth a look before
+anything else.</p>
+<p>Do not move or delete <code>ggml-metal.metal</code>. It is ggml's Metal shader source and
+ggml looks for it beside the executable.</p>
+<h2 id="what-works-what-is-a-coin-flip">What works, what is a coin flip<a class="anchor" href="#what-works-what-is-a-coin-flip" aria-label="Permalink to this heading">#</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Detection, ffmpeg handling, all languages</td>
+<td>Pure C# and an external process. No reason for these to behave differently than on Linux.</td>
+</tr>
+<tr>
+<td>The VAD pre-pass</td>
+<td>Needs ONNX Runtime to load out of <code>runtimes/osx-arm64/</code>. Covered by the unit tests — run them.</td>
+</tr>
+<tr>
+<td>Whisper on the CPU</td>
+<td>Should work.</td>
+</tr>
+<tr>
+<td>Whisper on the GPU</td>
+<td>Not selectable. See below.</td>
+</tr>
+<tr>
+<td><code>--vad-threads auto</code> / <code>--whisper-threads auto</code></td>
+<td>Reads <code>hw.perflevel0.physicalcpu</code> so that efficiency cores are not counted as workers. Written to Apple's documented sysctl names, never observed. If the numbers look wrong, pass the thread counts explicitly.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="gpus">GPUs<a class="anchor" href="#gpus" aria-label="Permalink to this heading">#</a></h3>
+<p><code>--use-gpu</code> and <code>--list-gpus</code> do nothing useful on macOS, and say so when you
+run them. They work through Vulkan, macOS has no Vulkan loader, and Whisper.net
+publishes neither a Vulkan nor a CUDA native for the platform.</p>
+<p>What that does <em>not</em> mean is that the GPU sits idle. Whisper.net loads its CPU
+runtime, and ggml then picks up the Metal backend from
+<code>libggml-metal-whisper.dylib</code> in the same folder if it can. The startup banner
+will say <code>Cpu backend</code> regardless, because that is the runtime Whisper.net
+reports loading, and guessing anything else would be exactly that. Whether
+Metal actually engages is the largest single unknown in this port.</p>
+<h3 id="why-not-intel">Why not Intel<a class="anchor" href="#why-not-intel" aria-label="Permalink to this heading">#</a></h3>
+<p>Microsoft.ML.OnnxRuntime ships no <code>osx-x64</code> native at all — the package covers
+android, ios, linux-arm64, linux-x64, osx-arm64, win-arm64 and win-x64, and
+that is the complete list. No ONNX Runtime means no Silero VAD, and since
+0.12.0 the VAD pre-pass runs on every file with a load failure ending the run
+rather than degrading it. An Intel Mac would therefore not run this tool at
+all, rather than run it without jingle geometry. Adding a fallback path for one
+untestable platform is not a trade this project is going to make.</p>
+<h2 id="if-it-works-or-if-it-does-not">If it works, or if it does not<a class="anchor" href="#if-it-works-or-if-it-does-not" aria-label="Permalink to this heading">#</a></h2>
+<p>Either way, say so on the <a href="https://github.com/Inguiotar/ABChapterize/issues">issue tracker</a> — including the
+boring case where it just worked. &quot;Ran a 12-hour book on an M2, all 40 chapters
+correct&quot; is worth more here than any amount of code review, because it is the
+one thing nobody on this side can produce.</p>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="adding-a-language.html" rel="prev"><span>Previous</span>Adding a language</a>
+<a class="next" href="constants.html" rel="next"><span>Next</span>Tuning constants</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

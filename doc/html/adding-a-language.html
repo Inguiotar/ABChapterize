@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="ABChapterize docgen">
+<title>Adding a language - ABChapterize documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="topbar"><a class="brand" href="index.html">ABChapterize documentation</a><span class="version">v1.0.0</span></header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation contents">
+<p class="sidebar-heading"><a href="index.html">ABChapterize manual</a></p>
+<ul class="nav-list">
+<li><a href="01-what-abchapterize-does.html">1. What ABChapterize does</a></li>
+<li><a href="02-supported-file-formats.html">2. Supported file formats</a></li>
+<li><a href="03-how-detection-works.html">3. How detection works</a></li>
+<li><a href="04-how-chapters-are-written--file-safety.html">4. How chapters are written — file safety</a></li>
+<li><a href="05-what-is-kept-and-what-is-stripped.html">5. What is kept and what is stripped</a></li>
+<li><a href="06-command-line-reference.html">6. Command line reference</a></li>
+<li><a href="07-languages-and-number-recognition.html">7. Languages and number recognition</a></li>
+<li><a href="08-whisper-models.html">8. Whisper models</a></li>
+<li><a href="09-gpu-acceleration.html">9. GPU acceleration</a></li>
+<li><a href="10-ffmpeg-requirements-and-discovery.html">10. ffmpeg: requirements and discovery</a></li>
+<li><a href="11-xhe-aac-usac-files.html">11. xHE-AAC (USAC) files</a></li>
+<li><a href="12-output-progress-and-logging.html">12. Output, progress and logging</a></li>
+<li><a href="13-exit-codes.html">13. Exit codes</a></li>
+<li><a href="14-troubleshooting.html">14. Troubleshooting</a></li>
+</ul>
+<p class="sidebar-heading">More documentation</p>
+<ul class="nav-list">
+<li class="current"><a href="adding-a-language.html" aria-current="page">Adding a language</a>
+<ul class="subsections">
+<li><a href="#1-what-a-language-consists-of">1. What a &quot;language&quot; consists of</a></li>
+<li><a href="#2-step-1--the-language-class">2. Step 1 — the language class</a></li>
+<li><a href="#3-step-2--register-it">3. Step 2 — register it</a></li>
+<li><a href="#4-step-3--the-number-parser">4. Step 3 — the number parser</a></li>
+<li><a href="#5-step-4--tests">5. Step 4 — tests</a></li>
+<li><a href="#6-step-5--documentation">6. Step 5 — documentation</a></li>
+<li><a href="#7-building-and-running">7. Building and running</a></li>
+<li><a href="#8-checklist">8. Checklist</a></li>
+</ul>
+</li>
+<li><a href="building-on-macos.html">Building on macOS</a></li>
+<li><a href="constants.html">Tuning constants</a></li>
+</ul>
+</nav>
+<main id="content">
+<h1 id="adding-a-language-to-abchapterize">Adding a language to ABChapterize<a class="anchor" href="#adding-a-language-to-abchapterize" aria-label="Permalink to this heading">#</a></h1>
+<p>So your audiobooks are in a language ABChapterize does not speak yet, and you
+would like to fix that. Good news: it is a self-contained job. You will touch
+two or three files, all of them in <code>src\Language\</code>, and you need to know
+nothing whatsoever about how the rest of the tool works — no audio, no
+Whisper, no ffmpeg, no threading. If you have written code in <em>any</em>
+curly-brace language, you can do this.</p>
+<p>This guide assumes you know what a regular expression is, roughly. Everything
+else is spelled out.</p>
+<p><strong>Contents</strong></p>
+<ol>
+<li><a href="#1-what-a-language-consists-of">What a &quot;language&quot; consists of</a></li>
+<li><a href="#2-step-1--the-language-class">Step 1 — the language class</a></li>
+<li><a href="#3-step-2--register-it">Step 2 — register it</a></li>
+<li><a href="#4-step-3--the-number-parser">Step 3 — the number parser</a></li>
+<li><a href="#5-step-4--tests">Step 4 — tests</a></li>
+<li><a href="#6-step-5--documentation">Step 5 — documentation</a></li>
+<li><a href="#7-building-and-running">Building and running</a></li>
+<li><a href="#8-checklist">Checklist</a></li>
+</ol>
+<hr />
+<h2 id="1-what-a-language-consists-of">1. What a &quot;language&quot; consists of<a class="anchor" href="#1-what-a-language-consists-of" aria-label="Permalink to this heading">#</a></h2>
+<p>ABChapterize finds chapters by listening for the narrator saying something
+like <em>&quot;Chapter seventeen&quot;</em>. To do that in your language it needs two things
+from you:</p>
+<ol>
+<li><strong>Words.</strong> What does a chapter announcement sound like? What should the
+marks be called? Half a dozen short strings. This is 90 % of the value and
+maybe fifteen minutes of work.</li>
+<li><strong>Numbers.</strong> How is &quot;seventeen&quot; spelled out in your language? This is the
+larger job, and it is optional in the sense that the tool still works
+without it — announcements with <em>digits</em> (&quot;Kapitel 17&quot;) and <em>Roman
+numerals</em> (&quot;Kapitel XVII&quot;) are understood in
+every language, always. Only spelled-out numbers need a parser.</li>
+</ol>
+<p>You can ship step 1 alone and add step 2 later. A pull request with just the
+words is genuinely useful.</p>
+<p>Everything lives here:</p>
+<pre><code>src\Language\
+    ILanguage.cs              &lt;- the interface you implement (read this first)
+    LanguageRegistry.cs       &lt;- the one list of all languages (add one line)
+    Languages\
+        EnglishLanguage.cs    &lt;- copy one of these
+        GermanLanguage.cs
+        ...
+    Parsers\
+        INumberWordParser.cs  &lt;- the number interface
+        EnglishNumberParser.cs
+        ...
+</code></pre>
+<p>Nothing outside <code>src\Language\</code> knows how many languages exist or what they
+are called. That is deliberate, and it is why this is a small job.</p>
+<h3 id="which-alphabets-this-works-for">Which alphabets this works for<a class="anchor" href="#which-alphabets-this-works-for" aria-label="Permalink to this heading">#</a></h3>
+<p>All eleven languages shipped so far are written in the Latin alphabet, but
+nothing in the machinery requires that, and it was checked rather than assumed
+(2026-08-22, build 383). Matching is case-insensitive across the whole of
+Unicode, the word boundaries the number pattern uses are the Unicode ones, and
+everything written to a file — chapter titles included — is UTF-8. So <strong>a
+language written in Cyrillic, Greek, Hebrew, Arabic or Hangul is an ordinary
+addition</strong>: write the class, write the parser, add the line, and nothing else
+is different. Two things to know before you do:</p>
+<ul>
+<li><p><strong>Greek loses its accents when it is written in capitals</strong> — Whisper writes
+both <code>Κεφάλαιο</code> and <code>ΚΕΦΑΛΑΙΟ</code>, and the second does not match the first even
+case-insensitively. Write the phrase so it accepts either: <code>κεφ[άα]λαιο</code>.
+This is the same trick the Spanish and Turkish phrases already use for
+dropped accents; see <a href="#the-three-phrases">The three phrases</a> below. Greek
+also writes its final sigma differently (<code>ς</code> at the end of a word, <code>σ</code>
+elsewhere), and those two do not match each other either, so spell that as
+<code>[σς]</code> where it can occur.</p>
+</li>
+<li><p><strong>Chinese, Japanese and Thai do not work yet, and not because of the
+characters.</strong> They do not put spaces between words, and three separate parts
+of the tool split text on whitespace: how a number is picked out of a
+sentence, how a segment is split into sentences, and — the blocking one —
+the <code>()</code> token of a chapter phrase, which refuses to match a number that has
+a letter directly in front of it. In Chinese and Japanese it always does:
+<code>第3章</code> has no spaces anywhere. So <code>--chapter-phrase &quot;/^第()章/&quot;</code> finds
+nothing. Supporting these properly means teaching those three places about a
+script that has no word gaps; that is a real piece of work and nobody has
+done it.</p>
+<p><strong>There is a workaround, and it is a one-liner for the user rather than a
+code change.</strong> Writing your own capturing group instead of <code>()</code> sidesteps
+the rule: <code>--chapter-phrase &quot;/^第([0-9]+)章/&quot;</code> does match <code>第3章</code>, and Korean
+<code>--chapter-phrase &quot;/^제([0-9]+)장/&quot;</code> matches <code>제3장</code>. It only finds numbers
+written as digits — spelled-out <code>第三章</code> still needs the missing work — but
+for a book whose announcements carry digits it is enough.</p>
+</li>
+</ul>
+<p>Language <em>codes</em> are not restricted to two letters either. Whisper's own list
+is not purely ISO 639-1 — Hawaiian is <code>haw</code> and Cantonese is <code>yue</code> — so
+<code>--lang</code>, the <code>[xx]</code> tag and <code>ILanguage.Code</code> all take two or three letters.</p>
+<hr />
+<h2 id="2-step-1--the-language-class">2. Step 1 — the language class<a class="anchor" href="#2-step-1--the-language-class" aria-label="Permalink to this heading">#</a></h2>
+<p>Say you are adding Czech (<code>cs</code>). Copy an existing file that is structurally
+close to your language — <code>GermanLanguage.cs</code> is the simplest one — to
+<code>src\Language\Languages\CzechLanguage.cs</code>, and edit it:</p>
+<pre><code class="language-csharp">// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
+// Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
+// MIT license - see the LICENSE file in the repository root.
+
+using ABChapterize.Language.Parsers;
+
+namespace ABChapterize.Language.Languages;
+
+/// &lt;summary&gt;Czech.&lt;/summary&gt;
+public sealed class CzechLanguage : ILanguage
+{
+    /// &lt;inheritdoc/&gt;
+    public string Code =&gt; &quot;cs&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string ChapterPhrase =&gt; &quot;/(?:^kapitol ()|^() kapitol|^kapitol)/&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string ChapterTitle =&gt; &quot;Kapitola&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string PartTitle =&gt; &quot;Část&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string IntroTitle =&gt; &quot;Úvod&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string ProloguePhrase =&gt; &quot;/prolog/&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string PrologueTitle =&gt; &quot;Prolog&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string EpiloguePhrase =&gt; &quot;/epilog/&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string EpilogueTitle =&gt; &quot;Epilog&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public INumberWordParser NumberParser { get; } = new CzechNumberParser();
+}
+</code></pre>
+<p>That is the whole class. A few notes on filling it in.</p>
+<h3 id="the-three-phrases">The three phrases<a class="anchor" href="#the-three-phrases" aria-label="Permalink to this heading">#</a></h3>
+<p><code>ChapterPhrase</code>, <code>ProloguePhrase</code> and <code>EpiloguePhrase</code> are exactly what a user
+could type after <code>--chapter-phrase</code> on the command line: either a plain word,
+or a regular expression wrapped in slashes. Use the <code>/regexp/</code> form — every
+built-in language does, for consistency.</p>
+<p>The chapter phrase has one more thing in it. Every built-in language spells it
+<code>/(?:^WORD ()|^() WORD|^WORD)/</code>: three alternatives of one phrase, where <code>()</code>
+stands for a chapter number in your language's own notation and captures it.
+The first alternative takes the number that follows the word directly
+(&quot;Kapitola 12&quot;), the second the number that precedes it (&quot;První kapitola&quot;), and
+the third is the bare word, where the number is read off whatever stands around
+it. Copy the shape and change the word; the parts that vary by language are the
+word itself and the number grammar in step 3.</p>
+<p>Keep all three, in that order. The order matters where two of them read the
+same words differently: on &quot;Der erste Kapitel 5&quot; the second alternative claims
+&quot;erste Kapitel&quot; — it starts earlier, and the leftmost match wins — and would
+make that chapter 1. Three transcripts in the reference corpus read exactly
+like that, none because the narrator said it, all because a short probe window
+opened with a word Whisper invented. What saves them is that a reading the
+chapter sequence cannot accept is put aside and the next one tried, so
+&quot;Kapitel 5&quot; gets its turn; the ordering is what decides which reading is
+preferred when both would fit.</p>
+<p>The <code>^</code> on all three says the announcement must be set off from what precedes
+it — by a pause, or by the recognizer writing it as a transcript segment of its
+own. Keep it. It is what stops your chapter word becoming a mark every time it
+turns up in ordinary narration, and on the second alternative it is also what
+lets an ordinal-first announcement be recognized by its own segment start.</p>
+<p>If your word needs a <code>(?:...)</code> for a stem change, as Swedish and Danish do with
+<code>kapit(?:el|let)</code>, write it and think no further: the alternation is multiplied
+out for you, so those three alternatives become six, one per spelling. That is
+deliberate — each alternative has to be a single expression with no choice left
+in it, because the one that finds an announcement is also the one its position is
+confirmed against later.</p>
+<p>Two rules about how they are matched, both of which save you work:</p>
+<ul>
+<li><strong>Case is ignored.</strong> Never write <code>[Kk]</code>.</li>
+<li><strong>It is a substring match, not a whole-word match.</strong> The pattern only has to
+occur <em>somewhere</em> in the transcribed line. So a pattern that stops at the
+stem automatically covers every ending your language glues on: Polish gets
+&quot;rozdział&quot;, &quot;rozdziale&quot; and &quot;rozdziału&quot; out of the single pattern
+<code>rozdzia[łl]</code>, and English <code>prolog</code> finds &quot;prologue&quot; for free.</li>
+</ul>
+<p>What <em>does</em> need a pattern:</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Example</th>
+<th>Pattern</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Whisper drops an accent</td>
+<td>&quot;capitulo&quot; for &quot;capítulo&quot;</td>
+<td><code>cap[íi]tulo</code></td>
+</tr>
+<tr>
+<td>Whisper drops a diacritic</td>
+<td>&quot;bolum&quot; for &quot;bölüm&quot;</td>
+<td><code>b[öo]l[üu]m</code></td>
+</tr>
+<tr>
+<td>The stem itself changes</td>
+<td>Swedish &quot;kapitel&quot; / &quot;kapitlet&quot;</td>
+<td><code>kapit(?:el\|let)</code></td>
+</tr>
+<tr>
+<td>Two accepted spellings</td>
+<td>&quot;prolog&quot; / &quot;prologue&quot;</td>
+<td>just <code>prolog</code> — substring</td>
+</tr>
+</tbody>
+</table>
+<p>Write any alternation of your own as <code>(?:a|b)</code>, <strong>not</strong> <code>(a|b)</code>. A plain
+<code>(...)</code> is a <em>capturing</em> group, and ABChapterize reads one in a phrase as &quot;the
+chapter number is here&quot; — which is exactly what the <code>()</code> above is, and what a
+second one would collide with. A unit test
+(<code>EveryRegisteredLanguage_HasUsableDefaultPhrases</code>) will fail if you slip.</p>
+<p>Do not try to cover a <em>different word</em> your language might use for a chapter
+(&quot;part&quot;, &quot;book&quot;, &quot;section&quot;). Being greedy here costs accuracy: a phrase that
+matches ordinary prose puts marks in the middle of scenes. Pick the one word a
+narrator actually says, and let users reach for <code>--chapter-phrase</code> for the
+rest.</p>
+<p>The exception, should your language have one: if two <em>different</em> words are
+genuinely interchangeable as the thing narrators announce — not &quot;one common
+one and one a publisher occasionally uses&quot;, but two you would be equally
+unsurprised to hear — then the default has to cover both, or half the
+audiobooks in that language get nothing. Write it as one alternation,
+<code>/(?:^(?:woord|kapittel) ()|^() (?:woord|kapittel)|^(?:woord|kapittel))/</code>, and
+the earlier note applies: <code>(?:...)</code>, never
+<code>(...)</code>. Test it against prose before you commit to it. The bar is high on
+purpose, and no built-in language has cleared it so far: all eleven get by on
+a single word, and the only alternations among them (Swedish and Danish
+<code>kapit(?:el|let)</code>) are two endings of one word rather than two words.</p>
+<p>For the prologue and the epilogue, prefer your language's Latin-derived form
+(&quot;Prolog&quot;, &quot;Prólogo&quot;, …) over a native near-synonym. Words like German
+&quot;Vorwort&quot; or Turkish &quot;Önsöz&quot; mean <em>foreword</em> — front matter <em>about</em> the book —
+whereas a prologue is part of the story, and that is what gets announced.</p>
+<h3 id="the-four-titles">The four titles<a class="anchor" href="#the-four-titles" aria-label="Permalink to this heading">#</a></h3>
+<p><code>ChapterTitle</code> is the word marks are named after: with <code>Kapitola</code>, chapters
+come out as &quot;Kapitola 1&quot;, &quot;Kapitola 2&quot;, …. Write it the way it should appear
+in a player — properly capitalized, with all its accents.</p>
+<p><code>PartTitle</code> is only used for a book whose chapters count from one again in
+every part, where the marks come out as &quot;Část 2 - Kapitola 1&quot;. Pick the word
+for a <em>structural division of a book</em>, not a synonym of the chapter word —
+Turkish uses &quot;Bölüm&quot; for a chapter and &quot;Kısım&quot; here, and reusing one for both
+would produce &quot;Bölüm 2 - Bölüm 1&quot;. Two rules follow from how it is read back
+off a written title: it must be a word the language does not routinely use at
+the start of a chapter heading, and if it happens to be the beginning of a
+longer word (Swedish &quot;Del&quot; is also the start of &quot;Delen&quot;), that is fine — a
+prefix only counts when a non-letter follows it.</p>
+<p><code>IntroTitle</code> names the mark covering whatever comes before the first chapter
+(a publisher's announcement, a title read aloud). &quot;Intro&quot; is fine if your
+language borrows it; otherwise use the natural word.</p>
+<p><code>PrologueTitle</code> and <code>EpilogueTitle</code> name those two marks. They are usually the
+phrase with a capital letter.</p>
+<h3 id="numberparser"><code>NumberParser</code><a class="anchor" href="#numberparser" aria-label="Permalink to this heading">#</a></h3>
+<p>Point it at your parser from step 3. If you are not writing one yet, borrow
+English's tables through a stub that still declares <em>your</em> code — a test
+(<code>EveryRegisteredLanguage_CarriesItsOwnNumberParser</code> in
+<code>NumberWordParserTests.cs</code>) checks that no language is reachable under another
+language's parser, so handing over <code>new EnglishNumberParser()</code> directly turns the
+suite red:</p>
+<pre><code class="language-csharp">public sealed class CzechNumberParser : INumberWordParser
+{
+    private static readonly EnglishNumberParser Borrowed = new();
+
+    /// &lt;inheritdoc/&gt;
+    public string LanguageCode =&gt; &quot;cs&quot;;
+
+    /// &lt;inheritdoc/&gt;
+    public string DigitOrdinalSuffixPattern =&gt; Borrowed.DigitOrdinalSuffixPattern;
+
+    /// &lt;inheritdoc/&gt;
+    public string NumberWordPattern =&gt; Borrowed.NumberWordPattern;
+
+    /// &lt;inheritdoc/&gt;
+    public bool TryParse(IReadOnlyList&lt;string&gt; tokens, out int number, out int consumed)
+        =&gt; Borrowed.TryParse(tokens, out number, out consumed);
+}
+</code></pre>
+<pre><code class="language-csharp">public INumberWordParser NumberParser { get; } = new CzechNumberParser();
+</code></pre>
+<p>Digits and Roman numerals still work that way; spelled-out Czech numbers will
+not, until step 3 replaces the borrowed tables.</p>
+<p>One thing you do <em>not</em> have to worry about: your language's number words are
+tried before the Roman-numeral reading, so a word that happens to be spelled
+like one is safe. French &quot;dix&quot; is ten, even though <code>DIX</code> is also a perfectly
+good Roman 509.</p>
+<p>(Do please come back and replace it. Many audiobooks spell their numbers out.)</p>
+<hr />
+<h2 id="3-step-2--register-it">3. Step 2 — register it<a class="anchor" href="#3-step-2--register-it" aria-label="Permalink to this heading">#</a></h2>
+<p>Open <code>src\Language\LanguageRegistry.cs</code> and add one line to the <code>All</code> array:</p>
+<pre><code class="language-csharp">    private static readonly ILanguage[] All =
+    [
+        new EnglishLanguage(),
+        new GermanLanguage(),
+        ...
+        new DanishLanguage(),
+        new CzechLanguage(),      // &lt;- yours
+    ];
+</code></pre>
+<p>That is the entire wiring. The <code>--lang</code> help text, the supported-language
+list, the number-parser lookup and the localized defaults all read from this
+array; none of them needs touching.</p>
+<hr />
+<h2 id="4-step-3--the-number-parser">4. Step 3 — the number parser<a class="anchor" href="#4-step-3--the-number-parser" aria-label="Permalink to this heading">#</a></h2>
+<p>This is the part that takes an evening. Your job: turn the words Whisper wrote
+(&quot;sedmnáct&quot;, &quot;dvacet jedna&quot;) into the integers 17 and 21, for every number
+from 0 to 999, as <strong>cardinals</strong> (&quot;chapter twenty-one&quot;) and as <strong>ordinals</strong>
+(&quot;the twenty-first chapter&quot;) — audiobooks use both.</p>
+<p>Ordinals are allowed to stop short of 999 if your language spells them as
+words of their own rather than deriving them from the cardinals. Spanish
+(&quot;vigésimo&quot; has nothing to do with &quot;veinte&quot;) stops at 199 and Danish at 100
+for exactly that reason: the words above are ones no narrator would say. Go as
+far as the language stays regular, say where you stopped in the class doc
+comment, and let the digit ordinals cover the rest.</p>
+<p>Create <code>src\Language\Parsers\CzechNumberParser.cs</code> implementing
+<code>INumberWordParser</code>. Read <code>INumberWordParser.cs</code> first; it is short and states
+the contract precisely. Then pick the existing parser whose language works
+most like yours and adapt it:</p>
+<table>
+<thead>
+<tr>
+<th>Your language builds numbers like…</th>
+<th>Start from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>separate words, &quot;twenty one&quot;</td>
+<td><code>EnglishNumberParser.cs</code></td>
+</tr>
+<tr>
+<td>one compound word, units first, &quot;einundzwanzig&quot;</td>
+<td><code>GermanNumberParser.cs</code>, <code>DutchNumberParser.cs</code></td>
+</tr>
+<tr>
+<td>one compound word, tens first, &quot;tjugoett&quot;</td>
+<td><code>SwedishNumberParser.cs</code></td>
+</tr>
+<tr>
+<td>separate words with a connector, &quot;vinte e um&quot;</td>
+<td><code>PortugueseNumberParser.cs</code></td>
+</tr>
+<tr>
+<td>separate words, heavily inflected ordinals</td>
+<td><code>PolishNumberParser.cs</code></td>
+</tr>
+</tbody>
+</table>
+<p>Three things to get right, all of which the existing parsers demonstrate:</p>
+<ul>
+<li><strong><code>consumed</code>.</strong> Report how many of the tokens you actually used. Callers
+matching a number that has to end exactly at the chapter phrase rely on it;
+get it wrong and &quot;he said three. Chapter&quot; becomes chapter 3.</li>
+<li><strong>Be forgiving.</strong> Whisper writes what it hears. Normalize away accents,
+hyphens and alternate spellings rather than demanding the dictionary form —
+see the <code>Normalize</code> method most parsers have.</li>
+<li><strong><code>DigitOrdinalSuffixPattern</code>.</strong> If your language writes digit ordinals with
+a suffix (&quot;1st&quot;, &quot;1:a&quot;, &quot;5'inci&quot;), give the regex fragment for it, including
+any separator. If it just writes &quot;17.&quot; — a number and a period — return an
+empty string; that case is already handled for every language.</li>
+</ul>
+<p>There is a fourth member, <code>NumberWordPattern</code>: a regex fragment matching one
+spoken number of your language, which is what the <code>()</code> of a phrase expands to.
+Build it from the very tables you parse with, using the helpers in
+<code>NumberWordPatterns.cs</code> — <code>TokenRun</code> for a language that writes a number as
+separate words, <code>Alt</code> and <code>AnyOf</code> for one that compounds it — so that adding a
+spelling to a table adds it to the pattern in the same edit. It is allowed, and
+meant, to be a <em>superset</em> of what your parser accepts: whatever it captures is
+handed straight back to <code>TryParse</code>, which is the authority on the value. Being
+generous costs nothing; missing a spelling costs a chapter. <code>NumberWordPatternTests</code>
+checks the direction that matters, replaying every spelling the reference
+spellers produce for 0-999 through it.</p>
+<hr />
+<h2 id="5-step-4--tests">5. Step 4 — tests<a class="anchor" href="#5-step-4--tests" aria-label="Permalink to this heading">#</a></h2>
+<p>Run the suite from the repository root:</p>
+<pre><code>dotnet test tests\ABChapterize.Tests
+</code></pre>
+<p>Some tests will already cover your work the moment you register the language:
+they walk <code>LanguageRegistry.Languages</code> and check that every language's phrases
+compile, that the chapter phrase carries its number group where it should while
+the prologue and epilogue phrases carry none, and that the titles are non-empty.</p>
+<p>Two you should extend by hand:</p>
+<ul>
+<li><code>SupportedLanguages_ListsAllParsers</code> in <code>NumberWordParserTests.cs</code> — add
+your code to the expected list.</li>
+<li><code>DefaultPhrases_MatchTheirLanguagesAnnouncements</code> in <code>CliOptionsTests.cs</code> —
+add one <code>[InlineData]</code> row with a realistic chapter announcement, a prologue
+and an epilogue as Whisper would transcribe them. If your phrase has
+spelling variants, write the <em>awkward</em> spelling here; that is the whole
+point of the row.</li>
+<li><code>IntroTitle_Default_IsLocalized</code> in <code>CliOptionsTests.cs</code> — add a row for your
+code and intro title. It carries a row per supported language plus one
+<em>unsupported</em> code standing in for the English fallback; if that placeholder
+happens to be the code you are adding, move it to another unsupported one.</li>
+<li><code>ExistingMarkTitleTests.cs</code>, which reads a written title back: add a row to
+its <code>Spellings</code> table (your reference spellers and the highest ordinal your
+parser covers) and an <code>[InlineData]</code> row to
+<code>APartPrefixedTitle_GivesBackBothItsNumbers</code>. That one is what proves your
+<code>PartTitle</code> choice survives a resumed run — the trap this guide warns about
+under <code>PartTitle</code> is exactly what it catches.</li>
+</ul>
+<p>If you wrote a number parser, add it to the exhaustive round-trip tests as
+well: <code>ExhaustiveNumberWordTests.cs</code> for cardinals, <code>ExhaustiveOrdinalTests.cs</code>
+for ordinals, and <code>NumberWordPatternTests.cs</code> for the <code>()</code> expansion. They spell
+out every number 0–999 with an <strong>independent</strong> reference speller in
+<code>Spellers.cs</code> and feed it back through your parser — the grammar is deliberately
+written twice, so a misunderstanding of it cannot agree with itself. Copy the
+reference speller closest to your language, then add your language to those
+three files.</p>
+<p>Finally, try it on a real book:</p>
+<pre><code>abchapterize --lang cs --dry-run kniha.m4b
+</code></pre>
+<p><code>--dry-run</code> detects everything and writes nothing, so it is safe to run
+repeatedly. Add <code>--verbose</code> to watch each announcement being recognized.</p>
+<hr />
+<h2 id="6-step-5--documentation">6. Step 5 — documentation<a class="anchor" href="#6-step-5--documentation" aria-label="Permalink to this heading">#</a></h2>
+<p>Three tables in <code>doc\manual.md</code>, section 7 (&quot;Languages and number recognition&quot;):</p>
+<ul>
+<li>the parsed-languages table (language, code, an example cardinal and ordinal
+announcement) — only if you wrote a number parser;</li>
+<li>the two defaults tables (chapter phrase / title word / part word / intro
+title, and the prologue/epilogue phrases and titles).</li>
+</ul>
+<p><code>README.md</code>'s feature list also names the supported languages and counts them
+(&quot;<strong>Eleven languages</strong> of number recognition out of the box …&quot;), with one
+spelled-out example number each: bump the count, add your language, add a
+number word. It is the first thing anyone reads, and nothing generates it.</p>
+<p>If your language is the first to need some trick — a script issue, a
+transcription quirk worth warning about — say so in a sentence there.</p>
+<p>Add a line to <code>CHANGELOG.md</code> under the unreleased version, written for
+someone using the tool:</p>
+<pre><code class="language-markdown">- **Czech is now understood**: chapter announcements, spoken numbers 0–999 and
+  the localized `--lang cs` defaults.
+</code></pre>
+<hr />
+<h2 id="7-building-and-running">7. Building and running<a class="anchor" href="#7-building-and-running" aria-label="Permalink to this heading">#</a></h2>
+<p>You need the .NET SDK (version 10 or newer). From the repository root:</p>
+<pre><code>dotnet build                          # compile
+dotnet test tests\ABChapterize.Tests  # run the tests
+dotnet publish -c Release             # build the actual executable
+</code></pre>
+<p>The publish output lands in <code>bin\publish\win-x64\</code> (or <code>linux-x64\</code> with
+<code>-r linux-x64</code>). You do <strong>not</strong> need to edit any project file: every <code>.cs</code>
+under <code>src\</code> is compiled automatically, so a new file in the right folder is
+picked up on its own.</p>
+<p>Keep the build at zero warnings. Documentation comments are compiler-checked
+here, so a <code>&lt;see cref=&quot;...&quot;/&gt;</code> pointing at something that does not exist is a
+warning, not a silent typo.</p>
+<hr />
+<h2 id="8-checklist">8. Checklist<a class="anchor" href="#8-checklist" aria-label="Permalink to this heading">#</a></h2>
+<ul>
+<li>[ ] <code>src\Language\Languages\XxxLanguage.cs</code> written, all ten members filled in</li>
+<li>[ ] Chapter phrase written as <code>/(?:^WORD ()|^() WORD|^WORD)/</code>; any other grouping
+<code>(?:...)</code>, never <code>(...)</code></li>
+<li>[ ] Titles carry their proper capitalization and accents</li>
+<li>[ ] One line added to <code>LanguageRegistry.All</code></li>
+<li>[ ] <code>src\Language\Parsers\XxxNumberParser.cs</code> written (or a stub borrowing
+English's tables under your own <code>LanguageCode</code>, temporarily)</li>
+<li>[ ] <code>SupportedLanguages_ListsAllParsers</code>,
+<code>DefaultPhrases_MatchTheirLanguagesAnnouncements</code>,
+<code>IntroTitle_Default_IsLocalized</code> and <code>ExistingMarkTitleTests</code> extended</li>
+<li>[ ] Round-trip tests, <code>NumberWordPattern</code> and reference speller added, if there is a
+number parser</li>
+<li>[ ] <code>doc\manual.md</code> section 7 tables updated</li>
+<li>[ ] <code>README.md</code> language count and list updated</li>
+<li>[ ] <code>CHANGELOG.md</code> entry added</li>
+<li>[ ] <code>dotnet test</code> green, <code>dotnet build</code> free of warnings</li>
+<li>[ ] Tried against a real audiobook with <code>--lang xx --dry-run --verbose</code></li>
+</ul>
+<p>Thank you — every language added here is one more shelf of audiobooks that
+stops being a wall of &quot;Chapter 1&quot; and starts being navigable.</p>
+<nav class="pagenav" aria-label="Previous and next page">
+<a class="prev" href="14-troubleshooting.html" rel="prev"><span>Previous</span>14. Troubleshooting</a>
+<a class="next" href="building-on-macos.html" rel="next"><span>Next</span>Building on macOS</a>
+</nav>
+</main>
+</div>
+<footer class="sitefoot">Generated from the Markdown sources in <code>doc/</code> - edit those, not these files. <a href="https://github.com/Inguiotar/ABChapterize">ABChapterize on GitHub</a></footer>
+</body>
+</html>

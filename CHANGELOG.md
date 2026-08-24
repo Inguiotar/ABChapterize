@@ -59,6 +59,12 @@ earn a round number.
   Homebrew and MacPorts and their directories rather than apt and Linux's. `--list-gpus`
   says plainly that GPU selection does not apply on a Mac, instead of offering it CUDA.
 
+- **The manual is now also readable as a set of web pages.** `doc/html/index.html` in a
+  clone opens the same manual split into one page per section, with a navigation column, a
+  contents table two levels deep and a permalink on every heading. It is generated from the
+  Markdown, which stays the source of truth, and it is deliberately not part of the download
+  archives — those already carry the manual itself.
+
 ### Fixed
 
 - **Text outside your console's code page no longer prints as question marks.** Windows still
