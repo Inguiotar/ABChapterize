@@ -88,6 +88,13 @@ earn a round number.
 
 ### Fixed
 
+- **A long Audiobookshelf run no longer stops working part way through.** Recent servers hand
+  out a session that lasts an hour, which is shorter than a job of more than two or three books,
+  so every request after that came back "401 Unauthorized" — the marks were still written to the
+  files, but nothing more reached the server. A run given `--abs-user` and `--abs-password` now
+  signs in again whenever the server says the session has run out, and carries on where it was.
+  An API key cannot be renewed this way, so a key that has passed its expiry date is reported as
+  refused rather than worked around.
 - **A chapter is no longer lost when one announcement is heard as two.** Where a single reading
   came back as the chapter plus a phantom carrying the next number, the phantom claimed that
   number, and the real chapter bearing it was turned away every time it later came up — while the

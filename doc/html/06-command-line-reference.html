@@ -319,9 +319,15 @@ spelled out is taken at its word, so <code>https://books.example.com</code> is p
 a reverse-proxy sub-path works too.</p>
 <p><code>--abs-key &lt;key&gt;</code>
 : An API key to authenticate with, made in Audiobookshelf under settings →
-users → API keys.</p>
+users → API keys. A key given an expiry date stops working when it reaches it,
+and a run that meets that says the key was refused — there is nothing it can do
+but tell you.</p>
 <p><code>--abs-user &lt;name&gt;</code>, <code>--abs-password &lt;pw&gt;</code>
-: Log in with an account instead. Either a key or a username, not both.</p>
+: Log in with an account instead. Either a key or a username, not both. A run
+stays signed in for as long as it takes: recent Audiobookshelf servers issue a
+session that lasts an hour, which is shorter than a job of more than two or
+three books, so the run quietly signs in again whenever the server says the old
+session has run out.</p>
 <p><code>--abs-temp &lt;dir&gt;</code>
 : Where the temporary downloads go; the system temporary folder by default. An
 audiobook is a large file, so which drive holds it is worth being able to

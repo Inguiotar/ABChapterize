@@ -18,13 +18,19 @@ namespace ABChapterize.Abs;
 /// <para>
 /// The only class in <c>src\Abs\</c> that touches <see cref="HttpClient"/>. Everything above it
 /// asks in terms of paths and wire objects, which is what keeps the retry policy, the error
-/// wording and - most of all - the handling of the token in one place: a bearer header set on the
-/// client rather than passed around cannot be forgotten on one request or logged by another.
+/// wording and - most of all - the handling of the token in one place: every request is built and
+/// sent by <see cref="SendAsync"/>, so the bearer header cannot be forgotten on one request or
+/// logged by another, and the token can be replaced mid-run without any caller knowing.
 /// </para>
 /// <para>
 /// Deliberately not disposed-and-recreated per request. A run against a whole library makes a
 /// request per book plus a download each, and a fresh client per call is the textbook way to
 /// exhaust the socket pool.
+/// </para>
+/// <para>
+/// One session serves a whole run and is used from one book at a time. Nothing here is safe to
+/// call concurrently - the token is swapped in place when it expires - so a future path that
+/// processes books in parallel needs a session each, or a lock around the swap.
 /// </para>
 /// </remarks>
 public sealed class AbsSession : IDisposable
@@ -39,6 +45,17 @@ public sealed class AbsSession : IDisposable
 
     /// <summary>The account this session authenticated as, once <see cref="OpenAsync"/> has run.</summary>
     private AbsWire.User? _user;
+
+    /// <summary>
+    /// The bearer token every request carries, or null before <see cref="OpenAsync"/> has run.
+    /// </summary>
+    /// <remarks>
+    /// Held here and applied per request rather than pinned into
+    /// <see cref="HttpClient.DefaultRequestHeaders"/>, because it is replaced mid-run when the
+    /// server expires it - see <see cref="LogInAsync"/> - and a default header is the one place
+    /// that cannot be swapped safely while a request reading it is in flight.
+    /// </remarks>
+    private string? _token;
 
     /// <summary>
     /// How the wire is read: Audiobookshelf spells its fields in camelCase and this tool in Pascal,
@@ -73,10 +90,34 @@ public sealed class AbsSession : IDisposable
     /// <param name="connection">The resolved server and credentials.</param>
     /// <param name="log">Sink for the connection note, or null.</param>
     public AbsSession(AbsConnection connection, Action<string>? log = null)
+        : this(connection, new HttpClient(), log)
+    {
+    }
+
+    /// <summary>Creates a session sending over a transport of the caller's choosing.</summary>
+    /// <param name="connection">The resolved server and credentials.</param>
+    /// <param name="handler">What to send over; disposed with the session.</param>
+    /// <param name="log">Sink for the connection note, or null.</param>
+    /// <remarks>
+    /// Exists for the tests. The one failure this class has to survive is the server expiring a
+    /// token mid-run, and nothing short of waiting an hour against a real server produces one on
+    /// demand - so the renewal path would otherwise be the one part of ABS mode covered by nothing.
+    /// </remarks>
+    internal AbsSession(AbsConnection connection, HttpMessageHandler handler, Action<string>? log = null)
+        : this(connection, new HttpClient(handler, disposeHandler: true), log)
+    {
+    }
+
+    /// <summary>Shared by the two public constructors; see them for the parameters.</summary>
+    /// <param name="connection">The resolved server and credentials.</param>
+    /// <param name="client">The client to send over, still to be configured.</param>
+    /// <param name="log">Sink for the connection note, or null.</param>
+    private AbsSession(AbsConnection connection, HttpClient client, Action<string>? log)
     {
         _connection = connection;
         _log = log;
-        _client = new HttpClient { Timeout = RequestTimeout };
+        _client = client;
+        _client.Timeout = RequestTimeout;
         _client.DefaultRequestHeaders.UserAgent.ParseAdd($"ABChapterize/{Cli.CliOptions.Version}");
     }
 
@@ -98,8 +139,7 @@ public sealed class AbsSession : IDisposable
     /// </remarks>
     public async Task OpenAsync(bool needsUpdate, CancellationToken ct)
     {
-        var token = _connection.ApiKey ?? await LogInAsync(ct);
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _token = _connection.ApiKey ?? await LogInAsync(ct);
 
         var session = await PostAsync<AbsWire.Session>("/api/authorize", new { }, ct);
         _user = session.User
@@ -124,22 +164,74 @@ public sealed class AbsSession : IDisposable
     /// Exchanges a username and password for a token.
     /// </summary>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The bearer token to use for the rest of the run.</returns>
+    /// <returns>The bearer token to use until the server stops accepting it.</returns>
     /// <remarks>
+    /// <para>
     /// Servers from 2.26 on answer with a short-lived <c>accessToken</c> and keep the refresh token
     /// in an http-only cookie; older ones answer with the long-lived <c>token</c> and nothing else.
-    /// Both are read, newest first. A run is short enough that the access token cannot expire
-    /// mid-way, so there is no refresh handling here and deliberately no cookie jar - one fewer
-    /// place a credential could be written down.
+    /// Both are read, newest first.
+    /// </para>
+    /// <para>
+    /// <b>The access token lasts one hour.</b> Measured against 2.36.0 on 2026-08-25 by decoding the
+    /// JWT this endpoint returns: its <c>exp</c> claim sits exactly 3600 s after its <c>iat</c>.
+    /// That is well inside a single run - a book costs a quarter to half an hour to transcribe - so
+    /// a library run loses the token two or three books in, and before the renewal below existed
+    /// every request after that came back <c>401 Unauthorized</c>, reported by the user against
+    /// <c>--abs-push</c>. This comment previously asserted the opposite, that "a run is short enough
+    /// that the access token cannot expire mid-way"; it was never measured and it was wrong.
+    /// </para>
+    /// <para>
+    /// Renewal is a fresh login rather than the refresh-token flow, and there is still deliberately
+    /// no cookie jar. The username and password are held for the length of the run anyway, so
+    /// logging in a second time writes down nothing the first one did not, while a cookie jar would
+    /// add a place a credential lives. It also keeps one path for both server generations, the
+    /// pre-2.26 one having no refresh endpoint to call.
+    /// </para>
+    /// <para>
+    /// <b>Rejected: preferring the legacy token.</b> The same 2.36.0 login also returns the
+    /// pre-2.26 <c>token</c> beside the new one, and that JWT carries <em>no</em> <c>exp</c> claim
+    /// at all - it never expires, and reading it first would make this whole problem disappear in
+    /// one line. It is the wrong trade: the field is deprecated and due to be removed, so the fix
+    /// would rot into the same 401 on a later server, and a bearer token that never expires is a
+    /// worse thing to be holding for the sake of avoiding a re-login. Newest first stays.
+    /// </para>
     /// </remarks>
     private async Task<string> LogInAsync(CancellationToken ct)
     {
-        var session = await PostAsync<AbsWire.Session>(
-            "/login", new { username = _connection.Username, password = _connection.Password }, ct);
+        using var response = await SendPostAsync(
+            "/login", new { username = _connection.Username, password = _connection.Password },
+            SendMode.Login, ct);
+        await EnsureSuccessAsync(response, "POST", "/login", ct);
+        var session = await ReadAsync<AbsWire.Session>(response, "/login", ct);
+
         return session.User?.AccessToken ?? session.User?.Token
             ?? throw new AppError(
                 $"{_connection.Root} accepted the login for \"{_connection.Username}\" but returned no token.");
     }
+
+    /// <summary>Signs in again after the server refused the token this session was using.</summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// Announced rather than silent: on a long run this is the only visible sign that an hour has
+    /// passed, and a login that starts failing here is worth being able to see in a debug log
+    /// next to the request that provoked it.
+    /// </remarks>
+    private async Task RenewTokenAsync(CancellationToken ct)
+    {
+        _log?.Invoke("Audiobookshelf: the access token has expired, signing in again");
+        _token = await LogInAsync(ct);
+    }
+
+    /// <summary>Whether an expired token can be replaced without asking the user for anything.</summary>
+    /// <param name="mode">How the refused request was sent.</param>
+    /// <remarks>
+    /// Only a login can be repeated. Where the run was given an API key that key is the whole of
+    /// the credential, so a 401 on one is a refusal to report rather than an expiry to work around
+    /// - Audiobookshelf lets a key be created with an expiry date, and there is nothing this tool
+    /// could do about one but say so.
+    /// </remarks>
+    private bool CanRenewToken(SendMode mode)
+        => mode != SendMode.Login && _connection.ApiKey == null && _connection.Username != null;
 
     /// <summary>
     /// Runs a GET and deserializes the response.
@@ -150,20 +242,11 @@ public sealed class AbsSession : IDisposable
     /// <returns>The deserialized response.</returns>
     public async Task<T> GetAsync<T>(string path, CancellationToken ct) where T : class
     {
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                using var response = await _client.GetAsync(_connection.Root + path, ct);
-                await EnsureSuccessAsync(response, "GET", path, ct);
-                return await ReadAsync<T>(response, path, ct);
-            }
-            catch (Exception ex) when (attempt < ReadAttempts && IsTransient(ex) && !ct.IsCancellationRequested)
-            {
-                _log?.Invoke($"Audiobookshelf: {path} failed ({ex.Message}); retrying");
-                await Task.Delay(RetryPause, ct);
-            }
-        }
+        using var response = await SendAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, _connection.Root + path),
+            HttpCompletionOption.ResponseContentRead, SendMode.Read, path, ct);
+        await EnsureSuccessAsync(response, "GET", path, ct);
+        return await ReadAsync<T>(response, path, ct);
     }
 
     /// <summary>
@@ -175,13 +258,14 @@ public sealed class AbsSession : IDisposable
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The deserialized response.</returns>
     /// <remarks>
-    /// Never retried, unlike <see cref="GetAsync{T}"/>: the two things this tool posts are a login
-    /// and a chapter update, and repeating either after an ambiguous failure is worse than
-    /// reporting it.
+    /// Not retried after a transport failure, unlike <see cref="GetAsync{T}"/>: the two things this
+    /// tool posts are a login and a chapter update, and repeating either after an ambiguous failure
+    /// is worse than reporting it. An expired token is not that kind of failure - see
+    /// <see cref="SendAsync"/>.
     /// </remarks>
     public async Task<T> PostAsync<T>(string path, object body, CancellationToken ct) where T : class
     {
-        using var response = await SendPostAsync(path, body, ct);
+        using var response = await SendPostAsync(path, body, SendMode.Write, ct);
         await EnsureSuccessAsync(response, "POST", path, ct);
         return await ReadAsync<T>(response, path, ct);
     }
@@ -194,24 +278,109 @@ public sealed class AbsSession : IDisposable
     /// <param name="ct">Cancellation token.</param>
     public async Task PostAsync(string path, object body, CancellationToken ct)
     {
-        using var response = await SendPostAsync(path, body, ct);
+        using var response = await SendPostAsync(path, body, SendMode.Write, ct);
         await EnsureSuccessAsync(response, "POST", path, ct);
     }
 
-    /// <summary>Sends one POST, translating the transport failures into <see cref="AppError"/>.</summary>
+    /// <summary>Sends one POST with a JSON body.</summary>
     /// <param name="path">Request path, beginning with a separator.</param>
     /// <param name="body">The request body, serialized as JSON.</param>
+    /// <param name="mode">Which credential the request carries and what it survives.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The response, for the caller to check and dispose.</returns>
-    private async Task<HttpResponseMessage> SendPostAsync(string path, object body, CancellationToken ct)
+    /// <remarks>
+    /// The body is serialized afresh for every attempt because an <see cref="HttpRequestMessage"/>
+    /// cannot be sent twice - its content has been consumed by the time the first one comes back.
+    /// </remarks>
+    private Task<HttpResponseMessage> SendPostAsync(
+        string path, object body, SendMode mode, CancellationToken ct)
+        => SendAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, _connection.Root + path)
+            {
+                Content = JsonContent.Create(body, options: Json),
+            },
+            HttpCompletionOption.ResponseContentRead, mode, path, ct);
+
+    /// <summary>How one request is sent: which credential it carries and what it survives.</summary>
+    private enum SendMode
     {
-        try
+        /// <summary>The login itself. Carries no bearer - there either is not one yet, or the one
+        /// there is has just been refused - and a refusal to it is the answer, not something to
+        /// work around.</summary>
+        Login,
+
+        /// <summary>A write. Carries the token and renews it once, but is never repeated after a
+        /// failure that leaves it unclear whether the server acted.</summary>
+        Write,
+
+        /// <summary>A read. Carries the token, renews it once, and survives one dropped
+        /// connection.</summary>
+        Read,
+    }
+
+    /// <summary>
+    /// Sends one request: applies the bearer token, renews it when the server says it has expired,
+    /// and gives a read a second chance at a dropped connection.
+    /// </summary>
+    /// <param name="build">Builds the request. Called again for each attempt, an
+    /// <see cref="HttpRequestMessage"/> being single-use.</param>
+    /// <param name="completion">Whether the task completes on the headers or the whole body.</param>
+    /// <param name="mode">Which credential the request carries and what it survives.</param>
+    /// <param name="path">The request path, for messages.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The response, for the caller to check and dispose.</returns>
+    /// <exception cref="AppError">Thrown when the server could not be reached at all.</exception>
+    /// <remarks>
+    /// <para>
+    /// Every request goes through here, which is what keeps the token in one place: applied at the
+    /// moment of sending rather than pinned to the client, it cannot be left off a request and
+    /// cannot be swapped underneath one that is already in flight.
+    /// </para>
+    /// <para>
+    /// <b>A 401 is replayed even for a write, and that does not contradict "a POST is never
+    /// retried".</b> That rule is about failures which leave it unknown whether the server acted -
+    /// a timeout, a connection dropped mid-request - where a second attempt risks applying the
+    /// change twice. A 401 is the opposite: an explicit refusal, decided before the request was
+    /// carried out, so replaying it with a fresh token cannot push a chapter list twice. Exactly
+    /// once, though - a second 401 is a real refusal and is reported rather than turned into a
+    /// login loop against a server that is simply saying no.
+    /// </para>
+    /// </remarks>
+    private async Task<HttpResponseMessage> SendAsync(
+        Func<HttpRequestMessage> build, HttpCompletionOption completion, SendMode mode, string path,
+        CancellationToken ct)
+    {
+        var renewed = false;
+        var attempt = 1;
+        while (true)
         {
-            return await _client.PostAsJsonAsync(_connection.Root + path, body, Json, ct);
-        }
-        catch (Exception ex) when (IsTransient(ex))
-        {
-            throw Unreachable(ex);
+            HttpResponseMessage response;
+            try
+            {
+                using var request = build();
+                if (mode != SendMode.Login && _token != null)
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
+                response = await _client.SendAsync(request, completion, ct);
+            }
+            catch (Exception ex) when (mode == SendMode.Read && attempt < ReadAttempts
+                                       && IsTransient(ex) && !ct.IsCancellationRequested)
+            {
+                attempt++;
+                _log?.Invoke($"Audiobookshelf: {path} failed ({ex.Message}); retrying");
+                await Task.Delay(RetryPause, ct);
+                continue;
+            }
+            catch (Exception ex) when (IsTransient(ex))
+            {
+                throw Unreachable(ex);
+            }
+
+            if (response.StatusCode != HttpStatusCode.Unauthorized || renewed || !CanRenewToken(mode))
+                return response;
+
+            response.Dispose();
+            renewed = true;
+            await RenewTokenAsync(ct);
         }
     }
 
@@ -226,18 +395,26 @@ public sealed class AbsSession : IDisposable
     /// <exception cref="AppError">Thrown when the download fails, in which case the partial file
     /// has already been removed.</exception>
     /// <remarks>
+    /// <para>
     /// <see cref="HttpCompletionOption.ResponseHeadersRead"/> is what takes the body out of
     /// <see cref="RequestTimeout"/>: an audiobook is a gigabyte and a fixed deadline over the whole
     /// transfer would be a guess about the user network. What bounds a stalled download instead is
     /// Ctrl+C, which every other long step of a run is bounded by too.
+    /// </para>
+    /// <para>
+    /// Only the request is renewed and retried, never the transfer: once the headers are back the
+    /// token has done its work and the server does not check it again, so a failure part way
+    /// through a gigabyte is a transfer to report rather than one to restart from nothing.
+    /// </para>
     /// </remarks>
     public async Task<long> DownloadAsync(
         string path, string destination, Action<long>? onProgress, CancellationToken ct)
     {
         try
         {
-            using var response = await _client.GetAsync(
-                _connection.Root + path, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var response = await SendAsync(
+                () => new HttpRequestMessage(HttpMethod.Get, _connection.Root + path),
+                HttpCompletionOption.ResponseHeadersRead, SendMode.Read, path, ct);
             await EnsureSuccessAsync(response, "GET", path, ct);
 
             await using var source = await response.Content.ReadAsStreamAsync(ct);
@@ -310,7 +487,13 @@ public sealed class AbsSession : IDisposable
 
         var hint = response.StatusCode switch
         {
-            HttpStatusCode.Unauthorized => " - the credentials were refused",
+            // An expired token has already been renewed and the request replayed by the time this
+            // runs, so a 401 arriving here is the credential itself being refused. Which one that
+            // is worth naming: an API key is all the run was given, and Audiobookshelf lets a key
+            // be created with an expiry date, so "refused" and "expired" look identical from here.
+            HttpStatusCode.Unauthorized => _connection.ApiKey != null
+                ? " - the API key was refused; an Audiobookshelf key can carry an expiry date"
+                : " - the credentials were refused",
             HttpStatusCode.Forbidden => " - this account may not do that",
             HttpStatusCode.NotFound => " - no such item on this server",
             _ => "",
@@ -353,6 +536,6 @@ public sealed class AbsSession : IDisposable
     private AppError Unreachable(Exception ex)
         => new($"Audiobookshelf at {_connection.Root} could not be reached: {ex.Message}");
 
-    /// <summary>Releases the HTTP client and with it the token held in its default headers.</summary>
+    /// <summary>Releases the HTTP client and any transport it was given.</summary>
     public void Dispose() => _client.Dispose();
 }

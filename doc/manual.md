@@ -1245,10 +1245,16 @@ carries on.
 
 `--abs-key <key>`
 : An API key to authenticate with, made in Audiobookshelf under settings →
-  users → API keys.
+  users → API keys. A key given an expiry date stops working when it reaches it,
+  and a run that meets that says the key was refused — there is nothing it can do
+  but tell you.
 
 `--abs-user <name>`, `--abs-password <pw>`
-: Log in with an account instead. Either a key or a username, not both.
+: Log in with an account instead. Either a key or a username, not both. A run
+  stays signed in for as long as it takes: recent Audiobookshelf servers issue a
+  session that lasts an hour, which is shorter than a job of more than two or
+  three books, so the run quietly signs in again whenever the server says the old
+  session has run out.
 
 `--abs-temp <dir>`
 : Where the temporary downloads go; the system temporary folder by default. An
