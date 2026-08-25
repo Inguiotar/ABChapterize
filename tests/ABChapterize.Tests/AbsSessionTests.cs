@@ -131,7 +131,7 @@ public sealed class AbsSessionTests
             _ => Answering(HttpStatusCode.OK),               // and asks again, with the new token
         });
         using var session = LoggingIn(transport);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
 
         await session.GetAsync<object>("/api/libraries", CancellationToken.None);
 
@@ -164,7 +164,7 @@ public sealed class AbsSessionTests
             _ => Answering(HttpStatusCode.OK),
         });
         using var session = LoggingIn(transport);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
 
         await session.PostAsync("/api/items/1/chapters", new { }, CancellationToken.None);
 
@@ -191,7 +191,7 @@ public sealed class AbsSessionTests
         using var session = LoggingIn(transport);
 
         var error = await Assert.ThrowsAsync<AppError>(
-            () => session.OpenAsync(needsUpdate: false, CancellationToken.None));
+            () => session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None));
 
         Assert.Contains("401", error.Message);
         Assert.Contains("credentials were refused", error.Message);
@@ -214,7 +214,7 @@ public sealed class AbsSessionTests
         using var session = new AbsSession(AbsConnection.Resolve(Server, "key", null, null), transport);
 
         var error = await Assert.ThrowsAsync<AppError>(
-            () => session.OpenAsync(needsUpdate: false, CancellationToken.None));
+            () => session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None));
 
         Assert.Contains("API key was refused", error.Message);
         Assert.DoesNotContain(transport.Seen, r => r.Path == "/login");
@@ -238,7 +238,7 @@ public sealed class AbsSessionTests
         });
         using var session = LoggingIn(transport, Retrying);
 
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
 
         Assert.Equal(
             [("POST", "/login", null), ("POST", "/login", null),
@@ -256,7 +256,7 @@ public sealed class AbsSessionTests
         using var session = LoggingIn(transport);
 
         var error = await Assert.ThrowsAsync<AppError>(
-            () => session.OpenAsync(needsUpdate: false, CancellationToken.None));
+            () => session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None));
 
         Assert.Contains("could not be reached", error.Message);
         Assert.Single(transport.Seen);
@@ -278,7 +278,7 @@ public sealed class AbsSessionTests
         using var session = LoggingIn(transport, AbsRetryPolicy.Of(minutes: 0.002, pauseSeconds: 0.01));
 
         await Assert.ThrowsAsync<AppError>(
-            () => session.OpenAsync(needsUpdate: false, CancellationToken.None));
+            () => session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None));
 
         Assert.InRange(transport.Seen.Count, 2, 200);
     }
@@ -298,7 +298,7 @@ public sealed class AbsSessionTests
             _ => Answering(HttpStatusCode.OK),
         });
         using var session = LoggingIn(transport, Retrying);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
 
         await session.GetAsync<object>("/api/libraries", CancellationToken.None);
 
@@ -324,7 +324,7 @@ public sealed class AbsSessionTests
             _ => Answering(status),
         });
         using var session = LoggingIn(transport, Retrying);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
 
         await Assert.ThrowsAsync<AppError>(
             () => session.GetAsync<object>("/api/libraries", CancellationToken.None));
@@ -352,7 +352,7 @@ public sealed class AbsSessionTests
             _ => Answering(HttpStatusCode.OK),
         });
         using var session = LoggingIn(transport, Retrying);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
 
         await session.PostAsync("/api/items/1/chapters", new { }, CancellationToken.None);
 
@@ -377,7 +377,7 @@ public sealed class AbsSessionTests
             },
         });
         using var session = LoggingIn(transport, Retrying);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
         var destination = Path.Combine(Path.GetTempPath(), $"abchapterize-test-{Guid.NewGuid():N}.bin");
 
         try
@@ -412,7 +412,7 @@ public sealed class AbsSessionTests
             _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[4096]) },
         });
         using var session = LoggingIn(transport, Retrying);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
         var destination = Path.Combine(Path.GetTempPath(), $"abchapterize-test-{Guid.NewGuid():N}.bin");
 
         try
@@ -443,7 +443,7 @@ public sealed class AbsSessionTests
             _ => Answering(HttpStatusCode.Forbidden),
         });
         using var session = LoggingIn(transport);
-        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        await session.OpenAsync(needsDownload: true, needsUpdate: false, CancellationToken.None);
 
         var error = await Assert.ThrowsAsync<AppError>(
             () => session.GetAsync<object>("/api/libraries", CancellationToken.None));

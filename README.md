@@ -100,9 +100,11 @@ Prebuilt binaries for Windows and Linux are available on the
   afterwards. Nothing on the server changes but the chapter list. This mode takes
   any format ffmpeg can decode, `.flac` and `.ogg` included, because the marks are
   going into the server's database rather than into the file. For a shelf you keep
-  here *and* serve from Audiobookshelf, `--abs-push` marks the local files as usual
-  and tells the server too, while `--abs-push-only` sends marks a book already has,
-  either way round — books on the server, or local files matched to it by their tags.
+  here *and* serve from Audiobookshelf, marks travel in both directions: `--abs-push`
+  marks the local files as usual and tells the server too, `--abs-push-only` sends
+  marks a book already has, and `--abs-pull` takes the server's list and puts it into
+  the file. Pull and push together reconcile a shelf — each side ends up with the same
+  chapters, and running it twice does nothing the second time.
 - **Windows and Linux**, single self-contained executable. Linux ARM64 and
   Apple Silicon build from source as well, untested and unreleased — see
   [Building from source](#building-from-source).
@@ -191,6 +193,12 @@ abchapterize --abs-push --recurse "D:\Audiobooks"
 # Books you already marked locally, whose chapters the server has not got:
 abchapterize --abs-push-only --recurse "D:\Audiobooks"
 
+# The other direction: chapters the server has, put back into the files:
+abchapterize --abs-pull-only --recurse "D:\Audiobooks"
+
+# Or both at once - detect what neither side has, and leave them agreeing:
+abchapterize --abs-pull --abs-push --recurse "D:\Audiobooks"
+
 # Marks that should be one per numbered chapter (say, from an earlier run),
 # but you're not sure they all landed right? Check each against the audio;
 # only the ones that don't check out get redone:
@@ -270,6 +278,8 @@ document that long. Grouped below exactly as `--help` groups them:
 | `-A`, `--abs` | Work on books held by an Audiobookshelf server rather than files on this machine. Each selected book is fetched to a temporary copy, processed as usual, and its finished marks sent back; the copy is then deleted. The trailing arguments become selectors — `library:NAME`, `series:NAME`, `collection:NAME`, `item:ID`, `title:NAME`, `all` — and anything unprefixed is read as a title. A book the server already has chapters for is skipped without `--force`, and a book held as more than one audio file is passed over. Any format ffmpeg can decode is accepted here, not just the ones chapter marks can be written into. See the [manual](doc/manual.md#audiobookshelf). |
 | `--abs-push` | Mark local files as usual — writing the marks into each file — and send the finished list to the server as well. Each file is matched to the server's libraries as below; one that matches nothing is written anyway and simply not sent. Only a complete chapter set is sent, so a file left with a gap keeps its partial marks and is pushed once it is finished. Not combinable with `--abs`. |
 | `--abs-push-only` | Send the server the marks a book already carries, detecting nothing. With `--abs` the selected books are fetched and read; without it, the local files named are matched to the server's libraries by their album tag, title tag, folder name or file name. |
+| `--abs-pull` | Ask Audiobookshelf what chapters it holds for each local file's book and treat them as the file's own — the server's list wins, the file's fills in where it has none. A file the run then has nothing to detect for is written the pulled list. A local file whose play time differs from the book's by more than a minute is passed over: it is a part of a split book, or a different edition, and the server's marks describe neither. Not combinable with `--abs`. |
+| `--abs-pull-only` | Write each local file the chapters Audiobookshelf holds for it and change nothing else, detecting nothing. Unlike an ordinary run this replaces marks the file already has — that being the point of it. |
 | `--abs-url <url>` | Which server: `http://host:13378`, `host:13378`, or just `host`. |
 | `--abs-key <key>` | An API key to authenticate with... |
 | `--abs-user <name>`, `--abs-password <pw>` | ...or an account to log in as. |

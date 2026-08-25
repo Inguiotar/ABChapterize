@@ -251,8 +251,8 @@ public sealed class FileProcessor
 
         if (_options.Import)
             await RunImportAsync(files, ffmpeg, ct);
-        else if (_options.AbsPushOnly)
-            await RunAbsPushOnlyAsync(files, ffmpeg, ct);
+        else if (_options.AbsPushOnly || _options.AbsPullOnly)
+            await RunWithoutDetectionAsync(files, ffmpeg, ct);
         else
             await RunDetectionAsync(files, ffmpeg, ct);
 
@@ -319,13 +319,20 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// The --abs-push-only pipeline: no model is loaded and nothing is detected, so each file is an
-    /// ffprobe, a look-up on the server and one request.
+    /// The pipeline the two server-only modes share: no model is loaded and nothing is detected, so
+    /// each file is an ffprobe, a look-up on the server and one request.
     /// </summary>
-    /// <param name="files">The files, or the books, to send marks for.</param>
+    /// <param name="files">The files, or the books, to move marks for.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
-    private async Task RunAbsPushOnlyAsync(List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
+    /// <remarks>
+    /// One loop for <c>--abs-push-only</c> and <c>--abs-pull-only</c> rather than one each: they
+    /// differ only in which side of the exchange holds the good copy, and that difference is
+    /// settled by <see cref="PlanFor"/>. What they have in common - no model, no detector, one
+    /// file at a time - is all this method is.
+    /// </remarks>
+    private async Task RunWithoutDetectionAsync(
+        List<PendingFile> files, FfmpegClient ffmpeg, CancellationToken ct)
     {
         foreach (var file in files)
         {
@@ -790,9 +797,13 @@ public sealed class FileProcessor
     /// local file. Carried in the context rather than passed alongside it because the two places
     /// that need it - the merge that settles which marks the book already has, and the write that
     /// sends the finished ones back - sit at opposite ends of the pipeline.</param>
+    /// <param name="Pull">What <c>--abs-pull</c> found for this local file, or null when the run
+    /// does not pull. Carried for the same reason as <paramref name="Abs"/>, and it holds both
+    /// chapter lists as they stood before the merge - which is what lets the commit decide whether
+    /// either side has anything left to be given.</param>
     private readonly record struct FileContext(
         string File, string Name, WorkTracker Work, DetectionLog Logs, MediaInfo Info,
-        FfmpegClient Ffmpeg, CliOptions Options, AbsLocalCopy? Abs = null);
+        FfmpegClient Ffmpeg, CliOptions Options, AbsLocalCopy? Abs = null, AbsPull? Pull = null);
 
     /// <summary>
     /// Processes a single audiobook file, prints its summary line and - once it is finished for
@@ -953,6 +964,12 @@ public sealed class FileProcessor
         /// <summary>Send the marks it already carries to Audiobookshelf and change nothing
         /// (--abs-push-only).</summary>
         Push,
+
+        /// <summary>
+        /// Detect nothing and give each side the chapter list the pull settled on, where it has
+        /// not got it already (<c>--abs-pull</c>, <c>--abs-pull-only</c>).
+        /// </summary>
+        Reconcile,
     }
 
     /// <summary>Applies the "what happens to this file" policy - see <see cref="FilePlan"/>.</summary>
@@ -964,6 +981,12 @@ public sealed class FileProcessor
         // anything to decide. A book with no marks at all is caught where they are read.
         if (_options.AbsPushOnly)
             return FilePlan.Push;
+
+        // --abs-pull-only for the same reason from the other side: what the server holds is what the
+        // file gets, so the marks it already has are not a reason to leave it alone - they are the
+        // thing being replaced. A server with no chapters for it is caught where they are read.
+        if (_options.AbsPullOnly)
+            return FilePlan.Reconcile;
 
         // Auto-resume a ".missing-marks-<n>-<n>-..." file left by a previous run's unresolved
         // chapter-sequence gap: only the still-missing gap(s) are re-probed, the committed marks
@@ -977,7 +1000,14 @@ public sealed class FileProcessor
             return FilePlan.Resume;
         if (!EvaluateExistingChapters(ctx.Info).Skip)
             return FilePlan.Detect;
-        return _options.Verify ? FilePlan.Verify : FilePlan.Skip;
+        if (_options.Verify)
+            return FilePlan.Verify;
+        // Last, and only for a pulling run: the marks this file is "already" carrying may be the
+        // server's rather than its own, and a file the run has nothing to detect for still has to
+        // be given them - and the server told, where the two started out disagreeing. What there is
+        // left to do is worked out in ReconcileMarksAsync, which reports a skip when the answer is
+        // nothing at all.
+        return _options.AbsPull ? FilePlan.Reconcile : FilePlan.Skip;
     }
 
     /// <summary>
@@ -1004,6 +1034,10 @@ public sealed class FileProcessor
         var info = await ProbeAndLogAsync(file, ffmpeg, log, ct);
         // Between the probe and every decision that reads it, because "what marks does this book
         // already have" is a question the server has the better answer to - see AbsChapterMerge.
+        // The two ways a book can arrive from a server meet here and nowhere else: fetched whole
+        // (--abs), or matched to a file already on this machine (--abs-pull). One merge rule
+        // afterwards, so the rest of the run cannot tell which of them it was.
+        AbsPull? pull = null;
         if (abs != null)
         {
             var (merged, note) = _abs!.Merge(info, abs);
@@ -1011,8 +1045,25 @@ public sealed class FileProcessor
             if (note.Length > 0)
                 log?.Invoke(note);
         }
+        else if (_options.UsesAbsPull)
+        {
+            pull = await _abs!.PullAsync(file, info, ct);
+            log?.Invoke(pull.Value.Note);
+            // Only where a book was settled on. A pull that found none - or refused the one it
+            // found - has nothing to merge, and running the rule anyway would answer with "the
+            // server has no chapters", which reads as a fact about the book rather than as what it
+            // is: this file never got as far as asking one.
+            if (pull.Value.Book != null)
+            {
+                var (merged, note) = AbsChapterMerge.Apply(info, pull.Value.FromServer);
+                info = merged;
+                if (note.Length > 0)
+                    log?.Invoke(note);
+            }
+        }
         if (await ResolveXheAacDecoderAsync(
-                new FileContext(file, name, work, new DetectionLog(log, null), info, ffmpeg, options, abs),
+                new FileContext(
+                    file, name, work, new DetectionLog(log, null), info, ffmpeg, options, abs, pull),
                 ct)
             is not { } probed)
             return null;
@@ -1038,15 +1089,19 @@ public sealed class FileProcessor
     private async Task<string?> CommitOneAsync(
         FileContext ctx, ChapterDetector? detector, FilePlan plan, Stopwatch watch, CancellationToken ct)
     {
-        // Also the null-detector case, and not by coincidence: --abs-push-only is the one mode that
-        // loads no model, and FilePlan.Push is the only plan PlanFor gives it.
+        if (plan is FilePlan.Reconcile)
+            return await ReconcileMarksAsync(ctx, watch, ct);
+
+        // Also the null-detector case, and not by coincidence: of the two modes that load no model,
+        // --abs-pull-only is answered above and --abs-push-only here, PlanFor giving each of them
+        // exactly one plan.
         if (plan is FilePlan.Push || detector == null)
             return await PushExistingMarksAsync(ctx, watch, ct);
 
         if (plan is FilePlan.Resume)
             return await ProcessResumeAsync(ctx, detector, watch, ct);
 
-        if (await DetectChaptersAsync(ctx, detector, plan, ct) is not { } outcome)
+        if (await DetectChaptersAsync(ctx, detector, plan, watch, ct) is not { } outcome)
             return null;
         var (result, dropped, note) = outcome;
 
@@ -1108,6 +1163,96 @@ public sealed class FileProcessor
         // separator comes off with it, the clause being the only thing this line has to say.
         var note = await _abs!.PushAsync(book, chapters, ctx.Info.DurationSeconds, ct);
         _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {note.TrimStart(',', ' ')}");
+        return null;
+    }
+
+    /// <summary>
+    /// The <c>--abs-pull</c> outcome for one file that has nothing left to detect: give each side
+    /// the chapter list the pull settled on, where it has not got it already.
+    /// </summary>
+    /// <param name="ctx">The file's context, its <see cref="FileContext.Info"/> already merged so
+    /// that its chapter list is the one the pull settled on.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Always null: the file keeps its name, this path having formed no opinion about
+    /// chapter numbers and so none about whether any are missing.</returns>
+    /// <remarks>
+    /// <para>
+    /// Two rules, one line each, and the symmetry is the point: <b>write to the file unless the
+    /// marks came from the file and are unchanged; send to the server unless they came from the
+    /// server and are unchanged.</b> Everything this mode does falls out of those - a file with no
+    /// marks gets the server's list, a server with no chapters gets the file's, two sides that
+    /// already agree get nothing and the file is reported as skipped.
+    /// </para>
+    /// <para>
+    /// The comparison is against the lists as they stood <em>before</em> the merge, which is why
+    /// <see cref="AbsPull"/> carries both. By the time this runs, <see cref="FileContext.Info"/>
+    /// holds the merged list for everything downstream, and asking it what the file itself had
+    /// would get the answer the merge just put there.
+    /// </para>
+    /// </remarks>
+    private async Task<string?> ReconcileMarksAsync(
+        FileContext ctx, Stopwatch watch, CancellationToken ct)
+    {
+        var pull = ctx.Pull ?? default;
+        var settled = ctx.Info.ExistingChapters;
+        // No book means no side to take marks from and none to send them to, whether the file
+        // matched nothing or matched something that turned out to be different audio. Its own note
+        // is the only one that says which, so it is what the skip line carries.
+        if (pull.Book == null)
+        {
+            ReportSkipped(ctx.Work, ctx.Name, pull.Note, hint: "");
+            return null;
+        }
+        if (settled.Count == 0)
+        {
+            ReportSkipped(ctx.Work, ctx.Name,
+                "neither this file nor Audiobookshelf has any chapter marks", hint: "");
+            return null;
+        }
+
+        // Which side the settled list came from, asked of the merge rule rather than of the list:
+        // the server's wins whenever it has one, so a non-empty server list is what "these are the
+        // server's marks" means.
+        var fromServer = pull.FromServer.Count > 0;
+        var source = fromServer ? "Audiobookshelf" : "the file";
+
+        var writeIt = !AbsChapterMerge.SameMarks(settled, pull.FromFile);
+        var sendIt = _options.AbsPush && !AbsChapterMerge.SameMarks(settled, pull.FromServer);
+        if (!writeIt && !sendIt)
+        {
+            ReportSkipped(ctx.Work, ctx.Name,
+                fromServer
+                    ? $"has the {settled.Count} chapter mark(s) Audiobookshelf holds"
+                    : $"Audiobookshelf has no chapters for this book; the file keeps its {settled.Count}",
+                hint: "");
+            return null;
+        }
+        if (_options.DryRun)
+        {
+            _progress.FinishWithSummary(ctx.Work,
+                $"{ctx.Name}: DRY RUN - would take {settled.Count} chapter mark(s) from {source}"
+                + (writeIt ? " and write them to the file" : "")
+                + (sendIt ? " and send them to ABS" : "") + ":"
+                + $"{Environment.NewLine}{FormatChapterListing(settled)}");
+            return null;
+        }
+
+        RecordProcessed(watch);
+        var writeNote = writeIt
+            ? await WriteChaptersIfTheContainerHoldsThemAsync(ctx, [.. settled], ct)
+            : "";
+        // complete: true - there is no gap to speak of. This path forms no opinion about chapter
+        // numbers at all, so it cannot be holding a partial sequence back the way a detection run
+        // that failed to close a gap is (see PushLocalFileAsync).
+        var pushNote = sendIt ? await PushLocalFileAsync(ctx, [.. settled], complete: true, ct) : "";
+        // Where nothing was written the source is not worth naming: a list this file already had is
+        // its own by definition, and "from the file already in the file" is what saying so gets.
+        _progress.FinishWithSummary(ctx.Work,
+            $"{ctx.Name}: " + (writeIt
+                ? $"{settled.Count} chapter mark(s) from {source} written to the file"
+                : $"{settled.Count} chapter mark(s) already in the file")
+            + writeNote + pushNote);
         return null;
     }
 
@@ -1265,15 +1410,17 @@ public sealed class FileProcessor
     /// <param name="plan">What is to happen to this file. Never <see cref="FilePlan.Skip"/>, which
     /// is settled before either hook runs, nor <see cref="FilePlan.Resume"/>, which never reaches
     /// this far.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average - only
+    /// wanted by the one branch that finishes a file here rather than handing a result back.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detection result and the note describing what happened to any existing
     /// marks, or null when the file was left alone - in which case it has already been counted
     /// and reported.</returns>
     private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> DetectChaptersAsync(
-        FileContext ctx, ChapterDetector detector, FilePlan plan, CancellationToken ct)
+        FileContext ctx, ChapterDetector detector, FilePlan plan, Stopwatch watch, CancellationToken ct)
     {
         if (plan is FilePlan.Verify)
-            return await VerifyThenDetectAsync(ctx, detector, ct);
+            return await VerifyThenDetectAsync(ctx, detector, watch, ct);
         var (_, dropped) = EvaluateExistingChapters(ctx.Info);
         return (await detector.DetectAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct), dropped, "");
     }
@@ -1398,11 +1545,12 @@ public sealed class FileProcessor
     /// </summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="detector">The detector borrowed for this file.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detection result and its discard note, or null when the file was left
     /// unchanged - in which case it has already been counted and reported.</returns>
     private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> VerifyThenDetectAsync(
-        FileContext ctx, ChapterDetector detector, CancellationToken ct)
+        FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
     {
         var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
         if (verify.Checked == 0 || verify.Passed)
@@ -1411,6 +1559,16 @@ public sealed class FileProcessor
             // that is the point of it, and the file then gets rewritten rather than skipped.
             if (verify.Outcomes.Any(m => m.CorrectedStartSeconds != null))
                 return await ApplyMarkFixesAsync(ctx, verify, ct);
+            // A pulling run has more to do than skip: the marks that just checked out may be the
+            // server's and not yet in the file, or the file's and not yet on the server. Verifying
+            // them was the "if present" half of --abs-pull --verify --abs-push; this is the rest.
+            if (_options.UsesAbsPull)
+            {
+                if (verify.Checked > 0)
+                    ctx.Logs.Write($"{verify.Checked} chapter mark(s) verified correct");
+                await ReconcileMarksAsync(ctx, watch, ct);
+                return null;
+            }
             var verifyNote = verify.Checked > 0
                 ? $"{verify.Checked} pre-existing chapter mark(s) verified correct"
                 : $"has {ctx.Info.ChapterCount} chapter mark(s) (none had a checkable number)";
@@ -1890,12 +2048,28 @@ public sealed class FileProcessor
     /// away, is reported in the summary line and nowhere else. Failing a written file over a
     /// push that did not happen would be the one outcome nobody wants.
     /// </para>
+    /// <para>
+    /// A run that also pulls has done the looking already, and its answer is used rather than
+    /// asked for again - which matters beyond saving a lookup, because the pull refuses a book
+    /// whose play time is not this file's (see <see cref="ABChapterize.Abs.AbsChapterPull"/>) and
+    /// re-matching here would walk straight past that refusal. It is also where the second half of
+    /// the reconciliation lives: a list the server already has is not sent back to it.
+    /// </para>
     /// </remarks>
     private async Task<string> PushLocalFileAsync(
         FileContext ctx, List<Chapter> chapters, bool complete, CancellationToken ct)
     {
         if (!complete)
             return ", not sent to ABS while chapters are missing";
+
+        if (ctx.Pull is { } pull)
+        {
+            if (pull.Book == null)
+                return $", not sent to ABS ({pull.Note})";
+            if (AbsChapterMerge.SameMarks(chapters, pull.FromServer))
+                return ", not sent to ABS (it already has these marks)";
+            return await _abs!.PushAsync(pull.Book, chapters, ctx.Info.DurationSeconds, ct);
+        }
 
         var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
         if (match.Book == null)

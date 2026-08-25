@@ -114,6 +114,90 @@ public sealed class AbsCliTests : IDisposable
     }
 
     /// <summary>
+    /// The pull modes work on local files, so the trailing arguments stay paths and no selector is
+    /// parsed - and <c>--abs-pull-only</c> is a run in its own right where <c>--abs-pull</c> is a
+    /// modifier on an ordinary one.
+    /// </summary>
+    [Fact]
+    public void ThePullModes_WorkOnLocalFilesAndKeepTheirPaths()
+    {
+        foreach (var mode in new[] { "--abs-pull", "--abs-pull-only" })
+        {
+            var options = CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", mode, _file])!;
+
+            Assert.True(options.UsesAbsPull);
+            Assert.True(options.UsesAbs);
+            Assert.False(options.Abs);
+            Assert.Single(options.Targets);
+            Assert.Empty(options.AbsSelectors);
+        }
+    }
+
+    /// <summary>
+    /// The point of the pair: pulling and pushing together is a reconciliation, so it has to parse.
+    /// </summary>
+    [Fact]
+    public void PullAndPush_AreTheOneCombinationOfModesThatIsAllowed()
+    {
+        var options = CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-pull", "--abs-push", "--verify", _file])!;
+
+        Assert.True(options.AbsPull);
+        Assert.True(options.AbsPush);
+        Assert.True(options.SendsMarksToAbs);
+    }
+
+    /// <summary>
+    /// Every other pairing is refused rather than silently resolved: each would either undo the
+    /// other or leave one of them looking as though it had been honoured.
+    /// </summary>
+    /// <param name="line">The command line after the connection options, space-separated.</param>
+    [Theory]
+    [InlineData("--abs --abs-pull all")]
+    [InlineData("--abs --abs-pull-only all")]
+    [InlineData("--abs-pull --abs-pull-only f")]
+    [InlineData("--abs-pull --abs-push-only f")]
+    [InlineData("--abs-pull-only --abs-push-only f")]
+    [InlineData("--abs-pull-only --abs-push f")]
+    [InlineData("--abs-pull --import f")]
+    [InlineData("--abs-pull --export f")]
+    [InlineData("--abs-pull-only --verify f")]
+    [InlineData("--abs-pull-only --force f")]
+    [InlineData("--abs-pull-only --lang de f")]
+    [InlineData("--abs-pull --no-op --filter m4b f")]
+    public void PullCombinationsThatContradictThemselves_AreRefused(string line)
+        => Assert.Throws<CliError>(() => CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", .. line.Split(' ')]));
+
+    /// <summary>
+    /// <c>--abs-pull-only</c> writes the file, so a backup of what it replaced is exactly the kind
+    /// of thing to want - unlike <c>--abs-push-only</c>, which changes no file and refuses it.
+    /// </summary>
+    [Fact]
+    public void PullOnly_AllowsABackupOfWhatItOverwrites()
+    {
+        var options = CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-pull-only", "--backup", _file])!;
+
+        Assert.True(options.Backup);
+        Assert.True(options.AbsPullOnly);
+    }
+
+    /// <summary>
+    /// The one mode that never writes to the server, which is what the up-front permission check
+    /// reads: an account that may not update items can still pull.
+    /// </summary>
+    [Fact]
+    public void PullOnly_NeverSendsMarksToTheServer()
+    {
+        var pulling = CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-pull-only", _file])!;
+
+        Assert.True(pulling.UsesAbs);
+        Assert.False(pulling.SendsMarksToAbs);
+    }
+
+    /// <summary>
     /// The retry budget defaults to three minutes and takes a value in minutes, decimal separator
     /// either way round like every other number this tool reads off a command line.
     /// </summary>

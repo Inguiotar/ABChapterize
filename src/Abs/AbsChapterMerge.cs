@@ -37,22 +37,29 @@ public static class AbsChapterMerge
     public const double SameMarkSeconds = 1.0;
 
     /// <summary>
-    /// Applies the merge rule to a freshly probed local copy.
+    /// Applies the merge rule to a freshly probed file.
     /// </summary>
-    /// <param name="info">What ffprobe found in the downloaded file.</param>
-    /// <param name="file">The book's audio file and the server's own chapter list.</param>
+    /// <param name="info">What ffprobe found in the file - the temporary copy in ABS mode, the
+    /// user's own file under <c>--abs-pull</c>.</param>
+    /// <param name="fromServer">The chapter list Audiobookshelf holds for the book, possibly
+    /// empty.</param>
     /// <returns>The media info the rest of the pipeline should see, and the one-line note for
     /// <c>--verbose</c>, or an empty note when there is nothing worth saying.</returns>
-    public static (MediaInfo Info, string Note) Apply(MediaInfo info, AbsBookFile file)
+    /// <remarks>
+    /// The same rule for both directions the marks can travel, and deliberately so: <c>--abs</c>
+    /// and <c>--abs-pull</c> ask the identical question - which of the two lists is this book's -
+    /// and an answer that depended on which mode was asking would be two rules wearing one name.
+    /// </remarks>
+    public static (MediaInfo Info, string Note) Apply(MediaInfo info, IReadOnlyList<Chapter> fromServer)
     {
         var fromFile = info.ExistingChapters;
-        if (file.Chapters.Count == 0)
+        if (fromServer.Count == 0)
             return (info, fromFile.Count > 0
                 ? $"Audiobookshelf has no chapters; using the {fromFile.Count} the file carries"
                 : "");
 
-        var merged = info with { ChapterCount = file.Chapters.Count, ExistingChapterList = file.Chapters };
-        return (merged, Describe(fromFile, file.Chapters));
+        var merged = info with { ChapterCount = fromServer.Count, ExistingChapterList = fromServer };
+        return (merged, Describe(fromFile, fromServer));
     }
 
     /// <summary>
@@ -84,4 +91,22 @@ public static class AbsChapterMerge
     private static bool Agree(IReadOnlyList<Chapter> left, IReadOnlyList<Chapter> right)
         => left.Count == right.Count
            && !left.Where((c, i) => Math.Abs(c.StartSeconds - right[i].StartSeconds) > SameMarkSeconds).Any();
+
+    /// <summary>
+    /// Whether one side already has exactly what the run settled on, titles included - the question
+    /// <c>--abs-pull</c> asks before rewriting a file or sending anything to the server.
+    /// </summary>
+    /// <param name="left">One list, in start order.</param>
+    /// <param name="right">The other, in start order.</param>
+    /// <remarks>
+    /// Stricter than <see cref="Agree"/>, and for the opposite reason. That one answers "are these
+    /// the same marks", where a differing title is noise; this one answers "is there anything left
+    /// to do", where it is not - a pull exists to give a file the list the server holds, titles and
+    /// all, and stopping short of the titles would leave the two sides disagreeing for ever. It
+    /// still converges: once the file has been written, its own list is what comes back off the
+    /// next probe and the answer becomes yes.
+    /// </remarks>
+    public static bool SameMarks(IReadOnlyList<Chapter> left, IReadOnlyList<Chapter> right)
+        => Agree(left, right)
+           && !left.Where((c, i) => !string.Equals(c.Title, right[i].Title, StringComparison.Ordinal)).Any();
 }

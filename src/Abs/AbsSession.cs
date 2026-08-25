@@ -149,6 +149,8 @@ public sealed class AbsSession : IDisposable
     /// <summary>
     /// Authenticates and checks that this account may do what ABS mode needs of it.
     /// </summary>
+    /// <param name="needsDownload">Whether the run intends to fetch audio files, which only ABS
+    /// mode does.</param>
     /// <param name="needsUpdate">Whether the run intends to write chapters back, which not every
     /// account may do.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -157,9 +159,11 @@ public sealed class AbsSession : IDisposable
     /// <remarks>
     /// The permission check is here, before the first book is downloaded, on purpose: an account
     /// without update rights fails at the very last step of a run that has already spent an hour
-    /// transcribing, and finding that out first costs one request.
+    /// transcribing, and finding that out first costs one request. Both rights are asked for only
+    /// where the run actually uses them, so an account that may do exactly what was asked of it is
+    /// never turned away for something it was never going to be told to do.
     /// </remarks>
-    public async Task OpenAsync(bool needsUpdate, CancellationToken ct)
+    public async Task OpenAsync(bool needsDownload, bool needsUpdate, CancellationToken ct)
     {
         _token = _connection.ApiKey ?? await LogInAsync(ct);
 
@@ -168,7 +172,7 @@ public sealed class AbsSession : IDisposable
                 ?? throw new AppError($"{_connection.Describe} accepted the credentials but named no account.");
 
         var permissions = _user.Permissions;
-        if (permissions is { Download: false })
+        if (needsDownload && permissions is { Download: false })
             throw new AppError(
                 $"The Audiobookshelf account \"{_user.Username}\" may not download audio files, "
                 + "which ABS mode needs in order to look at a book at all.");

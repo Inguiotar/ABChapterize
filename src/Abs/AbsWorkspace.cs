@@ -88,9 +88,11 @@ public sealed class AbsWorkspace : IDisposable
     public string Describe => _session.Describe;
 
     /// <inheritdoc cref="AbsSession.OpenAsync"/>
+    /// <param name="needsDownload">Whether the run intends to fetch audio files.</param>
     /// <param name="needsUpdate">Whether the run intends to write chapters back.</param>
     /// <param name="ct">Cancellation token.</param>
-    public Task OpenAsync(bool needsUpdate, CancellationToken ct) => _session.OpenAsync(needsUpdate, ct);
+    public Task OpenAsync(bool needsDownload, bool needsUpdate, CancellationToken ct)
+        => _session.OpenAsync(needsDownload, needsUpdate, ct);
 
     /// <inheritdoc cref="AbsCatalog.SelectAsync"/>
     /// <param name="selectors">The selectors, in the order they were typed.</param>
@@ -109,6 +111,12 @@ public sealed class AbsWorkspace : IDisposable
     /// <param name="ct">Cancellation token.</param>
     public Task<AbsBookFile> DescribeFileAsync(AbsBook book, CancellationToken ct)
         => _catalog.LoadFileAsync(book, ct);
+
+    /// <inheritdoc cref="AbsCatalog.LoadChaptersAsync"/>
+    /// <param name="book">The book to look at.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public Task<IReadOnlyList<Chapter>> ChaptersOfAsync(AbsBook book, CancellationToken ct)
+        => _catalog.LoadChaptersAsync(book, ct);
 
     /// <summary>
     /// Downloads one book's audio file into a folder of its own.

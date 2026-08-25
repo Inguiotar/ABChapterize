@@ -1117,11 +1117,20 @@ though it does, and each of them is a download and an hour of transcription.
 `abchapterize -A -O --summary "library:Discworld"` lists what would be processed
 and what would be skipped, and fetches no audio at all.
 
-Three modes talk to a server, and they differ in where the marks end up. `--abs`
+Five modes talk to a server, and they differ in where the marks end up. `--abs`
 works on the server's own books, which is the whole of this section. The other
-two work on files on this machine: `--abs-push` marks them as usual and tells
-the server as well, and `--abs-push-only` sends the server the marks they
-already carry without detecting anything. No two of them can be combined.
+four work on files on this machine:
+
+| Mode | The marks go |
+| --- | --- |
+| [`--abs-push`](#marking-local-files-and-telling-the-server) | into each file as usual, *and* to the server |
+| [`--abs-push-only`](#sending-marks-a-book-already-has) | from the file to the server, nothing detected |
+| [`--abs-pull`](#taking-the-servers-marks) | from the server into the file, and detection fills the gaps |
+| [`--abs-pull-only`](#taking-the-servers-marks) | from the server into the file, nothing detected |
+
+`--abs-pull` and `--abs-push` are the one pair that combine, and together they
+reconcile a book: each side ends up with the same list. No other two can be given
+at once.
 
 #### Selecting books
 
@@ -1234,6 +1243,63 @@ carries on.
   Because nothing is detected, `--abs-push-only` cannot be combined with the
   detection options, nor with `--import`, `--export`, `--force` or `--backup`.
   `--dry-run` works and reports what would be sent.
+
+#### Taking the server's marks
+
+`--abs-pull`
+: Before working on a local file, ask Audiobookshelf what chapters it holds for
+  that book and treat them as the file's own. The same rule as above decides
+  which list counts: **the server's wins where it has one, the file's fills in
+  where it has none.** A file the run then has nothing to detect for is written
+  the pulled list, so the two sides stop disagreeing.
+
+  Use it to put marks you made — or edited in Audiobookshelf's web interface —
+  back into the files themselves, without re-detecting books that are already
+  done. Everything else about the run is unchanged: a book neither side has
+  marked is detected exactly as it would be otherwise.
+
+  Each file is matched against the server's libraries the same way
+  [`--abs-push-only`](#sending-marks-a-book-already-has) matches them, with one
+  extra test: **the two must be the same recording.** A local file whose play
+  time differs from the book's by more than a minute is passed over with a note.
+  Audiobookshelf's marks are positions on the whole item's timeline, and every
+  part of a split book carries the same album tag as the whole — so without that
+  test, a five-minute part would be given a whole book's chapter list, nearly all
+  of it past its own end. An abridgement or a different edition of the same title
+  is caught by it too.
+
+`--abs-pull-only`
+: Write each file the marks Audiobookshelf holds for it and change nothing else.
+  No Whisper model is loaded and nothing is detected. A book the server has no
+  chapters for, or that no local file matches, is skipped with a note.
+
+  Unlike an ordinary run it does *not* leave an already-marked file alone —
+  replacing what the file has with what the server has is the whole of what it
+  was asked to do. `--backup` keeps the old version beside the new one.
+
+##### Reconciling both ways
+
+`--abs-pull --abs-push` together make the file and the server agree, and it is
+the one combination of modes that is allowed. In order:
+
+1. Pull the marks from Audiobookshelf; where it has none, the file's own are used.
+2. With `--verify`, the marks that were used are checked (see [Handling of
+   pre-existing chapters](#handling-of-pre-existing-chapters)).
+3. The file is processed if there is anything left to do.
+4. The finished list is written to the file — unless it came from the file and
+   nothing changed it.
+5. The finished list is sent to the server — unless it came from the server and
+   nothing changed it.
+
+The last two lines are the whole of it. A file with no marks and a server that
+has them gets them written in and nothing is sent; a file with marks and a server
+that has none has them sent and nothing is written; two sides that already agree
+are reported as skipped and neither is touched. Running it twice over the same
+shelf does nothing the second time.
+
+As always with `--abs-push`, a book left with an unresolved chapter-sequence gap
+is not sent, and a push that cannot happen never fails a file that was marked
+successfully.
 
 #### Connecting
 

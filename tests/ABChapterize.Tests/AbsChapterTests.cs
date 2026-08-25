@@ -23,8 +23,7 @@ public sealed class AbsChapterTests
 
     /// <summary>An audio file record carrying the given server-side chapter list.</summary>
     /// <param name="chapters">What Audiobookshelf holds for the book.</param>
-    private static AbsBookFile Held(params Chapter[] chapters)
-        => new("42", "book.m4b", 1000, chapters);
+    private static IReadOnlyList<Chapter> Held(params Chapter[] chapters) => chapters;
 
     [Fact]
     public void Merge_ServerListWins()
@@ -90,6 +89,30 @@ public sealed class AbsChapterTests
 
         Assert.NotEqual("", note);
     }
+
+    /// <summary>
+    /// <see cref="AbsChapterMerge.SameMarks"/> answers a different question from the note above it
+    /// - "is there anything left to do" rather than "are these the same marks" - so it keeps the
+    /// one-second tolerance on positions and adds the titles the note ignores.
+    /// </summary>
+    [Fact]
+    public void SameMarks_ToleratesADriftedPositionButNotADifferentTitle()
+    {
+        Chapter[] settled = [new Chapter(0, "Intro"), new Chapter(100, "Chapter 1")];
+
+        Assert.True(AbsChapterMerge.SameMarks(
+            settled, [new Chapter(0.4, "Intro"), new Chapter(100.5, "Chapter 1")]));
+        Assert.False(AbsChapterMerge.SameMarks(
+            settled, [new Chapter(0, "Opening"), new Chapter(100, "Chapter 1")]));
+        Assert.False(AbsChapterMerge.SameMarks(settled, [new Chapter(0, "Intro")]));
+        Assert.False(AbsChapterMerge.SameMarks(settled, []));
+    }
+
+    /// <summary>Two empty lists are the same marks, which is what makes "the server has nothing and
+    /// so has the file" a skip rather than an empty write.</summary>
+    [Fact]
+    public void SameMarks_TwoEmptyListsAgree()
+        => Assert.True(AbsChapterMerge.SameMarks([], []));
 
     [Fact]
     public void Build_DerivesEachEndFromTheNextStart()

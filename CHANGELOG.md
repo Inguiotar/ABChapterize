@@ -27,6 +27,25 @@ earn a round number.
   reported and passed over. `--no-op` lists what a selector picked without fetching anything,
   which is worth doing before a selector that turns out to name a hundred books.
 
+- **`--abs-pull` brings Audiobookshelf's chapters back into your files.** The mirror of
+  `--abs-push`: before working on a local file, the run asks the server what chapters it holds
+  for that book and treats them as the file's own — the server's list wins, the file's fills in
+  where the server has none. A file the run then has nothing to detect for is written the pulled
+  list, so an edit made in Audiobookshelf's web interface ends up in the audio file as well.
+  `--abs-pull-only` does just that and no detection at all, for putting a whole shelf's marks
+  back in one pass.
+
+  **`--abs-pull --abs-push` reconciles both directions at once**, and it is the one combination
+  of the server modes that is allowed: whatever list the run settles on is written to the file
+  unless the file already had it, and sent to the server unless the server already had it. Two
+  sides that agree are left alone, so running it twice over the same shelf does nothing the
+  second time. `--verify` fits in the middle of that, checking the marks before either side is
+  given them.
+
+  A local file whose play time differs from the book's by more than a minute is passed over
+  rather than marked: it is one part of a split book, or a different edition, and the server's
+  chapter list describes neither.
+
 - **`--abs-retry` waits out a server that is not answering.** Every exchange with
   Audiobookshelf — signing in, listing a library, fetching a book, sending its chapters — is
   tried again for up to three minutes by default, a minute between attempts, so a server

@@ -184,11 +184,38 @@ author, cover, tags and the audio file itself are never touched.</p>
 though it does, and each of them is a download and an hour of transcription.
 <code>abchapterize -A -O --summary &quot;library:Discworld&quot;</code> lists what would be processed
 and what would be skipped, and fetches no audio at all.</p>
-<p>Three modes talk to a server, and they differ in where the marks end up. <code>--abs</code>
+<p>Five modes talk to a server, and they differ in where the marks end up. <code>--abs</code>
 works on the server's own books, which is the whole of this section. The other
-two work on files on this machine: <code>--abs-push</code> marks them as usual and tells
-the server as well, and <code>--abs-push-only</code> sends the server the marks they
-already carry without detecting anything. No two of them can be combined.</p>
+four work on files on this machine:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>The marks go</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#marking-local-files-and-telling-the-server"><code>--abs-push</code></a></td>
+<td>into each file as usual, <em>and</em> to the server</td>
+</tr>
+<tr>
+<td><a href="#sending-marks-a-book-already-has"><code>--abs-push-only</code></a></td>
+<td>from the file to the server, nothing detected</td>
+</tr>
+<tr>
+<td><a href="#taking-the-servers-marks"><code>--abs-pull</code></a></td>
+<td>from the server into the file, and detection fills the gaps</td>
+</tr>
+<tr>
+<td><a href="#taking-the-servers-marks"><code>--abs-pull-only</code></a></td>
+<td>from the server into the file, nothing detected</td>
+</tr>
+</tbody>
+</table>
+<p><code>--abs-pull</code> and <code>--abs-push</code> are the one pair that combine, and together they
+reconcile a book: each side ends up with the same list. No other two can be given
+at once.</p>
 <h3 id="selecting-books">Selecting books<a class="anchor" href="#selecting-books" aria-label="Permalink to this heading">#</a></h3>
 <p>In ABS mode the trailing arguments are <em>selectors</em> rather than paths. Give as
 many as you like; their books are added together and each book is processed once.</p>
@@ -311,6 +338,54 @@ what is there.</p>
 <p>Because nothing is detected, <code>--abs-push-only</code> cannot be combined with the
 detection options, nor with <code>--import</code>, <code>--export</code>, <code>--force</code> or <code>--backup</code>.
 <code>--dry-run</code> works and reports what would be sent.</p>
+<h3 id="taking-the-servers-marks">Taking the server's marks<a class="anchor" href="#taking-the-servers-marks" aria-label="Permalink to this heading">#</a></h3>
+<p><code>--abs-pull</code>
+: Before working on a local file, ask Audiobookshelf what chapters it holds for
+that book and treat them as the file's own. The same rule as above decides
+which list counts: <strong>the server's wins where it has one, the file's fills in
+where it has none.</strong> A file the run then has nothing to detect for is written
+the pulled list, so the two sides stop disagreeing.</p>
+<p>Use it to put marks you made — or edited in Audiobookshelf's web interface —
+back into the files themselves, without re-detecting books that are already
+done. Everything else about the run is unchanged: a book neither side has
+marked is detected exactly as it would be otherwise.</p>
+<p>Each file is matched against the server's libraries the same way
+<a href="#sending-marks-a-book-already-has"><code>--abs-push-only</code></a> matches them, with one
+extra test: <strong>the two must be the same recording.</strong> A local file whose play
+time differs from the book's by more than a minute is passed over with a note.
+Audiobookshelf's marks are positions on the whole item's timeline, and every
+part of a split book carries the same album tag as the whole — so without that
+test, a five-minute part would be given a whole book's chapter list, nearly all
+of it past its own end. An abridgement or a different edition of the same title
+is caught by it too.</p>
+<p><code>--abs-pull-only</code>
+: Write each file the marks Audiobookshelf holds for it and change nothing else.
+No Whisper model is loaded and nothing is detected. A book the server has no
+chapters for, or that no local file matches, is skipped with a note.</p>
+<p>Unlike an ordinary run it does <em>not</em> leave an already-marked file alone —
+replacing what the file has with what the server has is the whole of what it
+was asked to do. <code>--backup</code> keeps the old version beside the new one.</p>
+<h4 id="reconciling-both-ways">Reconciling both ways<a class="anchor" href="#reconciling-both-ways" aria-label="Permalink to this heading">#</a></h4>
+<p><code>--abs-pull --abs-push</code> together make the file and the server agree, and it is
+the one combination of modes that is allowed. In order:</p>
+<ol>
+<li>Pull the marks from Audiobookshelf; where it has none, the file's own are used.</li>
+<li>With <code>--verify</code>, the marks that were used are checked (see <a href="#handling-of-pre-existing-chapters">Handling of
+pre-existing chapters</a>).</li>
+<li>The file is processed if there is anything left to do.</li>
+<li>The finished list is written to the file — unless it came from the file and
+nothing changed it.</li>
+<li>The finished list is sent to the server — unless it came from the server and
+nothing changed it.</li>
+</ol>
+<p>The last two lines are the whole of it. A file with no marks and a server that
+has them gets them written in and nothing is sent; a file with marks and a server
+that has none has them sent and nothing is written; two sides that already agree
+are reported as skipped and neither is touched. Running it twice over the same
+shelf does nothing the second time.</p>
+<p>As always with <code>--abs-push</code>, a book left with an unresolved chapter-sequence gap
+is not sent, and a push that cannot happen never fails a file that was marked
+successfully.</p>
 <h3 id="connecting">Connecting<a class="anchor" href="#connecting" aria-label="Permalink to this heading">#</a></h3>
 <p><code>--abs-url &lt;url&gt;</code>
 : Which server. <code>http://host:13378</code>, <code>host:13378</code>, or just <code>host</code> — http and

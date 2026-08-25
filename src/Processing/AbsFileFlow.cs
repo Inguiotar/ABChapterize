@@ -59,10 +59,14 @@ internal sealed class AbsFileFlow : IDisposable
     /// <param name="ct">Cancellation token.</param>
     public async Task ConnectAsync(CancellationToken ct)
     {
-        // A --dry-run and a --no-op listing write nothing, so an account that may only read is
-        // enough for them - and being able to preview a run from a read-only account is worth the
-        // one extra branch.
-        await _workspace.OpenAsync(needsUpdate: !_options.DryRun && !_options.NoOp, ct);
+        // Each right is asked for only where this run would use it. A --dry-run and a --no-op
+        // listing write nothing, so an account that may only read is enough for them; and of the
+        // five modes only --abs ever fetches audio, so a pull or a push from an account without
+        // download rights is a perfectly good run and must not be turned away at the door.
+        await _workspace.OpenAsync(
+            needsDownload: _options.Abs,
+            needsUpdate: _options.SendsMarksToAbs && !_options.DryRun && !_options.NoOp,
+            ct);
         if (!_options.Quiet)
             _progress.Announce($"Audiobookshelf: {_workspace.Describe}");
     }
@@ -170,7 +174,30 @@ internal sealed class AbsFileFlow : IDisposable
     /// send them straight back, turning the mode into an expensive no-op.
     /// </remarks>
     public (MediaInfo Info, string Note) Merge(MediaInfo info, AbsLocalCopy copy)
-        => _options.AbsPushOnly ? (info, "") : AbsChapterMerge.Apply(info, copy.Source);
+        => _options.AbsPushOnly ? (info, "") : AbsChapterMerge.Apply(info, copy.Source.Chapters);
+
+    /// <summary>
+    /// The <c>--abs-pull</c> half: finds the book a local file belongs to and reads the chapter
+    /// list the server holds for it.
+    /// </summary>
+    /// <param name="localPath">Path of the local audio file.</param>
+    /// <param name="info">What ffprobe found in it, before any merge.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>What may be taken from the server, and the note describing it.</returns>
+    /// <remarks>
+    /// One request per file on top of the matching, and only for the files a pulling run reaches -
+    /// the whole-catalogue listing behind <see cref="MatchAsync"/> is fetched once and reused,
+    /// but a book's own chapter list is not in it (a library listing arrives minified, carrying
+    /// counts rather than lists).
+    /// </remarks>
+    public async Task<AbsPull> PullAsync(string localPath, MediaInfo info, CancellationToken ct)
+    {
+        var match = await MatchAsync(localPath, info, ct);
+        var fromServer = match.Book is { } book
+            ? await _workspace.ChaptersOfAsync(book, ct)
+            : [];
+        return AbsChapterPull.Decide(match, fromServer, info);
+    }
 
     /// <summary>
     /// Sends a book's finished marks to the server.

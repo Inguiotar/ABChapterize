@@ -880,8 +880,43 @@ public sealed class CliOptions
     /// </remarks>
     public bool AbsPush { get; private set; }
 
+    /// <summary>
+    /// <c>--abs-pull</c>: an ordinary run over local files that first asks Audiobookshelf what
+    /// marks each book already has, and treats what comes back as the file's own.
+    /// </summary>
+    /// <remarks>
+    /// The mirror of <see cref="AbsPush"/> and combinable with it, which is what makes the pair a
+    /// reconciliation: pull settles which of the two lists is the book's, the run does whatever
+    /// work that leaves, and then each side is given the result unless it already had it. Refused
+    /// with <see cref="Abs"/>, where the same merge is already applied to every fetched book.
+    /// </remarks>
+    public bool AbsPull { get; private set; }
+
+    /// <summary>
+    /// <c>--abs-pull-only</c>: write each local file the marks Audiobookshelf holds for it and do
+    /// nothing else - no detection, and no model loaded.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart of <see cref="AbsPushOnly"/>, and it does what that one does in reverse:
+    /// there the file's marks are the good copy and the server is told, here the server's are and
+    /// the file is. That is also why it overwrites a file's existing marks without <c>--force</c>
+    /// while an ordinary run would skip the file - taking the server's list is the whole of what
+    /// was asked for.
+    /// </remarks>
+    public bool AbsPullOnly { get; private set; }
+
+    /// <summary>Whether this run asks Audiobookshelf what marks a local file's book already has.
+    /// </summary>
+    public bool UsesAbsPull => AbsPull || AbsPullOnly;
+
     /// <summary>Whether this run talks to an Audiobookshelf server at all.</summary>
-    public bool UsesAbs => Abs || AbsPushOnly || AbsPush;
+    public bool UsesAbs => Abs || AbsPushOnly || AbsPush || UsesAbsPull;
+
+    /// <summary>
+    /// Whether this run would ever write anything to the server, which is what decides the up-front
+    /// permission check. <c>--abs-pull-only</c> is the one server mode that never does.
+    /// </summary>
+    public bool SendsMarksToAbs => Abs || AbsPushOnly || AbsPush;
 
     // The connection as typed, kept only until Parse resolves it: what is missing here is filled
     // in from the environment, so neither half is complete on its own.
@@ -1118,8 +1153,11 @@ public sealed class CliOptions
                 // Without these, an --abs-push-only sweep over a folder would record its files as done
                 // and the detection run afterwards would skip every one of them. --abs-push is in for
                 // the mirror image: a plain run leaves files marked but unsent, and the --abs-push run
-                // meant to send them must not mistake them for work it has already finished.
-                $"abs={Abs}/{AbsPushOnly}/{AbsPush}", $"absserver={AbsServer?.Root}",
+                // meant to send them must not mistake them for work it has already finished. The two
+                // pull modes are in for both halves of that at once - each leaves a file in a state
+                // the other three modes would still have something to do to.
+                $"abs={Abs}/{AbsPushOnly}/{AbsPush}/{AbsPull}/{AbsPullOnly}",
+                $"absserver={AbsServer?.Root}",
                 $"runbefore={RunBefore?.Raw}", $"runafter={RunAfter?.Raw}",
                 $"set={string.Join('|', _tuningOverrides)}",
                 // --no-rename is deliberately absent, although it is a processing option
@@ -1273,12 +1311,13 @@ public sealed class CliOptions
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
 
         // --abs is the exception above and stays one: there --no-op is the listing of what the
-        // selectors picked. The two push modes are not - both exist to send something, and a mode
-        // that lists and exits would never send it.
-        if (o.NoOp && (o.AbsPush || o.AbsPushOnly))
+        // selectors picked. The four modes that work on local files are not - each exists to move
+        // marks between a file and a server, and a mode that lists and exits would never move any.
+        if (o.NoOp && (o.AbsPush || o.AbsPushOnly || o.UsesAbsPull))
             throw new CliError(
-                "--no-op lists what a run would work on and exits, so it has nothing to send and "
-                + "cannot be combined with --abs-push or --abs-push-only.");
+                "--no-op lists what a run would work on and exits, so it has nothing to send or "
+                + "fetch and cannot be combined with --abs-push, --abs-push-only, --abs-pull or "
+                + "--abs-pull-only.");
 
         if (o.Import && o.Export)
             throw new CliError("--import and --export cannot be combined.");
@@ -1377,8 +1416,9 @@ public sealed class CliOptions
             throw new CliError(
                 "The --abs-... options describe an Audiobookshelf server, so one of the modes that "
                 + "talks to one has to be given as well: --abs (-A) works on books held by it, "
-                + "--abs-push marks local files and sends the result to it, and --abs-push-only "
-                + "sends it the marks local files already carry.");
+                + "--abs-push marks local files and sends the result to it, --abs-push-only sends "
+                + "it the marks local files already carry, and --abs-pull / --abs-pull-only take "
+                + "the marks it holds and put them into local files.");
         // Two answers to "where do the marks go", and they are not compatible: --abs has the server
         // hold the only copy, --abs-push writes the file and tells the server as well. Silently
         // preferring one would make the other look like it had been honoured.
@@ -1410,6 +1450,45 @@ public sealed class CliOptions
             throw new CliError(
                 $"--abs-push-only detects nothing, so {DetectionSettingOptions} have no effect and cannot "
                 + "be combined with it.");
+        // The pull modes. --abs already applies the same merge rule to every book it fetches, so
+        // asking for it on top would be either a no-op or a second answer to a question already
+        // settled; and a pull that fed --abs-push-only would send the server back the very list it
+        // had just handed over, which is an expensive way to change nothing.
+        if (o.UsesAbsPull && o.Abs)
+            throw new CliError(
+                "--abs (-A) already takes the chapter list Audiobookshelf holds for every book it "
+                + "fetches, so --abs-pull and --abs-pull-only have nothing to add there. They are "
+                + "for runs over files on this machine.");
+        if (o.AbsPull && o.AbsPullOnly)
+            throw new CliError(
+                "--abs-pull-only writes the marks Audiobookshelf holds and detects nothing, which is "
+                + "what --abs-pull does only where there is nothing left to detect. Use one or the other.");
+        if (o.UsesAbsPull && o.AbsPushOnly)
+            throw new CliError(
+                "--abs-push-only sends Audiobookshelf the marks a file already carries, so pulling "
+                + "its list first would send it straight back. Use --abs-pull with --abs-push to "
+                + "reconcile the two, or --abs-push-only on its own to send what the files have.");
+        if (o.AbsPullOnly && o.AbsPush)
+            throw new CliError(
+                "--abs-pull-only takes the server's marks and changes nothing else, so there is never "
+                + "anything for --abs-push to send back. Use --abs-pull --abs-push to have both sides "
+                + "end up with the same list.");
+        // Both read or write a sidecar in place of what the run would otherwise decide, so a pull
+        // would be a third answer to "which marks does this file get" - and --import's path never
+        // reaches the merge at all, so accepting it would honour the option in name only.
+        if (o.UsesAbsPull && (o.Import || o.Export))
+            throw new CliError(
+                "--import and --export read and write the chapter list as a sidecar file, which is a "
+                + "different answer to where a file's marks come from than --abs-pull is. Use one or "
+                + "the other.");
+        if (o.AbsPullOnly && (o.Fix || o.Force || o.Verify))
+            throw new CliError(
+                "--abs-pull-only writes the marks Audiobookshelf holds and detects nothing, so "
+                + "--verify, --fix and --force have nothing to act on and cannot be combined with it.");
+        if (o.AbsPullOnly && o.AnyDetectionSettingGiven)
+            throw new CliError(
+                $"--abs-pull-only detects nothing, so {DetectionSettingOptions} have no effect and "
+                + "cannot be combined with it.");
         if (o.UsesAbs)
         {
             o.AbsServer = AbsConnection.Resolve(o._absUrl, o._absKey, o._absUser, o._absPassword);
@@ -1635,6 +1714,8 @@ public sealed class CliOptions
             case "--abs": Abs = true; return true;
             case "--abs-push-only": AbsPushOnly = true; return true;
             case "--abs-push": AbsPush = true; return true;
+            case "--abs-pull": AbsPull = true; return true;
+            case "--abs-pull-only": AbsPullOnly = true; return true;
             default: return false;
         }
     }
@@ -2193,6 +2274,7 @@ public sealed class CliOptions
           abchapterize [options] <file-or-directory>...
           abchapterize -A|--abs [options] <selector>...
           abchapterize --abs-push-only [options] <file-or-directory>...
+          abchapterize --abs-pull-only [options] <file-or-directory>...
           abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
@@ -2277,6 +2359,19 @@ public sealed class CliOptions
                                     libraries - by album tag, then title tag, then folder name,
                                     then file name - and one that matches nothing, or matches
                                     several books, is skipped with a note.
+              --abs-pull            Ask Audiobookshelf what marks each local file's book already
+                                    has, and treat what comes back as the file's own - the
+                                    server's list wins, the file's fills in where it has none.
+                                    A file whose marks the run does not otherwise change is then
+                                    written the pulled list, so the two sides end up agreeing.
+                                    Combine with --abs-push to reconcile both ways: each side is
+                                    given the finished list unless it already had it. Not for use
+                                    with --abs, which applies the same rule to its own books.
+              --abs-pull-only       Write each local file the chapter marks Audiobookshelf holds
+                                    for it and change nothing else, detecting nothing. A book the
+                                    server has no chapters for, or that no file matches, is
+                                    skipped. Unlike an ordinary run this replaces marks a file
+                                    already has, that being the whole of what it is asked to do.
               --abs-url <url>       Which server: "http://host:13378", "host:13378", or just
                                     "host" - http and Audiobookshelf's own port 13378 stand in
                                     for whatever you leave out. https and a reverse-proxy

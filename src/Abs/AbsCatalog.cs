@@ -207,14 +207,37 @@ public sealed class AbsCatalog
         var metadata = files[0].Metadata
                        ?? throw new AppError($"Audiobookshelf named no file for \"{book.Title}\".");
 
-        // Sorted rather than trusted: everything downstream - the merge, the skip decision,
-        // --verify - reads this as a chapter list in play order, and ABS stores what it was given.
-        var chapters = (item.Media?.Chapters ?? [])
-            .OrderBy(c => c.Start)
-            .Select(c => new Chapter(c.Start, c.Title))
-            .ToList();
-        return new AbsBookFile(files[0].Ino, metadata.Filename, metadata.Size, chapters);
+        return new AbsBookFile(files[0].Ino, metadata.Filename, metadata.Size, ChaptersOf(item));
     }
+
+    /// <summary>
+    /// Fetches just the chapter list of one book, which is all <c>--abs-pull</c> wants of it.
+    /// </summary>
+    /// <param name="book">The book to look at.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Audiobookshelf's own chapter list, in start order and possibly empty.</returns>
+    /// <remarks>
+    /// Deliberately without <see cref="LoadFileAsync"/>'s demand that the item hold exactly one
+    /// audio file. That demand belongs to fetching: a split book cannot be downloaded as one file
+    /// and marked. Reading its chapter list is a different matter - the list addresses the whole
+    /// item's timeline, so it is the right list for a local copy of the whole book however many
+    /// files the server keeps it in, and whether the local file <em>is</em> the whole book is
+    /// settled by <see cref="AbsChapterPull"/> on evidence rather than by a file count.
+    /// </remarks>
+    public async Task<IReadOnlyList<Chapter>> LoadChaptersAsync(AbsBook book, CancellationToken ct)
+        => ChaptersOf(await _session.GetAsync<AbsWire.Item>(
+            $"/api/items/{Uri.EscapeDataString(book.ItemId)}", ct));
+
+    /// <summary>The chapter list of a fetched item, in play order.</summary>
+    /// <param name="item">The full item as the server sent it.</param>
+    /// <remarks>
+    /// Sorted rather than trusted: everything downstream - the merge, the skip decision, --verify -
+    /// reads this as a chapter list in play order, and ABS stores what it was given.
+    /// </remarks>
+    private static List<Chapter> ChaptersOf(AbsWire.Item item)
+        => [.. (item.Media?.Chapters ?? [])
+            .OrderBy(c => c.Start)
+            .Select(c => new Chapter(c.Start, c.Title))];
 
     /// <summary>The server's book libraries, fetched once and remembered.</summary>
     /// <param name="ct">Cancellation token.</param>
