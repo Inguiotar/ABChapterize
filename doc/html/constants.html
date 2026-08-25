@@ -39,6 +39,7 @@
 <li><a href="#vadsegmenter">VadSegmenter</a></li>
 <li><a href="#silerovaddetector">SileroVadDetector</a></li>
 <li><a href="#audiofidelity">AudioFidelity</a></li>
+<li><a href="#absretrypolicy">AbsRetryPolicy</a></li>
 </ul>
 </li>
 </ul>
@@ -578,6 +579,25 @@ test suite when it no longer matches.</em></p>
 <td><code>Threshold</code></td>
 <td><code>0.02</code></td>
 <td>Below this ratio a file may be denoised.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="absretrypolicy">AbsRetryPolicy<a class="anchor" href="#absretrypolicy" aria-label="Permalink to this heading">#</a></h2>
+<p>How long a run keeps trying to reach an Audiobookshelf server that is not answering
+(<code>--abs-retry</code>), and which failures are worth trying again at all.</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RetryPauseSeconds</code></td>
+<td><code>60.0</code></td>
+<td>How long to wait between attempts, in seconds. Long on purpose: what this exists to survive is a server that is down rather than one that is busy, and something restarting is not back a second later. Retrying quickly would spend the whole budget while the server was still coming up.</td>
 </tr>
 </tbody>
 </table>

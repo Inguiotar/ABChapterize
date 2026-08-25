@@ -74,48 +74,70 @@ public sealed class AbsSession : IDisposable
     /// </summary>
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(120);
 
-    /// <summary>
-    /// How often a read-only request is attempted before giving up, and how long the pause between
-    /// attempts is. One retry, not a policy: this talks to a home server over a LAN, where the
-    /// failure worth surviving is a single dropped connection part way through a hundred-book run,
-    /// and anything worse should stop the run rather than be papered over.
-    /// </summary>
-    private const int ReadAttempts = 2;
+    /// <summary>How long a failing request keeps being repeated, and which failures qualify.</summary>
+    private readonly AbsRetryPolicy _retry;
 
-    /// <inheritdoc cref="ReadAttempts"/>
-    private static readonly TimeSpan RetryPause = TimeSpan.FromSeconds(2);
+    /// <summary>
+    /// Where the few notes a user must see whatever the verbosity go - a wait before another
+    /// attempt, a download started again - or null when nothing is listening.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="_log"/> because these are the one thing here that is not a note: a
+    /// run that has gone quiet for three minutes looks exactly like one that has hung, and the
+    /// user has no way to tell the difference from the outside. Everything else this class has to
+    /// say is <c>--verbose</c> material.
+    /// </remarks>
+    private readonly Action<string>? _notify;
 
     /// <summary>Creates a session against the given server. Nothing is sent until
     /// <see cref="OpenAsync"/> runs.</summary>
     /// <param name="connection">The resolved server and credentials.</param>
+    /// <param name="retry">How long to keep trying a request that fails.</param>
     /// <param name="log">Sink for the connection note, or null.</param>
-    public AbsSession(AbsConnection connection, Action<string>? log = null)
-        : this(connection, new HttpClient(), log)
+    /// <param name="notify">Sink for a note the user must see whatever the verbosity, or null.</param>
+    public AbsSession(
+        AbsConnection connection, AbsRetryPolicy retry, Action<string>? log = null,
+        Action<string>? notify = null)
+        : this(connection, new HttpClient(), retry, log, notify)
     {
     }
 
     /// <summary>Creates a session sending over a transport of the caller's choosing.</summary>
     /// <param name="connection">The resolved server and credentials.</param>
     /// <param name="handler">What to send over; disposed with the session.</param>
+    /// <param name="retry">How long to keep trying a request that fails; null for not at all,
+    /// which is what a test wanting no waiting asks for.</param>
     /// <param name="log">Sink for the connection note, or null.</param>
+    /// <param name="notify">Sink for a note the user must see whatever the verbosity, or null.</param>
     /// <remarks>
-    /// Exists for the tests. The one failure this class has to survive is the server expiring a
-    /// token mid-run, and nothing short of waiting an hour against a real server produces one on
-    /// demand - so the renewal path would otherwise be the one part of ABS mode covered by nothing.
+    /// Exists for the tests. The two failures this class has to survive - the server expiring a
+    /// token mid-run and the server not answering - are both unreachable from a short test against
+    /// a live server: one takes an hour of waiting to reproduce, the other means switching a real
+    /// machine off mid-request. Without a scripted transport they would be the parts of ABS mode
+    /// covered by nothing.
     /// </remarks>
-    internal AbsSession(AbsConnection connection, HttpMessageHandler handler, Action<string>? log = null)
-        : this(connection, new HttpClient(handler, disposeHandler: true), log)
+    internal AbsSession(
+        AbsConnection connection, HttpMessageHandler handler, AbsRetryPolicy? retry = null,
+        Action<string>? log = null, Action<string>? notify = null)
+        : this(connection, new HttpClient(handler, disposeHandler: true),
+               retry ?? AbsRetryPolicy.None, log, notify)
     {
     }
 
     /// <summary>Shared by the two public constructors; see them for the parameters.</summary>
     /// <param name="connection">The resolved server and credentials.</param>
     /// <param name="client">The client to send over, still to be configured.</param>
+    /// <param name="retry">How long to keep trying a request that fails.</param>
     /// <param name="log">Sink for the connection note, or null.</param>
-    private AbsSession(AbsConnection connection, HttpClient client, Action<string>? log)
+    /// <param name="notify">Sink for a note the user must see whatever the verbosity, or null.</param>
+    private AbsSession(
+        AbsConnection connection, HttpClient client, AbsRetryPolicy retry, Action<string>? log,
+        Action<string>? notify)
     {
         _connection = connection;
+        _retry = retry;
         _log = log;
+        _notify = notify;
         _client = client;
         _client.Timeout = RequestTimeout;
         _client.DefaultRequestHeaders.UserAgent.ParseAdd($"ABChapterize/{Cli.CliOptions.Version}");
@@ -244,7 +266,7 @@ public sealed class AbsSession : IDisposable
     {
         using var response = await SendAsync(
             () => new HttpRequestMessage(HttpMethod.Get, _connection.Root + path),
-            HttpCompletionOption.ResponseContentRead, SendMode.Read, path, ct);
+            HttpCompletionOption.ResponseContentRead, SendMode.Authenticated, path, ct);
         await EnsureSuccessAsync(response, "GET", path, ct);
         return await ReadAsync<T>(response, path, ct);
     }
@@ -258,14 +280,14 @@ public sealed class AbsSession : IDisposable
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The deserialized response.</returns>
     /// <remarks>
-    /// Not retried after a transport failure, unlike <see cref="GetAsync{T}"/>: the two things this
-    /// tool posts are a login and a chapter update, and repeating either after an ambiguous failure
-    /// is worse than reporting it. An expired token is not that kind of failure - see
-    /// <see cref="SendAsync"/>.
+    /// Retried on the same terms as <see cref="GetAsync{T}"/>, which is only safe because every
+    /// POST this tool sends is one that can be repeated without accumulating anything - see
+    /// <see cref="AbsRetryPolicy"/>, which is where that argument is set out and where it would
+    /// have to be revisited if a second kind of write were ever added.
     /// </remarks>
     public async Task<T> PostAsync<T>(string path, object body, CancellationToken ct) where T : class
     {
-        using var response = await SendPostAsync(path, body, SendMode.Write, ct);
+        using var response = await SendPostAsync(path, body, SendMode.Authenticated, ct);
         await EnsureSuccessAsync(response, "POST", path, ct);
         return await ReadAsync<T>(response, path, ct);
     }
@@ -278,7 +300,7 @@ public sealed class AbsSession : IDisposable
     /// <param name="ct">Cancellation token.</param>
     public async Task PostAsync(string path, object body, CancellationToken ct)
     {
-        using var response = await SendPostAsync(path, body, SendMode.Write, ct);
+        using var response = await SendPostAsync(path, body, SendMode.Authenticated, ct);
         await EnsureSuccessAsync(response, "POST", path, ct);
     }
 
@@ -301,7 +323,13 @@ public sealed class AbsSession : IDisposable
             },
             HttpCompletionOption.ResponseContentRead, mode, path, ct);
 
-    /// <summary>How one request is sent: which credential it carries and what it survives.</summary>
+    /// <summary>How one request is sent: which credential it carries.</summary>
+    /// <remarks>
+    /// Reads and writes are not told apart, deliberately, because nothing here treats them
+    /// differently any more: a 401 is replayed for both, and so is a transient failure - see
+    /// <see cref="AbsRetryPolicy"/> for why repeating this tool's writes is safe. A distinction
+    /// nothing branches on is one that goes stale without anybody noticing.
+    /// </remarks>
     private enum SendMode
     {
         /// <summary>The login itself. Carries no bearer - there either is not one yet, or the one
@@ -309,41 +337,40 @@ public sealed class AbsSession : IDisposable
         /// work around.</summary>
         Login,
 
-        /// <summary>A write. Carries the token and renews it once, but is never repeated after a
-        /// failure that leaves it unclear whether the server acted.</summary>
-        Write,
-
-        /// <summary>A read. Carries the token, renews it once, and survives one dropped
-        /// connection.</summary>
-        Read,
+        /// <summary>Everything else: carries the token and renews it once when the server says it
+        /// has expired.</summary>
+        Authenticated,
     }
 
     /// <summary>
     /// Sends one request: applies the bearer token, renews it when the server says it has expired,
-    /// and gives a read a second chance at a dropped connection.
+    /// and keeps trying for as long as <c>--abs-retry</c> allows when the failure is one that could
+    /// clear up.
     /// </summary>
     /// <param name="build">Builds the request. Called again for each attempt, an
     /// <see cref="HttpRequestMessage"/> being single-use.</param>
     /// <param name="completion">Whether the task completes on the headers or the whole body.</param>
-    /// <param name="mode">Which credential the request carries and what it survives.</param>
+    /// <param name="mode">Which credential the request carries.</param>
     /// <param name="path">The request path, for messages.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The response, for the caller to check and dispose.</returns>
-    /// <exception cref="AppError">Thrown when the server could not be reached at all.</exception>
+    /// <exception cref="AppError">Thrown when the server could not be reached at all and the retry
+    /// budget is spent.</exception>
     /// <remarks>
     /// <para>
     /// Every request goes through here, which is what keeps the token in one place: applied at the
     /// moment of sending rather than pinned to the client, it cannot be left off a request and
-    /// cannot be swapped underneath one that is already in flight.
+    /// cannot be swapped underneath one that is already in flight. It is also what makes
+    /// <c>--abs-retry</c> cover every interaction with the server rather than the handful somebody
+    /// remembered to wrap.
     /// </para>
     /// <para>
-    /// <b>A 401 is replayed even for a write, and that does not contradict "a POST is never
-    /// retried".</b> That rule is about failures which leave it unknown whether the server acted -
-    /// a timeout, a connection dropped mid-request - where a second attempt risks applying the
-    /// change twice. A 401 is the opposite: an explicit refusal, decided before the request was
-    /// carried out, so replaying it with a fresh token cannot push a chapter list twice. Exactly
-    /// once, though - a second 401 is a real refusal and is reported rather than turned into a
-    /// login loop against a server that is simply saying no.
+    /// <b>The renewal and the retry are two different mechanisms and are kept apart.</b> A 401 is
+    /// replayed exactly once and never waits, because it is not a failure at all - the server
+    /// decided it before doing anything, and a fresh token is all it wants; a second 401 is a real
+    /// refusal and is reported rather than turned into a login loop against a server that is simply
+    /// saying no. A transient failure is the opposite: nothing about the request needs changing,
+    /// only the moment, so it is repeated unchanged after a pause until the budget runs out.
     /// </para>
     /// </remarks>
     private async Task<HttpResponseMessage> SendAsync(
@@ -351,7 +378,7 @@ public sealed class AbsSession : IDisposable
         CancellationToken ct)
     {
         var renewed = false;
-        var attempt = 1;
+        var window = _retry.Open();
         while (true)
         {
             HttpResponseMessage response;
@@ -362,26 +389,57 @@ public sealed class AbsSession : IDisposable
                     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
                 response = await _client.SendAsync(request, completion, ct);
             }
-            catch (Exception ex) when (mode == SendMode.Read && attempt < ReadAttempts
-                                       && IsTransient(ex) && !ct.IsCancellationRequested)
+            catch (Exception ex) when (AbsRetryPolicy.IsTransient(ex) && !ct.IsCancellationRequested
+                                       && !window.Exhausted)
             {
-                attempt++;
-                _log?.Invoke($"Audiobookshelf: {path} failed ({ex.Message}); retrying");
-                await Task.Delay(RetryPause, ct);
+                await WaitBeforeRetryAsync(window, path, ex.Message, ct);
                 continue;
             }
-            catch (Exception ex) when (IsTransient(ex))
+            // Before the transient catch below, and only because a timeout and a Ctrl+C arrive as
+            // the same exception type: without this the run's own cancellation would be reported as
+            // a server that could not be reached.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (AbsRetryPolicy.IsTransient(ex))
             {
                 throw Unreachable(ex);
             }
 
-            if (response.StatusCode != HttpStatusCode.Unauthorized || renewed || !CanRenewToken(mode))
+            if (response.StatusCode == HttpStatusCode.Unauthorized && !renewed && CanRenewToken(mode))
+            {
+                response.Dispose();
+                renewed = true;
+                await RenewTokenAsync(ct);
+                continue;
+            }
+
+            if (!AbsRetryPolicy.IsTransientStatus(response.StatusCode) || window.Exhausted)
                 return response;
 
+            // Read before disposing: the response object is what carries the words this note is
+            // about to use, and it must not outlive the message it describes.
+            var refusal = $"{(int)response.StatusCode} {response.ReasonPhrase}";
             response.Dispose();
-            renewed = true;
-            await RenewTokenAsync(ct);
+            await WaitBeforeRetryAsync(window, path, refusal, ct);
         }
+    }
+
+    /// <summary>Says what went wrong and waits out the pause before the next attempt.</summary>
+    /// <param name="window">This request's share of the retry budget.</param>
+    /// <param name="path">The request path, for the message.</param>
+    /// <param name="failure">What came back, or did not.</param>
+    /// <param name="ct">Cancellation token, which is what cuts a wait short.</param>
+    /// <remarks>
+    /// Announced rather than logged: a run that has gone silent for minutes is indistinguishable
+    /// from one that has hung, and a user who cannot tell the two apart kills the good one.
+    /// </remarks>
+    private async Task WaitBeforeRetryAsync(
+        AbsRetryWindow window, string path, string failure, CancellationToken ct)
+    {
+        _notify?.Invoke($"Audiobookshelf: {path} failed ({failure}); trying again {window.Describe}");
+        await Task.Delay(window.Pause, ct);
     }
 
     /// <summary>
@@ -402,45 +460,85 @@ public sealed class AbsSession : IDisposable
     /// Ctrl+C, which every other long step of a run is bounded by too.
     /// </para>
     /// <para>
-    /// Only the request is renewed and retried, never the transfer: once the headers are back the
-    /// token has done its work and the server does not check it again, so a failure part way
-    /// through a gigabyte is a transfer to report rather than one to restart from nothing.
+    /// <b>A transfer that breaks off is started again at most once, however much retry budget is
+    /// left.</b> The request in front of it is bounded by <c>--abs-retry</c> like any other, but
+    /// the transfer is not and cannot be: a gigabyte over a home network takes longer than the
+    /// whole budget by itself, so a budget-driven rule would either be no rule at all or one that
+    /// spent the run re-downloading the same book. Once is the useful case - a link that dropped
+    /// for a moment - without the failure mode where a server that cuts every stream at 90% is
+    /// answered by fetching 90% of a book over and over.
+    /// </para>
+    /// <para>
+    /// There is no resume from a byte offset. Audiobookshelf's download endpoint would very likely
+    /// serve a Range request, but a partial file that has to be verified against the server's idea
+    /// of the same file is a correctness problem, and detection running over a book quietly
+    /// stitched from two halves is exactly the failure this class deletes partial downloads to
+    /// avoid.
     /// </para>
     /// </remarks>
     public async Task<long> DownloadAsync(
         string path, string destination, Action<long>? onProgress, CancellationToken ct)
     {
-        try
+        var restarted = false;
+        while (true)
         {
-            using var response = await SendAsync(
-                () => new HttpRequestMessage(HttpMethod.Get, _connection.Root + path),
-                HttpCompletionOption.ResponseHeadersRead, SendMode.Read, path, ct);
-            await EnsureSuccessAsync(response, "GET", path, ct);
-
-            await using var source = await response.Content.ReadAsStreamAsync(ct);
-            await using var target = new FileStream(
-                destination, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 16,
-                useAsync: true);
-
-            var buffer = new byte[1 << 16];
-            long written = 0;
-            int read;
-            while ((read = await source.ReadAsync(buffer, ct)) > 0)
+            try
             {
-                await target.WriteAsync(buffer.AsMemory(0, read), ct);
-                written += read;
-                onProgress?.Invoke(written);
+                return await StreamToFileAsync(path, destination, onProgress, ct);
             }
-            return written;
+            catch (Exception ex) when (ex is not AppError)
+            {
+                // A half-written audiobook is worse than none: ffprobe would read it as a truncated
+                // file and detection would run over a book missing its end. Removed on the way out
+                // whatever went wrong, cancellation included - and before another attempt too,
+                // since the next one opens the file afresh anyway.
+                TryDelete(destination);
+                if (ct.IsCancellationRequested)
+                    throw;
+                if (restarted || !_retry.Enabled || !AbsRetryPolicy.IsTransient(ex))
+                    throw Unreachable(ex);
+                restarted = true;
+                _notify?.Invoke(
+                    $"Audiobookshelf: the download of {path} broke off ({ex.Message}); "
+                    + $"starting it again in {_retry.Pause.TotalSeconds:0} s");
+                await Task.Delay(_retry.Pause, ct);
+            }
         }
-        catch (Exception ex) when (ex is not AppError)
+    }
+
+    /// <summary>One attempt at the download: the request, and the body copied to disk.</summary>
+    /// <param name="path">Request path of the download endpoint.</param>
+    /// <param name="destination">Where to write the file; overwritten if it exists.</param>
+    /// <param name="onProgress">Called with the running byte count, or null.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The number of bytes written.</returns>
+    /// <remarks>
+    /// Failures are left raw for <see cref="DownloadAsync"/> to classify - wrapping them here would
+    /// hide the very thing it has to look at to decide whether another attempt is worth making.
+    /// </remarks>
+    private async Task<long> StreamToFileAsync(
+        string path, string destination, Action<long>? onProgress, CancellationToken ct)
+    {
+        using var response = await SendAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, _connection.Root + path),
+            HttpCompletionOption.ResponseHeadersRead, SendMode.Authenticated, path, ct);
+        await EnsureSuccessAsync(response, "GET", path, ct);
+
+        await using var source = await response.Content.ReadAsStreamAsync(ct);
+        await using var target = new FileStream(
+            destination, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 16,
+            useAsync: true);
+
+        var buffer = new byte[1 << 16];
+        long written = 0;
+        int read;
+        while ((read = await source.ReadAsync(buffer, ct)) > 0)
         {
-            // A half-written audiobook is worse than none: ffprobe would read it as a truncated
-            // file and detection would run over a book missing its end. Removed on the way out
-            // whatever went wrong, cancellation included.
-            TryDelete(destination);
-            throw ex is OperationCanceledException ? ex : Unreachable(ex);
+            await target.WriteAsync(buffer.AsMemory(0, read), ct);
+            written += read;
+            onProgress?.Invoke(written);
         }
+        return written;
     }
 
     /// <summary>Deletes a partial download, noting rather than raising a failure to.</summary>
@@ -523,12 +621,6 @@ public sealed class AbsSession : IDisposable
             throw new AppError($"Audiobookshelf answered {path} with something unreadable: {ex.Message}");
         }
     }
-
-    /// <summary>Whether a failure is the kind a second attempt could survive - a dropped
-    /// connection or a timeout, as opposed to a refusal the server meant.</summary>
-    /// <param name="ex">The exception to classify.</param>
-    private static bool IsTransient(Exception ex)
-        => ex is HttpRequestException or TaskCanceledException or IOException;
 
     /// <summary>Wraps a transport failure in the message that names the server, which the raw
     /// socket error does not.</summary>

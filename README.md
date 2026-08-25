@@ -274,6 +274,7 @@ document that long. Grouped below exactly as `--help` groups them:
 | `--abs-key <key>` | An API key to authenticate with... |
 | `--abs-user <name>`, `--abs-password <pw>` | ...or an account to log in as. |
 | `--abs-temp <dir>` | Where the temporary downloads go (system temp by default). |
+| `--abs-retry <minutes>` | How long to keep trying a server that is not answering, in minutes (default 3, 0 to give up at once). Covers every exchange with the server, a minute apart; a download that breaks off is started again once. What the server refuses on purpose — an unknown item, a right the account has not got — is reported straight away. |
 | (none) | All five can come from the environment instead — `ABCHAPTERIZE_ABS_URL`, `ABCHAPTERIZE_ABS_KEY`, `ABCHAPTERIZE_ABS_USER`, `ABCHAPTERIZE_ABS_PASSWORD`, `ABCHAPTERIZE_ABS_TEMP` — which keeps a key or password out of your shell history and out of the process list. |
 
 **Detection tuning**

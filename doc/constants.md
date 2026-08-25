@@ -139,3 +139,12 @@ The measurement that decides whether a file is dull enough to be worth denoising
 | Constant | Default | Meaning |
 | --- | --- | --- |
 | `Threshold` | `0.02` | Below this ratio a file may be denoised. |
+
+## AbsRetryPolicy
+
+How long a run keeps trying to reach an Audiobookshelf server that is not answering
+(`--abs-retry`), and which failures are worth trying again at all.
+
+| Constant | Default | Meaning |
+| --- | --- | --- |
+| `RetryPauseSeconds` | `60.0` | How long to wait between attempts, in seconds. Long on purpose: what this exists to survive is a server that is down rather than one that is busy, and something restarting is not back a second later. Retrying quickly would spend the whole budget while the server was still coming up. |

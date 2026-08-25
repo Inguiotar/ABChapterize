@@ -120,7 +120,7 @@ public sealed class AbsChapterTests
     {
         var book = new AbsBook("id", "Book", null, "folder", 1, 0, 3600);
         var connection = AbsConnection.Resolve("host:9", "key", null, null);
-        using var session = new AbsSession(connection);
+        using var session = new AbsSession(connection, AbsRetryPolicy.None);
 
         // Refused before a single byte goes anywhere, which is the whole point: the update replaces
         // the list rather than merging into it, so an empty one deletes what the server has.

@@ -113,6 +113,40 @@ public sealed class AbsCliTests : IDisposable
         Assert.Equal(_dir, Parse("-A", "--abs-temp", _dir, "all").AbsTemp);
     }
 
+    /// <summary>
+    /// The retry budget defaults to three minutes and takes a value in minutes, decimal separator
+    /// either way round like every other number this tool reads off a command line.
+    /// </summary>
+    [Fact]
+    public void AbsRetry_DefaultsToThreeMinutesAndAcceptsEitherDecimalSeparator()
+    {
+        Assert.Equal(3, Parse("-A", "all").AbsRetryMinutes);
+        Assert.Equal(0, Parse("-A", "--abs-retry", "0", "all").AbsRetryMinutes);
+        Assert.Equal(1.5, Parse("-A", "--abs-retry", "1.5", "all").AbsRetryMinutes);
+        Assert.Equal(1.5, Parse("-A", "--abs-retry", "1,5", "all").AbsRetryMinutes);
+    }
+
+    /// <summary>A budget that is not a number, or is negative, is a command line error.</summary>
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("soon")]
+    [InlineData("1441")]
+    public void AbsRetry_RejectsWhatCannotBeAWaitingTime(string value)
+        => Assert.Throws<CliError>(() => CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs", "--abs-retry", value, "all"]));
+
+    /// <summary>
+    /// Like the rest of the <c>--abs-...</c> family, it describes a conversation with a server and
+    /// is refused where there is none - including when it names the default, which is the case a
+    /// naive "did the value change" test would let through.
+    /// </summary>
+    [Fact]
+    public void AbsRetry_WithoutAnyServerMode_IsRefused()
+    {
+        var ex = Assert.Throws<CliError>(() => CliOptions.Parse(["--abs-retry", "3", _file]));
+        Assert.Contains("--abs", ex.Message);
+    }
+
     [Fact]
     public void AbsPushOnly_WorksWithoutAbsModeAndKeepsItsPaths()
     {

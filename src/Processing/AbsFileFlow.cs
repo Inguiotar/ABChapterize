@@ -46,8 +46,11 @@ internal sealed class AbsFileFlow : IDisposable
         _options = options;
         _progress = progress;
         _workspace = new AbsWorkspace(
-            options.AbsServer!, options.AbsTemp,
-            options.LoggingEnabled ? progress.Log : null);
+            options.AbsServer!, options.AbsTemp, AbsRetryPolicy.For(options.AbsRetryMinutes),
+            options.LoggingEnabled ? progress.Log : null,
+            // Not gated on --quiet, unlike the connection note below: what goes down this sink is a
+            // wait of a minute or more, and a quiet run that stalls without a word looks broken.
+            progress.Announce);
     }
 
     /// <summary>

@@ -27,6 +27,14 @@ earn a round number.
   reported and passed over. `--no-op` lists what a selector picked without fetching anything,
   which is worth doing before a selector that turns out to name a hundred books.
 
+- **`--abs-retry` waits out a server that is not answering.** Every exchange with
+  Audiobookshelf — signing in, listing a library, fetching a book, sending its chapters — is
+  tried again for up to three minutes by default, a minute between attempts, so a server
+  restarting in the middle of a long batch no longer ends it. `--abs-retry 0` goes back to giving
+  up at the first failure. What the server refuses on purpose — an item it does not know, a
+  right the account has not got — is still reported straight away; there is nothing to wait for.
+  A download that breaks off part way through is started again once.
+
 - **`--abs-push` marks your own files and tells the server as well.** An ordinary run — the
   marks go into each file exactly as they always have — that then sends the finished chapter
   list to Audiobookshelf, for a shelf you keep on this machine and also serve from there. Each

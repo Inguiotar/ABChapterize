@@ -906,6 +906,18 @@ public sealed class CliOptions
     public string? AbsTemp { get; private set; }
 
     /// <summary>
+    /// <c>--abs-retry</c>: how many minutes a request the Audiobookshelf server did not answer
+    /// keeps being tried before the run gives up on it. 0 gives up at the first failure.
+    /// </summary>
+    /// <remarks>
+    /// Three minutes by default, which is about what a server takes to come back from a restart -
+    /// long enough to survive one, short enough that a genuinely absent server is reported while
+    /// the user is still watching. What counts as worth trying again, and why the pause between
+    /// attempts is not an option, are both in <see cref="ABChapterize.Abs.AbsRetryPolicy"/>.
+    /// </remarks>
+    public double AbsRetryMinutes { get; private set; } = 3;
+
+    /// <summary>
     /// What ABS mode is to work on: the trailing arguments read as book selectors rather than as
     /// paths. Empty when the run is not in ABS mode.
     /// </summary>
@@ -955,7 +967,7 @@ public sealed class CliOptions
 
     // Tracks which value options were given explicitly, for semantic validation and
     // for applying the --lang-dependent defaults only when the user did not choose.
-    private bool _langSet, _modelSet, _upgradeModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet;
+    private bool _langSet, _modelSet, _upgradeModelSet, _maxSet, _maxChapterNumberSet, _minSilenceSet, _earlyAbortSet, _expectedStartSet, _markLeadSet, _chapterCountSet, _noiseFloorSet, _namedMarkDistanceSet, _absRetrySet;
 
     // The command line this was parsed from, after --config expansion. Kept so a per-folder
     // .abchapterize-config can be resolved by re-parsing with its options in front (see
@@ -1359,7 +1371,9 @@ public sealed class CliOptions
         if (o.Cleanup && o.UsesAbs)
             throw new CliError(
                 "--cleanup works on folders on this machine and has nothing to do with an Audiobookshelf server.");
-        if (!o.UsesAbs && (o._absUrl ?? o._absKey ?? o._absUser ?? o._absPassword ?? o.AbsTemp) != null)
+        if (!o.UsesAbs
+            && ((o._absUrl ?? o._absKey ?? o._absUser ?? o._absPassword ?? o.AbsTemp) != null
+                || o._absRetrySet))
             throw new CliError(
                 "The --abs-... options describe an Audiobookshelf server, so one of the modes that "
                 + "talks to one has to be given as well: --abs (-A) works on books held by it, "
@@ -1719,6 +1733,7 @@ public sealed class CliOptions
             case "--abs-user": _absUser = nextParam(); return true;
             case "--abs-password": _absPassword = nextParam(); return true;
             case "--abs-temp": AbsTemp = ExpandHomeDirectory(nextParam()); return true;
+            case "--abs-retry": AbsRetryMinutes = ParseAbsRetry(nextParam()); _absRetrySet = true; return true;
             default: return false;
         }
     }
@@ -1937,6 +1952,18 @@ public sealed class CliOptions
     {
         if (!NumberCulture.TryParseDecimal(value, out var n) || n < 0 || n > 1440)
             throw new CliError($"Invalid --early-abort value \"{value}\": expected 0 (disabled) or minutes between 0 and 1440.");
+        return n;
+    }
+
+    /// <summary>Parses the --abs-retry parameter into 0 (give up at the first failure) or a number
+    /// of minutes up to 1440 (24 hours). The cap is there because a run that would sit in front of
+    /// an unreachable server for longer than a day is a typo rather than a plan.</summary>
+    /// <param name="value">The raw parameter.</param>
+    private static double ParseAbsRetry(string value)
+    {
+        if (!NumberCulture.TryParseDecimal(value, out var n) || n < 0 || n > 1440)
+            throw new CliError(
+                $"Invalid --abs-retry value \"{value}\": expected 0 (do not retry) or minutes between 0 and 1440.");
         return n;
     }
 
@@ -2266,6 +2293,13 @@ public sealed class CliOptions
                                     process list: ABCHAPTERIZE_ABS_URL, ABCHAPTERIZE_ABS_KEY,
                                     ABCHAPTERIZE_ABS_USER, ABCHAPTERIZE_ABS_PASSWORD and
                                     ABCHAPTERIZE_ABS_TEMP. A --config file does the same job.
+              --abs-retry <minutes> How long to keep trying a server that is not answering, in
+                                    minutes (default 3, 0 to give up at the first failure). Every
+                                    request is covered, with a minute between attempts; a
+                                    download that breaks off part way is started again once. What
+                                    the server refuses on purpose - an unknown item, a right the
+                                    account has not got - is reported straight away rather than
+                                    asked for again.
 
         Detection tuning:
           -l, --lang <code|auto>    Language hint for Whisper - the two-letter code, or the

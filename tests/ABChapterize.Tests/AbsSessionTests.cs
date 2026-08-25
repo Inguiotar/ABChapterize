@@ -61,8 +61,53 @@ public sealed class AbsSessionTests
 
     /// <summary>A session logging in with a username and password, over the given transport.</summary>
     /// <param name="transport">The scripted transport to send over.</param>
-    private static AbsSession LoggingIn(ScriptedTransport transport)
-        => new(AbsConnection.Resolve(Server, null, "root", "secret"), transport);
+    /// <param name="retry">How long to keep trying, or null for not at all.</param>
+    private static AbsSession LoggingIn(ScriptedTransport transport, AbsRetryPolicy? retry = null)
+        => new(AbsConnection.Resolve(Server, null, "root", "secret"), transport, retry);
+
+    /// <summary>
+    /// A retry policy with a real budget and no waiting at all, which is the only way these tests
+    /// can look at the retry loop: the pause a run actually uses is a minute.
+    /// </summary>
+    private static AbsRetryPolicy Retrying => AbsRetryPolicy.Of(minutes: 1, pauseSeconds: 0);
+
+    /// <summary>What an unreachable server looks like from inside a script.</summary>
+    private static HttpResponseMessage Refusing()
+        => throw new HttpRequestException("connection refused");
+
+    /// <summary>
+    /// A body that hands over some bytes and then breaks, which is what a transfer cut part way
+    /// through a book looks like: the request succeeded, the headers arrived, and the failure is
+    /// somewhere in the middle of a gigabyte.
+    /// </summary>
+    /// <param name="bytesBeforeBreak">How much to deliver before failing.</param>
+    private sealed class BreakingStream(int bytesBeforeBreak) : Stream
+    {
+        private int _delivered;
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_delivered >= bytesBeforeBreak)
+                throw new IOException("the connection was closed");
+            var give = Math.Min(count, bytesBeforeBreak - _delivered);
+            _delivered += give;
+            return give;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => _delivered;
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     /// <summary>
     /// The headline case: a token accepted at the start of a run and refused part way through gets
@@ -174,6 +219,214 @@ public sealed class AbsSessionTests
         Assert.Contains("API key was refused", error.Message);
         Assert.DoesNotContain(transport.Seen, r => r.Path == "/login");
         Assert.Equal(["key"], transport.Seen.Select(r => r.Token));
+    }
+
+    /// <summary>
+    /// The headline case for <c>--abs-retry</c>: a server that is not there yet is waited for
+    /// rather than reported, and every kind of request is covered - the login as readily as what
+    /// comes after it.
+    /// </summary>
+    [Fact]
+    public async Task AServerThatIsNotAnsweringIsTriedAgainUntilItDoes()
+    {
+        var transport = new ScriptedTransport((n, _) => n switch
+        {
+            1 => Refusing(),                     // the server is still starting up
+            2 => LoginGiving("first"),           // ... and by the next attempt it is up
+            3 => Refusing(),                     // the same again for the next request
+            _ => Answering(HttpStatusCode.OK),
+        });
+        using var session = LoggingIn(transport, Retrying);
+
+        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+
+        Assert.Equal(
+            [("POST", "/login", null), ("POST", "/login", null),
+             ("POST", "/api/authorize", "first"), ("POST", "/api/authorize", "first")],
+            transport.Seen);
+    }
+
+    /// <summary>
+    /// <c>--abs-retry 0</c> means what it says: the first failure is the run's answer.
+    /// </summary>
+    [Fact]
+    public async Task WithoutABudget_TheFirstFailureIsTheAnswer()
+    {
+        var transport = new ScriptedTransport((_, _) => Refusing());
+        using var session = LoggingIn(transport);
+
+        var error = await Assert.ThrowsAsync<AppError>(
+            () => session.OpenAsync(needsUpdate: false, CancellationToken.None));
+
+        Assert.Contains("could not be reached", error.Message);
+        Assert.Single(transport.Seen);
+    }
+
+    /// <summary>
+    /// A server that never comes back is reported once the budget is spent, rather than retried for
+    /// the rest of the user's evening.
+    /// </summary>
+    /// <remarks>
+    /// The attempt count is deliberately asserted as a range. What the budget bounds is time, so
+    /// how many attempts fit into it depends on how fast the machine running this is - the fact
+    /// worth pinning is that there was more than one and that it stopped by itself.
+    /// </remarks>
+    [Fact]
+    public async Task AServerThatNeverComesBackIsGivenUpOnWhenTheBudgetRunsOut()
+    {
+        var transport = new ScriptedTransport((_, _) => Refusing());
+        using var session = LoggingIn(transport, AbsRetryPolicy.Of(minutes: 0.002, pauseSeconds: 0.01));
+
+        await Assert.ThrowsAsync<AppError>(
+            () => session.OpenAsync(needsUpdate: false, CancellationToken.None));
+
+        Assert.InRange(transport.Seen.Count, 2, 200);
+    }
+
+    /// <summary>
+    /// A 503 is the shape a server behind a reverse proxy takes while it restarts, so it is waited
+    /// out like a dropped connection.
+    /// </summary>
+    [Fact]
+    public async Task AServiceUnavailableIsWaitedOut()
+    {
+        var transport = new ScriptedTransport((n, _) => n switch
+        {
+            1 => LoginGiving("first"),
+            2 => Answering(HttpStatusCode.OK),
+            3 => Answering(HttpStatusCode.ServiceUnavailable),
+            _ => Answering(HttpStatusCode.OK),
+        });
+        using var session = LoggingIn(transport, Retrying);
+        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+
+        await session.GetAsync<object>("/api/libraries", CancellationToken.None);
+
+        Assert.Equal(2, transport.Seen.Count(r => r.Path == "/api/libraries"));
+    }
+
+    /// <summary>
+    /// An answer the server meant is not waited out. Three minutes cannot turn an item id the
+    /// server has never heard of into one it has, and an <c>--abs</c> run over a library would pay
+    /// that wait once per book.
+    /// </summary>
+    /// <param name="status">A refusal the server decided.</param>
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    public async Task ARefusalTheServerMeantIsReportedAtOnce(HttpStatusCode status)
+    {
+        var transport = new ScriptedTransport((n, _) => n switch
+        {
+            1 => LoginGiving("first"),
+            2 => Answering(HttpStatusCode.OK),
+            _ => Answering(status),
+        });
+        using var session = LoggingIn(transport, Retrying);
+        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+
+        await Assert.ThrowsAsync<AppError>(
+            () => session.GetAsync<object>("/api/libraries", CancellationToken.None));
+
+        Assert.Equal(1, transport.Seen.Count(r => r.Path == "/api/libraries"));
+    }
+
+    /// <summary>
+    /// The chapter update is retried like everything else, which is only safe because it replaces a
+    /// book's whole chapter list rather than adding to it - see <see cref="AbsRetryPolicy"/>.
+    /// </summary>
+    /// <remarks>
+    /// The case that matters: the push is the last thing a run does, after half an hour of
+    /// transcription, and it is the one request whose failure loses work that cannot be repeated
+    /// cheaply.
+    /// </remarks>
+    [Fact]
+    public async Task TheChapterUpdateIsRetriedToo()
+    {
+        var transport = new ScriptedTransport((n, _) => n switch
+        {
+            1 => LoginGiving("first"),
+            2 => Answering(HttpStatusCode.OK),
+            3 => Refusing(),
+            _ => Answering(HttpStatusCode.OK),
+        });
+        using var session = LoggingIn(transport, Retrying);
+        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+
+        await session.PostAsync("/api/items/1/chapters", new { }, CancellationToken.None);
+
+        Assert.Equal(2, transport.Seen.Count(r => r.Path == "/api/items/1/chapters"));
+    }
+
+    /// <summary>
+    /// A transfer that breaks off part way through a book is started again - once, however much
+    /// budget is left, since a book is a large file and a server that cuts every stream would
+    /// otherwise have the run fetching most of the same one over and over.
+    /// </summary>
+    [Fact]
+    public async Task ABrokenDownloadIsStartedAgainExactlyOnce()
+    {
+        var transport = new ScriptedTransport((n, _) => n switch
+        {
+            1 => LoginGiving("first"),
+            2 => Answering(HttpStatusCode.OK),
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new BreakingStream(1024)),
+            },
+        });
+        using var session = LoggingIn(transport, Retrying);
+        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        var destination = Path.Combine(Path.GetTempPath(), $"abchapterize-test-{Guid.NewGuid():N}.bin");
+
+        try
+        {
+            await Assert.ThrowsAsync<AppError>(
+                () => session.DownloadAsync("/download", destination, null, CancellationToken.None));
+
+            Assert.Equal(2, transport.Seen.Count(r => r.Path == "/download"));
+            // The half-written file goes with the failure: ffprobe would read one as a truncated
+            // book and detection would run over an audiobook missing its end.
+            Assert.False(File.Exists(destination));
+        }
+        finally
+        {
+            File.Delete(destination);
+        }
+    }
+
+    /// <summary>The other half of it: the second attempt is a real one, and its bytes are the
+    /// ones that end up on disk.</summary>
+    [Fact]
+    public async Task ARestartedDownloadKeepsWhatTheSecondAttemptDelivered()
+    {
+        var transport = new ScriptedTransport((n, _) => n switch
+        {
+            1 => LoginGiving("first"),
+            2 => Answering(HttpStatusCode.OK),
+            3 => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new BreakingStream(1024)),
+            },
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[4096]) },
+        });
+        using var session = LoggingIn(transport, Retrying);
+        await session.OpenAsync(needsUpdate: false, CancellationToken.None);
+        var destination = Path.Combine(Path.GetTempPath(), $"abchapterize-test-{Guid.NewGuid():N}.bin");
+
+        try
+        {
+            var written = await session.DownloadAsync(
+                "/download", destination, null, CancellationToken.None);
+
+            Assert.Equal(4096, written);
+            Assert.Equal(4096, new FileInfo(destination).Length);
+        }
+        finally
+        {
+            File.Delete(destination);
+        }
     }
 
     /// <summary>

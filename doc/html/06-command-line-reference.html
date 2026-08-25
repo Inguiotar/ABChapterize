@@ -341,6 +341,23 @@ separately, so a server and key exported once still let a single command name a
 different account. <strong>Prefer this to typing a key or a password on the command
 line</strong>, where it is visible to anything that can list processes; a
 <a href="#options-from-a-file"><code>--config</code> file</a> does the same job.</p>
+<p><code>--abs-retry &lt;minutes&gt;</code>
+: How long to keep trying a server that is not answering, in minutes — 3 by
+default, 0 to give up at the first failure. It covers <em>every</em> exchange with
+the server: the sign-in, each listing, each download and each chapter update.
+Attempts are a minute apart, so the default is worth about three of them.</p>
+<p>This is for a server that is temporarily not there — restarting after an
+update, a NAS still spinning up, a link that drops for a minute. What the
+server refuses <em>on purpose</em> is reported straight away instead: an item id it
+does not know, a chapter list it will not accept, a right the account has not
+got. Waiting three minutes could not change any of those answers, and an
+<code>--abs</code> run over a library would pay the wait once per book.</p>
+<p>A download that breaks off part way through is started again, but only once
+however much of the budget is left: a book is a large file, and a server that
+cuts every transfer near the end would otherwise have the run fetching most of
+the same book over and over. There is no resume from where it stopped.</p>
+<p>Each wait is announced, <code>--quiet</code> included, since a run that goes silent for
+minutes is otherwise indistinguishable from one that has hung.</p>
 <p>The account's rights are checked before the first book is downloaded: one that
 may not update items is refused straight away rather than an hour into a run,
 unless <code>--dry-run</code> or <code>--no-op</code> means nothing would be written anyway.</p>
@@ -1675,6 +1692,12 @@ you are going to change one, that is what to read first.</p>
 <p>The class name is required even though the constant names happen to be unique.
 That is on purpose: it is a small confirmation that you went and looked at the
 class the constant belongs to.</p>
+<p>One class in the list has nothing to do with detection: <code>AbsRetryPolicy</code> holds
+the pause between attempts at an <a href="#audiobookshelf">Audiobookshelf</a> server that
+is not answering. How long a server needs to come back is a fact about somebody
+else's machine, so it is worth being able to change — but <code>--abs-retry</code> already
+asks the question a user can answer, and a second number to divide into the
+first would make a worse command line than one.</p>
 <p>A constant that is <em>derived</em> from others cannot be set on its own and is not
 listed — <code>RescanShiftSeconds</code> is half of <code>WhisperChunkSeconds</code>, so setting the
 latter moves it too. An unknown class or constant is an error rather than

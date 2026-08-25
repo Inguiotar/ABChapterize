@@ -65,11 +65,16 @@ public sealed class AbsWorkspace : IDisposable
     /// <param name="connection">The resolved server and credentials.</param>
     /// <param name="temporaryRoot">Where downloads should go, or null for the system temporary
     /// folder.</param>
+    /// <param name="retry">How long a request that fails keeps being tried (<c>--abs-retry</c>).</param>
     /// <param name="log">Sink for notes, or null.</param>
-    public AbsWorkspace(AbsConnection connection, string? temporaryRoot, Action<string>? log = null)
+    /// <param name="notify">Sink for a note the user must see whatever the verbosity, or null;
+    /// see <see cref="AbsSession"/>.</param>
+    public AbsWorkspace(
+        AbsConnection connection, string? temporaryRoot, AbsRetryPolicy retry,
+        Action<string>? log = null, Action<string>? notify = null)
     {
         _log = log;
-        _session = new AbsSession(connection, log);
+        _session = new AbsSession(connection, retry, log, notify);
         _catalog = new AbsCatalog(_session, log);
         // A folder per run rather than a shared one: two abchapterize processes against the same
         // server would otherwise clean up each other's downloads, and the guid is also what makes

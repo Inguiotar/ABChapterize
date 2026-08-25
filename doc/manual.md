@@ -1271,6 +1271,27 @@ different account. **Prefer this to typing a key or a password on the command
 line**, where it is visible to anything that can list processes; a
 [`--config` file](#options-from-a-file) does the same job.
 
+`--abs-retry <minutes>`
+: How long to keep trying a server that is not answering, in minutes — 3 by
+  default, 0 to give up at the first failure. It covers *every* exchange with
+  the server: the sign-in, each listing, each download and each chapter update.
+  Attempts are a minute apart, so the default is worth about three of them.
+
+  This is for a server that is temporarily not there — restarting after an
+  update, a NAS still spinning up, a link that drops for a minute. What the
+  server refuses *on purpose* is reported straight away instead: an item id it
+  does not know, a chapter list it will not accept, a right the account has not
+  got. Waiting three minutes could not change any of those answers, and an
+  `--abs` run over a library would pay the wait once per book.
+
+  A download that breaks off part way through is started again, but only once
+  however much of the budget is left: a book is a large file, and a server that
+  cuts every transfer near the end would otherwise have the run fetching most of
+  the same book over and over. There is no resume from where it stopped.
+
+  Each wait is announced, `--quiet` included, since a run that goes silent for
+  minutes is otherwise indistinguishable from one that has hung.
+
 The account's rights are checked before the first book is downloaded: one that
 may not update items is refused straight away rather than an hour into a run,
 unless `--dry-run` or `--no-op` means nothing would be written anyway.
@@ -2733,6 +2754,13 @@ you are going to change one, that is what to read first.
 The class name is required even though the constant names happen to be unique.
 That is on purpose: it is a small confirmation that you went and looked at the
 class the constant belongs to.
+
+One class in the list has nothing to do with detection: `AbsRetryPolicy` holds
+the pause between attempts at an [Audiobookshelf](#audiobookshelf) server that
+is not answering. How long a server needs to come back is a fact about somebody
+else's machine, so it is worth being able to change — but `--abs-retry` already
+asks the question a user can answer, and a second number to divide into the
+first would make a worse command line than one.
 
 A constant that is *derived* from others cannot be set on its own and is not
 listed — `RescanShiftSeconds` is half of `WhisperChunkSeconds`, so setting the

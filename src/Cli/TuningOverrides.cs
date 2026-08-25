@@ -4,6 +4,7 @@
 
 using System.Globalization;
 using System.Reflection;
+using ABChapterize.Abs;
 using ABChapterize.Audio;
 using ABChapterize.Detection;
 using ABChapterize.Errors;
@@ -36,9 +37,20 @@ internal static class TuningOverrides
     /// reflection.
     /// </summary>
     /// <remarks>
-    /// Detection and the audio analysis behind it, and nothing else. The rest of the tree's
-    /// constants describe protocol and layout - ffmpeg arguments, ONNX tensor shapes, progress bar
-    /// widths - where an override does not tune anything, it corrupts output.
+    /// <para>
+    /// Detection and the audio analysis behind it. The rest of the tree's constants describe
+    /// protocol and layout - ffmpeg arguments, ONNX tensor shapes, progress bar widths - where an
+    /// override does not tune anything, it corrupts output.
+    /// </para>
+    /// <para>
+    /// <see cref="AbsRetryPolicy"/> is the one member of this list that has nothing to do with
+    /// detection, and it is here because the pause between retries is a genuine knob with no good
+    /// answer: whether a server needs ten seconds or two minutes to come back is a fact about
+    /// somebody else's machine. It is not an option because <c>--abs-retry</c> already says the
+    /// thing a user knows (how long they will wait), and a second number that has to be divided
+    /// into the first is a worse command line than one. Do not read this as licence to expose the
+    /// rest of the tree: what qualifies is a value that is tuned, not one that is depended on.
+    /// </para>
     /// </remarks>
     private static readonly Type[] Exposed =
     [
@@ -46,6 +58,7 @@ internal static class TuningOverrides
         typeof(VadSegmenter),
         typeof(SileroVadDetector),
         typeof(AudioFidelity),
+        typeof(AbsRetryPolicy),
     ];
 
     /// <summary>Every field a <c>--set:</c> may write, by "Class.Name".</summary>
