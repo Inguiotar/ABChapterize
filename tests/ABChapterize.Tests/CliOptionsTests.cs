@@ -1552,6 +1552,35 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--revert", "--simple-metadata"));
     }
 
+    [Fact]
+    public void NoRename_IsOffByDefaultAndSwitchesOn()
+    {
+        Assert.False(ParseFile()!.NoRename);
+        Assert.True(ParseFile("--no-rename")!.NoRename);
+    }
+
+    /// <summary>
+    /// It withholds a name tag from a file a run leaves incomplete, so the modes that process no
+    /// file turn it away like every other processing option - most pointedly --cleanup, whose job
+    /// includes taking such tags back off.
+    /// </summary>
+    [Fact]
+    public void NoRename_IsRefusedByTheModesThatProcessNothing()
+    {
+        Assert.Throws<CliError>(() => ParseDir("--cleanup", "--yes", "--no-rename"));
+        Assert.Throws<CliError>(() => ParseDir("--revert", "--no-rename"));
+        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--no-rename"));
+    }
+
+    /// <summary>
+    /// And it stays out of the run fingerprint, unlike every other processing option: the marks a
+    /// file receives are the same either way and only the name it ends up under differs, so an
+    /// interrupted batch resumed with the option added must not redo the files it already finished.
+    /// </summary>
+    [Fact]
+    public void NoRename_DoesNotChangeTheRunFingerprint()
+        => Assert.Equal(ParseFile()!.RunFingerprint, ParseFile("--no-rename")!.RunFingerprint);
+
     /// <summary>
     /// The two hooks run per processed file, so every mode that processes no file rejects them
     /// rather than accepting a command it would never run.

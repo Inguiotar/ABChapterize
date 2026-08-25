@@ -72,6 +72,9 @@ internal static class FolderConfig
         // FileProcessor also consults it to decide whether a ".missing-marks" file may be
         // resumed, which happens before any of this and under the run's own options. Allowing
         // it per folder would honour half of it, which is worse than refusing it outright.
+        // --no-rename is out for the same reason and would be a natural thing to ask for per
+        // folder: the commit path that reads it works from the run's options, not the file's, so
+        // a per-folder value would be accepted and then ignored.
         // Not settings: the command line itself, which necessarily differs once a folder's
         // options have been put in front of it, and the fingerprint derived from it. Note the
         // run's own fingerprint is what BatchProgress records, not this one - so a per-folder
@@ -96,6 +99,7 @@ internal static class FolderConfig
         ["Import"] = "--import", ["Export"] = "--export", ["SimpleMetadata"] = "--simple-metadata",
         ["DryRun"] = "--dry-run", ["Revert"] = "--revert", ["Cleanup"] = "--cleanup",
         ["NoOp"] = "--no-op", ["AssumeYes"] = "--yes", ["IgnoreProgress"] = "--ignore-progress",
+        ["NoRename"] = "--no-rename",
         ["Quiet"] = "--quiet", ["Verbose"] = "--verbose",
         ["VerboseTranscripts"] = "--verbose-transcripts",
         ["Summary"] = "--summary", ["NoBar"] = "--no-bar", ["Color"] = "--color",

@@ -524,6 +524,19 @@ complete chapter sequence takes the tag off again and gives the file its own
 name back — the tag records work still to be done, and there is none left.
 With <code>--debug</code>, the log written beside the file follows it to that name,
 replacing any log already sitting there from the run that left the tag.</p>
+<p><code>--no-rename</code> withholds the tag entirely, for a library whose file names are
+not this tool's to change — a media server that keys its database off the path,
+a seeded or hard-linked file, somebody else's naming scheme. The marks that were
+found are still written, the warning is still printed and <code>--summary</code> still
+lists the file as incomplete; only the name is left alone. What it costs is the
+automatic resume above: with nothing on the name to say which chapters are
+missing, the next run over that folder sees a file that already carries marks
+and skips it, so finishing it takes <code>--force</code>. A tag an <em>earlier</em> run left behind
+is still taken off once the file is complete — that gives the file its own name
+back rather than imposing a new one, and it is what keeps a completed file from
+being sent down the resume path by every later run. <code>--no-rename</code> cannot be
+combined with <code>--cleanup</code>, <code>--revert</code> or <code>--no-op</code>, none of which detect
+anything, and it cannot be set per folder.</p>
 <h2 id="prologue-and-epilogue">Prologue and epilogue<a class="anchor" href="#prologue-and-epilogue" aria-label="Permalink to this heading">#</a></h2>
 <p>Alongside the numbered chapters, every run also listens for a prologue and an
 epilogue announcement (default phrases <code>/prolog/</code> / <code>/epilog/</code>, localized by

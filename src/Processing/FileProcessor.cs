@@ -1204,8 +1204,9 @@ public sealed class FileProcessor
         {
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - resume incomplete, still missing: {stillMissing}; would write " +
-                $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")} and re-tag as " +
-                $"{Path.GetFileName(retarget)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
+                $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")}" +
+                $"{WouldRenameNote(retarget, "re-tag as")}:" +
+                $"{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
             return null;
         }
@@ -1545,8 +1546,8 @@ public sealed class FileProcessor
         {
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - unresolved chapter sequence gap (missing: {missingList}); " +
-                $"would write {FormatWrittenCount(result, chapters, "partial mark(s)")} and rename to " +
-                $"{Path.GetFileName(target)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
+                $"would write {FormatWrittenCount(result, chapters, "partial mark(s)")}" +
+                $"{WouldRenameNote(target)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
             return null;
         }
@@ -1569,7 +1570,8 @@ public sealed class FileProcessor
     /// <param name="missingNumbers">The chapter numbers still missing.</param>
     private void RecordStillMissing(FileContext ctx, string taggedPath, IReadOnlyList<int> missingNumbers)
         => _outcomes.RecordMissingMarks(
-            _options.DryRun ? ctx.Name : Path.GetFileName(taggedPath), missingNumbers);
+            _options.DryRun || TagRenameSuppressed(taggedPath) ? ctx.Name : Path.GetFileName(taggedPath),
+            missingNumbers);
 
     /// <summary>
     /// Lists one file --summary is to report as carrying marks worth a manual check, under the name
@@ -1588,7 +1590,9 @@ public sealed class FileProcessor
         // per-file answer - so a batch mixing a bare-number book with ordinary ones earns the
         // block's footnote from the one book it applies to.
         _outcomes.RecordLowConfidence(
-            _options.DryRun || finalPath == null ? ctx.Name : Path.GetFileName(finalPath),
+            _options.DryRun || finalPath == null || TagRenameSuppressed(finalPath)
+                ? ctx.Name
+                : Path.GetFileName(finalPath),
             result.LowConfidenceChapters, result.SequenceCount, result.Profile.BareNumberAnnouncements);
     }
 
@@ -1666,7 +1670,7 @@ public sealed class FileProcessor
 
         if (_options.DryRun)
         {
-            var wouldRename = restored != null ? $" and rename to {Path.GetFileName(restored)}" : "";
+            var wouldRename = WouldRenameNote(restored);
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - would {DescribeDropped(dropped, prospective: true)}" +
                 $"write {FormatWrittenCount(result, chapters)}{notes}{wouldRename}:" +
@@ -1858,7 +1862,9 @@ public sealed class FileProcessor
             : _options.AbsPush
                 ? await PushLocalFileAsync(ctx, chapters, complete, ct)
                 : "";
-        return (RenameCommitted(ctx.File, renameTo), writeNote + pushNote);
+        // The one place a rename is performed, so the one place --no-rename has to be applied.
+        return (RenameCommitted(ctx.File, TagRenameSuppressed(renameTo) ? null : renameTo),
+                writeNote + pushNote);
     }
 
     /// <summary>
@@ -1967,6 +1973,48 @@ public sealed class FileProcessor
         return renameTo;
     }
 
+    /// <summary>
+    /// <see cref="RenameNote"/>'s <c>--dry-run</c> counterpart: what the line promises about the
+    /// file's name. Empty where the run would not rename it - either because the outcome calls for
+    /// no rename at all, or because <c>--no-rename</c> would hold it back - so that a dry run
+    /// never announces a name the real run would not produce.
+    /// </summary>
+    /// <param name="wanted">The name the outcome calls for, or null when none does.</param>
+    /// <param name="verb">How this path words the rename.</param>
+    private string WouldRenameNote(string? wanted, string verb = "rename to")
+        => wanted == null || TagRenameSuppressed(wanted)
+            ? ""
+            : $" and {verb} {Path.GetFileName(wanted)}";
+
+    /// <summary>
+    /// Whether <c>--no-rename</c> holds back the move to <paramref name="wanted"/>: it does for a
+    /// name carrying a ".missing-marks" tag, and only for one.
+    /// <para>
+    /// The tag is a note this tool leaves on somebody's file name, and the option says not to leave
+    /// any - so writing one is refused, while taking one off is not. That asymmetry is deliberate
+    /// and it is what makes the option safe to switch on over a library that already has tags in
+    /// it: the alternative leaves a completed file tagged for ever, and
+    /// <see cref="PlanFor"/> sends a tagged file down the resume path <em>before</em> it can be
+    /// skipped for the marks it already carries - so every later run would re-analyze a file with
+    /// nothing left to find in it.
+    /// </para>
+    /// <para>
+    /// Read by the step that performs the rename and by the ones that report or list the file
+    /// afterwards, so that a name nobody is going to see is never announced as one.
+    /// </para>
+    /// </summary>
+    /// <param name="wanted">The name the outcome called for, or null when none was.</param>
+    /// <param name="noRename">Whether <c>--no-rename</c> was given. A parameter rather than a read
+    /// of the run's options, so the rule can be tested without a processor. Internal for that
+    /// reason.</param>
+    internal static bool TagRenameSuppressed(string? wanted, bool noRename)
+        => noRename && wanted != null && MissingMarksTag.IsTagged(wanted);
+
+    /// <summary>This run's answer to <see cref="TagRenameSuppressed(string?, bool)"/>.</summary>
+    /// <param name="wanted">The name the outcome called for, or null when none was.</param>
+    private bool TagRenameSuppressed(string? wanted)
+        => TagRenameSuppressed(wanted, _options.NoRename);
+
     /// <summary>Whether two paths name the same file, by the platform's own rules.</summary>
     /// <param name="left">One path.</param>
     /// <param name="right">The other.</param>
@@ -1975,20 +2023,29 @@ public sealed class FileProcessor
             CliOptions.NormalizePath(left), CliOptions.NormalizePath(right));
 
     /// <summary>
-    /// The clause a summary line closes with about the file's name: what it was renamed to, or -
-    /// where <see cref="RenameCommitted"/> found the destination occupied - that it was not. Said
-    /// out loud rather than quietly omitted, because the marks are written either way and a reader
-    /// who goes looking for the new name has to be told why it is not there.
+    /// The clause a summary line closes with about the file's name: what it was renamed to, or that
+    /// it was not and why. Said out loud rather than quietly omitted, because the marks are written
+    /// either way and a reader who goes looking for the new name has to be told why it is not there
+    /// - which holds for <c>--no-rename</c> too, where the name that did not happen is the tool's
+    /// only lasting record that this file is incomplete.
+    /// <para>
+    /// The two ways a wanted rename does not happen are worth telling apart: one the reader asked
+    /// for, the other an obstacle they may want to clear.
+    /// </para>
     /// </summary>
     /// <param name="wanted">The name the outcome called for, or null when none was.</param>
     /// <param name="final">Where the file actually ended up.</param>
     /// <param name="verb">How this path words a rename that did happen.</param>
-    private static string RenameNote(string? wanted, string final, string verb = "renamed to")
-        => wanted == null
-            ? ""
-            : SamePath(final, wanted)
-                ? $", {verb} {Path.GetFileName(wanted)}"
-                : $", NOT {verb} {Path.GetFileName(wanted)} - a file of that name is already there";
+    private string RenameNote(string? wanted, string final, string verb = "renamed to")
+    {
+        if (wanted == null)
+            return "";
+        if (SamePath(final, wanted))
+            return $", {verb} {Path.GetFileName(wanted)}";
+        return TagRenameSuppressed(wanted)
+            ? ", not renamed (--no-rename)"
+            : $", NOT {verb} {Path.GetFileName(wanted)} - a file of that name is already there";
+    }
 
     /// <summary>Formats the indented "&lt;timestamp&gt;  &lt;title&gt;" block every --dry-run
     /// summary line ends with.</summary>

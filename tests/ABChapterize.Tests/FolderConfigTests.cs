@@ -130,6 +130,9 @@ public sealed class FolderConfigTests : IDisposable
     [InlineData("--filter", "m4b")]
     [InlineData("--debug")]
     [InlineData("--backup")]
+    // Reads like a per-book setting and is not one: the commit path that acts on it works from the
+    // run's options, so a folder's value would be accepted and then ignored.
+    [InlineData("--no-rename")]
     [InlineData("--set:DetectionTuning.WhisperChunkSeconds=25")]
     public void EverySortOfRunWideOption_IsRefused(params string[] line)
     {

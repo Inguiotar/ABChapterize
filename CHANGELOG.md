@@ -77,6 +77,15 @@ earn a round number.
   Markdown, which stays the source of truth, and it is deliberately not part of the download
   archives — those already carry the manual itself.
 
+- **`--no-rename` leaves your file names alone.** A file left with a chapter-sequence gap is
+  normally renamed to `<name>.missing-marks-3-7.<ext>` so the hole is visible and a later run can
+  pick it up. Where the name is not yours to change — a media server keying its database off the
+  path, a seeded or hard-linked file, somebody else's naming scheme — this withholds the tag: the
+  marks that were found are still written and the file is still reported as incomplete, it simply
+  keeps its name. The cost is the automatic resume, since the tag is what tells a later run which
+  chapters to go back for; finishing such a file takes `--force`. A tag an earlier run left behind
+  is still taken off once the file is complete.
+
 ### Fixed
 
 - **A chapter is no longer lost when one announcement is heard as two.** Where a single reading

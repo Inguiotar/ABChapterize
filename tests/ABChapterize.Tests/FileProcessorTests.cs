@@ -283,6 +283,26 @@ public sealed class FileProcessorTests : IDisposable
         => Assert.True(FileProcessor.IsWholesaleFailure(Verified(confirmed: 0, failed: 3), 100));
 
     /// <summary>
+    /// --no-rename holds back a rename that would <em>put</em> a ".missing-marks" tag on a name,
+    /// and only that one. Taking one off still happens: it gives the file its own name back rather
+    /// than imposing a new one, and without it a completed file would stay tagged for ever and be
+    /// sent down the resume path by every later run.
+    /// </summary>
+    [Fact]
+    public void TagRenameSuppressed_HoldsBackATagButNeverAnUntag()
+    {
+        const string tagged = "book.missing-marks-3-7.m4b";
+        const string plain = "book.m4b";
+        Assert.True(FileProcessor.TagRenameSuppressed(tagged, noRename: true));
+        // The unnumbered form is a tag too, and just as much a note on somebody's file name.
+        Assert.True(FileProcessor.TagRenameSuppressed("book.missing-marks.m4b", noRename: true));
+        Assert.False(FileProcessor.TagRenameSuppressed(plain, noRename: true));
+        Assert.False(FileProcessor.TagRenameSuppressed(null, noRename: true));
+        // And nothing at all is held back without the option.
+        Assert.False(FileProcessor.TagRenameSuppressed(tagged, noRename: false));
+    }
+
+    /// <summary>
     /// The ordinary rename: a file finishing under a new name gets it, and reports it.
     /// </summary>
     [Fact]

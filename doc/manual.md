@@ -570,6 +570,20 @@ name back — the tag records work still to be done, and there is none left.
 With `--debug`, the log written beside the file follows it to that name,
 replacing any log already sitting there from the run that left the tag.
 
+`--no-rename` withholds the tag entirely, for a library whose file names are
+not this tool's to change — a media server that keys its database off the path,
+a seeded or hard-linked file, somebody else's naming scheme. The marks that were
+found are still written, the warning is still printed and `--summary` still
+lists the file as incomplete; only the name is left alone. What it costs is the
+automatic resume above: with nothing on the name to say which chapters are
+missing, the next run over that folder sees a file that already carries marks
+and skips it, so finishing it takes `--force`. A tag an *earlier* run left behind
+is still taken off once the file is complete — that gives the file its own name
+back rather than imposing a new one, and it is what keeps a completed file from
+being sent down the resume path by every later run. `--no-rename` cannot be
+combined with `--cleanup`, `--revert` or `--no-op`, none of which detect
+anything, and it cannot be set per folder.
+
 ### Prologue and epilogue
 
 Alongside the numbered chapters, every run also listens for a prologue and an
@@ -2170,6 +2184,17 @@ looking. None of these is needed for an ordinary book.
   able to get back to. This run's own original is discarded instead, and the
   summary line says `earlier backup kept (predates this run)` so it is clear
   that `--revert` will not simply undo the last run.
+
+`--no-rename`
+: Never write a `.missing-marks-…` tag into a file name - see
+  [Re-scan](#re-scan--the-shifted-second-reading) for what the tag is and what
+  withholding it costs. The marks a run found are still written, the warning is
+  still printed, and `--summary` still lists the file as incomplete, under the
+  name it kept. Only a tag being *added* is withheld: one an earlier run left
+  behind still comes off when the file is completed. Rejected together with
+  `--cleanup`, `--revert` and `--no-op`, none of which detect anything, and it
+  cannot be given per folder - the step that reads it works from the run's own
+  options. No short form.
 
 `-R`, `--revert`
 : Restore backups instead of processing: for every supported audio file with

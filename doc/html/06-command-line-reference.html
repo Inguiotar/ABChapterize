@@ -1177,6 +1177,16 @@ stays the copy from before the first one, which is the state worth being
 able to get back to. This run's own original is discarded instead, and the
 summary line says <code>earlier backup kept (predates this run)</code> so it is clear
 that <code>--revert</code> will not simply undo the last run.</p>
+<p><code>--no-rename</code>
+: Never write a <code>.missing-marks-…</code> tag into a file name - see
+<a href="03-how-detection-works.html#re-scan--the-shifted-second-reading">Re-scan</a> for what the tag is and what
+withholding it costs. The marks a run found are still written, the warning is
+still printed, and <code>--summary</code> still lists the file as incomplete, under the
+name it kept. Only a tag being <em>added</em> is withheld: one an earlier run left
+behind still comes off when the file is completed. Rejected together with
+<code>--cleanup</code>, <code>--revert</code> and <code>--no-op</code>, none of which detect anything, and it
+cannot be given per folder - the step that reads it works from the run's own
+options. No short form.</p>
 <p><code>-R</code>, <code>--revert</code>
 : Restore backups instead of processing: for every supported audio file with
 an added <code>.bak</code> suffix under the target, the current file is deleted and

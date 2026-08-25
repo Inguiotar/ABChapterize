@@ -32,6 +32,34 @@ public sealed class CliOptions
     /// <summary>Keep the original file as "*.bak" (--backup / -b).</summary>
     public bool Backup { get; private set; }
 
+    /// <summary>
+    /// Never write a ".missing-marks" tag into a file name (--no-rename). The marks a run found are
+    /// still written and the missing chapters still reported; only the note left on the name is
+    /// withheld, so a file keeps whatever it was called.
+    /// <para>
+    /// For libraries where the file name is not the tool's to change: a media server that keys its
+    /// database off the path, a seeded or hard-linked file, a naming scheme somebody else's script
+    /// depends on. What it costs is the auto-resume - the tag is the only thing that tells a later
+    /// run which chapters to go back for (see
+    /// <see cref="ABChapterize.Processing.MissingMarksTag"/>), so a file left with a gap under this
+    /// option is skipped by the next run for the marks it already carries, and finishing it needs
+    /// <c>--force</c>.
+    /// </para>
+    /// <para>
+    /// Only tags are withheld: a run that <em>completes</em> a file already carrying one still
+    /// takes it off, which restores the file's own name rather than imposing a new one. That is
+    /// also what keeps the option safe to adopt mid-library - without it a tagged file would stay
+    /// tagged for ever, and every later run would send it down the resume path before it could be
+    /// skipped for the marks it has (see <see cref="ABChapterize.Processing.FileProcessor"/>'s
+    /// planning).
+    /// </para>
+    /// <para>
+    /// Deliberately without a short form: no free letter carries the meaning, and an arbitrary one
+    /// would be harder to remember than the word.
+    /// </para>
+    /// </summary>
+    public bool NoRename { get; private set; }
+
     /// <summary>Restore "*.&lt;ext&gt;.bak" backup files to their original names (--revert / -R).</summary>
     public bool Revert { get; private set; }
 
@@ -1014,6 +1042,7 @@ public sealed class CliOptions
     /// </summary>
     private bool AnyProcessingOptionGiven
         => Backup || Force || CpuOnly || MarkBeforeJingle || QuickMarks || !TrailingScan || !Denoise || DryRun
+           || NoRename
            || JingleFirst
            || Export || Import || SimpleMetadata || Verify || Fix || IgnoreProgress
            || UseGpu != null || VadThreads != null || WhisperThreads != null
@@ -1081,6 +1110,10 @@ public sealed class CliOptions
                 $"abs={Abs}/{AbsPushOnly}/{AbsPush}", $"absserver={AbsServer?.Root}",
                 $"runbefore={RunBefore?.Raw}", $"runafter={RunAfter?.Raw}",
                 $"set={string.Join('|', _tuningOverrides)}",
+                // --no-rename is deliberately absent, although it is a processing option
+                // everywhere else: the marks a file receives are identical either way, and only
+                // the name it ends up under differs. Including it would make an interrupted batch
+                // redo every finished file over a setting that could not change one of them.
             ]);
             return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(relevant)))[..16];
         }
@@ -1560,6 +1593,7 @@ public sealed class CliOptions
             case "--jingle-first": JingleFirst = true; return true;
             case "--quick-marks": QuickMarks = true; return true;
             case "--no-trailing-scan": TrailingScan = false; return true;
+            case "--no-rename": NoRename = true; return true;
             case "--no-denoise": Denoise = false; return true;
             // Inverted in 0.11.0. Named rather than left to "Unknown option" so a script carrying it
             // - or the -L it still maps from - is told the scan it asked for is now what it gets
@@ -2651,6 +2685,17 @@ public sealed class CliOptions
         File & backup management:
           -b, --backup              Keep the original file with the added suffix ".bak". A .bak
                                     left by an earlier run is kept as it is, not replaced.
+              --no-rename           Never tag a file name with ".missing-marks-...". A file left
+                                    with a chapter-sequence gap still gets the marks that were
+                                    found and is still reported as incomplete; it simply keeps
+                                    its own name. For libraries where the name is not this
+                                    tool's to change. The cost is the automatic resume: the tag
+                                    is what tells a later run which chapters to go back for, so
+                                    such a file is skipped next time for the marks it already
+                                    carries and finishing it needs --force. A tag an earlier run
+                                    left behind is still taken off once the file is complete -
+                                    that gives the file its own name back rather than imposing
+                                    one.
           -R, --revert              Restore backups: for every supported audio file with an
                                     added ".bak" suffix, delete the corresponding original and
                                     rename the .bak file back. Combinable with --cleanup,
