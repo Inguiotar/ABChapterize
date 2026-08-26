@@ -2213,10 +2213,10 @@ public sealed class FileProcessor
     /// <param name="renameTo">Path to move the written file to, or null to leave its name alone.</param>
     /// <param name="complete">
     /// Whether the chapter sequence has no gaps left in it. Only <c>--abs-push</c> reads it, and
-    /// only to decide whether to send anything - see <see cref="PushLocalFileAsync"/>. Stated by
-    /// the caller rather than derived here because the two paths that reach this with a gap are
-    /// exactly the two that re-tag the file as still missing marks, and that is a fact about the
-    /// outcome each of them has already worked out.
+    /// only to decide whether a gapped set still has to earn its way to the server - see
+    /// <see cref="WithholdPartialPush"/>. Stated by the caller rather than derived here because the
+    /// two paths that reach this with a gap are exactly the two that re-tag the file as still
+    /// missing marks, and that is a fact about the outcome each of them has already worked out.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Where the file ended up - see <see cref="RenameCommitted"/> - and the backup note
@@ -2261,11 +2261,16 @@ public sealed class FileProcessor
     /// found afterwards to be holding something other than what was sent.</returns>
     /// <remarks>
     /// <para>
-    /// Waits for a complete set where ABS mode sends a partial one, and the difference is which
-    /// copy of the marks is the good one. In ABS mode the server holds the only copy, so a partial
-    /// list beats nothing at all; here the file holds them and can be resumed later, and sending a
-    /// gapped list would replace whatever the server already has with something worse - then leave
-    /// it that way, since finishing the file afterwards would not push again by itself.
+    /// A complete set always goes. A set with a gap still in it goes only when the server has
+    /// <em>fewer</em> marks than this run is holding, which is the whole of the difference from ABS
+    /// mode, where a partial list is sent unconditionally. There the server holds the only copy, so
+    /// a partial list beats nothing at all; here the file holds them and can be resumed later, and
+    /// the danger is replacing what the server already has with something worse and then leaving it
+    /// that way - finishing the file afterwards would not push again by itself. Comparing counts is
+    /// what separates the two: 34 marks with a hole at chapter 7 are unambiguously more than the
+    /// nothing a freshly scanned book carries, so refusing them protected nobody, while a server
+    /// list at least as long is one this run has no evidence it can improve on. See
+    /// <see cref="WithholdPartialPush"/> for why the count is the whole of the test.
     /// </para>
     /// <para>
     /// Nothing here can fail the file. The marks are in the file by the time this runs, which is
@@ -2284,24 +2289,69 @@ public sealed class FileProcessor
     private async Task<(string Note, bool Mismatch)> PushLocalFileAsync(
         FileContext ctx, List<Chapter> chapters, bool complete, CancellationToken ct)
     {
-        if (!complete)
-            return (", not sent to ABS while chapters are missing", false);
-
         if (ctx.Pull is { } pull)
         {
             if (pull.Book == null)
                 return ($", not sent to ABS ({pull.Note})", false);
             if (AbsChapterMerge.SameMarks(chapters, pull.FromServer))
                 return (", not sent to ABS (it already has these marks)", false);
+            // The list itself, fetched for this very file, rather than the catalogue's count.
+            if (WithholdPartialPush(chapters, complete, pull.FromServer.Count) is { } held)
+                return (held, false);
             return await _abs!.PushAsync(pull.Book, chapters, ctx.Info.DurationSeconds, ct);
         }
 
+        // Asked for even when the set has a gap, unlike before: what the server already holds is
+        // the thing that decides whether a gapped set may be sent, and the book is what carries it.
         var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
         if (match.Book == null)
             return ($", not sent to ABS ({match.Reason})", false);
+        if (WithholdPartialPush(chapters, complete, match.Book.ChapterCount) is { } withheld)
+            return (withheld, false);
 
         ctx.Logs.Write(match.Reason);
         return await _abs.PushAsync(match.Book, chapters, ctx.Info.DurationSeconds, ct);
+    }
+
+    /// <summary>
+    /// Decides whether a chapter set with a gap still in it should be kept back from the server,
+    /// and says why when it should.
+    /// </summary>
+    /// <param name="chapters">The marks this run is holding.</param>
+    /// <param name="complete">Whether the chapter sequence has no gaps left in it.</param>
+    /// <param name="onServer">How many marks Audiobookshelf currently has for the book.</param>
+    /// <returns>The clause the summary line closes with when nothing is to be sent, or null when
+    /// the push should go ahead.</returns>
+    /// <remarks>
+    /// <para>
+    /// A complete set is never withheld, so this only ever speaks about the two outcomes that reach
+    /// a commit with a hole in the numbering - an unresolved gap and an incomplete resume, both of
+    /// which re-tag the file as still missing marks.
+    /// </para>
+    /// <para>
+    /// <b>Counts, not contents, and deliberately so</b> (the user's call, 2026-08-26): somebody
+    /// running <c>--abs-push</c> has already decided the file is the source of truth, so a shorter
+    /// list on the server is not something to preserve on the chance that it was curated. What is
+    /// left worth guarding against is the plain regression - a set of twelve replacing a set of
+    /// thirty-four and then staying, since the file can be resumed but the push does not repeat
+    /// itself - and a count is all that takes.
+    /// </para>
+    /// <para>
+    /// Outside a pulling run the figure comes from the catalogue listing fetched once per run, so
+    /// it is as fresh as the run's own start. The one thing that could stale it is a second local
+    /// file matching the same book after the first has pushed to it, which a folder of distinct
+    /// audiobooks cannot produce - and the cost if it ever did is one comparison against a count
+    /// this run put there itself.
+    /// </para>
+    /// Internal (and pure) for unit testing.
+    /// </remarks>
+    internal static string? WithholdPartialPush(IReadOnlyList<Chapter> chapters, bool complete, int onServer)
+    {
+        if (complete || chapters.Count > onServer)
+            return null;
+        return onServer > 0
+            ? $", not sent to ABS while chapters are missing (it already has {onServer})"
+            : ", not sent to ABS while chapters are missing";
     }
 
     /// <summary>

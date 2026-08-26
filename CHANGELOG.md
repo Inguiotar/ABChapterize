@@ -150,6 +150,14 @@ earn a round number.
 
 ### Fixed
 
+- **`--abs-push` no longer withholds a partial chapter set from a book the server has nothing
+  for.** It used to send only a complete set, so a book left with an unresolved chapter-sequence
+  gap kept its marks to itself — including when Audiobookshelf had no chapters for it at all,
+  which is precisely the case where a nearly-complete list is worth having. Such a set is now sent
+  whenever the server holds *fewer* marks for that book than the run does, and still kept back when
+  the server's list is at least as long, so a longer list is never replaced by a shorter one.
+  (`--abs-push-only` sends whatever a file carries and always has.)
+
 - **`--export` now writes a sidecar wherever marks are written.** A file left with an unresolved
   chapter-sequence gap, a `.missing-marks` file being resumed and a `--verify --fix` rewrite all
   wrote their marks into the audio file and quietly skipped the sidecar — which is exactly the

@@ -283,6 +283,61 @@ public sealed class FileProcessorTests : IDisposable
     public void IsWholesaleFailure_HoldsWithNothingConfirmed_WhateverTheThresholdSays()
         => Assert.True(FileProcessor.IsWholesaleFailure(Verified(confirmed: 0, failed: 3), 100));
 
+    /// <summary>A chapter list of the given length, positions and titles being nothing this
+    /// decision looks at.</summary>
+    /// <param name="count">How many marks the run is holding.</param>
+    private static List<Chapter> Marks(int count)
+        => [.. Enumerable.Range(1, count).Select(n => new Chapter(n * 100, $"Chapter {n}"))];
+
+    /// <summary>A complete set is never withheld, whatever the server has - including a server
+    /// whose list is longer, which is what a book marked by another tool looks like.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(10)]
+    [InlineData(99)]
+    public void WithholdPartialPush_NeverHoldsBackACompleteSet(int onServer)
+        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(10), complete: true, onServer));
+
+    /// <summary>
+    /// The case the rule exists for: a book the server has no chapters for at all. Withholding a
+    /// nearly-complete set there left the server with nothing, which is strictly worse than the
+    /// partial list it was being protected from.
+    /// </summary>
+    [Fact]
+    public void WithholdPartialPush_SendsAGappedSetToABookTheServerHasNothingFor()
+        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer: 0));
+
+    [Fact]
+    public void WithholdPartialPush_SendsAGappedSetThatIsLongerThanTheServerList()
+        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer: 12));
+
+    /// <summary>
+    /// A server list at least as long is one this run has no evidence it can improve on, so a
+    /// gapped set is kept back - replacing it with a shorter one would leave it that way, the file
+    /// being resumable but the push not repeating itself.
+    /// </summary>
+    [Theory]
+    [InlineData(34)]
+    [InlineData(35)]
+    public void WithholdPartialPush_HoldsBackAGappedSetTheServerCanMatch(int onServer)
+    {
+        var note = FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer);
+        Assert.NotNull(note);
+        // The count is named, so the summary line says what it lost out to rather than only that
+        // something was withheld.
+        Assert.Contains($"already has {onServer}", note);
+    }
+
+    /// <summary>Nothing to send and nothing on the server is still a refusal, and one that does not
+    /// claim the server "already has 0".</summary>
+    [Fact]
+    public void WithholdPartialPush_WithNothingOnEitherSide_SaysSoWithoutACount()
+    {
+        var note = FileProcessor.WithholdPartialPush(Marks(0), complete: false, onServer: 0);
+        Assert.NotNull(note);
+        Assert.DoesNotContain("already has", note);
+    }
+
     /// <summary>
     /// --no-rename holds back a rename that would <em>put</em> a ".missing-marks" tag on a name,
     /// and only that one. Taking one off still happens: it gives the file its own name back rather

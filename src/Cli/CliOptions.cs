@@ -895,9 +895,9 @@ public sealed class CliOptions
     /// <remarks>
     /// The complement of <see cref="Abs"/> rather than a variant of it, and refused together with
     /// it: there the server holds the only copy of the marks, here the file does and the server is
-    /// told as well. That is also why this one waits for a complete chapter set where ABS mode
-    /// sends a partial one - see
-    /// <see cref="ABChapterize.Processing.FileProcessor.CommitChaptersAsync"/>.
+    /// told as well. That is also why a set with a gap in it has to earn its way here, where ABS
+    /// mode sends one unconditionally - see
+    /// <see cref="ABChapterize.Processing.FileProcessor.WithholdPartialPush"/>.
     /// </remarks>
     public bool AbsPush { get; private set; }
 
@@ -2499,11 +2499,13 @@ public sealed class CliOptions
                                     and send the finished list to Audiobookshelf as well. Each
                                     file is matched against the server's libraries the way
                                     --abs-push-only matches them, and one that matches nothing, or
-                                    matches several books, is written and simply not sent. Only a
-                                    complete chapter set is sent: a file left with a gap keeps its
-                                    partial marks and is not pushed, so resuming it later and
-                                    running this again sends the finished list. For books the
-                                    server itself holds, use --abs instead.
+                                    matches several books, is written and simply not sent. A set
+                                    left with a chapter-sequence gap is sent only when the server
+                                    has fewer marks for that book than the run is holding, so it
+                                    can improve on an unmarked book without overwriting a longer
+                                    list; resume the file later and run this again to send the
+                                    finished set. For books the server itself holds, use --abs
+                                    instead.
               --abs-push-only       Send Audiobookshelf the chapter marks a book already has,
                                     detecting nothing and changing no file. With --abs, the
                                     selected books are fetched and read; without it, the files

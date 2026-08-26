@@ -1267,11 +1267,20 @@ book pushed, against a run that has just spent minutes listening to that book.
   summary line says so. Nothing about the server can fail a file that was
   marked successfully.
 
-  **Only a complete chapter set is sent.** A file left with an unresolved gap
-  keeps its partial marks and is not pushed: the server's list would otherwise
-  be replaced by a worse one and stay that way. Finish the file — see
+  **A set with a gap in it is sent only if it improves on the server's.** A
+  complete chapter set always goes. One left with an unresolved
+  chapter-sequence gap goes when Audiobookshelf has *fewer* marks for that book
+  than the run is holding — so a book the server has no chapters for gets the
+  partial set rather than nothing — and is kept back when the server's list is
+  at least as long, since replacing it with a shorter one would leave it that
+  way. Finish the file — see
   [Resuming an interrupted run](#resuming-an-interrupted-run) — and run
-  `--abs-push` again. `--dry-run` writes nothing and sends nothing.
+  `--abs-push` again to send the complete set. `--dry-run` writes nothing and
+  sends nothing.
+
+  The comparison is by count alone: this mode exists to make the file the
+  source of truth, so the only thing worth protecting the server's list from is
+  being replaced by a *shorter* one.
 
   For books the server itself holds, use [`--abs`](#audiobookshelf) instead. The
   two cannot be combined, being two different answers to where the marks live.
@@ -1352,8 +1361,8 @@ are reported as skipped and neither is touched. Running it twice over the same
 shelf does nothing the second time.
 
 As always with `--abs-push`, a book left with an unresolved chapter-sequence gap
-is not sent, and a push that cannot happen never fails a file that was marked
-successfully.
+is sent only where the server has fewer marks for it, and a push that cannot
+happen never fails a file that was marked successfully.
 
 `--abs-sync`
 : Shorthand for `--abs-pull --verify --abs-push`, which is the reconciliation
