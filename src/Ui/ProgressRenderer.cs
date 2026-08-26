@@ -129,12 +129,22 @@ public sealed class WorkTracker
     /// <summary>How many named marks of every kind - including the chapter announcements that
     /// <c>--ignore-chapter-numbers</c> files here rather than under a number - have been found so
     /// far. Shown as "mk N" in place of the chapter number in that mode alone, where the slot would
-    /// otherwise sit at "----" from start to finish however much the file is yielding.</summary>
+    /// otherwise sit at "----" from start to finish however much the file is yielding.
+    /// <para>
+    /// Under <c>--verify</c> it equals <see cref="ExtraMarks"/>, every named mark that path can
+    /// confirm being an extra one, so the "mk N" form does not arise there.
+    /// </para></summary>
     public int NamedMarks { get; set; }
 
     /// <summary>How many of <see cref="NamedMarks"/> are extra marks rather than chapters
     /// (prologue, epilogue, <c>--custom</c>); rendered as "(+N)" after the chapter number. The
-    /// intro mark is not among them: it is synthesized at write time, not detected.</summary>
+    /// intro mark is not among them: it is synthesized at write time, not detected.
+    /// <para>
+    /// Under <c>--verify</c> it counts the named marks <em>confirmed</em> so far, one that fails
+    /// leaving it alone rather than lowering it - see
+    /// <see cref="ABChapterize.Detection.ChapterDetector"/>'s named-progress refresh for why the
+    /// failure is not shown here at all.
+    /// </para></summary>
     public int ExtraMarks { get; set; }
 
     /// <summary>Starts a new phase: resets the bar to 0 % and sets its label and total work.</summary>
@@ -702,7 +712,8 @@ public sealed class ProgressRenderer : IDisposable
     /// Appends the bar's chapter section: "----" until anything at all is found (nothing can
     /// change during Analyze anyway); then how far each of the file's chapter sequences has got,
     /// followed by one bracket holding the count of still-missing earlier chapters - the ones
-    /// Scan would have to chase - and the count of extra marks found, as e.g. "ch 6(-2+1)". Each
+    /// Scan would have to chase - and the count of extra marks found (under <c>--verify</c>,
+    /// confirmed rather than found), as e.g. "ch 6(-2+1)". Each
     /// count is split off into its own span so the numbers alone carry their colors while the
     /// brackets stay structural. An extra mark found before the first chapter shows as
     /// "ch 0(+1)": the zero is worth printing there because the bracket next to it is not empty.

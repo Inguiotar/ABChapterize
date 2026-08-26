@@ -63,7 +63,10 @@ Scan would have to chase during detection, or a mark that failed its
 check during <code>--verify</code>);</li>
 <li>a positive count of the extra marks found — prologue, epilogue and
 <a href="03-how-detection-works.html#custom-marks"><code>--custom</code></a> marks. The intro mark is not among them; it is
-added when the file is written, not detected.</li>
+added when the file is written, not detected. Under <code>--verify</code> this counts
+the named marks <em>confirmed</em> so far; one that fails to confirm leaves the
+count where it is and is never shown as a <code>(-N)</code>, that half of the bracket
+being about chapters a sequence is still missing.</li>
 </ul>
 <p>So <code>ch 6(-2+1)</code> means chapter 6 is marked, two chapters below it are still
 outstanding, and one extra mark has been found. An extra mark found before

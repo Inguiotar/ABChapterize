@@ -2312,7 +2312,10 @@ looking. None of these is needed for an ordinary book.
   chapter state (see [section 12](#12-output-progress-and-logging)) tracks
   confirmations the same way it tracks fresh detections: the highest
   confirmed mark, with any lower one that failed confirmation shown as a
-  `(-N)` gap.
+  `(-N)` gap, and each confirmed prologue, epilogue or `--custom` mark
+  counted into the `(+N)` beside it. A named mark that fails to confirm does
+  not lower that count and gets no `(-N)` of its own — it is reported in the
+  summary instead, since nothing would be done about it either way.
 
 `--fix`
 : Requires `--verify`. Lets it *correct* a mark instead of only reporting on
@@ -3515,7 +3518,10 @@ counts, either of which is left out when it is zero:
   check during `--verify`);
 - a positive count of the extra marks found — prologue, epilogue and
   [`--custom`](#custom-marks) marks. The intro mark is not among them; it is
-  added when the file is written, not detected.
+  added when the file is written, not detected. Under `--verify` this counts
+  the named marks *confirmed* so far; one that fails to confirm leaves the
+  count where it is and is never shown as a `(-N)`, that half of the bracket
+  being about chapters a sequence is still missing.
 
 So `ch 6(-2+1)` means chapter 6 is marked, two chapters below it are still
 outstanding, and one extra mark has been found. An extra mark found before

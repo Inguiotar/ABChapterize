@@ -1299,7 +1299,10 @@ detection), <code>--verify</code> cannot be combined with either. The progress b
 chapter state (see <a href="12-output-progress-and-logging.html#12-output-progress-and-logging">section 12</a>) tracks
 confirmations the same way it tracks fresh detections: the highest
 confirmed mark, with any lower one that failed confirmation shown as a
-<code>(-N)</code> gap.</p>
+<code>(-N)</code> gap, and each confirmed prologue, epilogue or <code>--custom</code> mark
+counted into the <code>(+N)</code> beside it. A named mark that fails to confirm does
+not lower that count and gets no <code>(-N)</code> of its own — it is reported in the
+summary instead, since nothing would be done about it either way.</p>
 <p><code>--fix</code>
 : Requires <code>--verify</code>. Lets it <em>correct</em> a mark instead of only reporting on
 it: where a mark's announcement is confirmed but the mark sits a little

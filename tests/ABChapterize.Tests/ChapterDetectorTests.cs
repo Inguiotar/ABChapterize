@@ -7883,6 +7883,72 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal(1, tracker.MissingChapters);
     }
 
+    /// <summary>
+    /// A confirmed named mark shows up in the bar's "(+N)" exactly as a detection run's extra
+    /// marks do. Without it, the only thing a long verification says while it runs never moves for
+    /// a prologue or a --custom mark, and a user watching one they know to be good go past has no
+    /// way to tell a confirmation from a failure.
+    /// </summary>
+    [Fact]
+    public async Task Verify_CountsConfirmedNamedMarksAsExtras()
+    {
+        var (_, _, tracker) = await VerifyWithTranscriberAsync(
+            Options(),
+            [new Chapter(10, "Prologue"), new Chapter(610, "Chapter 1"), new Chapter(1210, "Epilogue")],
+            s =>
+            {
+                s.Add(0, Seg(10, " Prologue."));
+                s.Add(600, Seg(10, " Chapter 1."));
+                s.Add(1200, Seg(10, " Epilogue."));
+            });
+
+        Assert.Equal(2, tracker.ExtraMarks);
+        // Every named mark --verify can confirm is an extra one, so the two counts agree and the
+        // --ignore-chapter-numbers "mk N" form cannot be triggered from here.
+        Assert.Equal(2, tracker.NamedMarks);
+        Assert.Equal([1], tracker.HighestChapters);
+    }
+
+    /// <summary>
+    /// A named mark that cannot be confirmed leaves the count where it was: subtracting would make
+    /// a book with one bad epilogue report fewer good marks than it has, and the bracket's negative
+    /// half is about chapters a sequence is still missing - which a named mark never opens.
+    /// </summary>
+    [Fact]
+    public async Task Verify_AnUnconfirmedNamedMark_NeitherSubtractsNorCountsAsMissing()
+    {
+        var (result, _, tracker) = await VerifyWithTranscriberAsync(
+            Options(),
+            [new Chapter(10, "Prologue"), new Chapter(610, "Chapter 1"), new Chapter(1210, "Epilogue")],
+            s =>
+            {
+                s.Add(0, Seg(10, " Prologue."));
+                s.Add(600, Seg(10, " Chapter 1."));
+                // Nothing near the epilogue mark, so it cannot be confirmed.
+            });
+
+        Assert.Equal(1, tracker.ExtraMarks);
+        Assert.Equal(0, tracker.MissingChapters);
+        // Reported all the same, and still outside Checked/Failed - see NamedMarkOutcome.
+        Assert.Contains(result.NamedOutcomes!, o => o.Kind == NamedPhrase.EpilogueKind && !o.Confirmed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(0, result.Failed);
+    }
+
+    /// <summary>The intro entry is passed over rather than checked, so it cannot inflate the
+    /// count - it is this tool's own lead-in entry with no phrase behind it.</summary>
+    [Fact]
+    public async Task Verify_TheIntroEntry_IsNotCountedAsAnExtraMark()
+    {
+        var (_, _, tracker) = await VerifyWithTranscriberAsync(
+            Options(),
+            [new Chapter(0, "Intro"), new Chapter(610, "Chapter 1")],
+            s => s.Add(600, Seg(10, " Chapter 1.")));
+
+        Assert.Equal(0, tracker.ExtraMarks);
+        Assert.Equal([1], tracker.HighestChapters);
+    }
+
     [Fact]
     public async Task Verify_RetriesLongGapsBetweenSegments_AndConfirmsIfThePhraseIsThere()
     {

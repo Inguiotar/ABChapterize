@@ -802,6 +802,51 @@ public sealed class ChapterDetector
     }
 
     /// <summary>
+    /// Puts <c>--verify</c>'s tally of confirmed named marks on the progress line, where it shows
+    /// as the same "(+N)" a detection run's extra marks do.
+    /// </summary>
+    /// <param name="work">The file's progress tracker.</param>
+    /// <param name="confirmed">How many named marks this file has confirmed so far.</param>
+    /// <remarks>
+    /// <para>
+    /// It exists because the bar is the only thing a long verification says while it runs. A user
+    /// watching a prologue, an epilogue or a <c>--custom</c> mark they know to be good go past with
+    /// the counts unmoved has nothing to distinguish a confirmation from a failure, and will assume
+    /// the worse of the two.
+    /// </para>
+    /// <para>
+    /// <b>Confirmations only, and never a "(-N)".</b> A named mark that cannot be confirmed leaves
+    /// the count exactly where it was: subtracting would make a book with one bad epilogue report
+    /// fewer good marks than it has, and that bracket's negative half counts chapters missing from
+    /// a sequence, which gap recovery goes on to chase - a named mark opens no gap and nothing will
+    /// be done about it, so borrowing the notation would promise work that is not coming (see
+    /// <see cref="NamedMarkOutcome"/>). This changes what the line shows and nothing else:
+    /// <see cref="VerifyResult.Checked"/>, <see cref="VerifyResult.Failed"/> and the
+    /// wholesale-failure ratio are all as they were.
+    /// </para>
+    /// <para>
+    /// Both counters move together because every named mark <c>--verify</c> can confirm is an extra
+    /// one: <see cref="CheckNamedMarkAsync"/> recognizes a mark only through
+    /// <see cref="LanguageProfile.NamedPhrases"/>, which never holds the chapter announcement
+    /// (<see cref="LanguageProfile.ChapterAnnouncement"/> is a separate thing Probe uses for
+    /// <c>--ignore-chapter-numbers</c>). Keeping them equal preserves
+    /// <see cref="WorkTracker.ExtraMarks"/>'s meaning as a subset of
+    /// <see cref="WorkTracker.NamedMarks"/>.
+    /// </para>
+    /// <para>
+    /// A gap recovery that follows cannot make the number fall back: <see cref="RegionProber"/>
+    /// recomputes both counts off a list seeded with <see cref="CarryOverNamedMarks"/>, which
+    /// recognizes marks by the same title matcher this counted them by - so what was confirmed here
+    /// is always among what is seeded there.
+    /// </para>
+    /// </remarks>
+    private static void RefreshNamedProgress(WorkTracker work, int confirmed)
+    {
+        work.NamedMarks = confirmed;
+        work.ExtraMarks = confirmed;
+    }
+
+    /// <summary>
     /// The pipeline stage between Probe and Re-probe: settles the marks that landed on top of each
     /// other, hands <see cref="RepairSequenceOutliersAsync"/> a re-read backed by this file's decoder
     /// and recognizer, then clears out <see cref="DropNamedMarkEchoes"/>'s phantoms. Everything each
@@ -2419,6 +2464,8 @@ public sealed class ChapterDetector
         var outcomes = new List<ExistingMarkOutcome>();
         // Reported, never counted - see NamedMarkOutcome for why the two lists stay apart.
         var namedOutcomes = new List<NamedMarkOutcome>();
+        // Confirmations only, and for the progress line only - see RefreshNamedProgress.
+        var confirmedNamed = 0;
 
         work.BeginPhase(PhaseNames.Verify, info.ExistingChapters.Count);
         foreach (var mark in info.ExistingChapters)
@@ -2448,8 +2495,13 @@ public sealed class ChapterDetector
                 // never was. Reported, it would add a line saying nothing to every summary of every
                 // book this tool has ever marked.
                 if (!string.Equals(mark.Title.Trim(), profile.IntroTitle, StringComparison.OrdinalIgnoreCase))
-                    namedOutcomes.Add(await CheckNamedMarkAsync(
-                        file, info, mark, windowStart, windowLen, profile, ct));
+                {
+                    var named = await CheckNamedMarkAsync(
+                        file, info, mark, windowStart, windowLen, profile, ct);
+                    namedOutcomes.Add(named);
+                    if (named.Confirmed)
+                        RefreshNamedProgress(work, ++confirmedNamed);
+                }
                 else
                     _log?.Invoke($"mark at {FormatTimestamp(mark.StartSeconds)} " +
                                  $"(\"{mark.Title}\") - the lead-in entry, nothing to check");

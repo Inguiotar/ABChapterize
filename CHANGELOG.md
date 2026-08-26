@@ -137,7 +137,9 @@ earn a round number.
   gap in the numbering, so there is nothing detection could be sent back to fix, and which files a
   run redetects or leaves alone is decided by the numbered marks exactly as before. A mark this run
   has no phrase for — another tool's, or one whose `--custom` mapping you left off the command
-  line — is reported as unverifiable rather than as wrong.
+  line — is reported as unverifiable rather than as wrong. Each one that does confirm is counted
+  into the progress line's `(+N)`, so a prologue or a `--custom` mark going past is visibly
+  passing rather than leaving the bar unmoved; one that fails does not lower that count.
 
 - **`--summary` now reports a run that was interrupted or failed.** Ctrl+C part way through a
   shelf of two hundred audiobooks used to end the run with nothing at all to show for it —
