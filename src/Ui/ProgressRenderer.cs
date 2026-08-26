@@ -7,13 +7,13 @@ using System.Diagnostics;
 namespace ABChapterize.Ui;
 
 /// <summary>
-/// Tracks the progress of the current processing phase of one file. Each phase (e.g. silence
-/// scan, probing) has its own bar running from 0 to 100 %. The unit of work is chosen per phase:
-/// usually processed bytes (file size for full passes, or a play-time position rescaled to the
-/// same byte unit via the file's bytes-per-second rate for windowed passes), but a plain item
-/// count for phases with no continuous audio position (e.g. --verify's per-chapter checks).
-/// Safe to update from one file's worker while the renderer's timer thread reads it
-/// concurrently for redraws.
+/// Tracks the progress of the current processing phase of one file. Every phase's bar spans the
+/// whole file, whatever fraction of it the phase reads: the unit is the file's size in bytes and
+/// the progress is a play-time position rescaled to it via the file's bytes-per-second rate, so a
+/// pass working a handful of gaps sits at the position of the gap it is on and marks the gaps out
+/// with <see cref="PhaseSpans"/>. The one exception is a phase with no continuous audio position -
+/// --verify's per-chapter checks - which counts items instead. Safe to update from one file's
+/// worker while the renderer's timer thread reads it concurrently for redraws.
 /// </summary>
 public sealed class WorkTracker
 {
@@ -81,26 +81,56 @@ public sealed class WorkTracker
     public int? LocationsExplored { get; set; }
 
     /// <summary>
-    /// The stretch of the current phase's own timeline that the pass is working right now - a
-    /// sequence gap, a jingle-first stretch, the file's tail - or null while it is working the
-    /// whole of what the bar covers, which is the ordinary case. Drawn as a highlight inside the
-    /// bar, so a falling or oddly placed fill can be read against the piece of the book it belongs
-    /// to.
-    /// <para>
-    /// In the phase's own progress bytes, not in file positions, because that is the unit the bar is
-    /// drawn in: a phase whose total is the summed length of its regions (Re-probe, Scan) counts a
-    /// region's own stretch of that shorter timeline, not where the region sits in the book.
-    /// </para>
+    /// The stretch of the file that the pass is working right now - a sequence gap, a jingle-first
+    /// stretch, the file's tail - or null while it is working the whole book, which is the ordinary
+    /// case. Drawn as the brightest highlight inside the bar, so a fill that jumps or runs backwards
+    /// can be read against the piece of the book it belongs to.
     /// </summary>
     /// <remarks>
-    /// The primary whole-file walk deliberately leaves this null even though its region technically
-    /// spans the bar: the highlight says "this is a piece of the book, not the book", and a bar
-    /// tinted end to end from the first second of every run would say nothing at all. Scan is the
-    /// case that does tint end to end - it only ever reads regions, so its bar really is one.
-    /// Cleared by <see cref="BeginPhase"/> like <see cref="PhaseRevisiting"/>, so a span left behind
-    /// by an abandoned pass cannot leak into the next phase's bar.
+    /// The primary whole-file walk deliberately leaves this null even though its region spans the
+    /// bar: the highlight says "this is a piece of the book, not the book", and a bar tinted end to
+    /// end from the first second of every run would say nothing at all. Cleared by
+    /// <see cref="BeginPhase"/> like <see cref="PhaseRevisiting"/>, so a span left behind by an
+    /// abandoned pass cannot leak into the next phase's bar.
     /// </remarks>
     public (long FromBytes, long ToBytes)? RegionSpan { get; set; }
+
+    /// <summary>
+    /// Every stretch of the file the current phase is going to work, in file order, or null for a
+    /// phase that reads the book end to end. Drawn as a dimmer highlight than
+    /// <see cref="RegionSpan"/>, which is always one of these: together they say "this pass covers
+    /// these pieces, and it is on this one".
+    /// </summary>
+    /// <remarks>
+    /// Every bar this tool draws is a map of the whole file, whatever fraction of it the phase
+    /// actually reads, which is what this exists to make legible. The alternative - a bar whose
+    /// total is the summed length of the phase's regions - runs a tidy 0 to 100 % and is what Scan,
+    /// Re-probe, Re-scan and Probe's pause half all used to do, at the price of every bar in a run
+    /// measuring a different timeline: 40 % of a Scan meant nothing about where in the book the
+    /// reading head was, and the same position moved the bar differently from one phase to the next.
+    /// Set by <see cref="BeginPhase"/> alone, so a phase's stretches and its total cannot be stated
+    /// apart - and replaced wholesale rather than mutated, for the reason
+    /// <see cref="HighestChapters"/> gives: the renderer reads it from its own timer thread, and a
+    /// reference assignment is the one thing safe to do across the two without a lock.
+    /// </remarks>
+    public IReadOnlyList<(long FromBytes, long ToBytes)>? PhaseSpans { get; private set; }
+
+    /// <summary>Where a position in the file's play time falls on the bar, in the progress bytes it
+    /// is drawn in. Every conversion goes through this, so a phase's stretches and the positions
+    /// reported inside them cannot arrive at slightly different arithmetic and leave a pass looking
+    /// as though it had strayed outside its own gap.</summary>
+    /// <param name="seconds">Absolute position in the file.</param>
+    /// <param name="bytesPerSecond">The file's play time to progress-byte rate.</param>
+    public static long Position(double seconds, double bytesPerSecond)
+        => (long)(seconds * bytesPerSecond);
+
+    /// <summary>Where a stretch of play time falls on the bar; see <see cref="Position"/>.</summary>
+    /// <param name="fromSeconds">Absolute start of the stretch in the file.</param>
+    /// <param name="toSeconds">Absolute end of the stretch in the file.</param>
+    /// <param name="bytesPerSecond">The file's play time to progress-byte rate.</param>
+    public static (long FromBytes, long ToBytes) Span(
+        double fromSeconds, double toSeconds, double bytesPerSecond)
+        => (Position(fromSeconds, bytesPerSecond), Position(toSeconds, bytesPerSecond));
 
     /// <summary>The work this phase was begun with, so a phase that turns into another one part way
     /// through can hand the same total on - see <see cref="LocationsExplored"/> for the one that
@@ -147,15 +177,23 @@ public sealed class WorkTracker
     /// </para></summary>
     public int ExtraMarks { get; set; }
 
-    /// <summary>Starts a new phase: resets the bar to 0 % and sets its label and total work.</summary>
+    /// <summary>Starts a new phase: resets the bar to 0 % and sets its label, total work and the
+    /// stretches of the file it covers.</summary>
     /// <param name="label">Phase name shown after the bar.</param>
-    /// <param name="totalBytes">Total number of bytes this phase will process.</param>
-    public void BeginPhase(string label, long totalBytes)
+    /// <param name="totalBytes">Total number of bytes this phase will process - the whole file for
+    /// every phase whose progress is a position in it.</param>
+    /// <param name="spans">The stretches this phase will work (see <see cref="PhaseSpans"/>), or
+    /// null for one that reads the book end to end. Stated here rather than assigned afterwards so
+    /// that a phase abandoned part way through cannot leave its stretches highlighted under the
+    /// next one.</param>
+    public void BeginPhase(
+        string label, long totalBytes, IReadOnlyList<(long FromBytes, long ToBytes)>? spans = null)
     {
         _phaseName = label;
         PhaseRevisiting = false;
         LocationsExplored = null;
         RegionSpan = null;
+        PhaseSpans = spans;
         Interlocked.Exchange(ref _phaseTotalBytes, Math.Max(0, totalBytes));
         Interlocked.Exchange(ref _phaseDoneBytes, 0);
         Interlocked.Exchange(ref _phaseCurrentBytes, 0);
@@ -163,7 +201,7 @@ public sealed class WorkTracker
 
     /// <summary>
     /// Renames the running phase without disturbing anything else about it - the bar keeps its
-    /// total, its progress and its region highlight.
+    /// total, its progress and both of its highlights.
     /// </summary>
     /// <param name="phase">The phase name to show from now on; one of <see cref="PhaseNames"/>'
     /// constants.</param>
@@ -177,29 +215,15 @@ public sealed class WorkTracker
     /// </remarks>
     public void Relabel(string phase) => _phaseName = phase;
 
-    /// <summary>
-    /// Marks the region the pass is about to work as starting where the phase currently stands - the
-    /// shape every pass that books whole regions of work has (see <see cref="RegionSpan"/>).
-    /// </summary>
-    /// <param name="lengthBytes">The region's own length in progress bytes.</param>
-    /// <remarks>
-    /// Taking the start from the phase's booked progress rather than from a caller-supplied offset
-    /// is what keeps this free of plumbing: a pass that finishes each region with
-    /// <see cref="Advance"/> has already booked exactly the regions behind it, so "where the phase
-    /// stands" and "where this region begins on the bar" are the same number by construction, and
-    /// cannot drift apart the way a second, separately maintained offset would.
-    /// </remarks>
-    public void MarkRegion(long lengthBytes)
-    {
-        var from = Interlocked.Read(ref _phaseDoneBytes);
-        RegionSpan = (from, from + Math.Max(0, lengthBytes));
-    }
-
-    /// <summary>Reports transient progress of the work item currently running within the phase.</summary>
+    /// <summary>Reports transient progress of the work item currently running within the phase -
+    /// for a position-based phase, which is every phase but <c>--verify</c>'s, the absolute
+    /// position in the file the pass has reached.</summary>
     /// <param name="bytes">Bytes processed so far by the current work item.</param>
     public void SetPhaseProgress(long bytes) => Interlocked.Exchange(ref _phaseCurrentBytes, Math.Max(0, bytes));
 
-    /// <summary>Records finished work within the current phase and clears the transient progress.</summary>
+    /// <summary>Records finished work within the current phase and clears the transient progress.
+    /// Only a phase counting items rather than positions has anything to book here: a bar mapping
+    /// the whole file states where the pass <em>is</em>, which no accumulator can be behind.</summary>
     /// <param name="bytes">The full byte size of the finished work item.</param>
     public void Advance(long bytes)
     {
@@ -240,8 +264,8 @@ public sealed class ProgressRenderer : IDisposable
     /// The progress bar's colors. Kept restrained on purpose: the bar is on screen for hours at a
     /// stretch, so structure (brackets, separators) recedes into dark grey and the informational
     /// sections get one muted color each, purely so the eye can jump straight to the one it wants.
-    /// Only two things are allowed to stand out - the bar fill and the file name - and only one is
-    /// warm, the count of chapters still missing.
+    /// Three things are allowed to stand out - the bar fill, the stretch a pass is reading right
+    /// now, and the file name - and only one is warm, the count of chapters still missing.
     /// </summary>
     private static class Palette
     {
@@ -271,11 +295,19 @@ public sealed class ProgressRenderer : IDisposable
         /// muted as the separators: there is nothing to read there yet.</summary>
         public const ConsoleColor NoChapters = ConsoleColor.DarkGray;
 
-        /// <summary>The stretch of the bar a pass is working right now, where that is a piece of
-        /// the book rather than all of it (<see cref="WorkTracker.RegionSpan"/>). Shares the phase
-        /// label's darker cyan, which is the same statement made twice: the label says what the
-        /// pass is doing, the highlight says where.</summary>
-        public const ConsoleColor Region = ConsoleColor.DarkCyan;
+        /// <summary>The stretches of the book a pass is going to work, where those are pieces of it
+        /// rather than all of it (<see cref="WorkTracker.PhaseSpans"/>). Shares the phase label's
+        /// darker cyan, which is the same statement made twice: the label says what the pass is
+        /// doing, the highlight says where.</summary>
+        public const ConsoleColor Planned = ConsoleColor.DarkCyan;
+
+        /// <summary>The one stretch a pass is working right now
+        /// (<see cref="WorkTracker.RegionSpan"/>), picked out of <see cref="Planned"/> by being the
+        /// bright half of the same hue - the two are one statement at two levels of detail, so a
+        /// second color would only make them read as unrelated. It shares
+        /// <see cref="Progress"/>'s cyan, which does not confuse the two: one is inside the
+        /// brackets and the other is the number after them.</summary>
+        public const ConsoleColor Working = ConsoleColor.Cyan;
 
         /// <summary>The count of chapters still missing below the highest one found - the only
         /// part of the line reporting something outstanding, so the only warm color in it.</summary>
@@ -614,7 +646,7 @@ public sealed class ProgressRenderer : IDisposable
             new(" ", null),
             new("[", Palette.Structure),
         };
-        AddBarSpans(spans, bar, RegionCells(tracker, barWidth));
+        AddBarSpans(spans, bar, tracker);
         spans.Add(new("]", Palette.Structure));
         // Same width as " 100%", so a phase turning into an ordinary one does not shuffle the
         // bar's right edge by a column.
@@ -654,44 +686,74 @@ public sealed class ProgressRenderer : IDisposable
     }
 
     /// <summary>
-    /// Which cells of the bar the pass's current region covers, or null where it is working all of
-    /// what the bar shows (see <see cref="WorkTracker.RegionSpan"/>).
+    /// Which cells of the bar a stretch of the file covers.
     /// </summary>
-    /// <param name="tracker">The file's work tracker.</param>
+    /// <param name="span">The stretch, in the progress bytes the bar is drawn in.</param>
+    /// <param name="total">The phase's total, i.e. what the whole bar stands for.</param>
     /// <param name="barWidth">The bar's width in cells.</param>
     /// <remarks>
     /// Rounded outwards - floor at the start, ceiling at the end - and then held to at least one
-    /// cell, so a gap far too short to fill a cell still shows up. Understating where the pass is
-    /// working by a cell costs nothing; drawing nothing at all would leave a bar running backwards
-    /// with no explanation on the line beside it.
+    /// cell, so a gap far too short to fill a cell still shows up. Overstating a stretch by a cell
+    /// costs nothing; drawing nothing at all would leave a bar jumping about with no explanation on
+    /// the line beside it.
     /// </remarks>
-    private static (int From, int To)? RegionCells(WorkTracker tracker, int barWidth)
+    private static (int From, int To) SpanCells(
+        (long FromBytes, long ToBytes) span, long total, int barWidth)
     {
-        var total = tracker.PhaseTotalBytes;
-        if (tracker.RegionSpan is not { } span || total <= 0)
-            return null;
         var from = Math.Clamp((int)Math.Floor((double)span.FromBytes / total * barWidth), 0, barWidth - 1);
         var to = Math.Clamp((int)Math.Ceiling((double)span.ToBytes / total * barWidth), from + 1, barWidth);
         return (from, to);
     }
 
-    /// <summary>Appends the bar's cells, split at the region highlight's edges where there is
-    /// one.</summary>
+    /// <summary>
+    /// Appends the bar's cells, split wherever the highlighting changes: the stretches this phase
+    /// covers in <see cref="Palette.Planned"/>, the one it is working right now in
+    /// <see cref="Palette.Working"/>, everything else in <see cref="Palette.Bar"/>.
+    /// </summary>
     /// <param name="spans">The line being built, appended to in place.</param>
     /// <param name="bar">The bar's cells as drawn.</param>
-    /// <param name="region">The highlighted cell range, or null.</param>
-    private static void AddBarSpans(List<ColoredSpan> spans, string bar, (int From, int To)? region)
+    /// <param name="tracker">The file's work tracker.</param>
+    /// <remarks>
+    /// Colored cell by cell and then run-length encoded rather than sliced at each stretch's edges,
+    /// because the stretches are neither guaranteed disjoint once rounded out to whole cells nor
+    /// guaranteed to arrive in bar order - two gaps a few seconds apart share a cell on a narrow
+    /// console. Painting is idempotent where slicing would produce overlapping spans.
+    /// </remarks>
+    private static void AddBarSpans(List<ColoredSpan> spans, string bar, WorkTracker tracker)
     {
-        if (region is not { } cells)
+        var total = tracker.PhaseTotalBytes;
+        var planned = tracker.PhaseSpans;
+        var working = tracker.RegionSpan;
+        if (total <= 0 || (planned is null or { Count: 0 } && working is null))
         {
             spans.Add(new(bar, Palette.Bar));
             return;
         }
-        if (cells.From > 0)
-            spans.Add(new(bar[..cells.From], Palette.Bar));
-        spans.Add(new(bar[cells.From..cells.To], Palette.Region));
-        if (cells.To < bar.Length)
-            spans.Add(new(bar[cells.To..], Palette.Bar));
+
+        var colors = new ConsoleColor[bar.Length];
+        Array.Fill(colors, Palette.Bar);
+        foreach (var span in planned ?? [])
+            Paint(colors, SpanCells(span, total, bar.Length), Palette.Planned);
+        if (working is { } current)
+            Paint(colors, SpanCells(current, total, bar.Length), Palette.Working);
+
+        var start = 0;
+        for (var i = 1; i <= bar.Length; i++)
+            if (i == bar.Length || colors[i] != colors[start])
+            {
+                spans.Add(new(bar[start..i], colors[start]));
+                start = i;
+            }
+    }
+
+    /// <summary>Colors one run of bar cells.</summary>
+    /// <param name="colors">The bar's per-cell colors, written in place.</param>
+    /// <param name="cells">The half-open cell range to color.</param>
+    /// <param name="color">The color to give them.</param>
+    private static void Paint(ConsoleColor[] colors, (int From, int To) cells, ConsoleColor color)
+    {
+        for (var i = cells.From; i < cells.To; i++)
+            colors[i] = color;
     }
 
     /// <summary>

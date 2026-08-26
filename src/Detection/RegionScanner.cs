@@ -178,6 +178,13 @@ internal sealed class RegionScanner
     /// see <see cref="_expectedNumbers"/>.</summary>
     private readonly HashSet<int>? _remaining;
 
+    /// <summary>The furthest position in the file this scan has reported to the progress bar, which
+    /// is what <see cref="ReportPosition"/> holds it to. An unsnapped chunk border keeps
+    /// <see cref="GapChunkOverlapSeconds"/> of the previous chunk's audio, so the next chunk's first
+    /// segment really does arrive behind the border just booked; the audio being read twice is the
+    /// point, and the bar stepping back for it is not.</summary>
+    private double _reportedSeconds;
+
     /// <summary>Constructs a scanner for one region. Nothing is read until
     /// <see cref="RunAsync"/>.</summary>
     /// <param name="env">The tools this scan borrows; see <see cref="ScanEnvironment"/>.</param>
@@ -220,13 +227,11 @@ internal sealed class RegionScanner
     internal async Task<List<DetectedChapter>> RunAsync(CancellationToken ct)
     {
         // Scan only ever reads a piece of the book - a gap, or its tail - so the bar always has a
-        // region to mark out, even where that piece is the whole of what this phase covers. The
-        // region begins where the phase's booked progress stands, which is exactly the regions
-        // already read: see WorkTracker.MarkRegion. Nothing clears it on the way out, deliberately:
-        // whatever follows either marks its own region or begins a phase (which clears it), so the
-        // only moment the old mark is still up is between two regions of one phase, where it names
-        // the one just finished.
-        _ctx.Work.MarkRegion((long)((_toSeconds - _fromSeconds) * _ctx.BytesPerSecond));
+        // region to mark out, even where that piece is the only one this phase covers. Nothing
+        // clears it on the way out, deliberately: whatever follows either marks its own region or
+        // begins a phase (which clears it), so the only moment the old mark is still up is between
+        // two regions of one phase, where it names the one just finished.
+        _ctx.Work.RegionSpan = WorkTracker.Span(_fromSeconds, _toSeconds, _ctx.BytesPerSecond);
 
         // Inputs to the cross-chunk bridging below: the previous chunk's transcript in absolute
         // file time, and whether the seam it ends at was snapped (overlap-free).
@@ -252,16 +257,15 @@ internal sealed class RegionScanner
             // A chunk is minutes of audio in one recognizer call, and without this the bar stands
             // still for all of it - on a long gap, for the better part of an hour. Whisper hands
             // back its segments as it produces them, so its own position through the chunk is free
-            // for the taking; the transient progress is cleared by the Advance below, exactly as
-            // Analyze's decode progress is. Held to a monotonic maximum inside the chunk because
-            // neither property can be assumed of the raw ends: they are not strictly ordered once a
-            // window re-segments, and one overshooting the audio it was given is common enough to
-            // walk the bar into the next chunk's budget.
+            // for the taking. Held to a monotonic maximum inside the chunk because neither property
+            // can be assumed of the raw ends: they are not strictly ordered once a window
+            // re-segments, and one overshooting the audio it was given is common enough to walk the
+            // bar past the chunk it belongs to.
             var reachedSeconds = 0.0;
             var segments = await _env.TranscribeCounting(samples, ct, _env.Transcriber, segmentEnd =>
             {
                 reachedSeconds = Math.Max(reachedSeconds, Math.Min(segmentEnd, chunkSeconds));
-                _ctx.Work.SetPhaseProgress((long)(reachedSeconds * _ctx.BytesPerSecond));
+                ReportPosition(chunkStart + reachedSeconds);
             });
             _env.LogTranscript($"transcribed gap chunk @{FormatTimestamp(chunkStart)}", segments);
             var freshAbs = ShiftSegments(segments, chunkStart);
@@ -360,16 +364,18 @@ internal sealed class RegionScanner
             if (_remaining is null or { Count: > 0 })
                 await ScanUnnumberedRetriesAsync(chunkStart, chunkEnd, matchSegments, ct);
 
-            _ctx.Work.Advance((long)(chunkSeconds * _ctx.BytesPerSecond));
+            // The chunk is behind us whatever its last segment happened to end at - a chunk closing
+            // on silence reports nothing for its tail, and the bar would sit there until the next
+            // chunk's first segment arrived, minutes later.
+            ReportPosition(chunkEnd);
 
             // Everything this gap was meant to recover is found, so stop and let the caller move
-            // on. The unscanned remainder still counts as this gap's work done - advance it, or
-            // the Scan bar never reaches its budget.
+            // on. The unscanned remainder still counts as this region passed - book it, or the bar
+            // stops short of a stretch it is done with.
             if (_remaining is { Count: 0 })
             {
                 _env.Log?.Invoke("gap complete - all expected chapters found");
-                if (chunkEnd < _toSeconds)
-                    _ctx.Work.Advance((long)((_toSeconds - chunkEnd) * _ctx.BytesPerSecond));
+                ReportPosition(_toSeconds);
                 break;
             }
             if (chunkEnd >= _toSeconds)
@@ -396,6 +402,15 @@ internal sealed class RegionScanner
             chunkStart = next;
         }
         return _found;
+    }
+
+    /// <summary>Moves the progress bar to a position in the file, never backwards; see
+    /// <see cref="_reportedSeconds"/>.</summary>
+    /// <param name="positionSeconds">Absolute position in the file the scan has reached.</param>
+    private void ReportPosition(double positionSeconds)
+    {
+        _reportedSeconds = Math.Max(_reportedSeconds, positionSeconds);
+        _ctx.Work.SetPhaseProgress(WorkTracker.Position(_reportedSeconds, _ctx.BytesPerSecond));
     }
 
     /// <summary>

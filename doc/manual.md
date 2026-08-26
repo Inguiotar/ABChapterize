@@ -211,9 +211,10 @@ looked for. A mapping restricted to `before-first-chapter` or
 `--jingle-first` asks for the shape whatever the file looks like.
 
 `--verbose` says which shape a file ran under, and the progress bar names the
-half that is running: `J-probe` while the music is read, then `S-probe`, whose
-length is the stretches it has left to look at rather than the whole book. An
-ordinary file walks both together and stays `Probe` throughout.
+half that is running: `J-probe` while the music is read, then `S-probe`, which
+marks the stretches it has left to look at out on the bar (see
+[section 12](#12-output-progress-and-logging)). An ordinary file walks both
+together and stays `Probe` throughout.
 
 #### Reading the longest pauses first
 
@@ -3550,15 +3551,23 @@ where every mark is an
 announcement without a number, the state shows the plain total instead:
 `mk 12`.
 
-Probing's percentage follows the probe position within the
-file's play time, so it can move nonlinearly — and, briefly, backwards,
-when a sequence gap makes the detector re-probe earlier candidates. The label
-gains a `(<<)` for exactly that stretch, so a falling percentage is
-recognisable as the re-probe rather than as the bar misbehaving.
-`S-probing...`
-is [Probe's second half](#reading-the-music-first) on a file that read its
-music first; its percentage runs over the stretches that half still has to
-read rather than over the whole file. `SD-probing...` — the
+**The bar always spans the whole file**, whatever fraction of it the pass is
+reading, and its percentage is a position in the book rather than a share of
+that pass's own work. So the fill moves nonlinearly, jumps from one stretch to
+the next, and — briefly — runs backwards when a sequence gap makes the detector
+re-probe earlier candidates; the label gains a `(<<)` for exactly that stretch,
+so a falling percentage is recognisable as the re-probe rather than as the bar
+misbehaving. A pass that reads only part of the book — the gaps in a numbering,
+the stretches a music-first read left over, the file's tail — finishes well
+short of 100 %, which is the honest answer to where in the book the reading
+stopped.
+
+Those stretches are marked out inside the bar so its jumps can be read against
+them: **dark cyan for every stretch the pass is going to read**, and **cyan for
+the one it is reading right now**. A pass that reads the book end to end marks
+nothing, a bar tinted from edge to edge saying nothing at all.
+
+`SD-probing...` — the
 [skim of a book's longest pauses](#reading-the-longest-pauses-first) — stops
 being a bar altogether, because it has a position in the file but no notion of
 how far along it is: it shows a single `X` where the fill would have ended,
@@ -3569,13 +3578,6 @@ transcribes in chunks of several minutes each, and the bar follows the
 recognizer's own position through the chunk it is working on rather than
 jumping once per finished chunk — so a long gap keeps showing that something
 is happening throughout.
-
-Whenever a pass is working one piece of the book rather than all of it — a gap
-in the numbering, the stretches a music-first read left over, the file's tail —
-that piece is picked out in dark cyan inside the bar, so a fill that stops short
-or runs backwards can be read against the stretch it belongs to. Where the whole
-bar covers one such piece, as `Scanning...` always does, all of it is dark cyan:
-the bar is then a map of that stretch and not of the book.
 
 Under `--verify` the bar shows `Verifying...` instead of the detection phases
 above: that mode reads the marks the file already carries rather than looking

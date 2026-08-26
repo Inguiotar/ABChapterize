@@ -321,20 +321,6 @@ internal sealed class RegionProber
     private readonly List<DetectedMark> _namedFound;
 
     /// <summary>
-    /// Seconds added to a candidate's absolute position before it is reported as progress, i.e. the
-    /// offset between this region's own time base and the one the enclosing phase counts in.
-    /// <para>
-    /// Zero for a phase whose total is the whole file (Probe proper, and the gap-scoped Probe a
-    /// --verify recovery runs): there the absolute position <em>is</em> the progress. A phase whose
-    /// total covers only its regions - Re-probe, whose budget is the summed gap length, exactly like
-    /// Scan's - passes the offset that maps this region onto that shorter timeline, so the bar
-    /// advances monotonically from 0 to 100 % across the whole pass instead of reporting a
-    /// whole-file position against a gap-sized total.
-    /// </para>
-    /// </summary>
-    private readonly double _progressOffsetSeconds;
-
-    /// <summary>
     /// True while the sequence-gap recovery re-probes the stretch since the last mark. It makes that
     /// stretch's candidates a recovery pass's (see <see cref="Recovering"/>) and stops the decodes
     /// reading ahead (see <see cref="ExtendToPlannedSeam"/>), both for the same reason: what a
@@ -689,8 +675,6 @@ internal sealed class RegionProber
     /// <param name="found">Accumulator of confirmed chapters across all regions.</param>
     /// <param name="namedFound">Accumulator of the file's prologue/epilogue marks.</param>
     /// <param name="language">The file's settled language resolution.</param>
-    /// <param name="progressOffsetSeconds">Offset onto the enclosing phase's time base; see
-    /// <see cref="_progressOffsetSeconds"/>. Defaults to 0, i.e. report absolute file positions.</param>
     /// <param name="sweepingSubFloorSilences">Whether this is a Re-probe sub-floor sweep; see
     /// <see cref="_sweeping"/>.</param>
     /// <param name="recovery">Whether this is a recovery pass rather than the primary scan; see
@@ -701,7 +685,7 @@ internal sealed class RegionProber
     /// Defaults to all of them, which is every caller but a two-part Probe's halves.</param>
     internal RegionProber(ProbeEnvironment env, ProbeContext ctx, DetectionRegion region,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
-        double progressOffsetSeconds = 0, bool sweepingSubFloorSilences = false,
+        bool sweepingSubFloorSilences = false,
         bool recovery = false, IEnumerable<int>? hunting = null,
         ProbeShape shape = ProbeShape.Everything)
     {
@@ -712,7 +696,6 @@ internal sealed class RegionProber
         _found = found;
         _namedFound = namedFound;
         _language = language;
-        _progressOffsetSeconds = progressOffsetSeconds;
         _sweeping = sweepingSubFloorSilences;
         _recovery = recovery || sweepingSubFloorSilences;
         _hunting = hunting is null ? null : [.. hunting];
@@ -774,13 +757,11 @@ internal sealed class RegionProber
                 ? null
                 : SpanOnBar(_region.FromSeconds, _region.ToSeconds);
 
-    /// <summary>Where a stretch of this region's audio falls on the enclosing phase's bar, in the
-    /// progress bytes it counts in.</summary>
+    /// <summary>Where a stretch of this region's audio falls on the bar.</summary>
     /// <param name="fromSeconds">Absolute start of the stretch.</param>
     /// <param name="toSeconds">Absolute end of the stretch.</param>
     private (long FromBytes, long ToBytes) SpanOnBar(double fromSeconds, double toSeconds)
-        => ((long)((fromSeconds + _progressOffsetSeconds) * _ctx.BytesPerSecond),
-            (long)((toSeconds + _progressOffsetSeconds) * _ctx.BytesPerSecond));
+        => WorkTracker.Span(fromSeconds, toSeconds, _ctx.BytesPerSecond);
 
     /// <summary>
     /// The walk probing has always had: every candidate in file order, each one's verdict settled
@@ -891,12 +872,14 @@ internal sealed class RegionProber
                 $"SD-probe: {_settledSpans.Count} stretch(es) closed by consecutive chapter " +
                 "numbers - their pauses are passed over");
 
-        // The skim really is a phase of its own and ends here, so the walk gets the bar back: same
-        // total, counted from zero, and labelled for what it is. Begun from here rather than by the
-        // caller because only this method knows when the skim finished - it may stop at any of its
-        // three termination conditions or run the list out. Beginning a phase clears the region
-        // highlight, hence the second call.
-        _ctx.Work.BeginPhase(WalkPhaseName(candidates), _ctx.Work.PhaseTotalBytes);
+        // The skim really is a phase of its own and ends here, so the walk gets the bar back: the
+        // same file, the same stretches, and a label for what it is. Begun from here rather than by
+        // the caller because only this method knows when the skim finished - it may stop at any of
+        // its three termination conditions or run the list out. The enclosing phase's stretches are
+        // handed straight back rather than recomputed, since the walk covers exactly what the skim
+        // did; beginning a phase clears the current-region highlight, hence the second call.
+        _ctx.Work.BeginPhase(
+            WalkPhaseName(candidates), _ctx.Work.PhaseTotalBytes, _ctx.Work.PhaseSpans);
         ShowRegionOnBar();
         await WalkInFileOrderAsync(candidates, ct);
     }
@@ -1079,15 +1062,13 @@ internal sealed class RegionProber
 
 
 
-    /// <summary>Reports how far probing has got as the byte-based progress the bar counts in,
-    /// translated onto the enclosing phase's time base (see <see cref="_progressOffsetSeconds"/>).
+    /// <summary>Reports how far probing has got as the byte-based progress the bar counts in.
     /// Probe costs vary wildly - full window decode vs. reused overlap vs. skipped candidate - so a
     /// fixed per-probe budget would drift far off; position is honest about <em>where</em> the pass
     /// is, at the price of nonlinear (and, during gap re-probes, briefly backwards) movement.</summary>
     /// <param name="positionSeconds">Absolute position in the file that probing has reached.</param>
     private void ReportProgress(double positionSeconds)
-        => _ctx.Work.SetPhaseProgress(
-            (long)((positionSeconds + _progressOffsetSeconds) * _ctx.BytesPerSecond));
+        => _ctx.Work.SetPhaseProgress(WorkTracker.Position(positionSeconds, _ctx.BytesPerSecond));
 
     /// <summary>
     /// The probe candidates for this region: its own start (mirroring the whole-file case's

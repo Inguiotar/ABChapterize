@@ -83,15 +83,21 @@ backwards. The bracket stays one total across all the parts.</p>
 where every mark is an
 announcement without a number, the state shows the plain total instead:
 <code>mk 12</code>.</p>
-<p>Probing's percentage follows the probe position within the
-file's play time, so it can move nonlinearly — and, briefly, backwards,
-when a sequence gap makes the detector re-probe earlier candidates. The label
-gains a <code>(&lt;&lt;)</code> for exactly that stretch, so a falling percentage is
-recognisable as the re-probe rather than as the bar misbehaving.
-<code>S-probing...</code>
-is <a href="03-how-detection-works.html#reading-the-music-first">Probe's second half</a> on a file that read its
-music first; its percentage runs over the stretches that half still has to
-read rather than over the whole file. <code>SD-probing...</code> — the
+<p><strong>The bar always spans the whole file</strong>, whatever fraction of it the pass is
+reading, and its percentage is a position in the book rather than a share of
+that pass's own work. So the fill moves nonlinearly, jumps from one stretch to
+the next, and — briefly — runs backwards when a sequence gap makes the detector
+re-probe earlier candidates; the label gains a <code>(&lt;&lt;)</code> for exactly that stretch,
+so a falling percentage is recognisable as the re-probe rather than as the bar
+misbehaving. A pass that reads only part of the book — the gaps in a numbering,
+the stretches a music-first read left over, the file's tail — finishes well
+short of 100 %, which is the honest answer to where in the book the reading
+stopped.</p>
+<p>Those stretches are marked out inside the bar so its jumps can be read against
+them: <strong>dark cyan for every stretch the pass is going to read</strong>, and <strong>cyan for
+the one it is reading right now</strong>. A pass that reads the book end to end marks
+nothing, a bar tinted from edge to edge saying nothing at all.</p>
+<p><code>SD-probing...</code> — the
 <a href="03-how-detection-works.html#reading-the-longest-pauses-first">skim of a book's longest pauses</a> — stops
 being a bar altogether, because it has a position in the file but no notion of
 how far along it is: it shows a single <code>X</code> where the fill would have ended,
@@ -102,12 +108,6 @@ transcribes in chunks of several minutes each, and the bar follows the
 recognizer's own position through the chunk it is working on rather than
 jumping once per finished chunk — so a long gap keeps showing that something
 is happening throughout.</p>
-<p>Whenever a pass is working one piece of the book rather than all of it — a gap
-in the numbering, the stretches a music-first read left over, the file's tail —
-that piece is picked out in dark cyan inside the bar, so a fill that stops short
-or runs backwards can be read against the stretch it belongs to. Where the whole
-bar covers one such piece, as <code>Scanning...</code> always does, all of it is dark cyan:
-the bar is then a map of that stretch and not of the book.</p>
 <p>Under <code>--verify</code> the bar shows <code>Verifying...</code> instead of the detection phases
 above: that mode reads the marks the file already carries rather than looking
 for new ones, so it steps through those rather than through the file.</p>

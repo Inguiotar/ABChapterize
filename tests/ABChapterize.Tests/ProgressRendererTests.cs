@@ -59,6 +59,14 @@ public class ProgressRendererTests
     private static string Bar((WorkTracker Tracker, string Label) slot, int width = Width)
         => ConsoleColors.PlainText(ProgressRenderer.BuildBarSpans(slot.Tracker, width));
 
+    /// <summary>Just the cells between the bar's brackets, as text-and-color pairs, so a
+    /// highlighting expectation can be written out without the line's other sections.</summary>
+    /// <param name="tracker">The tracker to render a bar for.</param>
+    private static List<(string Text, ConsoleColor? Color)> BarCells(WorkTracker tracker)
+        => [.. ProgressRenderer.BuildBarSpans(tracker, Width)
+                .SkipWhile(s => s.Text != "[").Skip(1).TakeWhile(s => s.Text != "]")
+                .Select(s => (s.Text, s.Color))];
+
     [Fact]
     public void BuildLine_ChangesWhenPercentChanges_EvenWhenBarFillDoesNot()
     {
@@ -388,91 +396,102 @@ public class ProgressRendererTests
     }
 
     /// <summary>
-    /// A pass working one piece of the book gets that piece marked out on the bar, so a fill that
-    /// stops short - or runs backwards, as a gap re-probe's does - can be read against the stretch
-    /// it belongs to.
+    /// A pass working one piece of the book gets that piece marked out on the bar in the bright
+    /// cyan, so a fill that jumps - or runs backwards, as a gap re-probe's does - can be read
+    /// against the stretch it belongs to.
     /// </summary>
     [Fact]
-    public void BuildBarSpans_HighlightTheRegionBeingWorked_InDarkCyan()
+    public void BuildBarSpans_HighlightTheRegionBeingWorked_InCyan()
     {
-        var (tracker, label) = Slot(50, 100);
+        var (tracker, _) = Slot(50, 100);
         tracker.RegionSpan = (25, 75);
-
-        var spans = ProgressRenderer.BuildBarSpans(tracker, Width);
-        var bar = spans.SkipWhile(s => s.Text != "[").Skip(1).TakeWhile(s => s.Text != "]").ToList();
 
         // Cells 0-9 and 30-39 are outside the region and stay white; the ten filled and ten empty
         // cells between them are the region.
         Assert.Equal(
             [(new string('#', 10), ConsoleColor.White),
-             (new string('#', 10) + new string('-', 10), ConsoleColor.DarkCyan),
+             (new string('#', 10) + new string('-', 10), ConsoleColor.Cyan),
              (new string('-', 10), ConsoleColor.White)],
-            bar.Select(s => (s.Text, s.Color)));
+            BarCells(tracker));
     }
 
-    /// <summary>A gap far shorter than one bar cell still has to show, or a percentage running
-    /// backwards would have nothing on the line beside it to explain itself.</summary>
+    /// <summary>
+    /// Every stretch the phase will work is marked out too, a shade darker, so the piece being read
+    /// right now is legible as one of several rather than as all there is to do.
+    /// </summary>
+    [Fact]
+    public void BuildBarSpans_HighlightEveryStretchThePhaseCovers_InDarkCyan()
+    {
+        var t = new WorkTracker();
+        t.BeginPhase(PhaseNames.Scan, 100, [(10, 20), (60, 80)]);
+        t.SetPhaseProgress(15);
+        t.RegionSpan = (10, 20);
+
+        Assert.Equal(
+            [(new string('#', 4), ConsoleColor.White),
+             (new string('#', 2) + new string('-', 2), ConsoleColor.Cyan),
+             (new string('-', 16), ConsoleColor.White),
+             (new string('-', 8), ConsoleColor.DarkCyan),
+             (new string('-', 8), ConsoleColor.White)],
+            BarCells(t));
+    }
+
+    /// <summary>A gap far shorter than one bar cell still has to show, or a fill jumping about the
+    /// bar would have nothing beside it to explain itself.</summary>
     [Fact]
     public void BuildBarSpans_HighlightAtLeastOneCell_ForARegionTooShortToFillOne()
     {
         var (tracker, _) = Slot(50, 100);
         tracker.RegionSpan = (50, 50);
 
-        var region = ProgressRenderer.BuildBarSpans(tracker, Width)
-            .Single(s => s.Color == ConsoleColor.DarkCyan);
+        var region = BarCells(tracker).Single(c => c.Color == ConsoleColor.Cyan);
 
         Assert.Equal(1, region.Text.Length);
     }
 
-    /// <summary>The primary whole-file walk marks no region, and its bar must stay one plain white
+    /// <summary>Two stretches close enough to round onto the same cell must not produce overlapping
+    /// spans - the bar is colored cell by cell for exactly this.</summary>
+    [Fact]
+    public void BuildBarSpans_KeepTheBarIntact_WhenTwoStretchesLandOnOneCell()
+    {
+        var t = new WorkTracker();
+        t.BeginPhase(PhaseNames.Scan, 100, [(50, 51), (51, 52)]);
+
+        Assert.Equal(40, BarCells(t).Sum(c => c.Text.Length));
+    }
+
+    /// <summary>The primary whole-file walk marks nothing, and its bar must stay one plain white
     /// run - a bar tinted end to end from the first second of every run would say nothing.</summary>
     [Fact]
-    public void BuildBarSpans_LeaveTheBarPlain_WhenNoRegionIsMarked()
+    public void BuildBarSpans_LeaveTheBarPlain_WhenNoStretchIsMarked()
     {
-        var spans = ProgressRenderer.BuildBarSpans(Slot(50, 100).Tracker, Width);
-        Assert.DoesNotContain(spans, s => s.Color == ConsoleColor.DarkCyan);
+        Assert.Equal(
+            [(new string('#', 20) + new string('-', 20), ConsoleColor.White)],
+            BarCells(Slot(50, 100).Tracker));
     }
 
-    /// <summary>Scan is the case that does tint end to end: it only ever reads regions, so its bar
-    /// really is one.</summary>
+    /// <summary>Beginning a phase clears both highlights, so a pass abandoned part way through
+    /// cannot leave the next phase pointing at stretches nothing is working on.</summary>
     [Fact]
-    public void MarkRegion_CoveringTheWholeBar_TintsAllOfIt()
+    public void BeginPhase_ClearsBothHighlights()
     {
         var t = new WorkTracker();
-        t.BeginPhase(PhaseNames.Scan, 100);
-        t.MarkRegion(100);
-
-        var spans = ProgressRenderer.BuildBarSpans(t, Width);
-        Assert.Equal(40, spans.Single(s => s.Color == ConsoleColor.DarkCyan).Text.Length);
-    }
-
-    /// <summary>A pass that books whole regions of work marks each one from where the phase already
-    /// stands, so the second region's highlight sits behind the first's.</summary>
-    [Fact]
-    public void MarkRegion_StartsWhereThePhaseStands()
-    {
-        var t = new WorkTracker();
-        t.BeginPhase(PhaseNames.Scan, 100);
-        t.MarkRegion(40);
-        Assert.Equal((0L, 40L), t.RegionSpan);
-
-        t.Advance(40);
-        t.MarkRegion(60);
-        Assert.Equal((40L, 100L), t.RegionSpan);
-    }
-
-    /// <summary>Beginning a phase clears the highlight, so a pass abandoned part way through cannot
-    /// leave the next phase pointing at a stretch nothing is working on.</summary>
-    [Fact]
-    public void BeginPhase_ClearsTheRegionHighlight()
-    {
-        var t = new WorkTracker();
-        t.BeginPhase(PhaseNames.Scan, 100);
-        t.MarkRegion(40);
+        t.BeginPhase(PhaseNames.Scan, 100, [(10, 40)]);
+        t.RegionSpan = (10, 40);
 
         t.BeginPhase(PhaseNames.Rescan, 100);
 
         Assert.Null(t.RegionSpan);
+        Assert.Null(t.PhaseSpans);
+    }
+
+    /// <summary>Every bar this tool draws spans the whole file, so play time converts to bar
+    /// coordinates in one place and a stretch cannot be measured differently from the position
+    /// reported inside it.</summary>
+    [Fact]
+    public void Span_MapsPlayTimeOntoTheBar_AtTheFilesOwnByteRate()
+    {
+        Assert.Equal((1000L, 4000L), WorkTracker.Span(10, 40, 100));
     }
 
     /// <summary>

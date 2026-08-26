@@ -2750,12 +2750,12 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Reprobe_ReportsProgressRelativeToTheGapsItBudgetedFor_NotAbsoluteFilePosition()
+    public async Task Reprobe_ReportsItsPositionInTheFile_AgainstAWholeFileBar()
     {
-        // Re-probe's phase total is the summed length of the gaps it will re-probe, so its progress
-        // has to be measured in the same currency. Reporting the probe's absolute file position
-        // instead pegged the bar at 100 % for the whole pass whenever the gap sat late in the file -
-        // here a 999.7 s gap starting at 2400.25 s, where an absolute 3100 s would read as 310 %.
+        // Every bar this tool draws maps the whole book, Re-probe's included: its fill is the
+        // position being re-probed and its gaps are marked out around it. Here a 999.7 s gap
+        // starting at 2400.25 s of a 3600 s file, so a probe at 3100 s reads as 86 % - two thirds of
+        // the way through a book, not "nearly finished".
         var audio = new FakeAudioSource { Silences = [new(2395, 2400), new(3095, 3100), new(3395, 3400)] };
         var probe = new ScriptedTranscriber(audio);
         var upgrade = new ScriptedTranscriber(audio);
@@ -2781,12 +2781,19 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.False(result.GapRemains);
         Assert.Contains(result.Chapters, c => c.Number == 3);
         Assert.NotEmpty(during);
-        // The probe at 3100 s sits 699.75 s into a 999.7 s budget - nowhere near the clamp.
-        Assert.All(during, f => Assert.InRange(f, 0.0, 0.8));
-        // And the pass still lands exactly on 100 % when its last gap is done; nothing else began
-        // a phase afterwards, since Scan found no gap left to fill.
+        // The gap is marked out on the bar, which is what says why a fill sitting at 94 % belongs to
+        // a pass that has only just begun. Nothing else began a phase afterwards, since Scan found
+        // no gap left to fill.
         Assert.Equal(PhaseNames.Reprobe, tracker.PhaseName);
-        Assert.Equal(1.0, tracker.Fraction, 6);
+        var gap = Assert.Single(tracker.PhaseSpans!);
+        Assert.Equal((2400L, 3399L), gap);
+        // Every position reported lies in that gap, which is the whole of what the pass looks at -
+        // 1 byte per second here, so a fraction is a play-time position. A shade before its start is
+        // allowed for: a probe window opens ahead of the candidate it is aimed at.
+        Assert.All(during, f => Assert.InRange(f * Duration, gap.FromBytes - 5, gap.ToBytes));
+        // And the pass ends at the end of its last gap rather than at 100 %: a bar spanning the file
+        // says where the reading stopped, and the reading stopped 200 s short of the end.
+        Assert.Equal(gap.ToBytes / Duration, tracker.Fraction, 6);
     }
 
     [Fact]
@@ -6436,10 +6443,52 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.True(duringScan[0] > 0, $"the bar had not moved at the first report ({duringScan[0]})");
         Assert.Equal(duringScan.OrderBy(f => f), duringScan);
         Assert.All(duringScan, f => Assert.InRange(f, 0.0, 1.0));
-        // Scan only ever reads a piece of the book, so its bar is a map of that piece and is
-        // marked out as one throughout - here a single region filling the whole phase.
+        // Scan only ever reads a piece of the book, and its bar is a map of the whole book with
+        // that piece marked out on it - here the single gap [0.25, 500] of a 3600 s file, so the
+        // bar is a long way from full while the pass is very nearly done.
         Assert.NotEmpty(scannedRegions);
-        Assert.All(scannedRegions, r => Assert.Equal((0L, r.Total), r.Region));
+        Assert.All(scannedRegions, r => Assert.Equal(((long)Duration, (0L, 499L)), (r.Total, r.Region)));
+        Assert.All(duringScan, f => Assert.InRange(f * Duration, 0.0, 500.0));
+    }
+
+    [Fact]
+    public async Task Scan_MarksEveryGapItWillRead_NotOnlyTheOneItIsOn()
+    {
+        // The other half of a whole-file bar: with the fill free to jump from one gap to the next,
+        // the set of gaps has to be drawn on the bar or the jump reads as the bar malfunctioning.
+        // Two gaps here - chapters 2 and 4 both missing - so both stretches stay marked out while
+        // the pass works one of them at a time.
+        var audio = new FakeAudioSource { Silences = [new(1195, 1200), new(2395, 2400)] };
+        var transcriber = new ScriptedTranscriber(audio);
+        transcriber.Add(0, Seg(0.5, " Chapter one."));
+        transcriber.Add(1200, Seg(0.3, " Chapter three."));
+        transcriber.Add(2400, Seg(0.3, " Chapter five."));
+
+        var work = new WorkTracker();
+        var seen = new List<(IReadOnlyList<(long FromBytes, long ToBytes)>? Spans,
+                             (long FromBytes, long ToBytes)? Region)>();
+        transcriber.OnTranscribe = () =>
+        {
+            if (work.PhaseName == PhaseNames.Scan)
+                seen.Add((work.PhaseSpans, work.RegionSpan));
+        };
+
+        var detector = new ChapterDetector(Options("--quick-marks"), audio, transcriber);
+        await detector.DetectAsync(_file, Info, work, default, CancellationToken.None);
+
+        Assert.NotEmpty(seen);
+        Assert.All(seen, s =>
+        {
+            // Both gaps throughout, and the one being read is always one of them - the two are
+            // built from the same gap list through the same conversion, so anything else would mean
+            // the pass had wandered outside what it told the bar it would do.
+            Assert.Equal(2, s.Spans?.Count);
+            Assert.Contains(s.Region!.Value, s.Spans!);
+        });
+        // Chapter 3's mark bounds both gaps, so they meet at it and neither reaches the file's end.
+        var gaps = seen[0].Spans!;
+        Assert.Equal(gaps[0].ToBytes, gaps[1].FromBytes);
+        Assert.True(gaps[1].ToBytes < Info.SizeBytes);
     }
 
     [Fact]

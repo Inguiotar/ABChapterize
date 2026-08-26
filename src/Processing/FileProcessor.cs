@@ -736,7 +736,7 @@ public sealed class FileProcessor
     {
         work.BeginPhase(PhaseNames.Finish, info.SizeBytes);
         var bytesPerSecond = info.DurationSeconds > 0 ? info.SizeBytes / info.DurationSeconds : 0;
-        return seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond));
+        return seconds => work.SetPhaseProgress(WorkTracker.Position(seconds, bytesPerSecond));
     }
 
     /// <summary>

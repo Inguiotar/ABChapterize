@@ -376,8 +376,17 @@ public sealed class ChapterDetector
         // candidates come one per non-speech region - so they could in principle disagree about a
         // marginal file. Only the label is at stake, and this is the last moment before the several
         // seconds of silence the bar would otherwise sit through.
+        //
+        // Which pieces of the book this Probe covers: all of it on a fresh run (so no stretch is
+        // marked out at all), the gaps alone on a --verify or missing-marks recovery. Held in one
+        // variable because the two shape-specific re-begins below have to hand the bar exactly the
+        // same stretches - a re-begin that quietly dropped them would leave a recovery's gaps
+        // unmarked.
+        var probeSpans = BarSpans(
+            [.. regions.Select(r => (r.FromSeconds, r.ToSeconds))], info.DurationSeconds, bytesPerSecond);
         work.BeginPhase(
-            jingles.Count > 0 ? PhaseNames.Probe : PhaseNames.ChronologicalProbe, info.SizeBytes);
+            jingles.Count > 0 ? PhaseNames.Probe : PhaseNames.ChronologicalProbe,
+            info.SizeBytes, probeSpans);
 
         // The language is settled here, before a single probe runs, and fixed via ChangeLanguage
         // rather than re-detected per window - it belongs to the file, not to a region. Resolving it
@@ -450,9 +459,9 @@ public sealed class ChapterDetector
         // the walk itself. An ordinary file keeps the label begun above throughout. Re-beginning
         // resets the bar to zero, which is where it already is.
         if (jingleFirst.Run)
-            work.BeginPhase(PhaseNames.JingleProbe, info.SizeBytes);
+            work.BeginPhase(PhaseNames.JingleProbe, info.SizeBytes, probeSpans);
         else if (descending.Run)
-            work.BeginPhase(PhaseNames.DescendingProbe, info.SizeBytes);
+            work.BeginPhase(PhaseNames.DescendingProbe, info.SizeBytes, probeSpans);
 
         // The shortest chapter break any region measured, which is what decides whether the sweep
         // below has anything to do. Taken across regions rather than per region: it is a statement
@@ -462,7 +471,7 @@ public sealed class ChapterDetector
             jingleFirst.Run ? ProbeShape.JinglesOnly
                 : descending.Run ? ProbeShape.SilencesDescending
                 : ProbeShape.Everything,
-            bytesPerSecond, wholeFileProgress: true, ct);
+            ct);
 
         // The pauses the jingle half deferred, over the stretches it left unsettled. Not run after
         // an abort: both of them mean this file is not being detected at all, and the pauses cannot
@@ -561,34 +570,23 @@ public sealed class ChapterDetector
     /// <param name="namedFound">Accumulator of the file's named marks.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="shape">Which of each region's candidates to walk; see <see cref="ProbeShape"/>.</param>
-    /// <param name="bytesPerSecond">The file's play time to progress-byte rate.</param>
-    /// <param name="wholeFileProgress">Whether the enclosing phase's total is the whole file, in
-    /// which case a region's absolute position <em>is</em> its progress. False for a phase whose
-    /// budget is the summed length of its regions, where each one's position is mapped onto that
-    /// shorter timeline so the bar runs from 0 to 100 % once across the pass; see
-    /// <see cref="RegionProber"/>'s progress-offset remarks.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<ProbeOutcome> ProbeRegionsAsync(
         ProbeContext ctx, IReadOnlyList<DetectionRegion> regions,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
-        ProbeShape shape, double bytesPerSecond, bool wholeFileProgress, CancellationToken ct)
+        ProbeShape shape, CancellationToken ct)
     {
         var outcome = new ProbeOutcome(false, null, null);
-        var secondsDone = 0.0;
         foreach (var region in regions)
         {
             var prober = new RegionProber(
-                BuildProbeEnvironment(), ctx, region, found, namedFound, language,
-                wholeFileProgress ? 0 : secondsDone - region.FromSeconds, shape: shape);
+                BuildProbeEnvironment(), ctx, region, found, namedFound, language, shape: shape);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
             outcome = outcome.And(new ProbeOutcome(
                 prober.EarlyAborted, prober.BelowExpectedStartNumber, prober.AdaptedThresholdSeconds));
 
-            secondsDone += region.ToSeconds - region.FromSeconds;
-            if (!wholeFileProgress)
-                ctx.Work.SetPhaseProgress((long)(secondsDone * bytesPerSecond));
             if (outcome.EarlyAborted || outcome.BelowExpectedStartNumber != null)
                 break;
         }
@@ -605,10 +603,9 @@ public sealed class ChapterDetector
     /// <see cref="DescendingSilenceScan"/>.
     /// </para>
     /// <para>
-    /// A phase of its own, because its budget is the summed length of those stretches rather than
-    /// the whole file: reporting a whole-file position against it would send the bar back to the
-    /// start of a phase it is not in. It is also the honest thing to show - the run really is
-    /// looking at the book a second time, over a fraction of it.
+    /// A phase of its own, because the run really is looking at the book a second time, over a
+    /// fraction of it - which is what the bar shows: the stretches marked out on it, and the fill
+    /// back at the first of them.
     /// </para>
     /// <para>
     /// Each stretch is walked by an ordinary prober in the primary scan's own framing, not a
@@ -658,10 +655,12 @@ public sealed class ChapterDetector
         if (stretchSeconds <= 0)
             return new ProbeOutcome(false, null, null);
 
-        ctx.Work.BeginPhase(PhaseNames.SilenceProbe, (long)(stretchSeconds * bytesPerSecond));
+        ctx.Work.BeginPhase(
+            PhaseNames.SilenceProbe, ctx.Info.SizeBytes,
+            BarSpans([.. stretches.Select(s => (s.FromSeconds, s.ToSeconds))],
+                     ctx.Info.DurationSeconds, bytesPerSecond));
         return await ProbeRegionsAsync(
-            ctx, stretches, found, namedFound, language,
-            ProbeShape.SilencesOnly, bytesPerSecond, wholeFileProgress: false, ct);
+            ctx, stretches, found, namedFound, language, ProbeShape.SilencesOnly, ct);
     }
 
     /// <summary>
@@ -845,6 +844,29 @@ public sealed class ChapterDetector
         work.NamedMarks = confirmed;
         work.ExtraMarks = confirmed;
     }
+
+    /// <summary>
+    /// The stretches a pass is about to work, as the spans its phase is begun with (see
+    /// <see cref="WorkTracker.PhaseSpans"/>) - or null where they cover the book end to end, a bar
+    /// tinted from edge to edge saying nothing a plain one does not.
+    /// </summary>
+    /// <param name="stretches">The stretches of play time, in file order.</param>
+    /// <param name="durationSeconds">The file's play time, against which "the whole book" is
+    /// decided.</param>
+    /// <param name="bytesPerSecond">The file's play time to progress-byte rate.</param>
+    /// <remarks>
+    /// The whole-book exemption is the rule <see cref="RegionProber"/> applies to the current-region
+    /// highlight, restated here for the phase's own stretches so the two cannot disagree about
+    /// whether a pass is working a piece of the book. Probe is the pass that needs it: its regions
+    /// are the whole file on a fresh run and the gaps on a --verify recovery, from the one call.
+    /// </remarks>
+    private static IReadOnlyList<(long FromBytes, long ToBytes)>? BarSpans(
+        IReadOnlyList<(double FromSeconds, double ToSeconds)> stretches,
+        double durationSeconds, double bytesPerSecond)
+        => stretches.Count == 1 &&
+           stretches[0].FromSeconds <= 0 && stretches[0].ToSeconds >= durationSeconds
+            ? null
+            : [.. stretches.Select(s => WorkTracker.Span(s.FromSeconds, s.ToSeconds, bytesPerSecond))];
 
     /// <summary>
     /// The pipeline stage between Probe and Re-probe: settles the marks that landed on top of each
@@ -1335,8 +1357,10 @@ public sealed class ChapterDetector
         var gaps = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter);
         if (gaps.Count > 0)
         {
-            work.BeginPhase(PhaseNames.Scan,
-                (long)(gaps.Sum(g => g.ToSeconds - g.FromSeconds) * bytesPerSecond));
+            work.BeginPhase(
+                PhaseNames.Scan, info.SizeBytes,
+                BarSpans([.. gaps.Select(g => (g.FromSeconds, g.ToSeconds))],
+                         info.DurationSeconds, bytesPerSecond));
             // A distinct --upgrade-model needs its language set here; the probe transcriber already
             // carries it, so the common (same-model) case leaves everything untouched.
             if (!ReferenceEquals(_upgradeTranscriber, _transcriber))
@@ -1380,7 +1404,9 @@ public sealed class ChapterDetector
             var rereadPossible = trailing.Targets is not null && !_options.UpgradeModelIsWorse;
             _log?.Invoke($"transcribing {what} " +
                          $"{FormatTimestamp(trailing.From)} - {FormatTimestamp(info.DurationSeconds)}");
-            work.BeginPhase(PhaseNames.Scan, (long)((info.DurationSeconds - trailing.From) * bytesPerSecond));
+            work.BeginPhase(
+                PhaseNames.Scan, info.SizeBytes,
+                BarSpans([(trailing.From, info.DurationSeconds)], info.DurationSeconds, bytesPerSecond));
             if (!ReferenceEquals(_upgradeTranscriber, _transcriber))
                 _upgradeTranscriber.ChangeLanguage(profile.Language);
             var fills = await new RegionScanner(
@@ -1486,7 +1512,9 @@ public sealed class ChapterDetector
         _log?.Invoke(
             $"Re-scan: {what}{FormatTimestamp(fromSeconds)} - {FormatTimestamp(toSeconds)} " +
             $"from {FormatTimestamp(from)}, half a decode window later");
-        ctx.Work.BeginPhase(PhaseNames.Rescan, (long)((toSeconds - from) * ctx.BytesPerSecond));
+        ctx.Work.BeginPhase(
+            PhaseNames.Rescan, ctx.Info.SizeBytes,
+            BarSpans([(from, toSeconds)], ctx.Info.DurationSeconds, ctx.BytesPerSecond));
         if (!ReferenceEquals(_upgradeTranscriber, _transcriber))
             _upgradeTranscriber.ChangeLanguage(ctx.Profile.Language);
 
@@ -1664,8 +1692,8 @@ public sealed class ChapterDetector
             return chapters;
 
         // Only the gaps that actually name a missing chapter are worth re-probing, and only those
-        // are budgeted for below - a gap whose numbers are all accounted for would otherwise inflate
-        // the phase total and stop the bar from ever reaching 100 %.
+        // are marked out on the bar below - a gap whose numbers are all accounted for would
+        // otherwise be highlighted as work this pass is going to do and then silently skipped.
         var reprobeWork = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter)
             .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(chapters, gap, ExpectedStartChapter)))
             .Where(g => g.Missing.Count > 0)
@@ -1673,8 +1701,10 @@ public sealed class ChapterDetector
         if (reprobeWork.Count == 0)
             return chapters;
 
-        work.BeginPhase(PhaseNames.Reprobe,
-            (long)(reprobeWork.Sum(g => g.Gap.ToSeconds - g.Gap.FromSeconds) * bytesPerSecond));
+        work.BeginPhase(
+            PhaseNames.Reprobe, info.SizeBytes,
+            BarSpans([.. reprobeWork.Select(g => (g.Gap.FromSeconds, g.Gap.ToSeconds))],
+                     info.DurationSeconds, bytesPerSecond));
         _upgradeTranscriber.ChangeLanguage(profile.Language);
 
         // --early-abort and --expected-start-chapter are both disabled for these regions (infinity
@@ -1695,10 +1725,6 @@ public sealed class ChapterDetector
         // nonsense on a list holding only this pass's own finds.
         var found = new List<DetectedChapter>(chapters);
         var knownCount = found.Count;
-        // Seconds of gap already behind us; each gap's probing is reported relative to it, so the
-        // bar runs monotonically 0-100 % across the whole pass rather than measuring a whole-file
-        // position against a gap-sized budget.
-        var gapSecondsDone = 0.0;
         foreach (var (gap, missing) in reprobeWork)
         {
             _log?.Invoke(
@@ -1711,16 +1737,17 @@ public sealed class ChapterDetector
             // a second time. Its value is the heavier model over the same audio, seen whole.
             var prober = new RegionProber(
                 env, ctx, region, found, namedFound,
-                new LanguageState(profile, null, 0),
-                gapSecondsDone - gap.FromSeconds, recovery: true, hunting: missing);
+                new LanguageState(profile, null, 0), recovery: true, hunting: missing);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
             await SweepSubFloorSilencesAsync(
-                env, ctx, gap, missing, found, namedFound, profile, allSilences,
-                gapSecondsDone - gap.FromSeconds, ct);
-            gapSecondsDone += gap.ToSeconds - gap.FromSeconds;
-            work.SetPhaseProgress((long)(gapSecondsDone * bytesPerSecond));
+                env, ctx, gap, missing, found, namedFound, profile, allSilences, ct);
+            // The prober reports its position as it goes, but it stops at the last candidate rather
+            // than at the gap's end, and a gap yielding no candidates at all reports nothing - so
+            // the gap is booked as passed here, or the bar would sit behind the pass by up to a
+            // whole gap.
+            work.SetPhaseProgress(WorkTracker.Position(gap.ToSeconds, bytesPerSecond));
         }
 
         var recovered = found.Count - knownCount;
@@ -1780,16 +1807,14 @@ public sealed class ChapterDetector
     /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
     /// <param name="profile">The language profile resolved for this file.</param>
     /// <param name="allSilences">Every silence Analyze retained, which is where the bands come from.</param>
-    /// <param name="progressOffsetSeconds">The same offset the gap's ordinary re-probe reported
-    /// against, so a sweep re-walks that gap's own stretch of the bar rather than inventing a new one.</param>
     /// <param name="ct">Cancellation token.</param>
     private Task SweepSubFloorSilencesAsync(
         ProbeEnvironment env, ProbeContext ctx, GapRegion gap, List<int> missing, List<DetectedChapter> found,
         List<DetectedMark> namedFound, LanguageProfile profile, List<Silence> allSilences,
-        double progressOffsetSeconds, CancellationToken ct)
+        CancellationToken ct)
         => SweepGapBandsAsync(
             env, ctx, gap, missing, found, namedFound, new LanguageState(profile, null, 0),
-            allSilences, progressOffsetSeconds, "Re-probe", ct);
+            allSilences, "Re-probe", ct);
 
     /// <summary>
     /// One gap's sub-floor sweep, shared by Probe's and Re-probe's: the silences just under
@@ -1822,14 +1847,12 @@ public sealed class ChapterDetector
     /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="allSilences">Every silence Analyze retained, which is where the bands come from.</param>
-    /// <param name="progressOffsetSeconds">Offset onto the enclosing phase's time base, so a sweep
-    /// re-walks its gap's own stretch of the bar rather than inventing a new one.</param>
     /// <param name="phase">How the log lines name the pass this sweep belongs to.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task SweepGapBandsAsync(
         ProbeEnvironment env, ProbeContext ctx, GapRegion gap, List<int> missing,
         List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
-        List<Silence> allSilences, double progressOffsetSeconds, string phase, CancellationToken ct)
+        List<Silence> allSilences, string phase, CancellationToken ct)
     {
         var stillMissing = StillMissing(missing, found, gap.Sequence);
         if (stillMissing.Count == 0)
@@ -1870,7 +1893,7 @@ public sealed class ChapterDetector
                 gap.FromSeconds, gap.ToSeconds, stillMissing[0] - 1, stillMissing[^1] + 1, gap.Sequence);
             var prober = new RegionProber(
                 env, ctx with { Silences = band }, region, found, namedFound, language,
-                progressOffsetSeconds, sweepingSubFloorSilences: true, hunting: stillMissing);
+                sweepingSubFloorSilences: true, hunting: stillMissing);
             // Named for the length of the sweep itself and not a moment longer: the enclosing phase
             // is Probe or Re-probe, its bar is the one this walks over, and the name it was under is
             // restored whatever the sweep does - which is also why the name is taken from the
@@ -1981,8 +2004,7 @@ public sealed class ChapterDetector
 
         foreach (var (gap, missing) in work)
             await SweepGapBandsAsync(
-                env, ctx, gap, missing, found, namedFound, language, ctx.AllSilences,
-                progressOffsetSeconds: 0, "Probe", ct);
+                env, ctx, gap, missing, found, namedFound, language, ctx.AllSilences, "Probe", ct);
     }
 
     /// <summary>Which of <paramref name="expected"/> the accumulator still has no chapter for.</summary>
@@ -2336,14 +2358,14 @@ public sealed class ChapterDetector
             allSilences = await _audio.DetectSilencesAndStreamPcmAsync(
                 file, info.DurationSeconds, storedSilenceFloor, noiseDb,
                 async (pcm, innerCt) => speechSegments = await vad.DetectSpeechAsync(pcm, innerCt),
-                seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
+                seconds => work.SetPhaseProgress(WorkTracker.Position(seconds, bytesPerSecond)), info.InputDecoder, ct);
             nonSpeechRegions = ComputeNonSpeechRegions(speechSegments);
         }
         else
         {
             allSilences = await _audio.DetectSilencesAsync(
                 file, info.DurationSeconds, storedSilenceFloor, noiseDb,
-                seconds => work.SetPhaseProgress((long)(seconds * bytesPerSecond)), info.InputDecoder, ct);
+                seconds => work.SetPhaseProgress(WorkTracker.Position(seconds, bytesPerSecond)), info.InputDecoder, ct);
         }
         // Empty rather than "everything at or above 0" when silence probing is off: this list is
         // Probe's candidate set and nothing else, so emptying it is exactly what the option asks

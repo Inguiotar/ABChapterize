@@ -148,6 +148,18 @@ earn a round number.
   for the files the run got through, its first line saying that the run did not finish and how
   far it got. `--revert` and `--cleanup` do the same.
 
+### Changed
+
+- **The progress bar is now a map of the whole book, in every pass.** The passes that read only
+  part of a file — chasing the gaps in a numbering, the stretches a music-first read left over,
+  the file's tail — used to give their bar a scale of their own, so it ran a tidy 0 to 100 %
+  while saying nothing about where in the book the reading actually was, and the same position
+  meant something different from one pass to the next. Every bar now spans the file, its
+  percentage is a position in the book, and the stretches a pass is going to read are marked out
+  inside it: dark cyan for all of them, cyan for the one being read right now. A pass that reads
+  part of a book therefore finishes short of 100 %, which is the point — that is where the
+  reading stopped.
+
 ### Fixed
 
 - **`--abs-push` no longer withholds a partial chapter set from a book the server has nothing
