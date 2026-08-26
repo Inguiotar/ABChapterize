@@ -577,32 +577,62 @@ public sealed partial class FfmpegClient : IAudioSource
 
         if (backup && !earlierBakKept)
         {
-            File.Move(file, bak);
+            Move(file, bak, overwrite: false, $"Could not move \"{file}\" aside to its backup name");
             try
             {
-                File.Move(tmpFile, file);
+                Move(tmpFile, file, overwrite: false, $"Could not put the newly written \"{file}\" in place");
             }
             catch
             {
-                File.Move(bak, file, overwrite: true); // roll back
+                // Roll back. Its own failure replaces the one that caused it, which is the right way
+                // round: "the new file could not be moved in" is a run that changed nothing, where
+                // "and the audiobook is now called something else" is a folder needing a hand.
+                Move(bak, file, overwrite: true, $"Could not put \"{file}\" back from \"{bak}\"");
                 throw;
             }
             return false;
         }
 
         var parked = file + ParkedSuffix;
-        File.Move(file, parked);
+        Move(file, parked, overwrite: false, $"Could not move \"{file}\" out of the way");
         try
         {
-            File.Move(tmpFile, file);
+            Move(tmpFile, file, overwrite: false, $"Could not put the newly written \"{file}\" in place");
         }
         catch
         {
-            File.Move(parked, file); // roll back
+            Move(parked, file, overwrite: false, $"Could not put \"{file}\" back from \"{parked}\"");
             throw;
         }
         File.Delete(parked);
         return earlierBakKept;
+    }
+
+    /// <summary>
+    /// One step of <see cref="SwapInto"/>, reported with the file it failed on.
+    /// </summary>
+    /// <remarks>
+    /// <c>File.Move</c>'s own exceptions carry no path at all - a locked audiobook produces the
+    /// bare "Access to the path is denied.", which reaches the user through the top-level handler
+    /// as a type name and a sentence naming nothing. That is the least useful moment in the run to
+    /// be vague: this is the one place an audiobook can end up under a name nobody asked for, so
+    /// every step says which file and where it was going.
+    /// </remarks>
+    /// <param name="from">The file to move.</param>
+    /// <param name="to">Where it is going.</param>
+    /// <param name="overwrite">Whether an existing destination may be replaced.</param>
+    /// <param name="what">What failed, as a sentence opening naming the file.</param>
+    /// <exception cref="AppError">The move failed.</exception>
+    private static void Move(string from, string to, bool overwrite, string what)
+    {
+        try
+        {
+            File.Move(from, to, overwrite);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw new AppError($"{what}: {ex.Message}");
+        }
     }
 
     /// <summary>Builds an FFMETADATA1 document containing only the chapter list.

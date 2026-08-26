@@ -239,7 +239,19 @@ public sealed class FileProcessor
                 // taken its place, and a move that fails there leaves the folder looking emptier than
                 // it is. Overwriting is what --revert is for, so nothing here needs the refusal
                 // CommitChaptersAsync makes.
-                File.Move(bak, original, overwrite: true);
+                try
+                {
+                    File.Move(bak, original, overwrite: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                               or NotSupportedException)
+                {
+                    // File.Move names no path of its own - a file held open by a player gives the
+                    // bare "Access to the path is denied." - so the one thing the user needs from
+                    // this, which of a folder full of books stopped the revert, would otherwise be
+                    // the one thing missing.
+                    throw new AppError($"Could not restore \"{original}\" from its backup: {ex.Message}");
+                }
                 reverted++;
                 if (!_options.Quiet)
                     _progress.Announce($"{Path.GetFileName(original)}: reverted from backup");
@@ -2187,11 +2199,25 @@ public sealed class FileProcessor
     /// non-overwriting move would fail on the destination it is itself sitting in.
     /// </para>
     /// </remarks>
+    /// <exception cref="AppError">The rename failed. Named rather than left to <c>File.Move</c>,
+    /// whose exceptions carry no path: by this point the marks are in the file and only its name is
+    /// wrong, so the message has to say which file that is for the run to be recoverable by
+    /// hand.</exception>
     internal static string RenameCommitted(string file, string? renameTo)
     {
         if (renameTo == null || SamePath(file, renameTo) || File.Exists(renameTo))
             return file;
-        File.Move(file, renameTo);
+        try
+        {
+            File.Move(file, renameTo);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or NotSupportedException)
+        {
+            throw new AppError(
+                $"Could not rename \"{file}\" to \"{renameTo}\": {ex.Message} " +
+                "Its chapter marks are written; only the name is still the old one.");
+        }
         return renameTo;
     }
 

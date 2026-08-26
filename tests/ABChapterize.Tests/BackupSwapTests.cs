@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using ABChapterize.Audio;
+using ABChapterize.Errors;
 using ABChapterize.Processing;
 using Xunit;
 
@@ -104,5 +105,40 @@ public class BackupSwapTests : IDisposable
         Assert.Equal(", earlier backup kept (predates this run)",
             RunStatistics.FormatBackupNote(true, earlierKept: true));
         Assert.Equal("", RunStatistics.FormatBackupNote(false, earlierKept: false));
+    }
+
+    /// <summary>
+    /// A swap that cannot start names the audiobook it could not move. <c>File.Move</c>'s own
+    /// exceptions carry no path - a locked file gives the bare "Access to the path is denied." -
+    /// and this is the one place in the run where a book can end up under a name nobody asked for,
+    /// so the message identifying which file it was is the whole of what makes it recoverable.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AMoveThatFails_NamesTheFile(bool backup)
+    {
+        // Nothing to move aside: the first step of either branch fails.
+        var error = Assert.Throws<AppError>(
+            () => FfmpegClient.SwapInto(File_, File_ + ".abchapterize.tmp.m4b", backup));
+
+        Assert.Contains(File_, error.Message);
+    }
+
+    /// <summary>
+    /// The rollback still happens, and the failure that caused it still names the file: the
+    /// original is back under its own name and nothing has been lost.
+    /// </summary>
+    [Fact]
+    public void AFailedSwap_RollsBackAndStillNamesTheFile()
+    {
+        var tmp = Stage("the original");
+        File.Delete(tmp); // the replacement disappears between verification and the swap
+
+        var error = Assert.Throws<AppError>(() => FfmpegClient.SwapInto(File_, tmp, backup: true));
+
+        Assert.Contains(File_, error.Message);
+        Assert.Equal("the original", File.ReadAllText(File_));
+        Assert.False(File.Exists(Bak));
     }
 }

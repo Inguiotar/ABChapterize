@@ -6,6 +6,7 @@ using Xunit;
 using ABChapterize.Audio;
 using ABChapterize.Cli;
 using ABChapterize.Detection;
+using ABChapterize.Errors;
 using ABChapterize.Language;
 using ABChapterize.Processing;
 
@@ -344,4 +345,21 @@ public sealed class FileProcessorTests : IDisposable
     [Fact]
     public void RenameCommitted_DoesNothing_WithoutADestination()
         => Assert.Equal(_file, FileProcessor.RenameCommitted(_file, null));
+
+    /// <summary>
+    /// A rename that cannot happen names the file. <c>File.Move</c>'s own exceptions carry no path,
+    /// so without this the run ends on a sentence identifying nothing - and the marks are in the
+    /// file by then, which makes "which one" the only question left.
+    /// </summary>
+    [Fact]
+    public void RenameCommitted_NamesTheFile_WhenTheMoveFails()
+    {
+        var unreachable = Path.Combine(_dir, "no-such-folder", "book.missing-marks-3.m4b");
+
+        var error = Assert.Throws<AppError>(() => FileProcessor.RenameCommitted(_file, unreachable));
+
+        Assert.Contains(_file, error.Message);
+        Assert.Contains(unreachable, error.Message);
+        Assert.True(File.Exists(_file));
+    }
 }

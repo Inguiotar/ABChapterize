@@ -123,6 +123,12 @@ earn a round number.
 
 ### Fixed
 
+- **A file that cannot be renamed or moved is now named in the message.** Renaming is the last
+  step of writing a book's marks, of taking a `.missing-marks` tag off, and of `--revert`; when
+  one failed — the audiobook open in a player, a folder that has turned read-only — the run
+  ended on a bare "Access to the path is denied." naming no file at all, which in a batch of two
+  hundred left nothing to act on. The error now says which file, where it was going, and, for a
+  book whose marks were already written, that only its name is still the old one.
 - **A long Audiobookshelf run no longer stops working part way through.** Recent servers hand
   out a session that lasts an hour, which is shorter than a job of more than two or three books,
   so every request after that came back "401 Unauthorized" — the marks were still written to the
