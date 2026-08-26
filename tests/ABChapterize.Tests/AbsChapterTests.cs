@@ -138,6 +138,68 @@ public sealed class AbsChapterTests
         Assert.Equal(120, wire[^1].End);
     }
 
+    /// <summary>The ordinary outcome, and the one the check exists to be silent about: the server
+    /// hands back exactly what it was given.</summary>
+    [Fact]
+    public void Confirm_WithTheSameListSaysNothing()
+    {
+        List<Chapter> sent = [new Chapter(0, "Intro"), new Chapter(120.5, "Chapter 1")];
+
+        Assert.Equal("", AbsChapterPush.Confirm(sent, 1800, sent));
+    }
+
+    /// <summary>Titles are part of the comparison. A mark in the right place under the wrong name
+    /// is still not what was sent, and it is the difference a reader can act on.</summary>
+    [Fact]
+    public void Confirm_NamesTheMarkWhoseTitleChanged()
+    {
+        var mismatch = AbsChapterPush.Confirm(
+            [new Chapter(0, "Intro"), new Chapter(120, "Chapter 1")], 1800,
+            [new Chapter(0, "Intro"), new Chapter(120, "Kapitel 1")]);
+
+        Assert.Contains("mark 2 of 2", mismatch);
+        Assert.Contains("Kapitel 1", mismatch);
+    }
+
+    [Fact]
+    public void Confirm_ReportsAMarkThatMoved()
+    {
+        var mismatch = AbsChapterPush.Confirm(
+            [new Chapter(0, "Intro"), new Chapter(3600, "Chapter 1")], 7200,
+            [new Chapter(0, "Intro"), new Chapter(3720, "Chapter 1")]);
+
+        Assert.Contains("mark 2 of 2", mismatch);
+        Assert.Contains("1:02:00", mismatch);
+    }
+
+    [Fact]
+    public void Confirm_ReportsAListOfTheWrongLength()
+    {
+        var mismatch = AbsChapterPush.Confirm([new Chapter(0, "Intro")], 1800, []);
+
+        Assert.Contains("0 mark(s)", mismatch);
+        Assert.Contains("1 sent", mismatch);
+    }
+
+    /// <summary>Measured against 2.36.0: the server returns a double unchanged, so the check has no
+    /// drift to absorb and must not absorb a real move either.</summary>
+    [Fact]
+    public void Confirm_ToleratesOnlyASerializationHair()
+    {
+        Assert.Equal("", AbsChapterPush.Confirm(
+            [new Chapter(120, "One")], 1800, [new Chapter(120.0005, "One")]));
+        Assert.NotEqual("", AbsChapterPush.Confirm(
+            [new Chapter(120, "One")], 1800, [new Chapter(120.5, "One")]));
+    }
+
+    /// <summary>Compared against what the wire carried, not against the caller's list: a negative
+    /// start is clamped to zero on the way out, so a server faithfully holding zero agrees.</summary>
+    [Fact]
+    public void Confirm_ComparesAgainstTheClampedListThatWasSent()
+        => Assert.Equal("", AbsChapterPush.Confirm(
+            [new Chapter(-3, "Intro"), new Chapter(120, "One")], 1800,
+            [new Chapter(0, "Intro"), new Chapter(120, "One")]));
+
     [Fact]
     public async Task PushAsync_RefusesAnEmptyList()
     {

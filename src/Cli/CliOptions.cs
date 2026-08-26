@@ -757,6 +757,11 @@ public sealed class CliOptions
     /// addition to writing them into the audio file. Composes with normal detection (and
     /// with --dry-run, which still saves the sidecar even though the audio file is left
     /// untouched). Format is FFMETADATA unless --simple-metadata is given.
+    /// <para>
+    /// Written by every path that writes marks, not only the one that found them all - see
+    /// <see cref="ABChapterize.Processing.FileProcessor"/>'s commit step, which is also where the
+    /// name it is built from comes from.
+    /// </para>
     /// </summary>
     public bool Export { get; private set; }
 
@@ -827,6 +832,22 @@ public sealed class CliOptions
     /// which of the supported file types are processed. Null when no extension filter is active.
     /// </summary>
     public string[]? FilterExtensions { get; private set; }
+
+    /// <summary>
+    /// How recent a file must be to be worked on at all (--newer-than / -w), or null for no age
+    /// limit. Judged against a local file's last-write time, and in ABS mode against the date the
+    /// server says the book was added to its library.
+    /// </summary>
+    /// <remarks>
+    /// A duration rather than a date, because the thing people want is "whatever arrived this
+    /// week" and a date would have to be retyped to keep meaning it. What is measured differs
+    /// between the two modes because there is nothing in common to measure: a server knows when a
+    /// book joined its library and nothing about the file's timestamps, and a folder on disk is
+    /// the other way round. See <see cref="ABChapterize.Processing.FileProcessor"/> and
+    /// <see cref="ABChapterize.Processing.AbsFileFlow"/>, each of which fixes the cutoff instant
+    /// once for the whole run.
+    /// </remarks>
+    public TimeSpan? NewerThan { get; private set; }
 
     /// <summary>
     /// The file extensions to process when enumerating local files: --filter's list, or every
@@ -1017,7 +1038,7 @@ public sealed class CliOptions
         ['R'] = "--revert", ['B'] = "--no-bar", ['d'] = "--dry-run",
         ['E'] = "--export", ['I'] = "--import", ['S'] = "--simple-metadata",
         ['V'] = "--verify", ['h'] = "--verify-threshold", ['C'] = "--cpu-only", ['O'] = "--no-op",
-        ['o'] = "--log-file", ['A'] = "--abs",
+        ['o'] = "--log-file", ['A'] = "--abs", ['w'] = "--newer-than",
     };
 
     // Tracks which value options were given explicitly, for semantic validation and
@@ -1169,6 +1190,10 @@ public sealed class CliOptions
                 $"minsilence={MinSilenceSeconds}/{AutoMinSilence}",
                 $"noisefloor={NoiseFloorDb}/{AutoNoiseFloor}",
                 $"filter={FilterRegex?.ToString()}", $"extensions={string.Join(',', EffectiveExtensions)}",
+                // The duration, not the instant it resolves to: an interrupted batch picked up
+                // half an hour later is the same command, and a cutoff that had moved with the
+                // clock would make it a different one every time.
+                $"newerthan={NewerThan}",
                 $"import={Import}", $"export={Export}", $"simple={SimpleMetadata}",
                 // Without these, an --abs-push-only sweep over a folder would record its files as done
                 // and the detection run afterwards would skip every one of them. --abs-push is in for
@@ -1314,10 +1339,21 @@ public sealed class CliOptions
 
         // Semantic validation.
         if (o.Revert && o.AnyProcessingOptionGiven)
-            throw new CliError("--revert can only be combined with --cleanup, --recurse, --filter and the output options.");
+            throw new CliError("--revert can only be combined with --cleanup, --recurse, --filter, --newer-than and the output options.");
 
         if (o.Cleanup && o.AnyProcessingOptionGiven)
             throw new CliError("--cleanup can only be combined with --revert, --yes, --recurse, --filter and the output options.");
+
+        // --cleanup is the one selecting mode --newer-than has nothing to say to: what it acts on
+        // is leftovers, and a leftover's own age is not its book's - a ".bak" is as old as the run
+        // that made it, a sidecar as old as the export. Refused rather than quietly ignored, and
+        // rather than given a second meaning nobody could predict from the option's name. Refused
+        // alongside --revert too, where it would otherwise scope one half of the run and not the
+        // other.
+        if (o.Cleanup && o.NewerThan != null)
+            throw new CliError(
+                "--newer-than selects audio files by age and --cleanup acts on the leftovers beside "
+                + "them, whose own age is a different thing. Use --filter to scope a cleanup.");
 
         // --yes reads as a blanket "stop asking me things", so letting it stand where nothing asks
         // anything would leave the user believing they had covered a prompt they had not.
@@ -1327,15 +1363,16 @@ public sealed class CliOptions
         // --verify is exempt for the same reason --abs is: there the listing is what the
         // selectors picked, here it is what the marks turned out to be. Neither is the
         // "did my filter match what I meant" question this requirement exists for.
-        if (o.NoOp && !o.Abs && !o.Verify && o.FilterRegex == null && o.FilterExtensions == null)
-            throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
+        if (o.NoOp && !o.Abs && !o.Verify && o.FilterRegex == null && o.FilterExtensions == null
+            && o.NewerThan == null)
+            throw new CliError("--no-op requires --filter or --newer-than - its purpose is checking that a filter actually matches the intended files.");
 
         // --verify is the one processing option --no-op accepts, the two together being
         // --verify-only; what that mode refuses instead is listed with the mode itself
         // below. --revert and --cleanup stay refused through their own checks above, both
         // of which count --verify as a processing option like any other.
         if (o.NoOp && !o.Verify && (o.Revert || o.Cleanup || o.AnyProcessingOptionGiven))
-            throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
+            throw new CliError("--no-op can only be combined with --recurse, --filter, --newer-than and the output options.");
 
         // --abs is the exception above and stays one: there --no-op is the listing of what the
         // selectors picked. The four modes that work on local files are not - each exists to move
@@ -1861,6 +1898,7 @@ public sealed class CliOptions
             // file is broken. Its parameter is consumed and discarded.
             case ConfigFile.Option: nextParam(); return true;
             case "--filter": ParseFilter(nextParam()); return true;
+            case "--newer-than": NewerThan = ParseNewerThan(nextParam()); return true;
             case "--min-silence-length": (MinSilenceSeconds, AutoMinSilence) = ParseMinSilence(nextParam()); _minSilenceSet = true; return true;
             case "--noise-floor": (NoiseFloorDb, AutoNoiseFloor) = ParseNoiseFloor(nextParam()); _noiseFloorSet = true; return true;
             case "--mark-lead": MarkLeadSeconds = ParseMarkLead(nextParam()); _markLeadSet = true; return true;
@@ -1934,6 +1972,37 @@ public sealed class CliOptions
         // Which extensions are usable depends on --abs, which may not have been seen yet - the
         // check is in Parse, once the whole command line is known.
         FilterExtensions = extensions;
+    }
+
+    /// <summary>
+    /// Parses a --newer-than parameter: a number and its unit, "12h" or "7d".
+    /// </summary>
+    /// <param name="value">The raw --newer-than parameter.</param>
+    /// <exception cref="CliError">Thrown for a value that is not a positive number followed by
+    /// <c>h</c> or <c>d</c>, or one so large that no file could fail it.</exception>
+    /// <remarks>
+    /// The unit is required rather than defaulted, because there is no reading of a bare "7" that
+    /// most people would guess the same way - and the two answers are eight days apart. Fractions
+    /// are accepted (<c>1.5d</c>, <c>0,5h</c>) since they cost nothing and "the last half hour" is
+    /// a real thing to ask for. The ceiling is ten years: a value past that selects everything, so
+    /// anyone typing one has mistyped it or misunderstood the option.
+    /// </remarks>
+    private static TimeSpan ParseNewerThan(string value)
+    {
+        const double maximumHours = 10 * 365 * 24;
+        var text = value.Trim();
+        var hoursPerUnit = (text.Length > 0 ? char.ToLowerInvariant(text[^1]) : '\0') switch
+        {
+            'h' => 1.0,
+            'd' => 24.0,
+            _ => 0.0,
+        };
+        if (hoursPerUnit == 0.0 || !NumberCulture.TryParseDecimal(text[..^1], out var n) || n <= 0
+            || n * hoursPerUnit > maximumHours)
+            throw new CliError(
+                $"Invalid --newer-than value \"{value}\": expected a number of hours or days with "
+                + "its unit, like \"12h\" or \"7d\" (up to 3650d).");
+        return TimeSpan.FromHours(n * hoursPerUnit);
     }
 
     /// <summary>
@@ -2351,9 +2420,9 @@ public sealed class CliOptions
           abchapterize -A|--abs [options] <selector>...
           abchapterize --abs-push-only [options] <file-or-directory>...
           abchapterize --abs-pull-only [options] <file-or-directory>...
-          abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
+          abchapterize -R|--revert [--recurse] [--filter <f>] [--newer-than <age>] <file-or-directory>...
           abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
-          abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
+          abchapterize -O|--no-op --filter <f>|--newer-than <age> [--recurse] <file-or-directory>...
           abchapterize --verify-only [options] <file-or-directory>...
           abchapterize --help | -?
 
@@ -2396,6 +2465,12 @@ public sealed class CliOptions
                                     audio extension. In ABS mode the regexp is matched against
                                     "<item folder>/<book title>" instead, there being no local
                                     path to match yet.
+          -w, --newer-than <age>    Only process files younger than <age>, written as a number
+                                    of hours or days with its unit: "12h", "7d", "1.5d". Judged
+                                    by a file's last-write time, and in ABS mode by the date
+                                    the server says the book was added to its library. Combines
+                                    with --filter; not with --cleanup, whose leftovers have an
+                                    age of their own.
           -f, --force               Discard pre-existing chapter marks. Without --force, files
                                     that already have chapter marks are skipped.
           -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter marks,
@@ -2886,10 +2961,10 @@ public sealed class CliOptions
                                     the audio file (<file>.chapters.ffmeta by default, or
                                     <file>.chapters.txt with --simple-metadata), for manual
                                     review or correction. Combinable with --dry-run. Written
-                                    for a file detection completed normally - not for one
-                                    left with an unresolved gap, a resumed ".missing-marks"
-                                    file, or a --verify --fix rewrite, all of which change
-                                    the file's name as they write it.
+                                    whenever marks are written, an unresolved gap and a
+                                    --verify --fix rewrite included, and named after the
+                                    file's final name where a run renames it. An existing
+                                    sidecar is overwritten.
           -I, --import              Skip Whisper detection; write chapters from a previously
                                     exported sidecar file instead. Since nothing is detected,
                                     the detection options have no effect and are rejected:

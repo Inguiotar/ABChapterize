@@ -143,15 +143,41 @@ public sealed class AbsWorkspace : IDisposable
     }
 
     /// <summary>
-    /// Sends a finished chapter list back to the server.
+    /// Sends a finished chapter list back to the server, then reads it back to check that the
+    /// server stored what it was given.
     /// </summary>
     /// <param name="book">The book to update.</param>
     /// <param name="chapters">The marks to send, in start order.</param>
     /// <param name="durationSeconds">The book's play time.</param>
     /// <param name="ct">Cancellation token.</param>
-    public Task PushAsync(
+    /// <returns>The empty string when the server holds exactly what was sent, otherwise the
+    /// description of the difference - see <see cref="AbsChapterPush.Confirm"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// The read-back is here rather than inside <see cref="AbsChapterPush"/> because it is a
+    /// second request against a second endpoint, and this class is where the write and the
+    /// catalogue meet - which also lets it reuse <see cref="AbsCatalog.LoadChaptersAsync"/> instead
+    /// of a second parse of the same response shape. It costs one <c>GET</c> per pushed book
+    /// against a run that has just spent minutes transcribing one, and it is covered by
+    /// <c>--abs-retry</c> like every other request.
+    /// </para>
+    /// <para>
+    /// A mismatch is reported, never repaired. The server accepted the write and answered without
+    /// complaint, so pushing the same list a second time would store the same thing again; what
+    /// changed it is upstream of anything this run can do about it.
+    /// </para>
+    /// </remarks>
+    public async Task<string> PushAsync(
         AbsBook book, IReadOnlyList<Chapter> chapters, double durationSeconds, CancellationToken ct)
-        => AbsChapterPush.PushAsync(_session, book, chapters, durationSeconds, ct);
+    {
+        await AbsChapterPush.PushAsync(_session, book, chapters, durationSeconds, ct);
+        var mismatch = AbsChapterPush.Confirm(
+            chapters, durationSeconds, await _catalog.LoadChaptersAsync(book, ct));
+        _log?.Invoke(mismatch.Length == 0
+            ? $"sent {chapters.Count} chapter(s) to \"{book.Title}\" and read them back unchanged"
+            : $"read-back after pushing to \"{book.Title}\" disagrees: {mismatch}");
+        return mismatch;
+    }
 
     /// <summary>
     /// Removes a book's temporary folder, keeping any debug log it holds.

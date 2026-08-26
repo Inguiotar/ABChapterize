@@ -271,6 +271,7 @@ document that long. Grouped below exactly as `--help` groups them:
 | --- | --- |
 | `-r`, `--recurse` | Descend into subdirectories. |
 | `-F`, `--filter <f>` | Only process matching files: `/regexp/` (against the whole path) or an extension list like `mp3,m4b`. |
+| `-w`, `--newer-than <age>` | Only process files younger than `<age>`, written as hours or days with the unit: `12h`, `7d`, `1.5d`. Judged by last-write time, or in ABS mode by the date the server added the book. |
 | `-f`, `--force` | Redo files that already have chapter marks. |
 | `-x`, `--max-chapters <n>` | Treat more than `<n>` pre-existing marks as bogus and discard them. |
 
@@ -341,7 +342,7 @@ document that long. Grouped below exactly as `--help` groups them:
 | Option | What it does |
 | --- | --- |
 | `-d`, `--dry-run` | Detect chapters but write nothing; print what would be written. |
-| `-E`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. Written for a file detection completed normally — not for one left with an unresolved gap, a resumed `.missing-marks` file, or a `--verify --fix` rewrite. |
+| `-E`, `--export` | Also save detected chapters to a sidecar file (`<file>.chapters.ffmeta`, or `<file>.chapters.txt` with `--simple-metadata`) for manual review or correction. Combinable with `--dry-run`. Written wherever marks are, named after the file's final name where a run renames it, and overwriting any sidecar already there. |
 | `-I`, `--import` | Skip Whisper entirely and write chapters from a previously exported sidecar file instead — for reapplying a hand-corrected result. |
 | `-S`, `--simple-metadata` | Use a plain `H:MM:SS.fff  Title` sidecar format instead of FFMETADATA for `--export`/`--import`. |
 
@@ -355,7 +356,7 @@ document that long. Grouped below exactly as `--help` groups them:
 | `--cleanup` | Housekeeping instead of processing: undo the traces earlier runs left in the folder, printing a line per change. Leftover temporary files, `.debug.log` logs and interrupted runs' progress files are deleted, `.missing-marks-...` name tags are taken off, and `*.bak` backups are deleted — but only where the file they back up is next to them and runs the same length, so it can never throw away the only copy of anything. Add `--revert` to restore the backups instead of deleting them. Shows you the list and waits for a "yes" first. |
 | `--yes` | Answer `--cleanup`'s prompt in advance — required for a scripted cleanup, which has no console to be asked at. |
 | `--verify-only` | Check every selected file's marks against the audio, report what became of each, and change nothing — the same as `--verify --no-op`. With `--summary` the run ends with a list of the files that could not confirm all their marks, and of the marks nothing in the run could check at all. |
-| `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter`; combinable only with `--recurse` and the output options. |
+| `-O`, `--no-op` | List every file `--filter` (and `--recurse`) would select, then exit without loading Whisper, invoking ffmpeg or touching any file — a quick way to check a `--filter` regexp or extension list before a real run. Requires `--filter` or `--newer-than`; combinable only with those, `--recurse` and the output options. |
 | `--run-before <cmd>` | Run a shell command for each file just before it is worked on — and only for a file the run actually works on, so a skipped one runs neither hook. `$1` is the file name, `$0` it without its extension, `$99` its whole path, `$-1` its folder; they are quoted for the shell as needed. A non-zero exit skips the file. Under `--dry-run` the command is printed rather than run. See [the manual](doc/manual.md#running-your-own-commands-around-each-file) for the whole placeholder syntax. |
 | `--run-after <cmd>` | Run a shell command for each file once it is finished. Same placeholders and the same rules, plus one more: it does not run for a file left tagged `.missing-marks-...`, which a later run is expected to pick up again. |
 | `--ignore-progress` | Start every listed folder over instead of resuming it. While a folder is being processed, the files finished so far are recorded in an `.abchapterize-progress` file inside it, which is deleted again as soon as that folder is done — so an interrupted run resumes by itself when the same command is run again. Progress recorded under different options is discarded automatically, so this is only needed to redo files the very same command already finished. |

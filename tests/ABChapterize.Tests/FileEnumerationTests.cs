@@ -73,6 +73,53 @@ public sealed class FileEnumerationTests : IDisposable
         Assert.Equal(["gamma.opus"], names);
     }
 
+    /// <summary>Backdates one of the temp tree's files so an age filter has something to reject.
+    /// </summary>
+    /// <param name="name">File name within the temp directory.</param>
+    /// <param name="days">How far back to move its last-write time.</param>
+    private void Backdate(string name, double days)
+        => File.SetLastWriteTimeUtc(Path.Combine(_dir, name), DateTime.UtcNow.AddDays(-days));
+
+    [Fact]
+    public void NewerThan_DropsFilesOlderThanTheCutoff()
+    {
+        Backdate("alpha.m4b", 30);
+        var names = Names(Processor("--newer-than", "7d"), [".m4b", ".mp3"]);
+        Assert.Equal(["beta.MP3"], names);
+    }
+
+    /// <summary>The unit is read, not assumed: the same number of hours keeps nothing the same
+    /// number of days keeps.</summary>
+    [Fact]
+    public void NewerThan_ReadsHoursAndDaysDifferently()
+    {
+        // Four and a half days old, so the same "5" keeps them read as days and drops them read as
+        // hours - with half a day of margin either side, this not being a boundary test.
+        Backdate("alpha.m4b", 4.5);
+        Backdate("beta.MP3", 4.5);
+        Assert.Empty(Names(Processor("--newer-than", "5h"), [".m4b", ".mp3"]));
+        Assert.Equal(["alpha.m4b", "beta.MP3"], Names(Processor("--newer-than", "5d"), [".m4b", ".mp3"]));
+    }
+
+    /// <summary>Both filters narrow, neither replaces the other.</summary>
+    [Fact]
+    public void NewerThan_CombinesWithFilter()
+    {
+        Backdate("alpha.m4b", 30);
+        Assert.Empty(Names(Processor("--newer-than", "7d", "--filter", "/alpha/"), [".m4b", ".mp3"]));
+        Assert.Equal(["beta.MP3"], Names(Processor("--newer-than", "7d", "--filter", "/beta/"), [".m4b", ".mp3"]));
+    }
+
+    /// <summary>A backup carries the timestamp of the file it was made from, so an age filter
+    /// selects which backups a --revert restores just as it selects files to process.</summary>
+    [Fact]
+    public void NewerThan_AppliesToRevert()
+    {
+        Backdate("old.m4b.bak", 30);
+        Assert.Empty(Names(Processor("--revert", "--newer-than", "7d"), [".m4b.bak"]));
+        Assert.Equal(["old.m4b.bak"], Names(Processor("--revert", "--newer-than", "60d"), [".m4b.bak"]));
+    }
+
     [Fact]
     public void RevertMode_FindsBackupsBySuffix()
     {
@@ -253,5 +300,18 @@ public sealed class FileEnumerationTests : IDisposable
     {
         var output = await RunNoOpAsync("--no-op", "--filter", "opus"); // no top-level .opus file
         Assert.Contains("No audio files matching --filter found.", output);
+    }
+
+    /// <summary>The message names whichever rules were in play, so a run that found nothing says
+    /// which of them to loosen.</summary>
+    [Fact]
+    public async Task NoOp_NoMatches_NamesTheRuleThatRejectedThem()
+    {
+        Backdate("alpha.m4b", 30);
+        Backdate("beta.MP3", 30);
+        Assert.Contains("No audio files matching --newer-than found.",
+            await RunNoOpAsync("--no-op", "--newer-than", "1h"));
+        Assert.Contains("No audio files matching --filter and --newer-than found.",
+            await RunNoOpAsync("--no-op", "--newer-than", "1h", "--filter", "m4b"));
     }
 }

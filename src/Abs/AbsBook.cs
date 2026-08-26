@@ -21,6 +21,10 @@ namespace ABChapterize.Abs;
 /// <param name="ChapterCount">How many chapters Audiobookshelf currently has for the item - its own
 /// list, which need not be what is embedded in the audio.</param>
 /// <param name="DurationSeconds">Total play time as the library reports it.</param>
+/// <param name="AddedUtc">When the book joined its library, or null where the server reported no
+/// date. What <c>--newer-than</c> judges a book by: a server knows when a book arrived and nothing
+/// about the file timestamps a local run reads, so the two modes measure age from what each of
+/// them actually has.</param>
 /// <remarks>
 /// Split from <see cref="AbsBookFile"/> because selecting a book and fetching one are answered by
 /// two different requests: a library listing arrives minified, carrying counts instead of the audio
@@ -35,7 +39,8 @@ public sealed record AbsBook(
     string RelativePath,
     int AudioFileCount,
     int ChapterCount,
-    double DurationSeconds)
+    double DurationSeconds,
+    DateTime? AddedUtc = null)
 {
     /// <summary>
     /// Whether this book is one ABS mode can work on at all: exactly one audio file.
@@ -101,8 +106,20 @@ public sealed record AbsBook(
             item.RelPath,
             files,
             chapters,
-            media.Duration);
+            media.Duration,
+            AddedUtcOf(item.AddedAt));
     }
+
+    /// <summary>Turns the server's "added" stamp into a date, or null where it sent none.</summary>
+    /// <param name="addedAtMs">Milliseconds since the Unix epoch, or 0 for absent.</param>
+    /// <remarks>
+    /// Zero is read as "no date on record" rather than as the epoch, so that a book the server says
+    /// nothing about is kept by <c>--newer-than</c> instead of being silently dropped as ancient.
+    /// The distinction is deliberate even though every response shape this tool asks for does carry
+    /// the field: a filter that quietly selects nothing is the hardest kind of wrong to notice.
+    /// </remarks>
+    private static DateTime? AddedUtcOf(long addedAtMs)
+        => addedAtMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(addedAtMs).UtcDateTime : null;
 }
 
 /// <summary>

@@ -1635,6 +1635,60 @@ public sealed class CliOptionsTests : IDisposable
     }
 
     [Fact]
+    public void NewerThan_ReadsBothUnits_AndTheShortForm()
+    {
+        Assert.Equal(TimeSpan.FromHours(12), ParseDir("--newer-than", "12h")!.NewerThan);
+        Assert.Equal(TimeSpan.FromDays(7), ParseDir("--newer-than", "7d")!.NewerThan);
+        Assert.Equal(TimeSpan.FromDays(1.5), ParseDir("-w", "1.5d")!.NewerThan);
+        // Both decimal separators, like every other number this tool is typed.
+        Assert.Equal(TimeSpan.FromHours(0.5), ParseDir("--newer-than", "0,5h")!.NewerThan);
+        Assert.Null(ParseDir()!.NewerThan);
+    }
+
+    [Theory]
+    [InlineData("7")]        // no unit: eight days apart depending on the guess
+    [InlineData("12x")]
+    [InlineData("0h")]
+    [InlineData("-3d")]
+    [InlineData("4000d")]    // past the ten-year ceiling
+    [InlineData("d")]
+    [InlineData("")]
+    public void NewerThan_WithAnUnusableValue_IsAnError(string value)
+        => Assert.Throws<CliError>(() => ParseDir("--newer-than", value));
+
+    /// <summary>A different age is a different selection, so an interrupted batch must not resume
+    /// one run's progress under another's cutoff.</summary>
+    [Fact]
+    public void NewerThan_ChangesTheRunFingerprint()
+    {
+        Assert.NotEqual(ParseDir()!.RunFingerprint, ParseDir("--newer-than", "7d")!.RunFingerprint);
+        Assert.NotEqual(
+            ParseDir("--newer-than", "7d")!.RunFingerprint,
+            ParseDir("--newer-than", "8d")!.RunFingerprint);
+        // The same age written two ways is the same run.
+        Assert.Equal(
+            ParseDir("--newer-than", "1d")!.RunFingerprint,
+            ParseDir("--newer-than", "24h")!.RunFingerprint);
+    }
+
+    [Fact]
+    public void NewerThan_WithCleanup_IsAnError()
+    {
+        var ex = Assert.Throws<CliError>(() => ParseDir("--cleanup", "--newer-than", "7d"));
+        Assert.Contains("leftovers", ex.Message);
+        // Refused alongside --revert too, where it would scope one half of the run and not the other.
+        Assert.Throws<CliError>(() => ParseDir("--cleanup", "--revert", "--newer-than", "7d"));
+    }
+
+    [Fact]
+    public void NewerThan_WithRevertOrNoOp_IsAllowed()
+    {
+        Assert.True(ParseDir("--revert", "--newer-than", "7d")!.Revert);
+        // It also satisfies --no-op's "you must be filtering something" requirement on its own.
+        Assert.True(ParseDir("--no-op", "--newer-than", "7d")!.NoOp);
+    }
+
+    [Fact]
     public void Revert_WithRecurseAndFilter_IsAllowed()
     {
         var o = ParseDir("--revert", "--recurse", "--filter", "m4b")!;

@@ -969,9 +969,9 @@ ffmpeg afterwards.
 
 ```
 abchapterize [options] <file-or-directory>...
-abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
+abchapterize -R|--revert [--recurse] [--filter <f>] [--newer-than <age>] <file-or-directory>...
 abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
-abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
+abchapterize -O|--no-op --filter <f>|--newer-than <age> [--recurse] <file-or-directory>...
 abchapterize --verify-only [options] <file-or-directory>...
 abchapterize --help | -?
 abchapterize --version
@@ -1105,6 +1105,34 @@ checkpoint remembers the command line, not the folders' contents.
   audio file's path instead. A single file named directly
   as the target is *also* subject to the filter.
 
+`-w`, `--newer-than <age>`
+: Only process files younger than `<age>` — for keeping a shelf marked as it
+  fills up, without walking back over everything already done. The age is a
+  number and its unit: `12h`, `7d`, `1.5d`. The unit is not optional, there
+  being no reading of a bare `7` that everyone would guess the same way.
+  Fractions are fine, and a comma works as the decimal point.
+
+  What "younger" means depends on where the books are. For files on this
+  machine it is the **last-write time** — the only age a folder answers the
+  same way everywhere, creation time being unrecorded on some file systems and
+  reset by an ordinary copy on Windows. In [ABS mode](#audiobookshelf) it is
+  the date the **server** says the book was added to its library, which is what
+  "what arrived this week" means for a shelf you do not hold the files of. A
+  book the server gives no date for is kept rather than quietly dropped.
+
+  Combines with `--filter`; both narrow, neither replaces the other. It applies
+  to `--revert` too, where a backup carries the timestamp of the file it was
+  made from, and it satisfies `--no-op`'s requirement to be filtering
+  *something*. It cannot be combined with `--cleanup`: that acts on the
+  leftovers beside a book — a `.bak` is as old as the run that made it, a
+  sidecar as old as the export — and their age is not the book's. Scope a
+  cleanup with `--filter` instead.
+
+  One consequence worth knowing rather than working around: writing marks into
+  a file rewrites it, so a book marked today is young again tomorrow and the
+  same `--newer-than` still selects it. It is then skipped for already having
+  marks, which costs a probe and nothing more.
+
 ### Audiobookshelf
 
 ABChapterize can work straight off an [Audiobookshelf](https://www.audiobookshelf.org/)
@@ -1203,6 +1231,25 @@ The two disagreeing is normal rather than a fault — Audiobookshelf reads chapt
 when it scans a book and keeps them independently ever after, so any edit made in
 its web interface puts them out of step by design. `--verbose` says so and the run
 carries on.
+
+#### Checking what the server stored
+
+Every chapter list this tool sends is read straight back off the server and
+compared with what was sent — the same number of marks, in the same places, under
+the same titles. A server accepting an update and a server storing what was in it
+are two different claims, and with `--abs` the database holds the only copy of the
+marks, so a list quietly stored as something else would be a run that produced
+nothing and reported success.
+
+If the two disagree, the run says so: a `WARNING` line naming the book and the
+first difference found, whatever the verbosity, and the same note on the file's
+own summary line. The file itself is not failed — with `--abs-push` its marks were
+written perfectly well — and nothing is re-sent, since the server took the update
+without complaint and would store the same thing again. The book is counted among
+`--summary`'s warnings so a batch of two hundred does not hide it.
+
+Nothing to configure, and nothing to switch on. It costs one extra request per
+book pushed, against a run that has just spent minutes listening to that book.
 
 #### Marking local files and telling the server
 
@@ -2397,7 +2444,8 @@ looking. None of these is needed for an ordinary book.
   without loading a Whisper model, invoking ffmpeg or touching any file - a
   quick way to check that a `--filter` regexp or extension list actually
   matches the intended files before committing to a real run. Requires
-  `--filter`; combinable only with `--recurse` and the output options
+  `--filter` or [`--newer-than`](#target-selection); combinable only with those,
+  `--recurse` and the output options
   (`--quiet` suppresses the listing itself, leaving just `--summary`'s
   count), the same restriction `--revert` has.
 
@@ -2766,11 +2814,12 @@ touching Whisper at all.
   `--dry-run`, so `abchapterize --dry-run --export book.m4b` previews the
   result *and* saves it for review without touching the audio file.
 
-  The sidecar is written for a file detection completed normally. A file left
-  with an unresolved chapter-sequence gap, a `.missing-marks` file being
-  resumed, and a `--verify --fix` rewrite all write their marks into the audio
-  file as usual but no sidecar — those files change their name as they are
-  written, and a sidecar under the old one would not be found again.
+  A sidecar is written wherever marks are — a file left with an unresolved
+  chapter-sequence gap, a `.missing-marks` file being resumed, and a
+  `--verify --fix` rewrite all get one, carrying whatever that run settled on.
+  Where the run also renames the file, the sidecar is named after the name it
+  ends up with, so `--import` finds it. Any sidecar already there is
+  overwritten.
 
 `-I`, `--import`
 : Skip Whisper detection entirely and write the chapters found in the

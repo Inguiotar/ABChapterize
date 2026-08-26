@@ -93,7 +93,7 @@ internal static class FolderConfig
         ["VadThreads"] = "--vad-threads", ["WhisperThreads"] = "--whisper-threads",
         ["EffectiveVadThreads"] = "--vad-threads", ["EffectiveWhisperThreads"] = "--whisper-threads",
         ["Recurse"] = "--recurse", ["FilterRegex"] = "--filter", ["FilterExtensions"] = "--filter",
-        ["EffectiveExtensions"] = "--filter",
+        ["EffectiveExtensions"] = "--filter", ["NewerThan"] = "--newer-than",
         ["MaxChapters"] = "--max-chapters", ["Force"] = "--force", ["Backup"] = "--backup",
         ["Verify"] = "--verify", ["Fix"] = "--fix", ["VerifyFailThreshold"] = "--verify-threshold",
         ["Import"] = "--import", ["Export"] = "--export", ["SimpleMetadata"] = "--simple-metadata",

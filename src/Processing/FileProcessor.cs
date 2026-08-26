@@ -47,6 +47,18 @@ public sealed class FileProcessor
     /// </summary>
     private AbsFileFlow? _abs;
 
+    /// <summary>
+    /// The instant a file must have been written after to pass <c>--newer-than</c>, or null when
+    /// the option was not given.
+    /// </summary>
+    /// <remarks>
+    /// Fixed when the run starts rather than asked of the clock per file. Enumeration is cheap,
+    /// but <c>--summary</c>'s counts, the <c>--no-op</c> listing and the actual work all read the
+    /// same selection, and a batch of two hundred books runs for hours - a cutoff that crept
+    /// forward with it would be answering a slightly different question each time it was asked.
+    /// </remarks>
+    private readonly DateTime? _newerThanUtc;
+
     /// <summary>Number of files for which processing was aborted with a warning.</summary>
     private int _warnings;
 
@@ -85,6 +97,7 @@ public sealed class FileProcessor
     {
         _options = options;
         _progress = progress;
+        _newerThanUtc = options.NewerThan is { } age ? DateTime.UtcNow - age : null;
     }
 
     /// <summary>Runs the tool in the mode selected by the options (cleanup, revert, --no-op or
@@ -196,7 +209,7 @@ public sealed class FileProcessor
         var files = EnumerateTargets(_options.EffectiveExtensions);
         if (files.Count == 0)
         {
-            Console.WriteLine("No audio files matching --filter found.");
+            Console.WriteLine(NothingFoundNote);
             return;
         }
         if (!_options.Quiet)
@@ -346,9 +359,7 @@ public sealed class FileProcessor
         var groups = EnumerateTargetGroups(_options.EffectiveExtensions);
         if (groups.Sum(g => g.Files.Count) == 0)
         {
-            _progress.Announce(_options.FilterRegex != null || _options.FilterExtensions != null
-                ? "No audio files matching --filter found."
-                : $"No supported audio files ({AudioFormats.ChapterCapableText}) found.");
+            _progress.Announce(NothingFoundNote);
             return null;
         }
 
@@ -1254,7 +1265,12 @@ public sealed class FileProcessor
         // The push clause names the book itself, so this line no longer opens with it - printing
         // the title twice in one line was what naming it in the clause replaced. Its leading
         // separator comes off with it, the clause being the only thing this line has to say.
-        var note = await _abs!.PushAsync(book, chapters, ctx.Info.DurationSeconds, ct);
+        var (note, mismatch) = await _abs!.PushAsync(book, chapters, ctx.Info.DurationSeconds, ct);
+        if (mismatch)
+            _warnings++;
+        // Not flagged important on a mismatch, here or on any other push path: the warning itself is
+        // announced by AbsFileFlow.PushAsync, which no verbosity setting holds back, and this line
+        // would only repeat it.
         _progress.FinishWithSummary(ctx.Work, $"{ctx.Name}: {note.TrimStart(',', ' ')}");
         return null;
     }
@@ -1338,7 +1354,11 @@ public sealed class FileProcessor
         // complete: true - there is no gap to speak of. This path forms no opinion about chapter
         // numbers at all, so it cannot be holding a partial sequence back the way a detection run
         // that failed to close a gap is (see PushLocalFileAsync).
-        var pushNote = sendIt ? await PushLocalFileAsync(ctx, [.. settled], complete: true, ct) : "";
+        var (pushNote, pushMismatch) = sendIt
+            ? await PushLocalFileAsync(ctx, [.. settled], complete: true, ct)
+            : ("", false);
+        if (pushMismatch)
+            _warnings++;
         // Where nothing was written the source is not worth naming: a list this file already had is
         // its own by definition, and "from the file already in the file" is what saying so gets.
         _progress.FinishWithSummary(ctx.Work,
@@ -1443,6 +1463,7 @@ public sealed class FileProcessor
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - resume incomplete, still missing: {stillMissing}; would write " +
                 $"{FormatWrittenCount(resumed, chapters, "partial mark(s)")}" +
+                $"{await DryRunExportAsync(ctx, chapters, ct)}" +
                 $"{WouldRenameNote(retarget, "re-tag as")}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
@@ -1477,7 +1498,8 @@ public sealed class FileProcessor
         {
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - resume complete, all chapters found; would write " +
-                $"{FormatWrittenCount(resumed, chapters)} and rename to {Path.GetFileName(restored)}:" +
+                $"{FormatWrittenCount(resumed, chapters)} and rename to {Path.GetFileName(restored)}" +
+                $"{await DryRunExportAsync(ctx, chapters, ct)}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
@@ -1796,7 +1818,8 @@ public sealed class FileProcessor
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,
-                $"{ctx.Name}: DRY RUN - would write {what}:" +
+                $"{ctx.Name}: DRY RUN - would write {what}" +
+                $"{await DryRunExportAsync(ctx, chapters, ct)}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}");
             return null;
         }
@@ -1865,6 +1888,7 @@ public sealed class FileProcessor
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - unresolved chapter sequence gap (missing: {missingList}); " +
                 $"would write {FormatWrittenCount(result, chapters, "partial mark(s)")}" +
+                $"{await DryRunExportAsync(ctx, chapters, ct)}" +
                 $"{WouldRenameNote(target)}:{Environment.NewLine}{FormatChapterListing(chapters)}",
                 important: true);
             return null;
@@ -1969,7 +1993,7 @@ public sealed class FileProcessor
         var (chapters, merged) = BuildChapters(result, _options.NamedMarkDistanceSeconds);
         var notes = note + FormatNamedMarksNote(result, merged) + FormatLowConfidenceNote(result) +
                     FormatSequenceRestartNote(result) + FormatUnverifiedNumbersNote(result) +
-                    FormatLanguageNote(result) + await ExportSidecarAsync(ctx, chapters, ct);
+                    FormatLanguageNote(result);
         var what = FormatWrittenCount(result, chapters, "mark(s) written");
         // A low-confidence mark is worth surfacing above the progress bar; so is a book that gave up
         // chapters below its sequence, which is otherwise indistinguishable from one that simply
@@ -1991,7 +2015,8 @@ public sealed class FileProcessor
             var wouldRename = WouldRenameNote(restored);
             _progress.FinishWithSummary(ctx.Work,
                 $"{ctx.Name}: DRY RUN - would {DescribeDropped(dropped, prospective: true)}" +
-                $"write {FormatWrittenCount(result, chapters)}{notes}{wouldRename}:" +
+                $"write {FormatWrittenCount(result, chapters)}{notes}" +
+                $"{await DryRunExportAsync(ctx, chapters, ct)}{wouldRename}:" +
                 $"{Environment.NewLine}{FormatChapterListing(chapters)}", important);
             return null;
         }
@@ -2130,17 +2155,47 @@ public sealed class FileProcessor
         };
     }
 
+    /// <summary>Writes the --export sidecar for a run that is only previewing what it would do.
+    /// </summary>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="chapters">The chapters that would be written.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// Beside the name the file already has, because --dry-run renames nothing: the prospective
+    /// name is what the summary line reports, not where anything lands. That is also what makes
+    /// the pairing work - the sidecar this leaves behind is the one --import goes looking for.
+    /// </remarks>
+    private Task<string> DryRunExportAsync(FileContext ctx, List<Chapter> chapters, CancellationToken ct)
+        => ExportSidecarAsync(ctx, chapters, ctx.File, ct);
+
     /// <summary>Writes the --export sidecar, if asked for, and returns the note announcing it.
     /// Runs regardless of --dry-run, so a run can be previewed and saved for hand-editing in one
     /// pass.</summary>
     /// <param name="ctx">The file's context.</param>
     /// <param name="chapters">The chapters to export.</param>
+    /// <param name="audioFile">The audio file the sidecar is to sit beside and be named after -
+    /// the path the file ended up under, which on three of the commit paths is not the one it
+    /// arrived under.</param>
     /// <param name="ct">Cancellation token.</param>
-    private async Task<string> ExportSidecarAsync(FileContext ctx, List<Chapter> chapters, CancellationToken ct)
+    /// <remarks>
+    /// <para>
+    /// The path is stated by the caller rather than taken from <paramref name="ctx"/> because a
+    /// commit may rename the file as it writes it - a chapter-sequence gap tags it, a completed
+    /// resume untags it - and <c>--import</c> looks for a sidecar beside the name the file has
+    /// now. Built from the pre-rename path, it would sit beside a name that no longer exists.
+    /// </para>
+    /// <para>
+    /// Overwrites whatever is there. The alternative is a run that reports an export and leaves the
+    /// previous run's chapters on disk, which is the worse failure by some distance: a stale
+    /// sidecar is indistinguishable from a fresh one until it is imported.
+    /// </para>
+    /// </remarks>
+    private async Task<string> ExportSidecarAsync(
+        FileContext ctx, List<Chapter> chapters, string audioFile, CancellationToken ct)
     {
         if (!_options.Export)
             return "";
-        var sidecarPath = ChapterSidecar.PathFor(ctx.File, _options.SimpleMetadata);
+        var sidecarPath = ChapterSidecar.PathFor(audioFile, _options.SimpleMetadata);
         var sidecarText = _options.SimpleMetadata
             ? ChapterSidecar.BuildSimple(chapters)
             : FfmpegClient.BuildFfMetadata(chapters, ctx.Info.DurationSeconds);
@@ -2175,14 +2230,23 @@ public sealed class FileProcessor
         // file received, including a partial write left by an unresolved gap - which is worth
         // having on the server, since the alternative is nothing at all. A file the run declined to
         // write never gets here and so never sends anything.
-        var pushNote = ctx.Abs is { } abs
+        var (pushNote, pushMismatch) = ctx.Abs is { } abs
             ? await _abs!.PushAsync(abs.Book, chapters, ctx.Info.DurationSeconds, ct)
             : _options.AbsPush
                 ? await PushLocalFileAsync(ctx, chapters, complete, ct)
-                : "";
+                : ("", false);
+        // Counted here rather than at the six callers: a push that the server did not store as sent
+        // is a warning about the run, not about the outcome any one of them was reporting, and every
+        // one of them would have had to remember to ask.
+        if (pushMismatch)
+            _warnings++;
         // The one place a rename is performed, so the one place --no-rename has to be applied.
-        return (RenameCommitted(ctx.File, TagRenameSuppressed(renameTo) ? null : renameTo),
-                writeNote + pushNote);
+        var finalPath = RenameCommitted(ctx.File, TagRenameSuppressed(renameTo) ? null : renameTo);
+        // The sidecar last of all, for the same reason the push is here at all: this is where the
+        // file's final name is known, and a sidecar is looked up by the audio file's name. Written
+        // from here rather than by the six callers, so a gap, a resume and a --verify --fix all
+        // export what they wrote instead of only the run that had nothing left to find.
+        return (finalPath, writeNote + pushNote + await ExportSidecarAsync(ctx, chapters, finalPath, ct));
     }
 
     /// <summary>
@@ -2193,7 +2257,8 @@ public sealed class FileProcessor
     /// <param name="chapters">The chapters just written into the file.</param>
     /// <param name="complete">Whether the chapter sequence has no gaps left in it.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The clause the summary line closes with about the push.</returns>
+    /// <returns>The clause the summary line closes with about the push, and whether the server was
+    /// found afterwards to be holding something other than what was sent.</returns>
     /// <remarks>
     /// <para>
     /// Waits for a complete set where ABS mode sends a partial one, and the difference is which
@@ -2216,24 +2281,24 @@ public sealed class FileProcessor
     /// the reconciliation lives: a list the server already has is not sent back to it.
     /// </para>
     /// </remarks>
-    private async Task<string> PushLocalFileAsync(
+    private async Task<(string Note, bool Mismatch)> PushLocalFileAsync(
         FileContext ctx, List<Chapter> chapters, bool complete, CancellationToken ct)
     {
         if (!complete)
-            return ", not sent to ABS while chapters are missing";
+            return (", not sent to ABS while chapters are missing", false);
 
         if (ctx.Pull is { } pull)
         {
             if (pull.Book == null)
-                return $", not sent to ABS ({pull.Note})";
+                return ($", not sent to ABS ({pull.Note})", false);
             if (AbsChapterMerge.SameMarks(chapters, pull.FromServer))
-                return ", not sent to ABS (it already has these marks)";
+                return (", not sent to ABS (it already has these marks)", false);
             return await _abs!.PushAsync(pull.Book, chapters, ctx.Info.DurationSeconds, ct);
         }
 
         var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
         if (match.Book == null)
-            return $", not sent to ABS ({match.Reason})";
+            return ($", not sent to ABS ({match.Reason})", false);
 
         ctx.Logs.Write(match.Reason);
         return await _abs.PushAsync(match.Book, chapters, ctx.Info.DurationSeconds, ct);
@@ -2600,9 +2665,9 @@ public sealed class FileProcessor
             [.. SelectFiles(target, suffixes).Where(f => seen.Add(CliOptions.NormalizePath(f)))]))];
     }
 
-    /// <summary>Applies the extension, temporary-file, backup and --filter rules to one target's
-    /// candidates and sorts what survives into <see cref="NaturalPathComparer">natural</see>
-    /// order.</summary>
+    /// <summary>Applies the extension, temporary-file, backup, --filter and --newer-than rules to
+    /// one target's candidates and sorts what survives into
+    /// <see cref="NaturalPathComparer">natural</see> order.</summary>
     /// <param name="target">The file or directory to look at.</param>
     /// <param name="suffixes">Case-insensitive file name suffixes to accept.</param>
     private IEnumerable<string> SelectFiles(CliOptions.Target target, string[] suffixes)
@@ -2617,6 +2682,50 @@ public sealed class FileProcessor
             .Where(f => !f.Contains(FfmpegClient.ScratchInfix, StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.Revert || !f.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
             .Where(f => _options.FilterRegex == null || _options.FilterRegex.IsMatch(f))
+            .Where(IsRecentEnough)
             .OrderBy(f => f, NaturalPathComparer.Instance);
+    }
+
+    /// <summary>Whether a file passes <c>--newer-than</c>. Always true when the option was not
+    /// given.</summary>
+    /// <param name="file">Path of the candidate file.</param>
+    /// <remarks>
+    /// <para>
+    /// Last-write time, which is the only "how old is this" a folder on disk answers the same way
+    /// everywhere: creation time is not recorded at all on some file systems, and on Windows it is
+    /// set to <em>now</em> by an ordinary copy, so a shelf moved between drives would read as
+    /// brand new. Last-write time survives that copy where the tool doing it preserves timestamps,
+    /// and where it does not, both would have been wrong anyway.
+    /// </para>
+    /// <para>
+    /// A consequence worth knowing rather than working around: writing marks into a file rewrites
+    /// it, so a book this run marks is younger afterwards than it was before, and the same
+    /// <c>--newer-than</c> the next day still selects it. It is then skipped for having marks,
+    /// which is the cheap outcome.
+    /// </para>
+    /// </remarks>
+    private bool IsRecentEnough(string file)
+        => _newerThanUtc is not { } cutoff || File.GetLastWriteTimeUtc(file) >= cutoff;
+
+    /// <summary>What to say when the enumeration turned up nothing: the selection rules that were
+    /// in play, or - where there were none - what a supported file even looks like.</summary>
+    /// <remarks>
+    /// Naming the rules rather than saying only that nothing was found, because with a filter in
+    /// play "nothing" is nearly always the filter's doing and nearly never an empty folder, and
+    /// which of two filters did it is the first thing worth knowing.
+    /// </remarks>
+    private string NothingFoundNote
+    {
+        get
+        {
+            List<string> rules = [];
+            if (_options.FilterRegex != null || _options.FilterExtensions != null)
+                rules.Add("--filter");
+            if (_options.NewerThan != null)
+                rules.Add("--newer-than");
+            return rules.Count > 0
+                ? $"No audio files matching {string.Join(" and ", rules)} found."
+                : $"No supported audio files ({AudioFormats.ChapterCapableText}) found.";
+        }
     }
 }

@@ -59,9 +59,9 @@
 <main id="content">
 <h1 id="6-command-line-reference">6. Command line reference<a class="anchor" href="#6-command-line-reference" aria-label="Permalink to this heading">#</a></h1>
 <pre><code>abchapterize [options] &lt;file-or-directory&gt;...
-abchapterize -R|--revert [--recurse] [--filter &lt;f&gt;] &lt;file-or-directory&gt;...
+abchapterize -R|--revert [--recurse] [--filter &lt;f&gt;] [--newer-than &lt;age&gt;] &lt;file-or-directory&gt;...
 abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter &lt;f&gt;] &lt;file-or-directory&gt;...
-abchapterize -O|--no-op --filter &lt;f&gt; [--recurse] &lt;file-or-directory&gt;...
+abchapterize -O|--no-op --filter &lt;f&gt;|--newer-than &lt;age&gt; [--recurse] &lt;file-or-directory&gt;...
 abchapterize --verify-only [options] &lt;file-or-directory&gt;...
 abchapterize --help | -?
 abchapterize --version
@@ -172,6 +172,30 @@ is matched against the backup's own path — the name still ending in <code>.bak
 so do not anchor it at the audio extension; <code>--cleanup</code> matches it against the
 audio file's path instead. A single file named directly
 as the target is <em>also</em> subject to the filter.</p>
+<p><code>-w</code>, <code>--newer-than &lt;age&gt;</code>
+: Only process files younger than <code>&lt;age&gt;</code> — for keeping a shelf marked as it
+fills up, without walking back over everything already done. The age is a
+number and its unit: <code>12h</code>, <code>7d</code>, <code>1.5d</code>. The unit is not optional, there
+being no reading of a bare <code>7</code> that everyone would guess the same way.
+Fractions are fine, and a comma works as the decimal point.</p>
+<p>What &quot;younger&quot; means depends on where the books are. For files on this
+machine it is the <strong>last-write time</strong> — the only age a folder answers the
+same way everywhere, creation time being unrecorded on some file systems and
+reset by an ordinary copy on Windows. In <a href="#audiobookshelf">ABS mode</a> it is
+the date the <strong>server</strong> says the book was added to its library, which is what
+&quot;what arrived this week&quot; means for a shelf you do not hold the files of. A
+book the server gives no date for is kept rather than quietly dropped.</p>
+<p>Combines with <code>--filter</code>; both narrow, neither replaces the other. It applies
+to <code>--revert</code> too, where a backup carries the timestamp of the file it was
+made from, and it satisfies <code>--no-op</code>'s requirement to be filtering
+<em>something</em>. It cannot be combined with <code>--cleanup</code>: that acts on the
+leftovers beside a book — a <code>.bak</code> is as old as the run that made it, a
+sidecar as old as the export — and their age is not the book's. Scope a
+cleanup with <code>--filter</code> instead.</p>
+<p>One consequence worth knowing rather than working around: writing marks into
+a file rewrites it, so a book marked today is young again tomorrow and the
+same <code>--newer-than</code> still selects it. It is then skipped for already having
+marks, which costs a probe and nothing more.</p>
 <h2 id="audiobookshelf">Audiobookshelf<a class="anchor" href="#audiobookshelf" aria-label="Permalink to this heading">#</a></h2>
 <p>ABChapterize can work straight off an <a href="https://www.audiobookshelf.org/">Audiobookshelf</a>
 server instead of files on this machine. In <em>ABS mode</em> each selected book is
@@ -303,6 +327,21 @@ and <code>--verify</code> all reason about.</p>
 when it scans a book and keeps them independently ever after, so any edit made in
 its web interface puts them out of step by design. <code>--verbose</code> says so and the run
 carries on.</p>
+<h3 id="checking-what-the-server-stored">Checking what the server stored<a class="anchor" href="#checking-what-the-server-stored" aria-label="Permalink to this heading">#</a></h3>
+<p>Every chapter list this tool sends is read straight back off the server and
+compared with what was sent — the same number of marks, in the same places, under
+the same titles. A server accepting an update and a server storing what was in it
+are two different claims, and with <code>--abs</code> the database holds the only copy of the
+marks, so a list quietly stored as something else would be a run that produced
+nothing and reported success.</p>
+<p>If the two disagree, the run says so: a <code>WARNING</code> line naming the book and the
+first difference found, whatever the verbosity, and the same note on the file's
+own summary line. The file itself is not failed — with <code>--abs-push</code> its marks were
+written perfectly well — and nothing is re-sent, since the server took the update
+without complaint and would store the same thing again. The book is counted among
+<code>--summary</code>'s warnings so a batch of two hundred does not hide it.</p>
+<p>Nothing to configure, and nothing to switch on. It costs one extra request per
+book pushed, against a run that has just spent minutes listening to that book.</p>
 <h3 id="marking-local-files-and-telling-the-server">Marking local files and telling the server<a class="anchor" href="#marking-local-files-and-telling-the-server" aria-label="Permalink to this heading">#</a></h3>
 <p><code>--abs-push</code>
 : Do an ordinary run over local files — detection, and the marks written into
@@ -1372,7 +1411,8 @@ must not look like it covers prompts it does not. No short form.</p>
 without loading a Whisper model, invoking ffmpeg or touching any file - a
 quick way to check that a <code>--filter</code> regexp or extension list actually
 matches the intended files before committing to a real run. Requires
-<code>--filter</code>; combinable only with <code>--recurse</code> and the output options
+<code>--filter</code> or <a href="#target-selection"><code>--newer-than</code></a>; combinable only with those,
+<code>--recurse</code> and the output options
 (<code>--quiet</code> suppresses the listing itself, leaving just <code>--summary</code>'s
 count), the same restriction <code>--revert</code> has.</p>
 <p>The one exception is <a href="#handling-of-pre-existing-chapters"><code>--verify</code></a>. The two
@@ -1719,11 +1759,12 @@ them to a sidecar file next to it: <code>&lt;file&gt;.chapters.ffmeta</code> by 
 detection — it is not a separate mode — and works together with
 <code>--dry-run</code>, so <code>abchapterize --dry-run --export book.m4b</code> previews the
 result <em>and</em> saves it for review without touching the audio file.</p>
-<p>The sidecar is written for a file detection completed normally. A file left
-with an unresolved chapter-sequence gap, a <code>.missing-marks</code> file being
-resumed, and a <code>--verify --fix</code> rewrite all write their marks into the audio
-file as usual but no sidecar — those files change their name as they are
-written, and a sidecar under the old one would not be found again.</p>
+<p>A sidecar is written wherever marks are — a file left with an unresolved
+chapter-sequence gap, a <code>.missing-marks</code> file being resumed, and a
+<code>--verify --fix</code> rewrite all get one, carrying whatever that run settled on.
+Where the run also renames the file, the sidecar is named after the name it
+ends up with, so <code>--import</code> finds it. Any sidecar already there is
+overwritten.</p>
 <p><code>-I</code>, <code>--import</code>
 : Skip Whisper detection entirely and write the chapters found in the
 sidecar file instead (looked up next to the audio file, same naming as

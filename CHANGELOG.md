@@ -17,12 +17,21 @@ earn a round number.
 
 ### Added
 
+- **`--newer-than` (`-w`) works only on what arrived recently.** Give it an age — `12h`, `7d`,
+  `1.5d` — and everything older is passed over, which is what you want for a shelf you keep
+  marked as it fills up rather than re-walking it from the top each time. Local files are judged
+  by their last-write time; with `--abs` it is the date the server says the book joined its
+  library. It narrows alongside `--filter` rather than replacing it, applies to `--revert`, and
+  is enough on its own to satisfy `--no-op`.
+
 - **Audiobookshelf, directly.** With `--abs` (`-A`), books are named by what an
   [Audiobookshelf](https://www.audiobookshelf.org/) server calls them rather than by path:
   `library:Discworld`, `series:Tiffany Aching`, `collection:Favourites`, `item:<id>`, a bare
   title, or `all`. Each selected book is downloaded to a temporary copy, marked exactly as a
   local file would be, and its finished chapters are sent back to the server; the copy is then
-  deleted. Nothing on the server changes but the chapter list. Books the server already has
+  deleted. Nothing on the server changes but the chapter list, and every list sent is read back
+  off the server afterwards and checked against what was sent — a server holding something else
+  is reported as a warning rather than passed over in silence. Books the server already has
   chapters for are skipped without `--force`, and books held as more than one audio file are
   reported and passed over. `--no-op` lists what a selector picked without fetching anything,
   which is worth doing before a selector that turns out to name a hundred books.
@@ -138,6 +147,13 @@ earn a round number.
   far it got. `--revert` and `--cleanup` do the same.
 
 ### Fixed
+
+- **`--export` now writes a sidecar wherever marks are written.** A file left with an unresolved
+  chapter-sequence gap, a `.missing-marks` file being resumed and a `--verify --fix` rewrite all
+  wrote their marks into the audio file and quietly skipped the sidecar — which is exactly the
+  case somebody reaches for `--export` in. All three export now, the sidecar is named after the
+  name the file ends up under where the run renames it (so `--import` finds it), and a sidecar
+  already sitting there is overwritten rather than left to go stale.
 
 - **`--verify` works much harder before writing a mark off.** A mark whose chapter number the
   first reading does not turn up is now read again from several shorter, differently placed

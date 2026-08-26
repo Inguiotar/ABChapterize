@@ -37,6 +37,11 @@ internal sealed class AbsFileFlow : IDisposable
     /// <see cref="MatchAsync"/>).</summary>
     private IReadOnlyList<AbsBook>? _everyBook;
 
+    /// <summary>The instant a book must have joined its library after to pass
+    /// <c>--newer-than</c>, or null when the option was not given. Fixed once for the run, for the
+    /// same reason <see cref="FileProcessor"/>'s is.</summary>
+    private readonly DateTime? _newerThanUtc;
+
     /// <summary>Opens the ABS side of a run. Nothing is sent until <see cref="ConnectAsync"/>.</summary>
     /// <param name="options">The run's validated options; its <see cref="CliOptions.AbsServer"/>
     /// must be set, which <see cref="CliOptions.UsesAbs"/> guarantees.</param>
@@ -45,6 +50,7 @@ internal sealed class AbsFileFlow : IDisposable
     {
         _options = options;
         _progress = progress;
+        _newerThanUtc = options.NewerThan is { } age ? DateTime.UtcNow - age : null;
         _workspace = new AbsWorkspace(
             options.AbsServer!, options.AbsTemp, AbsRetryPolicy.For(options.AbsRetryMinutes),
             options.LoggingEnabled ? progress.Log : null,
@@ -73,23 +79,52 @@ internal sealed class AbsFileFlow : IDisposable
 
     /// <summary>
     /// Resolves the command line's selectors into the books this run will work on, applying
-    /// <c>--filter</c> to what comes back.
+    /// <c>--filter</c> and <c>--newer-than</c> to what comes back.
     /// </summary>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The selected books, in a stable order.</returns>
     public async Task<IReadOnlyList<AbsBook>> SelectAsync(CancellationToken ct)
     {
         var books = await _workspace.SelectAsync(_options.AbsSelectors, ct);
-        if (_options.FilterRegex is not { } filter)
-            return books;
         // The extension half of --filter is not applied here and cannot be: which extension a book
         // has is only known once its item detail has been fetched, which is a request per book.
         // It is applied at the fetch instead - see FetchAsync.
-        var kept = books.Where(b => filter.IsMatch(b.FilterText)).ToList();
-        if (kept.Count < books.Count && !_options.Quiet)
-            _progress.Announce($"--filter left {kept.Count} of {books.Count} selected book(s).");
+        var kept = books;
+        if (_options.FilterRegex is { } filter)
+            kept = Narrow(kept, b => filter.IsMatch(b.FilterText), "--filter");
+        if (_newerThanUtc != null)
+            kept = Narrow(kept, IsRecentEnough, "--newer-than");
         return kept;
     }
+
+    /// <summary>Applies one selection rule and says how much of the selection it left.</summary>
+    /// <param name="books">The books to narrow.</param>
+    /// <param name="keep">The rule.</param>
+    /// <param name="option">The option to name in the note, when there is one to make.</param>
+    /// <remarks>
+    /// The note matters more here than it would over a folder: what the selectors picked is not
+    /// something the user can see for themselves, so a run that quietly works on nine books out of
+    /// two hundred looks like a broken server rather than a filter doing its job.
+    /// </remarks>
+    private IReadOnlyList<AbsBook> Narrow(
+        IReadOnlyList<AbsBook> books, Func<AbsBook, bool> keep, string option)
+    {
+        var kept = books.Where(keep).ToList();
+        if (kept.Count < books.Count && !_options.Quiet)
+            _progress.Announce($"{option} left {kept.Count} of {books.Count} selected book(s).");
+        return kept;
+    }
+
+    /// <summary>Whether a book passes <c>--newer-than</c>.</summary>
+    /// <param name="book">The selected book.</param>
+    /// <remarks>
+    /// The date the server says the book joined its library, which is the only age a server-side
+    /// selection has to go on - and the one that matches what somebody asking for "what arrived
+    /// this week" means. A book the server gave no date for is kept: a filter that silently
+    /// discarded it would be indistinguishable from a library that had nothing new in it.
+    /// </remarks>
+    private bool IsRecentEnough(AbsBook book)
+        => _newerThanUtc is not { } cutoff || book.AddedUtc is not { } added || added >= cutoff;
 
     /// <summary>
     /// Fetches one book to a temporary copy, or explains why it is being passed over.
@@ -206,21 +241,37 @@ internal sealed class AbsFileFlow : IDisposable
     /// <param name="chapters">The marks, in start order.</param>
     /// <param name="durationSeconds">The book's play time, which the last chapter ends at.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The clause the file's summary line closes with.</returns>
+    /// <returns>The clause the file's summary line closes with, and whether the read-back found the
+    /// server holding something other than what was sent.</returns>
     /// <remarks>
+    /// <para>
     /// The clause names the book it went to, because under <c>--abs-push</c> the summary line is
     /// headed by the local file name and the server may well call the same book something else -
     /// "I Shall Wear Midnight.m4b" against "DW38 - I Shall Wear Midnight". Saying which book
     /// received the marks is the difference between a line that reports a push and one that can
     /// be checked.
+    /// </para>
+    /// <para>
+    /// A failed read-back is announced as well as reported in the clause, and the announcement is
+    /// what makes it visible: a summary line is held back by <c>--quiet</c>, and this is the one
+    /// outcome where a quiet run has been told its marks are on the server when they are not.
+    /// </para>
     /// </remarks>
-    public async Task<string> PushAsync(
+    public async Task<(string Note, bool Mismatch)> PushAsync(
         AbsBook book, IReadOnlyList<Chapter> chapters, double durationSeconds, CancellationToken ct)
     {
         if (_options.DryRun)
-            return $", would send {chapters.Count} chapter(s) to ABS ({book.Title})";
-        await _workspace.PushAsync(book, chapters, durationSeconds, ct);
-        return $", {chapters.Count} chapter(s) sent to ABS ({book.Title})";
+            return ($", would send {chapters.Count} chapter(s) to ABS ({book.Title})", false);
+
+        var mismatch = await _workspace.PushAsync(book, chapters, durationSeconds, ct);
+        var sent = $", {chapters.Count} chapter(s) sent to ABS ({book.Title})";
+        if (mismatch.Length == 0)
+            return (sent, false);
+
+        _progress.Announce(
+            $"WARNING: Audiobookshelf did not store the marks sent for \"{book.Title}\" as they "
+            + $"were sent - {mismatch}.");
+        return ($"{sent} - WARNING: the server's copy differs ({mismatch})", true);
     }
 
     /// <summary>

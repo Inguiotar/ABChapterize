@@ -70,6 +70,13 @@ internal static class AbsWire
         /// <summary>Path on the *server*, shown in listings so a book can be told from a namesake.</summary>
         public string RelPath { get; set; } = "";
 
+        /// <summary>When the item joined its library, in milliseconds since the Unix epoch; what
+        /// <c>--newer-than</c> judges a book by. Zero when the server sent none, which is read as
+        /// "no date on record" rather than as 1970 - see <see cref="AbsBook.AddedUtc"/>. Present in
+        /// every shape this tool asks for, minified library listings and series-embedded books
+        /// included (confirmed against 2.36.0, 2026-08-26).</summary>
+        public long AddedAt { get; set; }
+
         /// <summary>The media payload; absent on a malformed or podcast item.</summary>
         public Media? Media { get; set; }
     }
