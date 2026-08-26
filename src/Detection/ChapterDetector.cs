@@ -2456,6 +2456,8 @@ public sealed class ChapterDetector
                 .Cast<PhraseMatch?>().FirstOrDefault(m => m!.Value.Number == expected);
             match ??= await TryConfirmViaGapRetranscribeAsync(
                 file, info, windowStart, windowLen, segments, profile, expected, ct);
+            match ??= await TryConfirmViaReframedRereadAsync(
+                file, info, mark, windowStart, windowLen, profile, profile.Language, expected, ct);
             var confirmed = match != null;
             _log?.Invoke(confirmed
                 ? $"chapter {expected} mark at {FormatTimestamp(mark.StartSeconds)} confirmed"
@@ -2643,6 +2645,94 @@ public sealed class ChapterDetector
                         PhraseEndSeconds = chunkStart + m.PhraseEndSeconds,
                     };
                 }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Last-chance confirmation for a <c>--verify</c> mark that neither the first pass nor the gap
+    /// retry could find the expected number in: a ladder of up to
+    /// <see cref="DetectionTuning.VerifyRereadAttempts"/> shorter windows, each starting further
+    /// before the mark than the last, read with the <c>--upgrade-model</c> recognizer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two levers at once, because they are independent and both measured. A window start moved by
+    /// tens of milliseconds decides whether the chapter word is heard at all on roughly half of all
+    /// framings, and at the very offset where the probing model loses the word the heavier one
+    /// reads it correctly - so a ladder that changed only one of the two would leave most of its
+    /// recall on the table. The evidence is on
+    /// <see cref="DetectionTuning.VerifyRereadAttempts"/>.
+    /// </para>
+    /// <para>
+    /// Every window is clamped inside the caller's, which is what lets the match come back in the
+    /// caller's coordinates and keeps <see cref="ComputeMarkFixAsync"/>'s refinement bounded by the
+    /// window that was actually verified. A framing that clamps onto one already read is skipped
+    /// rather than decoded again: near the start of a file the whole ladder can collapse onto a
+    /// single window.
+    /// </para>
+    /// <para>
+    /// The heavier recognizer is used only where it is actually heavier. <c>--upgrade-model</c>
+    /// naming something lighter than <c>--model</c> is a deliberate downgrade (see
+    /// <see cref="CliOptions.UpgradeModelIsWorse"/>), and asking that one for a second opinion would
+    /// be asking the wrong recognizer - but the reframing on its own is worth the pass, so the
+    /// ladder still runs on the probing model.
+    /// </para>
+    /// </remarks>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="mark">The pre-existing mark being verified, which every framing is anchored on.</param>
+    /// <param name="windowStart">Start of the caller's verify window, which the result is
+    /// relative to.</param>
+    /// <param name="windowLen">Length of the caller's verify window.</param>
+    /// <param name="profile">The file's resolved language profile.</param>
+    /// <param name="language">The file's resolved language, for the heavier recognizer.</param>
+    /// <param name="expected">The chapter number the mark's title claims.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The match confirming the mark, in the caller's window coordinates, or null when no
+    /// framing found it.</returns>
+    private async Task<PhraseMatch?> TryConfirmViaReframedRereadAsync(
+        string file, MediaInfo info, Chapter mark, double windowStart, double windowLen,
+        LanguageProfile profile, string language, int expected, CancellationToken ct)
+    {
+        var heavier = _options.UpgradeModelIsBetter
+                      && !ReferenceEquals(_upgradeTranscriber, _transcriber);
+        var windowEnd = windowStart + windowLen;
+        var tried = new HashSet<(double Start, double Length)>();
+
+        for (var attempt = 0; attempt < VerifyRereadAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var lead = VerifyRereadLeadSeconds + attempt * VerifyRereadLeadStepSeconds;
+            var start = Math.Max(windowStart, mark.StartSeconds - lead);
+            var length = Math.Min(VerifyRereadWindowSeconds, windowEnd - start);
+            if (length <= 0)
+                continue;
+            // Rounded to the millisecond: two framings that differ by less than that are the same
+            // decode, and the only thing a second one would buy is the time it takes.
+            if (!tried.Add((Math.Round(start, 3), Math.Round(length, 3))))
+                continue;
+
+            var samples = await _audio.DecodePcmAsync(file, start, length, info.InputDecoder, ct);
+            var segments = heavier
+                ? await SecondOpinionAsync(samples, language, ct)
+                : await TranscribeCountingAsync(samples, ct);
+            LogTranscript($"verify re-read {length:0.0}s@{FormatTimestamp(start)}", segments);
+
+            foreach (var m in FindCappedPhraseMatches(segments, profile))
+            {
+                if (m.Number != expected)
+                    continue;
+                // Back into the caller's window, which is what its own matches are expressed in and
+                // what a --fix correction is measured from.
+                var offset = start - windowStart;
+                return m with
+                {
+                    PhraseStartSeconds = offset + m.PhraseStartSeconds,
+                    PhraseEndSeconds = offset + m.PhraseEndSeconds,
+                };
             }
         }
         return null;

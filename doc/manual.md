@@ -2216,10 +2216,17 @@ looking. None of these is needed for an ordinary book.
   What the check does: a short window around the mark's own timestamp is
   probed with Whisper for the chapter phrase and the expected chapter
   number, reusing the same transcription machinery as normal detection
-  rather than a plain string/fingerprint comparison. If the phrase isn't
-  found on the first pass, any long unrecognized stretch inside the window
-  gets a further, closer look in small overlapping chunks before the mark is
-  given up as unconfirmed — documented in the source. Marks that all check
+  rather than a plain string/fingerprint comparison. A mark whose phrase is
+  not found on the first pass is not given up there: any long unrecognized
+  stretch inside the window gets a closer look in small overlapping chunks,
+  and after that the mark is read again from several shorter, differently
+  placed windows using the heavier [`--upgrade-model`](#detection-behaviour)
+  recognizer. Whether the chapter word is heard at all turns out to depend on
+  where a window happens to start as much as on the audio, so trying the same
+  seconds again from a different angle — and with a better listener — recovers
+  marks that a single reading writes off. It is why a run with failing marks
+  may load the upgrade model and take noticeably longer than one where
+  everything checks out; the machinery is documented in the source. Marks that all check
   out are left untouched, same as a skip without `--verify`. If any mark fails but at
   least one other is confirmed, the confirmed marks are trusted and kept
   as-is, and detection - including its own proper Probe - runs only over

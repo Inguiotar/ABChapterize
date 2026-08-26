@@ -105,6 +105,10 @@ Chapter detection: window sizes, thresholds, retry budgets and mark placement.
 | `VerifyWindowSeconds` | `60` | Total length of the --verify probe window, starting VerifyMarginBeforeSeconds before the mark. |
 | `VerifyFixMinShiftSeconds` | `0.25` | How far off a confirmed mark has to be before --verify --fix bothers moving it. |
 | `VerifyFixMaxShiftSeconds` | `30` | The largest correction --verify --fix will apply. |
+| `VerifyRereadAttempts` | `3` | How many differently-framed re-reads a --verify mark gets on the --upgrade-model recognizer once the first pass and the gap retry have both failed to find its number. |
+| `VerifyRereadLeadSeconds` | `1.5` | How far before the mark the first reframed --verify re-read starts. |
+| `VerifyRereadLeadStepSeconds` | `3.5` | How much further back each further reframed --verify re-read starts, spreading the ladder across the lead-in band rather than jittering inside one spot: a mark being verified need not be this tool's own, so how far it sits from the phrase is not known to within the tens of milliseconds a jitter would step by. |
+| `VerifyRereadWindowSeconds` | `24` | Length of each reframed --verify re-read. |
 | `GapRetryThresholdSeconds` | `3.0` | Minimum length for a gap between transcribed segments (or before the first/after the last) to be worth a focused re-transcription - and, for Scan's version of the same fallback (see ScanGapRetriesAsync), for a silence or VAD non-speech region overlapping that gap to count as "plausibly the real jingle/scene transition" rather than an in-narration pause. |
 | `GapRetryPaddingSeconds` | `2.0` | Context padding added to each side of a gap before re-transcribing it, so the phrase is not cut off if it starts or ends right at the boundary. |
 | `UnnumberedRetryLeadSeconds` | `8.0` | How far before the phrase a Scan "heard it, could not number it" retry starts its decode. |

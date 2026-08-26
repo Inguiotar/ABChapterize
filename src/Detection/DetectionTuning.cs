@@ -1256,6 +1256,53 @@ internal static class DetectionTuning
     internal static double VerifyFixMaxShiftSeconds = 30;
 
     /// <summary>
+    /// How many differently-framed re-reads a <c>--verify</c> mark gets on the
+    /// <c>--upgrade-model</c> recognizer once the first pass and the gap retry have both failed to
+    /// find its number. 0 switches the ladder off.
+    /// <para>
+    /// It exists because "Whisper missed the chapter word" is often a framing fact rather than an
+    /// audio fact: identical audio read from window starts 20 ms apart recovers the word about half
+    /// the time, so a second and third framing take a coin-flip miss down to something between a
+    /// tenth and a quarter. Three is where that curve flattens. The model matters independently and
+    /// in the same direction, which is why the ladder does both at once.
+    /// </para>
+    /// <para>
+    /// The cost is paid only by a mark that has already failed, and the worst case is a book whose
+    /// marks group several chapters into one entry: every mark fails, every mark walks the whole
+    /// ladder, and the file is then left alone wholesale anyway. That is accepted rather than
+    /// guarded against - the cheap gate would be "the phrase was found here with a different
+    /// number", which is exactly the misheard-number case a heavier model is best at fixing.
+    /// </para>
+    /// </summary>
+    /// <remarks>Notes: the framing sweep and the model ladder measured on one announcement.
+    /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="VerifyRereadAttempts"]/*' /></remarks>
+    internal static int VerifyRereadAttempts = 3;
+
+    /// <summary>
+    /// How far before the mark the first reframed <c>--verify</c> re-read starts. Plus the
+    /// <see cref="DefaultMarkLeadSeconds"/> a mark of this tool's own sits ahead of the phrase, it
+    /// lands the window start in the lead-in band that recovered the chapter word in every framing
+    /// tried there.
+    /// </summary>
+    internal static double VerifyRereadLeadSeconds = 1.5;
+
+    /// <summary>
+    /// How much further back each further reframed <c>--verify</c> re-read starts, spreading the
+    /// ladder across the lead-in band rather than jittering inside one spot: a mark being verified
+    /// need not be this tool's own, so how far it sits from the phrase is not known to within the
+    /// tens of milliseconds a jitter would step by.
+    /// </summary>
+    internal static double VerifyRereadLeadStepSeconds = 3.5;
+
+    /// <summary>
+    /// Length of each reframed <c>--verify</c> re-read. Deliberately far shorter than
+    /// <see cref="VerifyWindowSeconds"/>: a shorter window is a differently framed one, and it also
+    /// stays clear of <see cref="WhisperChunkSeconds"/>, which the 60 s first pass does not - a
+    /// one-word announcement landing at that boundary is dropped in silence.
+    /// </summary>
+    internal static double VerifyRereadWindowSeconds = 24;
+
+    /// <summary>
     /// Minimum length for a gap between transcribed segments (or before the first/after the last)
     /// to be worth a focused re-transcription - and, for Scan's version of the same fallback
     /// (see <see cref="RegionScanner.ScanGapRetriesAsync"/>), for a silence or VAD non-speech

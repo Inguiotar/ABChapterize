@@ -477,6 +477,26 @@ test suite when it no longer matches.</em></p>
 <td>The largest correction --verify --fix will apply.</td>
 </tr>
 <tr>
+<td><code>VerifyRereadAttempts</code></td>
+<td><code>3</code></td>
+<td>How many differently-framed re-reads a --verify mark gets on the --upgrade-model recognizer once the first pass and the gap retry have both failed to find its number.</td>
+</tr>
+<tr>
+<td><code>VerifyRereadLeadSeconds</code></td>
+<td><code>1.5</code></td>
+<td>How far before the mark the first reframed --verify re-read starts.</td>
+</tr>
+<tr>
+<td><code>VerifyRereadLeadStepSeconds</code></td>
+<td><code>3.5</code></td>
+<td>How much further back each further reframed --verify re-read starts, spreading the ladder across the lead-in band rather than jittering inside one spot: a mark being verified need not be this tool's own, so how far it sits from the phrase is not known to within the tens of milliseconds a jitter would step by.</td>
+</tr>
+<tr>
+<td><code>VerifyRereadWindowSeconds</code></td>
+<td><code>24</code></td>
+<td>Length of each reframed --verify re-read.</td>
+</tr>
+<tr>
 <td><code>GapRetryThresholdSeconds</code></td>
 <td><code>3.0</code></td>
 <td>Minimum length for a gap between transcribed segments (or before the first/after the last) to be worth a focused re-transcription - and, for Scan's version of the same fallback (see ScanGapRetriesAsync), for a silence or VAD non-speech region overlapping that gap to count as &quot;plausibly the real jingle/scene transition&quot; rather than an in-narration pause.</td>

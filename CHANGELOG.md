@@ -123,6 +123,13 @@ earn a round number.
 
 ### Fixed
 
+- **`--verify` works much harder before writing a mark off.** A mark whose chapter number the
+  first reading does not turn up is now read again from several shorter, differently placed
+  windows, on the heavier `--upgrade-model` recognizer. Whether the chapter word is heard at all
+  depends on where a window happens to start about as much as on the audio itself, so the same
+  seconds read from a different angle — by a better listener — recover marks a single reading
+  writes off, and fewer good marks are needlessly redetected. A file with failing marks may now
+  load the upgrade model and take noticeably longer than one where everything checks out.
 - **`--revert` no longer gives up on the rest when one backup will not go back.** A file held
   open by a player, or a folder that has turned read-only, used to end the run there and leave
   every remaining backup unrestored. Each one is now reported and the others still restored, the

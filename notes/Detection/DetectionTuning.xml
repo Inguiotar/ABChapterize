@@ -251,6 +251,57 @@
     </para>
   </member>
 
+  <member name="VerifyRereadAttempts">
+    <para>
+    <b>The framing sweep.</b> Chapter 1 of "De vandrande djaeknarne", ggml-small, window length
+    21.70 s (2026-08-17, Jan-PC): window starts 23.915 / 23.920 / 23.925 s read
+    "1. Kapitlet - Gaknupptag" / "- Gjaknupptag" / "- Jacknupptag", and 23.930 - production's own
+    offset - reads "1. Jaknuktag" with the chapter word gone. Twenty-one starts over 23.80-24.20 at
+    20 ms steps: <b>10 recover the word</b>, flipping every 20-40 ms on identical audio at p=0.45-0.65.
+    Ruled out by measurement rather than argument: the machine, the GPU, the thread count, the input
+    decoder and the window length. That is where "about half" and "two or three framings take a
+    coin-flip miss to a tenth or a quarter" come from.
+    </para>
+    <para>
+    <b>The lead-in band.</b> Tallied over the same sweep by how long the window ran before the
+    24.67 s announcement onset: 0.7-1.1 s recovered <b>0 of 3</b> (production sat here, at 0.74 s),
+    1.3-2.7 s recovered <b>8 of 8</b>, 3.3-4.7 s recovered 5 of 8. Best reading of the whole sweep
+    was a 2.07 s lead-in - "Foersta kapitlet. Jacknupptag." at p=0.97. Hence
+    <see cref="VerifyRereadLeadSeconds"/> at 1.5 s, which plus a mark's own
+    <see cref="DefaultMarkLeadSeconds"/> lands inside that band, and a
+    <see cref="VerifyRereadLeadStepSeconds"/> that walks out through the next one rather than
+    jittering inside the first.
+    </para>
+    <para>
+    <b>The model ladder, at production's own failing offset.</b> small "1. Jaknuktag" p=0.59,
+    <b>medium "Foersta kapitlet" p=0.72, large-v3-turbo p=0.75, large-v3 p=0.84</b> - monotonic in
+    model size, and the bigger models also emit the announcement as a segment of its own instead of
+    gluing the chapter title onto it, which is what a <c>^</c>-guarded wording wants. That run's
+    <c>--upgrade-model</c> was turbo, so the recognizer that gets it right was already loaded.
+    Chapter 2 of the same book agrees: small p=0.59, medium 0.73, turbo "Andra kapitlet. Masugnen."
+    0.80.
+    </para>
+    <para>
+    <b>What it did on a real book, first try.</b> "Die Dritte Macht" (15 h, 35 marks all known
+    good, build 400 vs 401, 2026-08-26): build 400 failed chapters <b>7, 9, 10 and 20</b> - four
+    false negatives out of 35 - and went on to spend over ten minutes in gap recovery with a
+    50-minute trailing region still ahead of it. Build 401 confirmed all 35, and every one of the
+    four was rescued by the <em>first</em> rung alone (one 24 s re-read at a 1.5 s lead, on turbo):
+    2:59:42.49, 3:52:24.72, 4:20:55.50 and 8:38:30.59. The whole verify phase went from 2:44 to
+    3:09, so the four rescues cost about 25 seconds and saved the gap recovery entirely. Wintersmith
+    the same day is the case that needed a second rung: its chapter 10 failed the first re-read at
+    6:43:27.76 and was confirmed by the second at 6:43:24.26 - which is the argument against
+    stopping the ladder at one.
+    </para>
+    <para>
+    <b>What this ladder cannot fix, and why it is not asked to.</b> Chapter 2's real failure was
+    window planning, not recognition - every window starting in [801.70, 802.30] reads it, 12 of 12
+    across six lengths, and production left a 3.4 s hole with the announcement in it that nothing
+    ever read. A reframing ladder anchored on a mark cannot reach audio outside its own window, and
+    is not a substitute for the window planning that put the announcement out of reach.
+    </para>
+  </member>
+
   <member name="PreciseMarkSilenceAnchorSeconds">
     <para>
     <b>Why the effect is per-narrator, not per-language.</b> The plateau's late bias cost nothing on

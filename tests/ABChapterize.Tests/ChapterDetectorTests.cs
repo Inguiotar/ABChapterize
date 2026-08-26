@@ -7514,6 +7514,126 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Equal(0, result.Failed);
     }
 
+    /// <summary>
+    /// Fills a verify window with back-to-back narration, leaving the two seconds at
+    /// <paramref name="announcementAt"/> for the announcement itself. That makes the first pass
+    /// come back looking confident with no gap of
+    /// <see cref="DetectionTuning.GapRetryThresholdSeconds"/> anywhere in it - which is the shape
+    /// the reframing ladder exists for, and the one the gap retry cannot touch.
+    /// </summary>
+    /// <param name="s">The transcriber to script.</param>
+    /// <param name="windowSeconds">How much of the file to cover, from zero.</param>
+    /// <param name="announcementAt">The two-second slot to leave free.</param>
+    private static void ScriptContinuousNarration(
+        ScriptedTranscriber s, double windowSeconds, double announcementAt)
+    {
+        for (var at = 0.0; at < windowSeconds; at += 2)
+            if (at != announcementAt)
+                s.Add(at, Seg(0, " And the narration went on."));
+    }
+
+    /// <summary>
+    /// The reframing ladder: a mark whose announcement the 60 s first pass reads straight past is
+    /// confirmed by one of the shorter windows that follow it. Scripted as a chunk-sensitive
+    /// announcement inside continuous narration - real Whisper's own framing artifact, in the one
+    /// setting where nothing else would give the mark a second look.
+    /// </summary>
+    [Fact]
+    public async Task Verify_ConfirmsAMarkOnlyAReframedRereadCanHear()
+    {
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Chapter 1")],
+            s =>
+            {
+                ScriptContinuousNarration(s, 60, announcementAt: 10);
+                // Heard by any decode of at most 30 s: the 60 s first pass misses it, the 24 s
+                // re-read starting 1.5 s before the mark does not.
+                s.AddWithin(30, 10, Seg(0, " Chapter 1."));
+            });
+
+        Assert.True(result.Passed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(0, result.Failed);
+    }
+
+    /// <summary>
+    /// The same file with the ladder switched off, which is what pins the confirmation above to the
+    /// re-reads rather than to anything the first pass or the gap retry did.
+    /// </summary>
+    [Fact]
+    public async Task Verify_LeavesTheMarkUnconfirmed_WhenTheRereadLadderIsSwitchedOff()
+    {
+        var result = await VerifyAsync(
+            Options("--set:DetectionTuning.VerifyRereadAttempts=0"),
+            [new Chapter(10, "Chapter 1")],
+            s =>
+            {
+                ScriptContinuousNarration(s, 60, announcementAt: 10);
+                s.AddWithin(30, 10, Seg(0, " Chapter 1."));
+            });
+
+        Assert.False(result.Passed);
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(1, result.Failed);
+    }
+
+    /// <summary>
+    /// The ladder's other half: the re-reads go to the <c>--upgrade-model</c> recognizer, so an
+    /// announcement only that one can make out still confirms its mark. Both levers are changed at
+    /// once precisely because either alone leaves recall on the table.
+    /// </summary>
+    [Fact]
+    public async Task Verify_ReframedRereadsGoToTheUpgradeModel()
+    {
+        var audio = new FakeAudioSource();
+        var probe = new ScriptedTranscriber(audio);
+        var upgrade = new ScriptedTranscriber(audio);
+        // The probing model hears narration throughout and never the announcement; the heavier one
+        // hears it, and only it - so a confirmation can have come from nowhere else.
+        ScriptContinuousNarration(probe, 60, announcementAt: 10);
+        upgrade.Add(10, Seg(0, " Chapter 1."));
+        var heavyReads = 0;
+        upgrade.OnTranscribe = () => heavyReads++;
+
+        var detector = new ChapterDetector(
+            Options("--model", "base", "--upgrade-model", "large"),
+            audio, probe, vad: null, upgradeTranscriber: upgrade);
+        var info = new MediaInfo(Duration, (long)Duration, 1,
+            ExistingChapterList: [new Chapter(10, "Chapter 1")]);
+
+        var result = await detector.VerifyExistingChaptersAsync(
+            _file, info, new WorkTracker(), default, CancellationToken.None);
+
+        Assert.True(result.Passed);
+        Assert.Equal(0, result.Failed);
+        // The first framing already finds it, so the ladder stops there rather than walking on.
+        Assert.Equal(1, heavyReads);
+    }
+
+    /// <summary>
+    /// Every framing is clamped inside the caller's window, so a mark early enough in a file for
+    /// the whole ladder to clamp onto one window decodes it once rather than three times.
+    /// </summary>
+    [Fact]
+    public async Task Verify_DecodesAClampedRereadLadderOnlyOnce()
+    {
+        var audio = new FakeAudioSource();
+        var transcriber = new ScriptedTranscriber(audio);
+        // Nothing scripted at all, so every framing fails and the ladder is walked to its end.
+        var detector = new ChapterDetector(Options(), audio, transcriber);
+        var info = new MediaInfo(Duration, (long)Duration, 1,
+            ExistingChapterList: [new Chapter(0.5, "Chapter 1")]);
+
+        var result = await detector.VerifyExistingChaptersAsync(
+            _file, info, new WorkTracker(), default, CancellationToken.None);
+
+        Assert.Equal(1, result.Failed);
+        // The verify window itself starts at 0 (the mark is only 0.5 s in), and all three leads
+        // clamp there too - so one 24 s re-read, not three identical ones.
+        Assert.Single(audio.DecodeWindows, w => w.Start == 0 && w.Duration == 24);
+    }
+
     /// <summary>--fix's whole point: a mark whose announcement checks out but sits well away
     /// from it is moved onto it, instead of the run only reporting that it checked out.</summary>
     [Fact]
