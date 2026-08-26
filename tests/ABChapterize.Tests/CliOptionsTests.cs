@@ -1684,11 +1684,67 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--cpu-only"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--use-gpu", "gtx"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--backup"));
-        Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--verify"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--export"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--no-trailing-scan"));
         Assert.Throws<CliError>(() => ParseDir("--no-op", "--filter", "m4b", "--quick-marks"));
+        // --verify is deliberately absent: it is the one processing option --no-op now takes, the
+        // two together being --verify-only. See the tests below.
     }
+
+    /// <summary>
+    /// The two spellings of one mode. Derived rather than stored, so they cannot come to mean
+    /// different things - and neither needs --filter, whose "did my filter match what I meant"
+    /// question this mode does not ask.
+    /// </summary>
+    [Fact]
+    public void VerifyOnly_IsTheSameModeAsVerifyPlusNoOp()
+    {
+        foreach (var spelling in new[] { new[] { "--verify-only" }, ["--verify", "--no-op"] })
+        {
+            var options = ParseDir(spelling)!;
+            Assert.True(options.VerifyOnly);
+            Assert.True(options.Verify);
+            Assert.True(options.NoOp);
+        }
+        Assert.False(ParseDir("--verify")!.VerifyOnly);
+        Assert.False(ParseDir("--no-op", "--filter", "m4b")!.VerifyOnly);
+    }
+
+    /// <summary>
+    /// What the mode refuses: everything that would change a file or decide what happens to one
+    /// afterwards. The detection settings are not among them - see the next test.
+    /// </summary>
+    [Theory]
+    [InlineData("--fix")]
+    [InlineData("--force")]
+    [InlineData("--backup")]
+    [InlineData("--dry-run")]
+    [InlineData("--no-rename")]
+    [InlineData("--ignore-progress")]
+    [InlineData("--export")]
+    [InlineData("--import")]
+    public void VerifyOnly_RefusesEverythingThatWouldChangeAFile(string option)
+        => Assert.Throws<CliError>(() => ParseDir("--verify-only", option));
+
+    /// <summary>
+    /// The settings that say what is listened for are accepted, because this mode really does
+    /// listen. --custom above all: a named mark whose mapping the command line left off is exactly
+    /// what the run reports as unverifiable, so there has to be a way to include it.
+    /// </summary>
+    [Theory]
+    [InlineData("--lang", "de")]
+    [InlineData("--chapter-phrase", "/kapitel ()/")]
+    [InlineData("--custom", "Zwischenspiel:Interlude")]
+    [InlineData("--prologue-title", "Vorwort")]
+    [InlineData("--model", "medium")]
+    public void VerifyOnly_AcceptsTheSettingsThatSayWhatToListenFor(params string[] option)
+        => Assert.True(ParseDir(["--verify-only", .. option])!.VerifyOnly);
+
+    /// <summary>The threshold decides when a file is left alone rather than redetected, and this
+    /// mode redetects nothing.</summary>
+    [Fact]
+    public void VerifyOnly_RefusesTheVerifyThreshold()
+        => Assert.Throws<CliError>(() => ParseDir("--verify-only", "--verify-threshold", "3"));
 
     [Fact]
     public void NoOp_WithRecurseAndOutputOptions_IsAllowed()

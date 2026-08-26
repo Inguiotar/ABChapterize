@@ -104,7 +104,9 @@ public sealed class FileProcessor
             RunRevert(ct);
             return;
         }
-        if (_options.NoOp && !_options.Abs)
+        // --verify-only is --no-op too, and is the one spelling of it that reads the files rather
+        // than listing them - so it goes to the ordinary pipeline below, not to the listing.
+        if (_options.NoOp && !_options.Abs && !_options.VerifyOnly)
         {
             RunNoOp();
             return;
@@ -446,7 +448,10 @@ public sealed class FileProcessor
         var resumed = 0;
         foreach (var group in groups)
         {
-            if (!group.Target.IsDirectory || _options.DryRun)
+            // --verify-only joins --dry-run here for the same reason: it writes nothing, so there
+            // is nothing worth not doing twice - and recording its files as done would make the
+            // real run that follows skip every one of them.
+            if (!group.Target.IsDirectory || _options.DryRun || _options.VerifyOnly)
             {
                 pending.AddRange(group.Files.Select(f => new PendingFile(f, null, group.Target.Path)));
                 continue;
@@ -1060,6 +1065,13 @@ public sealed class FileProcessor
         // First, and unconditional: --abs-push-only forms no opinion about a book beyond what marks it
         // has, so none of the policy below - the resume tag, the pre-existing marks, --verify - has
         // anything to decide. A book with no marks at all is caught where they are read.
+        // Before everything: --verify-only forms no opinion about a file beyond what its marks
+        // turn out to be, so neither the resume tag nor the pre-existing-mark policy has anything
+        // to decide - and a file with no marks at all reaches VerifyThenDetectAsync too, which is
+        // where "nothing to verify" is reported.
+        if (_options.VerifyOnly)
+            return FilePlan.Verify;
+
         if (_options.AbsPushOnly)
             return FilePlan.Push;
 
@@ -1633,7 +1645,21 @@ public sealed class FileProcessor
     private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> VerifyThenDetectAsync(
         FileContext ctx, ChapterDetector detector, Stopwatch watch, CancellationToken ct)
     {
+        // --verify-only stops before the decision tree rather than inside it: what a file's marks
+        // turned out to be is the whole of what that mode produces, and every branch below is about
+        // acting on them.
+        if (_options.VerifyOnly && ctx.Info.ChapterCount == 0)
+        {
+            ReportSkipped(ctx.Work, ctx.Name, "no chapter marks to verify", hint: "");
+            return null;
+        }
+
         var verify = await detector.VerifyExistingChaptersAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, ct);
+        if (_options.VerifyOnly)
+        {
+            ReportVerifyOnly(ctx, verify, watch);
+            return null;
+        }
         if (verify.Checked == 0 || verify.Passed)
         {
             // --fix may have found marks worth moving even where every one of them checked out;
@@ -1677,6 +1703,59 @@ public sealed class FileProcessor
                           $"mark(s) trusted, {verify.Failed} unconfirmed one(s) gap-recovered";
         return (await detector.DetectGapsAsync(ctx.File, ctx.Info, ctx.Work, ctx.Logs, verify, ct),
                 default, trustedNote);
+    }
+
+    /// <summary>
+    /// Reports one file under <c>--verify-only</c>: what its marks turned out to be, and nothing
+    /// else. Counted as processed, because reading the whole file to answer that is the work this
+    /// mode does.
+    /// </summary>
+    /// <remarks>
+    /// The three groups are kept apart on the line for the reason they are kept apart everywhere
+    /// else: a numbered mark that failed is a mark this run believes is wrong, a named one is the
+    /// same belief with nothing that could act on it, and an unverifiable one is a question this
+    /// run could not ask at all. Collapsing them into one count would tell a reader a book needs
+    /// attention when all that happened is that they left a <c>--custom</c> mapping off the command
+    /// line.
+    /// </remarks>
+    /// <param name="ctx">The file's context.</param>
+    /// <param name="verify">What the verification found.</param>
+    /// <param name="watch">Running stopwatch of this file, for the processing-time average.</param>
+    private void ReportVerifyOnly(FileContext ctx, VerifyResult verify, Stopwatch watch)
+    {
+        RecordProcessed(watch);
+        var failedNumbers = verify.Outcomes
+            .Where(m => m is { ExpectedNumber: not null, Confirmed: false })
+            .Select(m => m.ExpectedNumber!.Value).ToList();
+        var named = verify.NamedOutcomes ?? [];
+        var failedNamed = named.Where(m => m.Kind != null && !m.Confirmed).Select(m => m.Title).ToList();
+        var unverifiable = named.Where(m => m.Kind == null).Select(m => m.Title).ToList();
+        var namedConfirmed = named.Count(m => m.Confirmed);
+
+        _outcomes.RecordVerifyFailures(ctx.Name, failedNumbers, failedNamed);
+        _outcomes.RecordUnverifiable(ctx.Name, unverifiable);
+
+        var parts = new List<string>
+        {
+            $"{verify.Checked - verify.Failed} of {verify.Checked} chapter mark(s) confirmed",
+        };
+        if (verify.Failed > 0)
+            parts.Add($"{verify.Failed} not confirmed " +
+                      $"(chapter {MissingMarksTag.FormatList(failedNumbers)})");
+        if (namedConfirmed > 0)
+            parts.Add($"{namedConfirmed} named mark(s) confirmed");
+        if (failedNamed.Count > 0)
+            parts.Add($"{failedNamed.Count} named mark(s) not confirmed");
+        if (unverifiable.Count > 0)
+            parts.Add($"{unverifiable.Count} mark(s) not checkable by this run");
+
+        var bad = verify.Failed > 0 || failedNamed.Count > 0;
+        if (bad)
+            _warnings++;
+        _progress.FinishWithSummary(
+            ctx.Work, $"{ctx.Name}: {string.Join(", ", parts)}"
+                      + FormatProcessingTime(ctx.Work.Elapsed, ctx.Info.DurationSeconds),
+            important: bad);
     }
 
     /// <summary>

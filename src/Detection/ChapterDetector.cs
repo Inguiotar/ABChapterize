@@ -2417,6 +2417,8 @@ public sealed class ChapterDetector
         // number) is still recorded, as null/false, so it cannot split a run of unconfirmed
         // marks around it into two.
         var outcomes = new List<ExistingMarkOutcome>();
+        // Reported, never counted - see NamedMarkOutcome for why the two lists stay apart.
+        var namedOutcomes = new List<NamedMarkOutcome>();
 
         work.BeginPhase(PhaseNames.Verify, info.ExistingChapters.Count);
         foreach (var mark in info.ExistingChapters)
@@ -2435,11 +2437,22 @@ public sealed class ChapterDetector
             var part = PartOf(mark.Title, profile);
             if (!TryParseExpectedNumber(mark.Title, profile, out var expected))
             {
-                // Named on purpose: "none had a checkable number" is otherwise a dead end for
-                // anyone asking why --verify did nothing, since the answer lives entirely in what
-                // the titles say and nothing else ever prints them.
-                _log?.Invoke($"mark at {FormatTimestamp(mark.StartSeconds)} (\"{mark.Title}\") " +
-                             "- no readable chapter number, not checked");
+                // A mark with no number is still worth asking about, just not worth counting: it
+                // may be this file's prologue, epilogue or --custom mark, and whether the phrase
+                // behind it is really spoken there is exactly as answerable as a chapter's. What it
+                // is not is a gap boundary, which is why the ExistingMarkOutcome recorded beside it
+                // is unchanged - null number, unconfirmed - and BuildGapRegions goes on skipping it.
+                // The intro entry is passed over rather than reported unverifiable, exactly as
+                // CarryOverNamedMarks passes it over: it is this tool's own lead-in entry, covering
+                // whatever precedes the first announcement, so there is no phrase behind it and
+                // never was. Reported, it would add a line saying nothing to every summary of every
+                // book this tool has ever marked.
+                if (!string.Equals(mark.Title.Trim(), profile.IntroTitle, StringComparison.OrdinalIgnoreCase))
+                    namedOutcomes.Add(await CheckNamedMarkAsync(
+                        file, info, mark, windowStart, windowLen, profile, ct));
+                else
+                    _log?.Invoke($"mark at {FormatTimestamp(mark.StartSeconds)} " +
+                                 $"(\"{mark.Title}\") - the lead-in entry, nothing to check");
                 outcomes.Add(new ExistingMarkOutcome(mark.StartSeconds, null, false));
                 work.Advance(1);
                 continue;
@@ -2479,7 +2492,8 @@ public sealed class ChapterDetector
 
         return new VerifyResult(failed == 0, checkedCount, failed, confirmedChapters, outcomes,
             profile, language.DetectedLanguage, language.DetectedProbability,
-            CarryOverNamedMarks(info, profile));
+            CarryOverNamedMarks(info, profile),
+            namedOutcomes.Count > 0 ? namedOutcomes : null);
     }
 
     /// <summary>
@@ -2666,18 +2680,10 @@ public sealed class ChapterDetector
     /// <see cref="DetectionTuning.VerifyRereadAttempts"/>.
     /// </para>
     /// <para>
-    /// Every window is clamped inside the caller's, which is what lets the match come back in the
-    /// caller's coordinates and keeps <see cref="ComputeMarkFixAsync"/>'s refinement bounded by the
-    /// window that was actually verified. A framing that clamps onto one already read is skipped
-    /// rather than decoded again: near the start of a file the whole ladder can collapse onto a
-    /// single window.
-    /// </para>
-    /// <para>
-    /// The heavier recognizer is used only where it is actually heavier. <c>--upgrade-model</c>
-    /// naming something lighter than <c>--model</c> is a deliberate downgrade (see
-    /// <see cref="CliOptions.UpgradeModelIsWorse"/>), and asking that one for a second opinion would
-    /// be asking the wrong recognizer - but the reframing on its own is worth the pass, so the
-    /// ladder still runs on the probing model.
+    /// The framings come from <see cref="RereadFramings"/>, which clamps every one of them inside
+    /// the caller's window - which is what lets the match come back in the caller's coordinates and
+    /// keeps <see cref="ComputeMarkFixAsync"/>'s refinement bounded by the window that was actually
+    /// verified.
     /// </para>
     /// </remarks>
     /// <param name="file">Path of the audio file.</param>
@@ -2696,31 +2702,9 @@ public sealed class ChapterDetector
         string file, MediaInfo info, Chapter mark, double windowStart, double windowLen,
         LanguageProfile profile, string language, int expected, CancellationToken ct)
     {
-        var heavier = _options.UpgradeModelIsBetter
-                      && !ReferenceEquals(_upgradeTranscriber, _transcriber);
-        var windowEnd = windowStart + windowLen;
-        var tried = new HashSet<(double Start, double Length)>();
-
-        for (var attempt = 0; attempt < VerifyRereadAttempts; attempt++)
+        foreach (var (start, length) in RereadFramings(mark.StartSeconds, windowStart, windowLen))
         {
-            ct.ThrowIfCancellationRequested();
-
-            var lead = VerifyRereadLeadSeconds + attempt * VerifyRereadLeadStepSeconds;
-            var start = Math.Max(windowStart, mark.StartSeconds - lead);
-            var length = Math.Min(VerifyRereadWindowSeconds, windowEnd - start);
-            if (length <= 0)
-                continue;
-            // Rounded to the millisecond: two framings that differ by less than that are the same
-            // decode, and the only thing a second one would buy is the time it takes.
-            if (!tried.Add((Math.Round(start, 3), Math.Round(length, 3))))
-                continue;
-
-            var samples = await _audio.DecodePcmAsync(file, start, length, info.InputDecoder, ct);
-            var segments = heavier
-                ? await SecondOpinionAsync(samples, language, ct)
-                : await TranscribeCountingAsync(samples, ct);
-            LogTranscript($"verify re-read {length:0.0}s@{FormatTimestamp(start)}", segments);
-
+            var segments = await RereadAsync(file, info, start, length, language, ct);
             foreach (var m in FindCappedPhraseMatches(segments, profile))
             {
                 if (m.Number != expected)
@@ -2734,8 +2718,151 @@ public sealed class ChapterDetector
                     PhraseEndSeconds = offset + m.PhraseEndSeconds,
                 };
             }
+            ct.ThrowIfCancellationRequested();
         }
         return null;
+    }
+
+    /// <summary>
+    /// Checks one existing mark that carries no chapter number - a prologue, an epilogue or a
+    /// <c>--custom</c> mapping's mark - by asking whether the phrase its title belongs to is
+    /// actually spoken there.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Which phrase that is comes from the mark's <em>title</em>, matched exactly as
+    /// <see cref="CarryOverNamedMarks"/> matches it: the written text is all a chapter entry
+    /// preserves, and this run's own titles are what a previous run of the same command wrote
+    /// there. So a mark this run has no phrase for - an intro entry, another tool's mark, a
+    /// <c>--custom</c> mapping left off the command line - is reported as unverifiable rather than
+    /// as wrong. It is not a mark that failed; it is a question this run was not equipped to ask.
+    /// </para>
+    /// <para>
+    /// Confirmation is the same shape as a numbered mark's, down to the reframing ladder, and for
+    /// the same reason: a named mark reported wrong sends somebody to listen to a book by hand, so
+    /// a framing artifact must not be allowed to look like a bad mark. What it does not share is
+    /// any consequence - see <see cref="NamedMarkOutcome"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="mark">The numberless mark to check.</param>
+    /// <param name="windowStart">Start of this mark's verify window.</param>
+    /// <param name="windowLen">Length of this mark's verify window.</param>
+    /// <param name="profile">The file's resolved language profile.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<NamedMarkOutcome> CheckNamedMarkAsync(
+        string file, MediaInfo info, Chapter mark, double windowStart, double windowLen,
+        LanguageProfile profile, CancellationToken ct)
+    {
+        var title = mark.Title.Trim();
+        if (profile.NamedPhrases.FirstOrDefault(p => p.TitleMatcher.IsMatch(title)) is not { } phrase)
+        {
+            _log?.Invoke($"mark at {FormatTimestamp(mark.StartSeconds)} (\"{mark.Title}\") " +
+                         "- no chapter number and no phrase this run knows, not checked");
+            return new NamedMarkOutcome(mark.StartSeconds, mark.Title, null, false);
+        }
+
+        var samples = await _audio.DecodePcmAsync(file, windowStart, windowLen, info.InputDecoder, ct);
+        var segments = await TranscribeCountingAsync(samples, ct);
+        LogTranscript($"verify {phrase.Kind} @{FormatTimestamp(mark.StartSeconds)}", segments);
+
+        var confirmed = HeardHere(segments, profile, phrase);
+        if (!confirmed)
+            foreach (var (start, length) in RereadFramings(mark.StartSeconds, windowStart, windowLen))
+            {
+                confirmed = HeardHere(
+                    await RereadAsync(file, info, start, length, profile.Language, ct),
+                    profile, phrase);
+                if (confirmed)
+                    break;
+                ct.ThrowIfCancellationRequested();
+            }
+
+        _log?.Invoke(confirmed
+            ? $"{phrase.Kind} mark at {FormatTimestamp(mark.StartSeconds)} confirmed"
+            : $"{phrase.Kind} mark at {FormatTimestamp(mark.StartSeconds)} NOT confirmed - " +
+              "phrase not found nearby");
+        return new NamedMarkOutcome(mark.StartSeconds, mark.Title, phrase.Kind, confirmed);
+    }
+
+    /// <summary>Whether one particular named phrase was heard in a window's transcript.</summary>
+    /// <remarks>
+    /// Compared by <see cref="NamedPhrase.Kind"/> rather than by the resolved title: a
+    /// <c>--custom</c> mapping's title may carry group references that expand differently per
+    /// match, so two marks of the same phrase can be written under two different titles and still
+    /// be the same announcement.
+    /// </remarks>
+    /// <param name="segments">The window's transcript.</param>
+    /// <param name="profile">The file's resolved language profile.</param>
+    /// <param name="phrase">The phrase the mark's title identified it as.</param>
+    private static bool HeardHere(
+        List<TranscriptSegment> segments, LanguageProfile profile, NamedPhrase phrase)
+        => FindNamedMatches(segments, profile).Any(m => m.Phrase.Kind == phrase.Kind);
+
+    /// <summary>
+    /// The windows a failed <c>--verify</c> mark is read again from: up to
+    /// <see cref="DetectionTuning.VerifyRereadAttempts"/> of them, each starting further before the
+    /// mark than the last and each clamped inside the caller's own window, so a match found in one
+    /// can be expressed in the caller's coordinates and <c>--fix</c>'s refinement stays bounded by
+    /// the window that was actually verified.
+    /// </summary>
+    /// <remarks>
+    /// The geometry lives here rather than in either caller because both the numbered and the
+    /// named check reframe the same way, and a second copy of "which windows, and in what order"
+    /// is a copy that would be retuned once and not twice. A framing that clamps onto one already
+    /// yielded is dropped: near the start of a file the whole ladder can collapse onto a single
+    /// window, and re-reading it buys nothing but the time it takes.
+    /// </remarks>
+    /// <param name="markSeconds">The mark every framing is anchored on.</param>
+    /// <param name="windowStart">Start of the caller's verify window.</param>
+    /// <param name="windowLen">Length of the caller's verify window.</param>
+    private static IEnumerable<(double Start, double Length)> RereadFramings(
+        double markSeconds, double windowStart, double windowLen)
+    {
+        var windowEnd = windowStart + windowLen;
+        var tried = new HashSet<(double Start, double Length)>();
+        for (var attempt = 0; attempt < VerifyRereadAttempts; attempt++)
+        {
+            var lead = VerifyRereadLeadSeconds + attempt * VerifyRereadLeadStepSeconds;
+            var start = Math.Max(windowStart, markSeconds - lead);
+            var length = Math.Min(VerifyRereadWindowSeconds, windowEnd - start);
+            if (length <= 0)
+                continue;
+            // Rounded to the millisecond: two framings that differ by less than that are the same
+            // decode.
+            if (tried.Add((Math.Round(start, 3), Math.Round(length, 3))))
+                yield return (start, length);
+        }
+    }
+
+    /// <summary>
+    /// Reads one reframed <c>--verify</c> window, on the heavier recognizer where there is one.
+    /// </summary>
+    /// <remarks>
+    /// The heavier one is used only where it is actually heavier. <c>--upgrade-model</c> naming
+    /// something lighter than <c>--model</c> is a deliberate downgrade (see
+    /// <see cref="CliOptions.UpgradeModelIsWorse"/>), and asking that one for a second opinion would
+    /// be asking the wrong recognizer - but the reframing on its own is worth the pass, so the
+    /// ladder still runs on the probing model.
+    /// </remarks>
+    /// <param name="file">Path of the audio file.</param>
+    /// <param name="info">Probe result of the file.</param>
+    /// <param name="start">Where the re-read starts.</param>
+    /// <param name="length">How long it is.</param>
+    /// <param name="language">The file's resolved language, for the heavier recognizer.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task<List<TranscriptSegment>> RereadAsync(
+        string file, MediaInfo info, double start, double length, string language,
+        CancellationToken ct)
+    {
+        var samples = await _audio.DecodePcmAsync(file, start, length, info.InputDecoder, ct);
+        var segments = _options.UpgradeModelIsBetter
+                       && !ReferenceEquals(_upgradeTranscriber, _transcriber)
+            ? await SecondOpinionAsync(samples, language, ct)
+            : await TranscribeCountingAsync(samples, ct);
+        LogTranscript($"verify re-read {length:0.0}s@{FormatTimestamp(start)}", segments);
+        return segments;
     }
 
     /// <summary>

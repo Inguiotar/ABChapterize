@@ -114,6 +114,22 @@ earn a round number.
   chapters to go back for; finishing such a file takes `--force`. A tag an earlier run left behind
   is still taken off once the file is complete.
 
+- **`--verify-only` checks a library without changing it.** Every selected file's marks are read
+  against the audio, what became of each is reported, and no file is touched — useful before
+  committing to a run that changes things, or after one as a second opinion. It is the same as
+  writing `--verify --no-op`, which used to be refused. With `--summary` the run closes with the
+  two listings that answer the question it was asked: every file that could not confirm all of its
+  marks, naming the ones that failed, and every file carrying marks nothing in the run could check
+  at all.
+
+- **`--verify` now checks prologue, epilogue and `--custom` marks too.** Where a mark carries no
+  chapter number, the question asked of it is whether the phrase its title belongs to is really
+  spoken there. The answer is reported and nothing more: a mark without a chapter number opens no
+  gap in the numbering, so there is nothing detection could be sent back to fix, and which files a
+  run redetects or leaves alone is decided by the numbered marks exactly as before. A mark this run
+  has no phrase for — another tool's, or one whose `--custom` mapping you left off the command
+  line — is reported as unverifiable rather than as wrong.
+
 - **`--summary` now reports a run that was interrupted or failed.** Ctrl+C part way through a
   shelf of two hundred audiobooks used to end the run with nothing at all to show for it —
   which is precisely the run whose report is worth having, since the listing of files still

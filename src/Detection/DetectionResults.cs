@@ -209,6 +209,32 @@ public readonly record struct ExistingMarkOutcome(
     double StartSeconds, int? ExpectedNumber, bool Confirmed, double? CorrectedStartSeconds = null,
     int Sequence = 0);
 
+/// <summary>
+/// Outcome of checking one existing mark that carries no chapter number - a prologue, an epilogue,
+/// a <c>--custom</c> mapping's mark, or anything else a previous run or another tool wrote.
+/// </summary>
+/// <remarks>
+/// Kept apart from <see cref="ExistingMarkOutcome"/> rather than folded into it, and that
+/// separation is the whole of the rule: a named mark's outcome is <em>reported and never counted</em>.
+/// It feeds neither <see cref="VerifyResult.Checked"/> nor <see cref="VerifyResult.Failed"/>, so
+/// which files a run redetects or skips wholesale is exactly what it was before named marks were
+/// checked at all. That is not timidity - a named mark opens no gap in a chapter sequence, so gap
+/// recovery has nothing to aim at even when one is plainly wrong (see the notes on named marks
+/// having no safety net), and counting it could only push a file over the wholesale-failure ratio
+/// on evidence nothing could act on.
+/// </remarks>
+/// <param name="StartSeconds">The mark's own pre-existing timestamp.</param>
+/// <param name="Title">The mark's title, which is what a reader identifies it by.</param>
+/// <param name="Kind">The <see cref="NamedPhrase.Kind"/> whose title this mark was recognized as,
+/// or null when this run knows no phrase that writes it - an intro entry, a mark from another tool,
+/// or a <c>--custom</c> mapping the command line did not include. Null is what makes a mark
+/// <em>unverifiable</em> rather than unconfirmed, and the two are reported separately: one is a
+/// question this run could not ask, the other an answer it did not like.</param>
+/// <param name="Confirmed">True when the phrase this mark's title belongs to was heard near it.
+/// Always false where <paramref name="Kind"/> is null, nothing having been asked.</param>
+public readonly record struct NamedMarkOutcome(
+    double StartSeconds, string Title, string? Kind, bool Confirmed);
+
 /// <summary>Outcome of checking a file's existing chapter marks against the audio (--verify).</summary>
 /// <param name="Passed">True when every checkable mark was confirmed; also true when none of the
 /// file's marks had a parseable expected number (nothing to disprove).</param>
@@ -232,8 +258,12 @@ public readonly record struct ExistingMarkOutcome(
 /// not silently drop them - they have no chapter number, so nothing else would ever notice they
 /// were gone. Null (rather than empty) when nothing was recognized, so the common case allocates
 /// nothing.</param>
+/// <param name="NamedOutcomes">What became of each of those numberless marks when it was checked
+/// against the audio - reported, never counted; see <see cref="NamedMarkOutcome"/>. Null (rather
+/// than empty) when the file carried none, so the common case allocates nothing.</param>
 public readonly record struct VerifyResult(
     bool Passed, int Checked, int Failed,
     IReadOnlyList<DetectedChapter> ConfirmedChapters, IReadOnlyList<ExistingMarkOutcome> Outcomes,
     LanguageProfile Profile, string? DetectedLanguage, double DetectedProbability,
-    IReadOnlyList<DetectedMark>? NamedMarks = null);
+    IReadOnlyList<DetectedMark>? NamedMarks = null,
+    IReadOnlyList<NamedMarkOutcome>? NamedOutcomes = null);

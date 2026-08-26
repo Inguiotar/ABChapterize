@@ -972,6 +972,7 @@ abchapterize [options] <file-or-directory>...
 abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
 abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
 abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
+abchapterize --verify-only [options] <file-or-directory>...
 abchapterize --help | -?
 abchapterize --version
 abchapterize --list-gpus
@@ -2209,9 +2210,24 @@ looking. None of these is needed for an ordinary book.
   `--verify`) or redo it wholesale with `--force` if you want
   ABChapterize's own chapter-level marks instead.
 
-  Marks whose title carries no chapter number that can be read are not
-  checked at all. If that is true of every mark in a file, there is nothing
-  to verify, and the file is skipped with a note saying so — unchanged.
+  Marks whose title carries no chapter number — a prologue, an epilogue, a
+  [`--custom`](#custom-marks) mapping's mark — are checked too, but
+  differently: the question asked of them is whether the phrase their title
+  belongs to is really spoken there, and **the answer decides nothing.** It is
+  reported and no more. A numbered mark that fails is a hole in a chapter
+  sequence and detection can be sent back to fill it; a prologue mark that
+  fails is a mark this run believes is wrong with nothing it could do about it,
+  since there is no gap around a prologue to recover it from. So which files a
+  run redetects, and which it leaves alone wholesale, is decided by the numbered
+  marks alone.
+
+  Which phrase a mark belongs to is read from its *title*, so a mark this run
+  has no phrase for is **unverifiable** rather than wrong: another tool's mark,
+  or a `--custom` mapping you left off this command line. The intro entry
+  ABChapterize writes for a book's lead-in is passed over silently, having no
+  phrase behind it and never having had one. If a file's marks carry no readable
+  chapter number *at all*, there is nothing to verify in the sense that decides
+  anything, and the file is skipped with a note saying so — unchanged.
 
   What the check does: a short window around the mark's own timestamp is
   probed with Whisper for the chapter phrase and the expected chapter
@@ -2314,6 +2330,43 @@ looking. None of these is needed for an ordinary book.
   cannot be given per folder - the step that reads it works from the run's own
   options. No short form.
 
+#### Checking marks without changing anything
+
+`--verify-only`
+: Everything [`--verify`](#handling-of-pre-existing-chapters) checks, and nothing
+  it decides: every selected file's marks are read against the audio, what became
+  of each is reported, and no file is touched. Exactly the same as writing
+  `--verify --no-op`, which is what it is short for.
+
+  ```
+  abchapterize --verify-only --recurse --summary "D:\Audiobooks"
+  ```
+
+  Use it to find out where a library actually stands before committing to a run
+  that changes it — or after one, as a second opinion on what it produced. A file
+  with no marks at all is passed over with a note; nothing is detected, and a
+  file that fails is not redetected, which is the difference from a plain
+  `--verify` run.
+
+  With [`--summary`](#12-output-progress-and-logging) the run ends with two
+  listings: every file that could not confirm all of its marks, naming the ones
+  that failed, and every file carrying marks nothing in the run could check —
+  a `--custom` mapping left off the command line, or another tool's marks.
+
+  ```
+  Failed verification in 1 file(s):
+    Die Dritte Macht.m4b: 3 mark(s) not confirmed (chapter 7, 9; "Prolog")
+  Could not be verified in 1 file(s):
+    Stalker.m4b: 1 mark(s) ("Zeittafel")
+  ```
+
+  Everything that says *what* to listen for still applies — `--lang`, the phrase
+  and title options, `--custom`, `--model` and `--upgrade-model`. Everything that
+  would change a file is refused: `--fix`, `--force`, `--backup`, `--import`,
+  `--export`, `--dry-run`, `--no-rename`, `--ignore-progress` and the two hooks,
+  along with `--verify-threshold` (which decides when a file is left alone rather
+  than redetected, and nothing here is redetected) and every Audiobookshelf mode.
+
 `-R`, `--revert`
 : Restore backups instead of processing: for every supported audio file with
   an added `.bak` suffix under the target, the current file is deleted and
@@ -2347,6 +2400,10 @@ looking. None of these is needed for an ordinary book.
   `--filter`; combinable only with `--recurse` and the output options
   (`--quiet` suppresses the listing itself, leaving just `--summary`'s
   count), the same restriction `--revert` has.
+
+  The one exception is [`--verify`](#handling-of-pre-existing-chapters). The two
+  together are [`--verify-only`](#checking-marks-without-changing-anything),
+  which reads the files rather than listing them, and needs no `--filter`.
 
 ### Running your own commands around each file
 
@@ -2616,7 +2673,10 @@ The details worth knowing:
   length (over 100 % is normal — re-probed stretches are counted each time),
   and Whisper's transcription speed as a percentage of real time.
 
-  The block closes with four listings, each left out when it would be empty:
+  The block closes with a set of listings, each left out when it would be empty
+  (two of them belong to
+  [`--verify-only`](#checking-marks-without-changing-anything) and are described
+  there):
   every file that was **skipped** and why, every file **no chapters were found
   in** and which of the reasons applied, every file left **still missing
   chapter marks**, with how many are missing and — up to ten of them — which

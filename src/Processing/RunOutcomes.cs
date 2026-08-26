@@ -43,10 +43,22 @@ internal sealed class RunOutcomes
     private readonly List<(string Name, IReadOnlyList<DetectedChapter> Chapters, int SequenceCount,
         bool BareNumbers)> _lowConfidence = [];
 
+    /// <summary>Files <c>--verify-only</c> could not confirm every mark of, each with the marks
+    /// that did not check out.</summary>
+    private readonly List<(string Name, string Marks)> _verifyFailed = [];
+
+    /// <summary>Files carrying marks <c>--verify-only</c> had no way to check at all, each with
+    /// those marks' titles.</summary>
+    private readonly List<(string Name, string Marks)> _unverifiable = [];
+
     /// <summary>How many files the run skipped. Taken from the listing itself rather than from a
     /// counter of its own, so the number <c>--summary</c>'s first line quotes and the entries
     /// printed under it cannot drift apart.</summary>
     internal int SkippedCount => _skipped.Count;
+
+    /// <summary>How many files failed to confirm at least one mark, counted from the listing for
+    /// the same reason <see cref="SkippedCount"/> is.</summary>
+    internal int VerifyFailedCount => _verifyFailed.Count;
 
     /// <summary>How many processed files came out with no chapters, counted from the listing for
     /// the same reason <see cref="SkippedCount"/> is.</summary>
@@ -75,6 +87,58 @@ internal sealed class RunOutcomes
     /// <param name="missingNumbers">The chapter numbers still missing.</param>
     internal void RecordMissingMarks(string name, IReadOnlyList<int> missingNumbers)
         => _missingMarks.Add((name, missingNumbers));
+
+    /// <summary>
+    /// Records one file <c>--verify-only</c> could not confirm every mark of.
+    /// </summary>
+    /// <remarks>
+    /// Only that mode fills this listing, and deliberately so: in an ordinary <c>--verify</c> run
+    /// an unconfirmed mark is not a result but a starting point - the file is redetected around it
+    /// - so listing it at the end as a failure would name work that has since been done. Where
+    /// nothing is redetected, the same fact is the whole answer.
+    /// </remarks>
+    /// <param name="name">The file's bare name.</param>
+    /// <param name="chapterNumbers">The numbered marks that did not check out.</param>
+    /// <param name="namedTitles">The titles of the named marks that did not check out.</param>
+    internal void RecordVerifyFailures(
+        string name, IReadOnlyList<int> chapterNumbers, IReadOnlyList<string> namedTitles)
+    {
+        var parts = new List<string>();
+        if (chapterNumbers.Count > 0)
+            parts.Add($"chapter {MissingMarksTag.FormatList(chapterNumbers)}");
+        if (namedTitles.Count > 0)
+            parts.Add(NameTitles(namedTitles));
+        if (parts.Count > 0)
+            _verifyFailed.Add((name, $"{chapterNumbers.Count + namedTitles.Count} mark(s) not " +
+                                     $"confirmed ({string.Join("; ", parts)})"));
+    }
+
+    /// <summary>
+    /// Records one file carrying marks nothing in this run could check - an intro entry, another
+    /// tool's mark, or a named mark whose <c>--custom</c> mapping the command line did not include.
+    /// </summary>
+    /// <param name="name">The file's bare name.</param>
+    /// <param name="titles">Those marks' titles.</param>
+    internal void RecordUnverifiable(string name, IReadOnlyList<string> titles)
+    {
+        if (titles.Count > 0)
+            _unverifiable.Add((name, $"{titles.Count} mark(s) ({NameTitles(titles)})"));
+    }
+
+    /// <summary>
+    /// Quotes a set of mark titles for a listing, under the same cut-off the chapter numbers get -
+    /// a book whose forty entries this run has no phrase for takes one line rather than forty
+    /// titles.
+    /// </summary>
+    /// <param name="titles">The titles to name, in file order.</param>
+    private static string NameTitles(IReadOnlyList<string> titles)
+    {
+        var shown = titles.Count <= MissingMarksTag.MaxNamedNumbers
+            ? titles
+            : [.. titles.Take(MissingMarksTag.MaxNamedNumbers)];
+        var more = titles.Count - shown.Count;
+        return string.Join(", ", shown.Select(t => $"\"{t}\"")) + (more > 0 ? $" and {more} more" : "");
+    }
 
     /// <summary>Records one file whose written marks include at least one low-confidence chapter
     /// number.</summary>
@@ -107,6 +171,10 @@ internal sealed class RunOutcomes
             $"(below p={LowConfidenceThreshold:0.00}, worth a manual check):",
             [.. _lowConfidence.Select(f => (f.Name, DescribeLowConfidence(f.Chapters, f.SequenceCount)))],
             BareNumberFootnote());
+        // Last, and only ever filled by --verify-only: they answer that mode's whole question, and
+        // a reader who ran it is looking for them rather than for the four blocks above.
+        AppendBlock(lines, $"Failed verification in {_verifyFailed.Count} file(s):", _verifyFailed);
+        AppendBlock(lines, $"Could not be verified in {_unverifiable.Count} file(s):", _unverifiable);
         return lines;
     }
 

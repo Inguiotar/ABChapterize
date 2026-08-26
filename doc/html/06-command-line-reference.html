@@ -62,6 +62,7 @@
 abchapterize -R|--revert [--recurse] [--filter &lt;f&gt;] &lt;file-or-directory&gt;...
 abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter &lt;f&gt;] &lt;file-or-directory&gt;...
 abchapterize -O|--no-op --filter &lt;f&gt; [--recurse] &lt;file-or-directory&gt;...
+abchapterize --verify-only [options] &lt;file-or-directory&gt;...
 abchapterize --help | -?
 abchapterize --version
 abchapterize --list-gpus
@@ -1206,9 +1207,23 @@ marked book is not silently rewritten; but its marks are also not
 improved. On such a file, either leave it alone (the default, no
 <code>--verify</code>) or redo it wholesale with <code>--force</code> if you want
 ABChapterize's own chapter-level marks instead.</p>
-<p>Marks whose title carries no chapter number that can be read are not
-checked at all. If that is true of every mark in a file, there is nothing
-to verify, and the file is skipped with a note saying so — unchanged.</p>
+<p>Marks whose title carries no chapter number — a prologue, an epilogue, a
+<a href="03-how-detection-works.html#custom-marks"><code>--custom</code></a> mapping's mark — are checked too, but
+differently: the question asked of them is whether the phrase their title
+belongs to is really spoken there, and <strong>the answer decides nothing.</strong> It is
+reported and no more. A numbered mark that fails is a hole in a chapter
+sequence and detection can be sent back to fill it; a prologue mark that
+fails is a mark this run believes is wrong with nothing it could do about it,
+since there is no gap around a prologue to recover it from. So which files a
+run redetects, and which it leaves alone wholesale, is decided by the numbered
+marks alone.</p>
+<p>Which phrase a mark belongs to is read from its <em>title</em>, so a mark this run
+has no phrase for is <strong>unverifiable</strong> rather than wrong: another tool's mark,
+or a <code>--custom</code> mapping you left off this command line. The intro entry
+ABChapterize writes for a book's lead-in is passed over silently, having no
+phrase behind it and never having had one. If a file's marks carry no readable
+chapter number <em>at all</em>, there is nothing to verify in the sense that decides
+anything, and the file is skipped with a note saying so — unchanged.</p>
 <p>What the check does: a short window around the mark's own timestamp is
 probed with Whisper for the chapter phrase and the expected chapter
 number, reusing the same transcription machinery as normal detection
@@ -1302,6 +1317,34 @@ behind still comes off when the file is completed. Rejected together with
 <code>--cleanup</code>, <code>--revert</code> and <code>--no-op</code>, none of which detect anything, and it
 cannot be given per folder - the step that reads it works from the run's own
 options. No short form.</p>
+<h3 id="checking-marks-without-changing-anything">Checking marks without changing anything<a class="anchor" href="#checking-marks-without-changing-anything" aria-label="Permalink to this heading">#</a></h3>
+<p><code>--verify-only</code>
+: Everything <a href="#handling-of-pre-existing-chapters"><code>--verify</code></a> checks, and nothing
+it decides: every selected file's marks are read against the audio, what became
+of each is reported, and no file is touched. Exactly the same as writing
+<code>--verify --no-op</code>, which is what it is short for.</p>
+<pre><code>abchapterize --verify-only --recurse --summary &quot;D:\Audiobooks&quot;
+</code></pre>
+<p>Use it to find out where a library actually stands before committing to a run
+that changes it — or after one, as a second opinion on what it produced. A file
+with no marks at all is passed over with a note; nothing is detected, and a
+file that fails is not redetected, which is the difference from a plain
+<code>--verify</code> run.</p>
+<p>With <a href="12-output-progress-and-logging.html#12-output-progress-and-logging"><code>--summary</code></a> the run ends with two
+listings: every file that could not confirm all of its marks, naming the ones
+that failed, and every file carrying marks nothing in the run could check —
+a <code>--custom</code> mapping left off the command line, or another tool's marks.</p>
+<pre><code>Failed verification in 1 file(s):
+  Die Dritte Macht.m4b: 3 mark(s) not confirmed (chapter 7, 9; &quot;Prolog&quot;)
+Could not be verified in 1 file(s):
+  Stalker.m4b: 1 mark(s) (&quot;Zeittafel&quot;)
+</code></pre>
+<p>Everything that says <em>what</em> to listen for still applies — <code>--lang</code>, the phrase
+and title options, <code>--custom</code>, <code>--model</code> and <code>--upgrade-model</code>. Everything that
+would change a file is refused: <code>--fix</code>, <code>--force</code>, <code>--backup</code>, <code>--import</code>,
+<code>--export</code>, <code>--dry-run</code>, <code>--no-rename</code>, <code>--ignore-progress</code> and the two hooks,
+along with <code>--verify-threshold</code> (which decides when a file is left alone rather
+than redetected, and nothing here is redetected) and every Audiobookshelf mode.</p>
 <p><code>-R</code>, <code>--revert</code>
 : Restore backups instead of processing: for every supported audio file with
 an added <code>.bak</code> suffix under the target, the current file is deleted and
@@ -1332,6 +1375,9 @@ matches the intended files before committing to a real run. Requires
 <code>--filter</code>; combinable only with <code>--recurse</code> and the output options
 (<code>--quiet</code> suppresses the listing itself, leaving just <code>--summary</code>'s
 count), the same restriction <code>--revert</code> has.</p>
+<p>The one exception is <a href="#handling-of-pre-existing-chapters"><code>--verify</code></a>. The two
+together are <a href="#checking-marks-without-changing-anything"><code>--verify-only</code></a>,
+which reads the files rather than listing them, and needs no <code>--filter</code>.</p>
 <h2 id="running-your-own-commands-around-each-file">Running your own commands around each file<a class="anchor" href="#running-your-own-commands-around-each-file" aria-label="Permalink to this heading">#</a></h2>
 <p><code>--run-before &lt;command&gt;</code>
 : Run a shell command for each file, just before ABChapterize starts work on it.</p>
@@ -1596,7 +1642,10 @@ both counting chapter 1 and, as an &quot;inter-chapter&quot; figure, ignoring it
 audio fed to Whisper as an absolute time and a share of the total run
 length (over 100 % is normal — re-probed stretches are counted each time),
 and Whisper's transcription speed as a percentage of real time.</p>
-<p>The block closes with four listings, each left out when it would be empty:
+<p>The block closes with a set of listings, each left out when it would be empty
+(two of them belong to
+<a href="#checking-marks-without-changing-anything"><code>--verify-only</code></a> and are described
+there):
 every file that was <strong>skipped</strong> and why, every file <strong>no chapters were found
 in</strong> and which of the reasons applied, every file left <strong>still missing
 chapter marks</strong>, with how many are missing and — up to ten of them — which

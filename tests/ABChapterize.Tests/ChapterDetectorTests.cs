@@ -7579,6 +7579,75 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     /// <summary>
+    /// A named mark is now checked too, where the run knows the phrase its title belongs to - and
+    /// the answer is reported without ever touching the counts an ordinary <c>--verify</c> run
+    /// decides on.
+    /// </summary>
+    [Fact]
+    public async Task Verify_ChecksNamedMarks_WithoutCountingThem()
+    {
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Prologue"), new Chapter(610, "Chapter 1"), new Chapter(1210, "Epilogue")],
+            s =>
+            {
+                s.Add(0, Seg(10, " Prologue."));
+                s.Add(600, Seg(10, " Chapter 1."));
+                // Nothing at 1200: the epilogue mark is where no epilogue is announced.
+            });
+
+        // One numbered mark checked and confirmed - the two named ones are not in these figures.
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(0, result.Failed);
+        Assert.True(result.Passed);
+        Assert.Equal(
+            [("prologue", true), ("epilogue", false)],
+            result.NamedOutcomes!.Select(m => (m.Kind, m.Confirmed)));
+    }
+
+    /// <summary>
+    /// A mark whose title this run has no phrase for is unverifiable rather than wrong: an intro
+    /// entry, another tool's mark, or a --custom mapping left off the command line. Reported as a
+    /// question that could not be asked, so a missing mapping never reads as a bad book.
+    /// </summary>
+    [Fact]
+    public async Task Verify_ReportsAMarkItHasNoPhraseFor_AsUnverifiable()
+    {
+        var result = await VerifyAsync(
+            Options(),
+            [new Chapter(10, "Zwischenspiel"), new Chapter(610, "Chapter 1")],
+            s => s.Add(600, Seg(10, " Chapter 1.")));
+
+        Assert.Equal(1, result.Checked);
+        Assert.Equal(0, result.Failed);
+        var named = Assert.Single(result.NamedOutcomes!);
+        Assert.Null(named.Kind);
+        Assert.False(named.Confirmed);
+        Assert.Equal("Zwischenspiel", named.Title);
+    }
+
+    /// <summary>
+    /// The same file with a --custom mapping for that title: the run now has a phrase to ask about,
+    /// so the mark stops being unverifiable and becomes an ordinary confirmation.
+    /// </summary>
+    [Fact]
+    public async Task Verify_ChecksAMarkOnceItsCustomMappingIsGiven()
+    {
+        var result = await VerifyAsync(
+            Options("--custom", "Zwischenspiel:Zwischenspiel"),
+            [new Chapter(10, "Zwischenspiel"), new Chapter(610, "Chapter 1")],
+            s =>
+            {
+                s.Add(0, Seg(10, " Zwischenspiel."));
+                s.Add(600, Seg(10, " Chapter 1."));
+            });
+
+        var named = Assert.Single(result.NamedOutcomes!);
+        Assert.Equal("custom 1", named.Kind);
+        Assert.True(named.Confirmed);
+    }
+
+    /// <summary>
     /// The ladder's other half: the re-reads go to the <c>--upgrade-model</c> recognizer, so an
     /// announcement only that one can make out still confirms its mark. Both levers are changed at
     /// once precisely because either alone leaves recall on the table.

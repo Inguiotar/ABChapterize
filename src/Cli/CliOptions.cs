@@ -916,6 +916,19 @@ public sealed class CliOptions
     /// </summary>
     public bool UsesAbsPull => AbsPull || AbsPullOnly;
 
+    /// <summary>
+    /// <c>--verify-only</c> (equivalently <c>--verify --no-op</c>): check every selected file's
+    /// existing marks against the audio, report what came of each, and change nothing.
+    /// </summary>
+    /// <remarks>
+    /// Derived rather than a flag of its own, so the two spellings cannot come to mean different
+    /// things - the shorter one simply sets both. It is the one combination <c>--no-op</c> takes
+    /// beyond file selection: everywhere else that option lists what a run would touch and exits,
+    /// and here it does the same for what a run would <em>find</em>, at the price of reading the
+    /// audio to find it.
+    /// </remarks>
+    public bool VerifyOnly => NoOp && Verify;
+
     /// <summary>Whether this run talks to an Audiobookshelf server at all.</summary>
     public bool UsesAbs => Abs || AbsPushOnly || AbsPush || UsesAbsPull;
 
@@ -1311,15 +1324,29 @@ public sealed class CliOptions
         if (o.AssumeYes && !o.Cleanup)
             throw new CliError("--yes answers --cleanup's confirmation prompt and has no meaning without it.");
 
-        if (o.NoOp && !o.Abs && o.FilterRegex == null && o.FilterExtensions == null)
+        // --verify is exempt for the same reason --abs is: there the listing is what the
+        // selectors picked, here it is what the marks turned out to be. Neither is the
+        // "did my filter match what I meant" question this requirement exists for.
+        if (o.NoOp && !o.Abs && !o.Verify && o.FilterRegex == null && o.FilterExtensions == null)
             throw new CliError("--no-op requires --filter - its purpose is checking that a filter actually matches the intended files.");
 
-        if (o.NoOp && (o.Revert || o.Cleanup || o.AnyProcessingOptionGiven))
+        // --verify is the one processing option --no-op accepts, the two together being
+        // --verify-only; what that mode refuses instead is listed with the mode itself
+        // below. --revert and --cleanup stay refused through their own checks above, both
+        // of which count --verify as a processing option like any other.
+        if (o.NoOp && !o.Verify && (o.Revert || o.Cleanup || o.AnyProcessingOptionGiven))
             throw new CliError("--no-op can only be combined with --recurse, --filter and the output options.");
 
         // --abs is the exception above and stays one: there --no-op is the listing of what the
         // selectors picked. The four modes that work on local files are not - each exists to move
         // marks between a file and a server, and a mode that lists and exits would never move any.
+        // --abs and --no-op together are the book listing, which is a different answer to "what
+        // would this run do" than --verify-only's is; and every other server mode moves marks, which
+        // is the one thing this mode promises not to do.
+        if (o.VerifyOnly && o.UsesAbs)
+            throw new CliError(
+                "--verify-only reads local files and changes nothing, on this machine or on a "
+                + "server. Use --verify without --no-op for a run that acts on what it finds.");
         if (o.NoOp && (o.AbsPush || o.AbsPushOnly || o.UsesAbsPull))
             throw new CliError(
                 "--no-op lists what a run would work on and exits, so it has nothing to send or "
@@ -1407,6 +1434,29 @@ public sealed class CliOptions
 
         if (o.SimpleMetadata && !o.Export && !o.Import)
             throw new CliError("--simple-metadata requires --export or --import.");
+
+        // --verify-only reads every selected file and writes none of them, so what it refuses is
+        // everything that would change a file or decide what happens to one afterwards.
+        if (o.VerifyOnly && (o.Fix || o.Force || o.Backup || o.Import || o.Export || o.SimpleMetadata
+                             || o.DryRun || o.NoRename || o.IgnoreProgress
+                             || o.RunBefore != null || o.RunAfter != null))
+            throw new CliError(
+                "--verify-only checks the marks a file already has and changes nothing, so --fix, "
+                + "--force, --backup, --import, --export, --simple-metadata, --dry-run, "
+                + "--no-rename, --ignore-progress, --run-before and --run-after have nothing to act "
+                + "on and cannot be combined with it.");
+        // The detection settings are deliberately *not* refused, unlike in the other two modes that
+        // change no file: this one really does listen to the audio, and --lang, --chapter-phrase,
+        // --custom and the title options are what it listens for. The ones it does not read - the
+        // placement and sequence settings - are accepted with them rather than picked out, because
+        // picking them out means a second classification of the detection settings, by which
+        // verification happens to read today, and that is a list that would drift the first time
+        // verification learned to read one more.
+        if (o.VerifyOnly && o.VerifyFailThreshold != null)
+            throw new CliError(
+                "--verify-threshold decides when a file's marks have failed badly enough to be left "
+                + "alone rather than redetected, and --verify-only redetects nothing. Drop one or "
+                + "the other.");
 
         // Audiobookshelf. All of it ahead of the target resolution below, because in ABS mode the
         // trailing arguments are book selectors rather than paths, and ResolveTargets would report
@@ -1727,6 +1777,9 @@ public sealed class CliOptions
             case "--import": Import = true; return true;
             case "--simple-metadata": SimpleMetadata = true; return true;
             case "--verify": Verify = true; return true;
+            // Not a mode of its own: it sets the two options it is spelled out as, so
+            // CliOptions.VerifyOnly can derive the mode from them and no third state exists.
+            case "--verify-only": Verify = NoOp = true; return true;
             case "--fix": Fix = true; return true;
             case "--ignore-progress": IgnoreProgress = true; return true;
             case "--ignore-chapter-numbers": IgnoreChapterNumbers = true; return true;
@@ -2301,6 +2354,7 @@ public sealed class CliOptions
           abchapterize -R|--revert [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize --cleanup [--revert] [--yes] [--recurse] [--filter <f>] <file-or-directory>...
           abchapterize -O|--no-op --filter <f> [--recurse] <file-or-directory>...
+          abchapterize --verify-only [options] <file-or-directory>...
           abchapterize --help | -?
 
         Any number of files and directories may be given, mixed freely; they are processed in
@@ -2785,7 +2839,22 @@ public sealed class CliOptions
                                     warning, since marks that fail in bulk usually mean
                                     something other than one numbered chapter each. A file
                                     already rejected by --max-chapters skips verification and
-                                    stays bogus. Cannot be combined with --force or --import.
+                                    stays bogus. Marks with no chapter number in their title -
+                                    a prologue, an epilogue, a --custom mapping's mark - are
+                                    checked too where this run knows the phrase behind them,
+                                    but the answer is only reported: it decides nothing, there
+                                    being no chapter-sequence gap to recover one from. Cannot
+                                    be combined with --force or --import.
+              --verify-only         --verify and nothing else: check every selected file's
+                                    marks, report what became of each, and change no file. The
+                                    same as writing "--verify --no-op". With --summary the run
+                                    ends with a list of the files that could not confirm every
+                                    mark, and of the marks nothing in the run could check at
+                                    all - a mapping left off the command line, an intro entry,
+                                    another tool's marks. Cannot be combined with anything that
+                                    would change a file (--fix, --force, --backup, --import,
+                                    --export, --dry-run, --no-rename, --ignore-progress, the
+                                    hooks) or with an Audiobookshelf server.
               --fix                 Requires --verify. Where a mark's announcement is confirmed
                                     but the mark sits a little away from it, move the mark
                                     onto it and rewrite the file, instead of only reporting that
