@@ -1302,7 +1302,8 @@ the backup renamed back. Combinable with <code>--recurse</code>, <code>--filter<
 output options (<code>--quiet</code> and <code>--summary</code> take effect; <code>--verbose</code> and
 <code>--no-bar</code> are accepted but change nothing here). All detection and safety
 options are rejected. An audio file named directly has its own <code>.bak</code>
-neighbour restored, so the suffix need not be typed out.</p>
+neighbour restored, so the suffix need not be typed out. One that cannot be
+restored is reported and the rest still run, the run ending with exit code 1.</p>
 <p><code>--cleanup</code>
 : Housekeeping instead of processing — see
 <a href="#cleaning-up-after-a-run">Cleaning up after a run</a> for what it removes and

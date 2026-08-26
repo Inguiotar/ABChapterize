@@ -123,6 +123,11 @@ earn a round number.
 
 ### Fixed
 
+- **`--revert` no longer gives up on the rest when one backup will not go back.** A file held
+  open by a player, or a folder that has turned read-only, used to end the run there and leave
+  every remaining backup unrestored. Each one is now reported and the others still restored, the
+  run ending with exit code 1 so a script cannot mistake a partial revert for a complete one —
+  the rule `--cleanup` already followed.
 - **A file that cannot be renamed or moved is now named in the message.** Renaming is the last
   step of writing a book's marks, of taking a `.missing-marks` tag off, and of `--revert`; when
   one failed — the audiobook open in a player, a folder that has turned read-only — the run

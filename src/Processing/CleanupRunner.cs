@@ -559,7 +559,10 @@ public sealed class CleanupRunner
     /// Carries the plan out, one step at a time, reporting each. A step that fails is reported and
     /// the rest still run - a single file held open by another program is no reason to leave the
     /// other ninety-nine as they are - but the run as a whole then ends in an error, so a script
-    /// cannot mistake a partial cleanup for a complete one.
+    /// cannot mistake a partial cleanup for a complete one. <c>--revert</c> in
+    /// <see cref="FileProcessor"/> keeps the same rule; the two undo work on files the user already
+    /// had, and a mode that stopped where its sibling carried on would be a difference nobody
+    /// could predict.
     /// </summary>
     /// <param name="plan">The plan to carry out.</param>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>

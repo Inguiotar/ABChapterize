@@ -208,6 +208,16 @@ public sealed class FileProcessor
     /// Restores backups: for every supported audio file with an added ".bak" suffix the
     /// corresponding original is deleted and the backup renamed back to its original name.
     /// </summary>
+    /// <remarks>
+    /// A file that cannot be restored is reported and the rest still run, exactly as in
+    /// <see cref="CleanupRunner"/> and for the same reason: one audiobook held open by a player is
+    /// no reason to leave the other ninety-nine as this tool left them. The run as a whole then
+    /// ends in an error, so a script cannot mistake a partial revert for a complete one. The two
+    /// modes are deliberately the same rule - both undo work on files the user already had, and a
+    /// mode that stopped where its sibling carried on would be a difference nobody could predict.
+    /// </remarks>
+    /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
+    /// <exception cref="AppError">At least one backup could not be restored.</exception>
     private void RunRevert(CancellationToken ct)
     {
         var bakSuffixes = _options.EffectiveExtensions.Select(e => e + ".bak").ToArray();
@@ -225,9 +235,14 @@ public sealed class FileProcessor
             return;
         }
         var watch = Stopwatch.StartNew();
-        // Counted as they happen rather than taken from the list at the end, so the figure survives
+        // Counted as they happen rather than taken from the list at the end, so the figures survive
         // a Ctrl+C: the summary below is printed either way, and "N reverted" has to be N.
         var reverted = 0;
+        var failed = 0;
+        // A file that could not be restored is not a run that stopped - it is reported and the rest
+        // still run - so only a Ctrl+C marks the summary as covering an unfinished run. Same rule,
+        // and same reasoning, as CleanupRunner.Apply.
+        var finished = false;
         try
         {
             foreach (var bak in backups)
@@ -242,31 +257,37 @@ public sealed class FileProcessor
                 try
                 {
                     File.Move(bak, original, overwrite: true);
+                    reverted++;
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                                               or NotSupportedException)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // File.Move names no path of its own - a file held open by a player gives the
-                    // bare "Access to the path is denied." - so the one thing the user needs from
-                    // this, which of a folder full of books stopped the revert, would otherwise be
-                    // the one thing missing.
-                    throw new AppError($"Could not restore \"{original}\" from its backup: {ex.Message}");
+                    // Named by us: File.Move carries no path of its own - a file held open by a
+                    // player gives the bare "Access to the path is denied." - so which of a folder
+                    // full of books this was would otherwise be the one thing missing. Not
+                    // suppressed by --quiet, unlike the line below it: a warning is the reason the
+                    // run will end in an error, and a quiet run still has to say why.
+                    failed++;
+                    _progress.Announce($"{Path.GetFileName(original)}: WARNING - not restored " +
+                                       $"from its backup: {ex.Message}");
+                    continue;
                 }
-                reverted++;
                 if (!_options.Quiet)
                     _progress.Announce($"{Path.GetFileName(original)}: reverted from backup");
             }
+            finished = true;
         }
         finally
         {
             if (_options.Summary)
             {
                 _progress.AnnounceSummaryHeading(
-                    $"{backups.Count} backup(s) encountered, {reverted} reverted",
-                    finished: reverted == backups.Count);
+                    $"{backups.Count} backup(s) encountered, {reverted} reverted" +
+                    (failed > 0 ? $", {failed} failed" : ""), finished);
                 _progress.AnnounceSummary($"Total time: {FormatTime(watch.Elapsed)}");
             }
         }
+        if (failed > 0)
+            throw new AppError($"{failed} backup(s) could not be restored; see the warnings above.");
     }
 
     /// <summary>

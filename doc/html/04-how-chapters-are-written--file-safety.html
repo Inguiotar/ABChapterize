@@ -83,6 +83,10 @@ output options (<code>--quiet</code>, <code>--summary</code>), but with no detec
 options. To undo everything else a run leaves behind as well — its logs, its
 name tags, its leftovers — see
 <a href="06-command-line-reference.html#cleaning-up-after-a-run">Cleaning up after a run</a>.</p>
+<p>A backup that cannot be restored (its file held open by a player, say) is
+reported and the remaining ones still run, but the run then ends with exit
+code 1 so a script cannot mistake a partial revert for a complete one — the
+same rule <a href="06-command-line-reference.html#cleaning-up-after-a-run"><code>--cleanup</code></a> follows.</p>
 <nav class="pagenav" aria-label="Previous and next page">
 <a class="prev" href="03-how-detection-works.html" rel="prev"><span>Previous</span>3. How detection works</a>
 <a class="next" href="05-what-is-kept-and-what-is-stripped.html" rel="next"><span>Next</span>5. What is kept and what is stripped</a>

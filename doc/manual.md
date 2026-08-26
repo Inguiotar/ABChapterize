@@ -926,6 +926,11 @@ options. To undo everything else a run leaves behind as well — its logs, its
 name tags, its leftovers — see
 [Cleaning up after a run](#cleaning-up-after-a-run).
 
+A backup that cannot be restored (its file held open by a player, say) is
+reported and the remaining ones still run, but the run then ends with exit
+code 1 so a script cannot mistake a partial revert for a complete one — the
+same rule [`--cleanup`](#cleaning-up-after-a-run) follows.
+
 ## 5. What is kept and what is stripped
 
 Chapter writing remuxes the file with ffmpeg, mapping streams explicitly.
@@ -2309,7 +2314,8 @@ looking. None of these is needed for an ordinary book.
   output options (`--quiet` and `--summary` take effect; `--verbose` and
   `--no-bar` are accepted but change nothing here). All detection and safety
   options are rejected. An audio file named directly has its own `.bak`
-  neighbour restored, so the suffix need not be typed out.
+  neighbour restored, so the suffix need not be typed out. One that cannot be
+  restored is reported and the rest still run, the run ending with exit code 1.
 
 `--cleanup`
 : Housekeeping instead of processing — see
