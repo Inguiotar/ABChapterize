@@ -198,6 +198,72 @@ public sealed class AbsCliTests : IDisposable
     }
 
     /// <summary>
+    /// <c>--abs-sync</c> is a spelling, not a mode: the run it resolves to has to be
+    /// indistinguishable from the three options written out, down to the fingerprint an
+    /// interrupted batch resumes on.
+    /// </summary>
+    [Fact]
+    public void AbsSync_IsExactlyPullVerifyPush()
+    {
+        var sync = CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-sync", _file])!;
+        var spelledOut = CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-pull", "--verify", "--abs-push", _file])!;
+
+        Assert.True(sync.AbsPull);
+        Assert.True(sync.AbsPush);
+        Assert.True(sync.Verify);
+        Assert.True(sync.SendsMarksToAbs);
+        Assert.Equal(spelledOut.RunFingerprint, sync.RunFingerprint);
+    }
+
+    /// <summary>
+    /// Repeating half of what <c>--abs-sync</c> already says is harmless: the flags are the same
+    /// flags, and setting one twice is setting it once.
+    /// </summary>
+    [Theory]
+    [InlineData("--abs-pull")]
+    [InlineData("--abs-push")]
+    [InlineData("--verify")]
+    public void AbsSync_ToleratesItsOwnPartsBeingRepeated(string option)
+    {
+        var options = CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-sync", option, _file])!;
+
+        Assert.True(options.AbsPull);
+        Assert.True(options.AbsPush);
+        Assert.True(options.Verify);
+    }
+
+    /// <summary>
+    /// The three modes it is not are refused - and the message names <c>--abs-sync</c> itself
+    /// rather than the options it stands for, which is the whole reason that check sits ahead of
+    /// the pairwise rules.
+    /// </summary>
+    /// <param name="line">The command line after the connection options, space-separated.</param>
+    [Theory]
+    [InlineData("--abs-sync --abs all")]
+    [InlineData("--abs-sync --abs-push-only f")]
+    [InlineData("--abs-sync --abs-pull-only f")]
+    public void AbsSync_RefusesTheOtherModesInItsOwnWords(string line)
+    {
+        var error = Assert.Throws<CliError>(() => CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", .. line.Split(' ')]));
+
+        Assert.Contains("--abs-sync", error.Message);
+    }
+
+    /// <summary>
+    /// <c>--no-op</c> lists and exits, so it has nothing to reconcile. Refused by the general rule
+    /// about processing options rather than by the ABS ones - <c>--verify</c> is one - which is
+    /// why the message is the general one.
+    /// </summary>
+    [Fact]
+    public void AbsSync_IsRefusedWithNoOp()
+        => Assert.Throws<CliError>(() => CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-sync", "--no-op", "--filter", "m4b", _file]));
+
+    /// <summary>
     /// The retry budget defaults to three minutes and takes a value in minutes, decimal separator
     /// either way round like every other number this tool reads off a command line.
     /// </summary>

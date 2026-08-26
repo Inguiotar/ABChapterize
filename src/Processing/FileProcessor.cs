@@ -53,6 +53,19 @@ public sealed class FileProcessor
     /// <summary>Number of files that actually went through chapter detection.</summary>
     private int _processed;
 
+    /// <summary>
+    /// Number of files the run got as far as starting, whatever became of them. Only a
+    /// <c>--summary</c> printed for a run that did not finish quotes it, and only that summary can
+    /// ask the question it answers - where the run stopped.
+    /// </summary>
+    /// <remarks>
+    /// Counted at the per-file entry points rather than derived from the other counters, which
+    /// would be a guess: a file cut off mid-transcription is neither processed nor skipped, and
+    /// subtracting the two from the run's total would silently move it into the files that were
+    /// never started.
+    /// </remarks>
+    private int _reached;
+
     /// <summary>Accumulated detection time of the processed files (for the --summary average).</summary>
     private TimeSpan _processingTime;
 
@@ -212,23 +225,35 @@ public sealed class FileProcessor
             return;
         }
         var watch = Stopwatch.StartNew();
-        foreach (var bak in backups)
+        // Counted as they happen rather than taken from the list at the end, so the figure survives
+        // a Ctrl+C: the summary below is printed either way, and "N reverted" has to be N.
+        var reverted = 0;
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            var original = bak[..^4]; // strip ".bak"
-            // One replacing move rather than a delete followed by a rename: the two-step version
-            // has a window in which the processed file is already gone and the backup has not yet
-            // taken its place, and a move that fails there leaves the folder looking emptier than
-            // it is. Overwriting is what --revert is for, so nothing here needs the refusal
-            // CommitChaptersAsync makes.
-            File.Move(bak, original, overwrite: true);
-            if (!_options.Quiet)
-                _progress.Announce($"{Path.GetFileName(original)}: reverted from backup");
+            foreach (var bak in backups)
+            {
+                ct.ThrowIfCancellationRequested();
+                var original = bak[..^4]; // strip ".bak"
+                // One replacing move rather than a delete followed by a rename: the two-step version
+                // has a window in which the processed file is already gone and the backup has not yet
+                // taken its place, and a move that fails there leaves the folder looking emptier than
+                // it is. Overwriting is what --revert is for, so nothing here needs the refusal
+                // CommitChaptersAsync makes.
+                File.Move(bak, original, overwrite: true);
+                reverted++;
+                if (!_options.Quiet)
+                    _progress.Announce($"{Path.GetFileName(original)}: reverted from backup");
+            }
         }
-        if (_options.Summary)
+        finally
         {
-            _progress.AnnounceSummary($"Summary: {backups.Count} backup(s) encountered, {backups.Count} reverted");
-            _progress.AnnounceSummary($"Total time: {FormatTime(watch.Elapsed)}");
+            if (_options.Summary)
+            {
+                _progress.AnnounceSummaryHeading(
+                    $"{backups.Count} backup(s) encountered, {reverted} reverted",
+                    finished: reverted == backups.Count);
+                _progress.AnnounceSummary($"Total time: {FormatTime(watch.Elapsed)}");
+            }
         }
     }
 
@@ -238,6 +263,14 @@ public sealed class FileProcessor
     /// the full Whisper detection run), then report. Both pipelines feed the same counters and
     /// the same <see cref="_runStats"/>, so the summary below does not care which one ran.
     /// </summary>
+    /// <remarks>
+    /// The report is in a <c>finally</c>, so a Ctrl+C or a failure part way through a batch still
+    /// gets one - marked as covering an unfinished run, and with the exception left to carry on
+    /// out to <see cref="ABChapterize.Cli.Program"/>, which decides the exit code. The file
+    /// selection deliberately sits outside it: a run that never reached its first file has nothing
+    /// to summarize, and a block of zeroes on top of the error that caused it would only be in the
+    /// way.
+    /// </remarks>
     /// <param name="ct">Cancellation token bound to Ctrl+C.</param>
     private async Task RunABChapterizeAsync(CancellationToken ct)
     {
@@ -248,16 +281,23 @@ public sealed class FileProcessor
         var (ffmpegPath, ffprobePath) = FfmpegLocator.Locate();
         var ffmpeg = new FfmpegClient(ffmpegPath, ffprobePath);
         var watch = Stopwatch.StartNew();
+        var finished = false;
 
-        if (_options.Import)
-            await RunImportAsync(files, ffmpeg, ct);
-        else if (_options.AbsPushOnly || _options.AbsPullOnly)
-            await RunWithoutDetectionAsync(files, ffmpeg, ct);
-        else
-            await RunDetectionAsync(files, ffmpeg, ct);
-
-        if (_options.Summary)
-            PrintRunSummary(files.Count, watch.Elapsed);
+        try
+        {
+            if (_options.Import)
+                await RunImportAsync(files, ffmpeg, ct);
+            else if (_options.AbsPushOnly || _options.AbsPullOnly)
+                await RunWithoutDetectionAsync(files, ffmpeg, ct);
+            else
+                await RunDetectionAsync(files, ffmpeg, ct);
+            finished = true;
+        }
+        finally
+        {
+            if (_options.Summary)
+                PrintRunSummary(files.Count, watch.Elapsed, finished);
+        }
     }
 
     /// <summary>
@@ -595,16 +635,23 @@ public sealed class FileProcessor
     /// per-file listings <see cref="RunOutcomes"/> gathered - last because they are the only part
     /// that grows with the size of the run.
     /// </summary>
-    /// <param name="fileCount">Number of files the run encountered.</param>
+    /// <param name="fileCount">Number of files the run selected.</param>
     /// <param name="elapsed">Wall-clock time the run took.</param>
-    private void PrintRunSummary(int fileCount, TimeSpan elapsed)
+    /// <param name="finished">Whether the run got to the end of its file list. When it did not,
+    /// the heading says so and quotes how far it got instead of claiming every selected file was
+    /// encountered - the listings under it are then a report of an unfinished job, which is a
+    /// different thing to read and has to look like one.</param>
+    private void PrintRunSummary(int fileCount, TimeSpan elapsed, bool finished)
     {
         var warningNote = _warnings > 0 ? $", {_warnings} with warnings" : "";
         var noChapters = _outcomes.NoChaptersCount;
         var noChaptersNote = noChapters > 0 ? $", {noChapters} with no chapters found" : "";
-        _progress.AnnounceSummary(
-            $"Summary: {fileCount} file(s) encountered, {_processed} processed, " +
-            $"{_outcomes.SkippedCount} skipped{warningNote}{noChaptersNote}");
+        var reached = finished
+            ? $"{fileCount} file(s) encountered"
+            : $"{_reached} of {fileCount} file(s) reached";
+        _progress.AnnounceSummaryHeading(
+            $"{reached}, {_processed} processed, " +
+            $"{_outcomes.SkippedCount} skipped{warningNote}{noChaptersNote}", finished);
         var average = _processed > 0
             ? $", average per processed file: {FormatTime(_processingTime / _processed)}"
             : "";
@@ -821,6 +868,7 @@ public sealed class FileProcessor
         // A book from a server is named by its title rather than by the file it happens to be
         // stored in: the title is what the user picked it out by and what the server calls it.
         var name = pending.Book?.Title ?? Path.GetFileName(pending.Path);
+        _reached++;
         var work = new WorkTracker();
         _progress.Start(name, work);
         AbsLocalCopy? copy = null;
@@ -2293,6 +2341,7 @@ public sealed class FileProcessor
     {
         var file = pending.Path;
         var name = Path.GetFileName(file);
+        _reached++;
         var work = new WorkTracker();
         _progress.Start(name, work);
         try

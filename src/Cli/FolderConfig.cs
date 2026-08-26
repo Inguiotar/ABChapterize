@@ -110,7 +110,10 @@ internal static class FolderConfig
         ["Targets"] = "the file arguments",
         ["Abs"] = "--abs", ["UsesAbs"] = "--abs", ["AbsPushOnly"] = "--abs-push-only",
         ["AbsPush"] = "--abs-push",
+        ["AbsPull"] = "--abs-pull", ["AbsPullOnly"] = "--abs-pull-only",
+        ["UsesAbsPull"] = "--abs-pull", ["SendsMarksToAbs"] = "--abs-push",
         ["AbsServer"] = "--abs-url", ["AbsTemp"] = "--abs-temp",
+        ["AbsRetryMinutes"] = "--abs-retry",
         ["AbsSelectors"] = "the book selectors",
     };
 

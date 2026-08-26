@@ -568,31 +568,44 @@ public sealed class CleanupRunner
     {
         var done = 0;
         var failed = 0;
-        foreach (var step in plan.Steps)
+        // A step that failed is not a run that stopped - it is reported and the rest still run, so
+        // reaching the end of the plan counts as finishing whatever the failures. Only a Ctrl+C
+        // leaves the plan half-applied, and only that marks the summary as covering a run that did
+        // not finish; the AppError below is thrown after the summary either way, so a script sees
+        // both the report and the non-zero exit.
+        var finished = false;
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            try
+            foreach (var step in plan.Steps)
             {
-                if (step.MoveTo is { } destination)
-                    File.Move(step.Path, destination, step.Overwrite);
-                else
-                    File.Delete(step.Path);
-                done++;
-                if (!_options.Quiet)
-                    _progress.Announce(step.Report);
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    if (step.MoveTo is { } destination)
+                        File.Move(step.Path, destination, step.Overwrite);
+                    else
+                        File.Delete(step.Path);
+                    done++;
+                    if (!_options.Quiet)
+                        _progress.Announce(step.Report);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    failed++;
+                    _progress.Announce($"{Path.GetFileName(step.Path)}: WARNING - {ex.Message}");
+                }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                failed++;
-                _progress.Announce($"{Path.GetFileName(step.Path)}: WARNING - {ex.Message}");
-            }
+            finished = true;
         }
-
-        if (_options.Summary)
-            _progress.AnnounceSummary(
-                $"Summary: {done} cleanup action(s) taken" +
-                (failed > 0 ? $", {failed} failed" : "") +
-                (plan.Notes.Count > 0 ? $", {plan.Notes.Count} file(s) left alone" : ""));
+        finally
+        {
+            if (_options.Summary)
+                _progress.AnnounceSummaryHeading(
+                    $"{done} cleanup action(s) taken" +
+                    (failed > 0 ? $", {failed} failed" : "") +
+                    (plan.Notes.Count > 0 ? $", {plan.Notes.Count} file(s) left alone" : ""),
+                    finished);
+        }
         if (failed > 0)
             throw new AppError($"{failed} cleanup action(s) failed; see the warnings above.");
     }

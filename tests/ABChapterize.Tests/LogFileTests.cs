@@ -99,6 +99,26 @@ public sealed class LogFileTests : IDisposable
         Assert.Contains("Summary: 3 file(s) encountered", file);
     }
 
+    /// <summary>
+    /// The heading of a run that was cut short has to say so on its own line - a log read a day
+    /// later is all there is, and figures that look like a finished run's would be read as one.
+    /// </summary>
+    [Fact]
+    public void AnUnfinishedRunsHeading_SaysSoOnBothDestinations()
+    {
+        var (console, file) = Capture(r =>
+        {
+            r.AnnounceSummaryHeading("3 file(s) encountered", finished: true);
+            r.AnnounceSummaryHeading("2 of 3 file(s) reached", finished: false);
+        });
+
+        foreach (var written in new[] { console, file })
+        {
+            Assert.Contains("Summary: 3 file(s) encountered", written);
+            Assert.Contains("Summary (run did not finish): 2 of 3 file(s) reached", written);
+        }
+    }
+
     [Fact]
     public void EveryLineCarriesADateAndTime()
     {

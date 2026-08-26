@@ -819,6 +819,9 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("--import", "--lang", "de")]
     [InlineData("--ignore-chapter-numbers", "--verify")]
     [InlineData("--ignore-chapter-numbers", "--jingle-first")]
+    // The one message that names an option nobody set: --abs-sync expands to three, so it has to
+    // say so, and all four spellings have to be findable in the help.
+    [InlineData("--abs-sync", "--abs-push-only")]
     public void AnIncompatibilityMessage_NamesOnlyOptionsTheHelpAlsoLists(params string[] args)
     {
         // Each of these lists of mutually exclusive options exists three times over: the check

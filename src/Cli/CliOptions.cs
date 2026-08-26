@@ -905,6 +905,13 @@ public sealed class CliOptions
     /// </remarks>
     public bool AbsPullOnly { get; private set; }
 
+    // --abs-sync, which is nothing but a shorter way of writing --abs-pull --verify --abs-push.
+    // Deliberately a private field and not a property: a public one would be a fourth mode flag
+    // for other code to branch on, and the moment anything did, the two spellings would be able
+    // to mean different things. Read in exactly one place - the collision check in Parse - which
+    // needs it only to report a conflict in the word the user actually typed.
+    private bool _absSyncGiven;
+
     /// <summary>Whether this run asks Audiobookshelf what marks a local file's book already has.
     /// </summary>
     public bool UsesAbsPull => AbsPull || AbsPullOnly;
@@ -1419,6 +1426,18 @@ public sealed class CliOptions
                 + "--abs-push marks local files and sends the result to it, --abs-push-only sends "
                 + "it the marks local files already carry, and --abs-pull / --abs-pull-only take "
                 + "the marks it holds and put them into local files.");
+        // Ahead of the pairwise rules below, and the one place --abs-sync is named: it sets three
+        // flags, so a conflict caught underneath would be reported in terms of options the user
+        // never typed. Stating its own rule costs one check, where teaching each of the rules below
+        // to name it would be a second copy of all of them. The modes are the whole of what it can
+        // collide with - it is itself two of the five - so nothing else needs the treatment; a
+        // conflict with, say, --import still reports --abs-pull, which the help text says it is.
+        if (o._absSyncGiven && (o.Abs || o.AbsPushOnly || o.AbsPullOnly))
+            throw new CliError(
+                "--abs-sync is --abs-pull --verify --abs-push: a reconciliation between local files "
+                + "and the server. --abs (-A), --abs-push-only and --abs-pull-only are each a "
+                + "different answer to where a book's marks come from and where they go, so none of "
+                + "them can be combined with it.");
         // Two answers to "where do the marks go", and they are not compatible: --abs has the server
         // hold the only copy, --abs-push writes the file and tells the server as well. Silently
         // preferring one would make the other look like it had been honoured.
@@ -1716,6 +1735,10 @@ public sealed class CliOptions
             case "--abs-push": AbsPush = true; return true;
             case "--abs-pull": AbsPull = true; return true;
             case "--abs-pull-only": AbsPullOnly = true; return true;
+            // A synonym rather than a mode: it sets the three flags and nothing else knows it was
+            // written, so --abs-sync and the three options spelled out are the same run down to
+            // the fingerprint an interrupted batch resumes on.
+            case "--abs-sync": AbsPull = AbsPush = Verify = _absSyncGiven = true; return true;
             default: return false;
         }
     }
@@ -2372,6 +2395,11 @@ public sealed class CliOptions
                                     server has no chapters for, or that no file matches, is
                                     skipped. Unlike an ordinary run this replaces marks a file
                                     already has, that being the whole of what it is asked to do.
+              --abs-sync            Shorthand for --abs-pull --verify --abs-push: take the marks
+                                    the server holds, check them against the audio, detect what
+                                    is still missing, and leave file and server with the same
+                                    list. Nothing else about it differs from writing the three
+                                    out, so an error may name them instead.
               --abs-url <url>       Which server: "http://host:13378", "host:13378", or just
                                     "host" - http and Audiobookshelf's own port 13378 stand in
                                     for whatever you leave out. https and a reverse-proxy

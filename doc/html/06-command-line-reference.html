@@ -215,7 +215,8 @@ four work on files on this machine:</p>
 </table>
 <p><code>--abs-pull</code> and <code>--abs-push</code> are the one pair that combine, and together they
 reconcile a book: each side ends up with the same list. No other two can be given
-at once.</p>
+at once. <a href="#reconciling-both-ways"><code>--abs-sync</code></a> is a shorthand for that pair with
+<code>--verify</code> added.</p>
 <h3 id="selecting-books">Selecting books<a class="anchor" href="#selecting-books" aria-label="Permalink to this heading">#</a></h3>
 <p>In ABS mode the trailing arguments are <em>selectors</em> rather than paths. Give as
 many as you like; their books are added together and each book is processed once.</p>
@@ -386,6 +387,15 @@ shelf does nothing the second time.</p>
 <p>As always with <code>--abs-push</code>, a book left with an unresolved chapter-sequence gap
 is not sent, and a push that cannot happen never fails a file that was marked
 successfully.</p>
+<p><code>--abs-sync</code>
+: Shorthand for <code>--abs-pull --verify --abs-push</code>, which is the reconciliation
+above with the marks checked against the audio on the way through. It is a
+spelling and nothing more: the run it produces is the same run in every
+respect, including the one an interrupted batch resumes from, so the two forms
+can be used interchangeably on the same shelf. An error about a combination it
+cannot have may name one of the three rather than <code>--abs-sync</code> itself.</p>
+<pre><code>abchapterize --abs-sync --recurse &quot;D:\Audiobooks&quot;
+</code></pre>
 <h3 id="connecting">Connecting<a class="anchor" href="#connecting" aria-label="Permalink to this heading">#</a></h3>
 <p><code>--abs-url &lt;url&gt;</code>
 : Which server. <code>http://host:13378</code>, <code>host:13378</code>, or just <code>host</code> — http and
@@ -1612,6 +1622,18 @@ Low-confidence chapter marks in 2 file(s) (below p=0.50, worth a manual check):
 second entry above does: every part counts from one again, so &quot;chapter 4&quot; on
 its own would not say which one to go and listen to. Parts are numbered from
 one, matching the titles the marks were written under.</p>
+<p><strong>A run that does not reach its end still gets a summary.</strong> Ctrl+C, a server
+that goes away, a disk that fills up — whatever stopped it, the block is
+printed for the files the run did get through, and its first line says so:</p>
+<pre><code>Summary (run did not finish): 61 of 200 file(s) reached, 58 processed, 3 skipped
+Total time: 9:12:44, average per processed file: 9:31
+</code></pre>
+<p>The heading counts the files the run <em>started</em>, which is not the same as the
+ones it finished: the file it was working on when it stopped is among them and
+is in neither of the figures after it. Everything below the heading — the
+statistics and the four listings — covers what was done, so the listing of
+files still missing chapter marks is the one to build the next command line
+from. <code>--revert</code> and <code>--cleanup</code> mark their own summaries the same way.</p>
 <p><code>-d</code>, <code>--dry-run</code>
 : Run full detection but write nothing. Instead of the usual &quot;N chapter(s)
 written&quot; line, the file's result shows every chapter that <em>would</em> be

@@ -199,6 +199,9 @@ abchapterize --abs-pull-only --recurse "D:\Audiobooks"
 # Or both at once - detect what neither side has, and leave them agreeing:
 abchapterize --abs-pull --abs-push --recurse "D:\Audiobooks"
 
+# The same with every mark checked against the audio on the way through:
+abchapterize --abs-sync --recurse "D:\Audiobooks"
+
 # Marks that should be one per numbered chapter (say, from an earlier run),
 # but you're not sure they all landed right? Check each against the audio;
 # only the ones that don't check out get redone:
@@ -280,6 +283,7 @@ document that long. Grouped below exactly as `--help` groups them:
 | `--abs-push-only` | Send the server the marks a book already carries, detecting nothing. With `--abs` the selected books are fetched and read; without it, the local files named are matched to the server's libraries by their album tag, title tag, folder name or file name. |
 | `--abs-pull` | Ask Audiobookshelf what chapters it holds for each local file's book and treat them as the file's own — the server's list wins, the file's fills in where it has none. A file the run then has nothing to detect for is written the pulled list. A local file whose play time differs from the book's by more than a minute is passed over: it is a part of a split book, or a different edition, and the server's marks describe neither. Not combinable with `--abs`. |
 | `--abs-pull-only` | Write each local file the chapters Audiobookshelf holds for it and change nothing else, detecting nothing. Unlike an ordinary run this replaces marks the file already has — that being the point of it. |
+| `--abs-sync` | Shorthand for `--abs-pull --verify --abs-push`: take the server's marks, check them against the audio, detect what is still missing, and leave file and server with the same list. A spelling and nothing more — the run it produces is identical to writing the three out. |
 | `--abs-url <url>` | Which server: `http://host:13378`, `host:13378`, or just `host`. |
 | `--abs-key <key>` | An API key to authenticate with... |
 | `--abs-user <name>`, `--abs-password <pw>` | ...or an account to log in as. |
@@ -365,7 +369,7 @@ document that long. Grouped below exactly as `--help` groups them:
 | `-o`, `--log-file <path>` | Write the log to a file instead of the console — switches logging on by itself (add `-T` for the transcripts). The console keeps its progress bar and result lines, which the file gets too. Appends to an existing file. |
 | `-B`, `--no-bar` | No progress bar; per-file results as log lines. |
 | `--color <mode>` | Colorize the progress bar, the file name on a per-file result line, and the `--summary` block: `auto` (default), `always` or `never`. Nothing else is ever colored, and a `--log-file` always gets plain text. |
-| `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics — followed by a list of every file that was skipped and why, of every file no chapters were found in, of every file left with chapter marks still missing, and of every file carrying marks read below a Whisper confidence of 0.50, which are the ones worth checking by hand. |
+| `-s`, `--summary` | Totals at the end of the run: file counts, times, and confidence, silence/jingle, Whisper-audio and transcription-speed statistics — followed by a list of every file that was skipped and why, of every file no chapters were found in, of every file left with chapter marks still missing, and of every file carrying marks read below a Whisper confidence of 0.50, which are the ones worth checking by hand. A run that is interrupted or fails part way through still prints the block, for as far as it got, with a heading that says so. |
 
 **Performance**
 

@@ -437,6 +437,26 @@ public sealed class ProgressRenderer : IDisposable
     public void AnnounceSummary(string line) => WriteAnnouncement(line, highlight: true);
 
     /// <summary>
+    /// Prints the line that opens a <c>--summary</c> block, and with it the one thing every mode's
+    /// block has to be able to say: that the run was cut short and the figures under this line
+    /// therefore cover only part of the work.
+    /// </summary>
+    /// <remarks>
+    /// Here rather than at the three call sites so the wording exists once. A summary that appears
+    /// only when a run reaches its end is a summary nobody gets on the runs that most need one -
+    /// a batch of two hundred audiobooks stopped by Ctrl+C or by a server going away has still
+    /// finished most of its files, and which those were is exactly what the next command line has
+    /// to be built from.
+    /// </remarks>
+    /// <param name="counts">The heading's own text, everything after "Summary: ".</param>
+    /// <param name="finished">False when the run did not get to the end of its work.</param>
+    public void AnnounceSummaryHeading(string counts, bool finished)
+        => AnnounceSummary(finished ? $"Summary: {counts}" : $"Summary ({UnfinishedRun}): {counts}");
+
+    /// <summary>How the heading marks a run that was interrupted or failed part way through.</summary>
+    private const string UnfinishedRun = "run did not finish";
+
+    /// <summary>
     /// Prints one line of the closing <c>--summary</c> block that was assembled from pieces rather
     /// than from one string, so that the book titles in it are colored as titles instead of being
     /// pattern-matched like prose. Same as <see cref="AnnounceSummary"/> in every other respect.

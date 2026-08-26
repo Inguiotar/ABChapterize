@@ -1130,7 +1130,8 @@ four work on files on this machine:
 
 `--abs-pull` and `--abs-push` are the one pair that combine, and together they
 reconcile a book: each side ends up with the same list. No other two can be given
-at once.
+at once. [`--abs-sync`](#reconciling-both-ways) is a shorthand for that pair with
+`--verify` added.
 
 #### Selecting books
 
@@ -1300,6 +1301,18 @@ shelf does nothing the second time.
 As always with `--abs-push`, a book left with an unresolved chapter-sequence gap
 is not sent, and a push that cannot happen never fails a file that was marked
 successfully.
+
+`--abs-sync`
+: Shorthand for `--abs-pull --verify --abs-push`, which is the reconciliation
+  above with the marks checked against the audio on the way through. It is a
+  spelling and nothing more: the run it produces is the same run in every
+  respect, including the one an interrupted batch resumes from, so the two forms
+  can be used interchangeably on the same shelf. An error about a combination it
+  cannot have may name one of the three rather than `--abs-sync` itself.
+
+  ```
+  abchapterize --abs-sync --recurse "D:\Audiobooks"
+  ```
 
 #### Connecting
 
@@ -2628,6 +2641,22 @@ The details worth knowing:
   second entry above does: every part counts from one again, so "chapter 4" on
   its own would not say which one to go and listen to. Parts are numbered from
   one, matching the titles the marks were written under.
+
+  **A run that does not reach its end still gets a summary.** Ctrl+C, a server
+  that goes away, a disk that fills up — whatever stopped it, the block is
+  printed for the files the run did get through, and its first line says so:
+
+  ```
+  Summary (run did not finish): 61 of 200 file(s) reached, 58 processed, 3 skipped
+  Total time: 9:12:44, average per processed file: 9:31
+  ```
+
+  The heading counts the files the run *started*, which is not the same as the
+  ones it finished: the file it was working on when it stopped is among them and
+  is in neither of the figures after it. Everything below the heading — the
+  statistics and the four listings — covers what was done, so the listing of
+  files still missing chapter marks is the one to build the next command line
+  from. `--revert` and `--cleanup` mark their own summaries the same way.
 
 `-d`, `--dry-run`
 : Run full detection but write nothing. Instead of the usual "N chapter(s)

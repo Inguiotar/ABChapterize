@@ -40,7 +40,8 @@ earn a round number.
   unless the file already had it, and sent to the server unless the server already had it. Two
   sides that agree are left alone, so running it twice over the same shelf does nothing the
   second time. `--verify` fits in the middle of that, checking the marks before either side is
-  given them.
+  given them, and **`--abs-sync` is a shorthand for exactly that trio** —
+  `--abs-pull --verify --abs-push` — which is the whole of what it does.
 
   A local file whose play time differs from the book's by more than a minute is passed over
   rather than marked: it is one part of a split book, or a different edition, and the server's
@@ -112,6 +113,13 @@ earn a round number.
   keeps its name. The cost is the automatic resume, since the tag is what tells a later run which
   chapters to go back for; finishing such a file takes `--force`. A tag an earlier run left behind
   is still taken off once the file is complete.
+
+- **`--summary` now reports a run that was interrupted or failed.** Ctrl+C part way through a
+  shelf of two hundred audiobooks used to end the run with nothing at all to show for it —
+  which is precisely the run whose report is worth having, since the listing of files still
+  missing chapter marks is what the next command line gets built from. The block is now printed
+  for the files the run got through, its first line saying that the run did not finish and how
+  far it got. `--revert` and `--cleanup` do the same.
 
 ### Fixed
 
