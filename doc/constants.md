@@ -33,14 +33,14 @@ Chapter detection: window sizes, thresholds, retry budgets and mark placement.
 | `NoiseFloorHeadroomDb` | `14` | How far above the measured room tone the silence threshold must sit, in dB. |
 | `SpeechHeadroomDb` | `8` | How far below sustained speech the silence threshold must sit, in dB. |
 | `MinAutoSilenceNoiseDb` | `-60` | The range an automatically chosen silence threshold is confined to, whatever the measurement says. |
-| `MaxAutoSilenceNoiseDb` | `-20` |  |
+| `MaxAutoSilenceNoiseDb` | `-20` | The upper end of that same range; see MinAutoSilenceNoiseDb, whose description this constant shares. |
 | `MinStoredSilenceSeconds` | `0.5` | The shortest silence Analyze keeps (see the allSilences/silences split in DetectAsync), regardless of --min-silence-length. |
 | `WindowEndSnapSearchSeconds` | `5.0` | How far past a Probe window's natural end PlanWindowEnd looks for a seam when that end has no next window to share a border with: the nearest silence - or VAD non-speech region, where the pre-pass ran - mid-point within this range becomes the window's end, so even a stand-alone window stops at a word-safe cut (a mid-word tail is exactly what makes Whisper garble a window's final phrase). |
 | `PhraseLatestStartSeconds` | `5.0` | Without a VAD pre-pass, the phrase must start within this many seconds after the silence that triggered its probe (or a closer anchor silence still inside the window) to count as a real announcement rather than an in-text mention. |
 | `ExpectedAnnouncementSeconds` | `22.0` | How far past the point where Probe's primary scan expects an announcement its probe window reaches - after the silence for a plain pause, after the music for a jingle (see BuildCandidates). |
 | `SilenceLeadInSeconds` | `3.0` | How much of the silence before an expected announcement a probe window opens with, so Whisper has a run-up rather than starting hard on the first syllable. |
 | `SandwichedAnnouncementSeconds` | `3.5` | How much speech may sit between a sub-threshold pause and the candidate pause behind it for SandwichedSilences to read the two as bracketing an announcement and promote the first to a candidate of its own. |
-| `FidelityExcerpts` | `8` | levels. |
+| `FidelityExcerpts` | `8` | How many excerpts of a file are measured to judge how much high frequency its speech has kept, which is the one reading deciding whether the book may be denoised at all. |
 | `FidelityExcerptSeconds` | `30.0` | How much audio each of those excerpts covers. |
 | `JingleLeadInSeconds` | `8.0` | The same run-up for a jingle candidate, taken from inside the music, and deliberately longer: the point it is measured back from is a VAD speech onset rather than a silencedetect edge, so it carries the detector's own latency plus whatever timeline drift survives Analyze's resync (see PcmResyncToleranceSeconds - seconds of it were measured across the corpus before that fix). |
 | `PhraseMarginSeconds` | `5.0` | Flat margin added to a measured jingle length so the phrase after the jingle still fits into the probe window. |

@@ -183,9 +183,12 @@ internal static class DetectionTuning
     internal static double SandwichedAnnouncementSeconds = 3.5;
 
     /// <summary>
-    /// levels. Eight because one says nothing: the measure moves several-fold between excerpts of
-    /// the same book, and re-sampling a book at different positions reshuffles the bottom of the
-    /// corpus ranking outright, so only a median over several is worth reading at all.
+    /// How many excerpts of a file are measured to judge how much high frequency its speech has
+    /// kept (<see cref="Audio.AudioFidelity"/>), which is the one reading deciding whether the book
+    /// may be denoised at all. Eight because one says nothing: the measure moves several-fold
+    /// between excerpts of the same book, and re-sampling a book at different positions reshuffles
+    /// the bottom of the corpus ranking outright, so only a median over several is worth reading at
+    /// all.
     /// </summary>
     /// <remarks>Notes: how far the measure actually moves within one book.
     /// <include file='../../notes/Detection/DetectionTuning.xml' path='doc/member[@name="FidelityExcerpts"]/*' /></remarks>

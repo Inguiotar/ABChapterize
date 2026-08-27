@@ -95,6 +95,44 @@ public sealed class ConstantsDocTests
             }
     }
 
+    /// <summary>
+    /// Every row says something, and says a whole sentence of it. The names and defaults above are
+    /// checked against the source, so they cannot rot quietly - the prose can, because nothing
+    /// generates it any more and nothing else reads it.
+    /// </summary>
+    /// <remarks>
+    /// Both shapes this catches were found in the file by a user rather than by the suite (build
+    /// 418). A constant documented with <c>&lt;inheritdoc&gt;</c> left an empty cell, the compiler
+    /// writing that tag through to the XML rather than resolving it; and one whose summary had lost
+    /// its opening clause left the fragment "levels." behind. Hence both halves of the test: a
+    /// description has to be long enough to be a sentence, and to begin like one.
+    /// </remarks>
+    [Fact]
+    public void EveryRow_CarriesAWholeSentenceOfDescription()
+    {
+        var rows = new Regex(@"^\| `(?<name>\w+)` \| `[^`]+` \|(?<text>.*)\|\s*$");
+        var bad = new List<string>();
+        foreach (var line in File.ReadAllLines(Path.Combine(RepoRoot(), "doc", "constants.md")))
+        {
+            if (rows.Match(line) is not { Success: true } row)
+                continue;
+            var text = row.Groups["text"].Value.Trim();
+            var name = row.Groups["name"].Value;
+            if (text.Length < 20)
+                bad.Add($"{name}: description is empty or a fragment (\"{text}\")");
+            else if (!char.IsUpper(text[0]))
+                bad.Add($"{name}: description does not begin a sentence (\"{Excerpt(text)}\")");
+            else if (!text.EndsWith('.'))
+                bad.Add($"{name}: description is cut off (\"{Excerpt(text)}\")");
+        }
+        Assert.True(bad.Count == 0, string.Join(Environment.NewLine, bad));
+    }
+
+    /// <summary>The head of a description, for a failure message that stays readable.</summary>
+    /// <param name="text">The description as the document carries it.</param>
+    private static string Excerpt(string text)
+        => text.Length <= 60 ? text : text[..60] + "...";
+
     [Fact]
     public void TheDocumentPointsAtTheManual_WhichIsWhereTheWarningLives()
     {
