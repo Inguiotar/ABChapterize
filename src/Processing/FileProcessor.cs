@@ -2298,8 +2298,10 @@ public sealed class FileProcessor
             if (AbsChapterMerge.SameMarks(chapters, pull.FromServer))
                 return (", not sent to ABS (it already has these marks)", false);
             // The list itself, fetched for this very file, rather than the catalogue's count.
-            if (WithholdPartialPush(chapters, complete, pull.FromServer.Count) is { } held)
+            if (WithholdPartialPush(chapters, complete, pull.FromServer.Count, _options.MaxChapters)
+                is { } held)
                 return (held, false);
+            LogBogusServerList(ctx, complete, pull.FromServer.Count);
             return await _abs!.PushAsync(pull.Book, chapters, ctx.Info.DurationSeconds, ct);
         }
 
@@ -2308,11 +2310,28 @@ public sealed class FileProcessor
         var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
         if (match.Book == null)
             return ($", not sent to ABS ({match.Reason})", false);
-        if (WithholdPartialPush(chapters, complete, match.Book.ChapterCount) is { } withheld)
+        if (WithholdPartialPush(chapters, complete, match.Book.ChapterCount, _options.MaxChapters)
+            is { } withheld)
             return (withheld, false);
 
         ctx.Logs.Write(match.Reason);
+        LogBogusServerList(ctx, complete, match.Book.ChapterCount);
         return await _abs.PushAsync(match.Book, chapters, ctx.Info.DurationSeconds, ct);
+    }
+
+    /// <summary>
+    /// Records that a gapped set was sent only because <c>--max-chapters</c> writes off what the
+    /// server holds - the one push decision whose reason cannot be read off the summary line, since
+    /// what it produces is an ordinary successful push.
+    /// </summary>
+    /// <param name="ctx">The file's context, for its log.</param>
+    /// <param name="complete">Whether the set being sent has no gap; nothing to explain if so.</param>
+    /// <param name="onServer">How many marks the server holds for the book.</param>
+    private void LogBogusServerList(FileContext ctx, bool complete, int onServer)
+    {
+        if (!complete && ServerListIsBogus(onServer, _options.MaxChapters))
+            ctx.Logs.Write($"ABS: sending a gapped set over the server's {onServer} mark(s), " +
+                           $"which --max-chapters {_options.MaxChapters} writes off as bogus");
     }
 
     /// <summary>
@@ -2322,6 +2341,9 @@ public sealed class FileProcessor
     /// <param name="chapters">The marks this run is holding.</param>
     /// <param name="complete">Whether the chapter sequence has no gaps left in it.</param>
     /// <param name="onServer">How many marks Audiobookshelf currently has for the book.</param>
+    /// <param name="maxChapters">The run's <c>--max-chapters</c>, or null when it was not given;
+    /// a server list longer than it is not one this rule protects. See
+    /// <see cref="ServerListIsBogus"/>.</param>
     /// <returns>The clause the summary line closes with when nothing is to be sent, or null when
     /// the push should go ahead.</returns>
     /// <remarks>
@@ -2347,14 +2369,39 @@ public sealed class FileProcessor
     /// </para>
     /// Internal (and pure) for unit testing.
     /// </remarks>
-    internal static string? WithholdPartialPush(IReadOnlyList<Chapter> chapters, bool complete, int onServer)
+    internal static string? WithholdPartialPush(
+        IReadOnlyList<Chapter> chapters, bool complete, int onServer, int? maxChapters)
     {
-        if (complete || chapters.Count > onServer)
+        if (complete || chapters.Count > onServer || ServerListIsBogus(onServer, maxChapters))
             return null;
         return onServer > 0
             ? $", not sent to ABS while chapters are missing (it already has {onServer})"
             : ", not sent to ABS while chapters are missing";
     }
+
+    /// <summary>
+    /// Whether a server chapter list is one <c>--max-chapters</c> has already declared bogus, and
+    /// so not a list the count test above has any business protecting.
+    /// </summary>
+    /// <param name="onServer">How many marks the server holds for the book.</param>
+    /// <param name="maxChapters">The run's <c>--max-chapters</c>, or null when it was not given.</param>
+    /// <remarks>
+    /// The count test exists to stop a short set replacing a longer one that might have been
+    /// curated. <c>--max-chapters</c> is the user saying which lists cannot have been - a book
+    /// carrying more marks than that is one whose marks this run throws away locally without even
+    /// asking for <c>--force</c> (see <see cref="EvaluateExistingChapters"/>). Letting the same
+    /// number govern the file's marks but not the server's left the guard protecting exactly the
+    /// junk it was told to discard: reported from a real run at build 415 - a book whose server
+    /// list ran to 180 auto-generated marks refused a hard-won partial set of 30 under
+    /// <c>-x 60</c>, on the grounds that 180 is more than 30.
+    /// <para>
+    /// It is only ever reached for a set with a gap in it, a complete one being sent regardless,
+    /// and it says nothing about which marks are right - only that a list this long is not
+    /// evidence of anything worth keeping.
+    /// </para>
+    /// </remarks>
+    internal static bool ServerListIsBogus(int onServer, int? maxChapters)
+        => maxChapters is { } max && onServer > max;
 
     /// <summary>
     /// Writes the marks into the file, unless its container cannot carry them.

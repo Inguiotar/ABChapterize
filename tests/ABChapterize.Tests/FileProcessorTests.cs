@@ -296,7 +296,7 @@ public sealed class FileProcessorTests : IDisposable
     [InlineData(10)]
     [InlineData(99)]
     public void WithholdPartialPush_NeverHoldsBackACompleteSet(int onServer)
-        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(10), complete: true, onServer));
+        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(10), complete: true, onServer, maxChapters: null));
 
     /// <summary>
     /// The case the rule exists for: a book the server has no chapters for at all. Withholding a
@@ -305,11 +305,11 @@ public sealed class FileProcessorTests : IDisposable
     /// </summary>
     [Fact]
     public void WithholdPartialPush_SendsAGappedSetToABookTheServerHasNothingFor()
-        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer: 0));
+        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer: 0, maxChapters: null));
 
     [Fact]
     public void WithholdPartialPush_SendsAGappedSetThatIsLongerThanTheServerList()
-        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer: 12));
+        => Assert.Null(FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer: 12, maxChapters: null));
 
     /// <summary>
     /// A server list at least as long is one this run has no evidence it can improve on, so a
@@ -321,19 +321,45 @@ public sealed class FileProcessorTests : IDisposable
     [InlineData(35)]
     public void WithholdPartialPush_HoldsBackAGappedSetTheServerCanMatch(int onServer)
     {
-        var note = FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer);
+        var note = FileProcessor.WithholdPartialPush(Marks(34), complete: false, onServer, maxChapters: null);
         Assert.NotNull(note);
         // The count is named, so the summary line says what it lost out to rather than only that
         // something was withheld.
         Assert.Contains($"already has {onServer}", note);
     }
 
+    /// <summary>
+    /// The defect this rule was reported with (build 415): a book whose server list ran to 180
+    /// auto-generated marks refused a hard-won partial set of 30 under <c>-x 60</c>, because 180 is
+    /// more than 30. <c>--max-chapters</c> is the run being told which lists cannot be curated, and
+    /// it has to mean that on the server as well as in the file - the same number already throws
+    /// the file's own marks away without <c>--force</c>.
+    /// </summary>
+    [Fact]
+    public void WithholdPartialPush_SendsAGappedSetOverAServerListMaxChaptersCallsBogus()
+        => Assert.Null(FileProcessor.WithholdPartialPush(
+            Marks(30), complete: false, onServer: 180, maxChapters: 60));
+
+    /// <summary>
+    /// The threshold is a ceiling on what is plausible, not a licence to overwrite: a server list
+    /// within it is still a list this run has no evidence it can improve on.
+    /// </summary>
+    /// <param name="onServer">Marks the server holds.</param>
+    /// <param name="maxChapters">The run's --max-chapters.</param>
+    [Theory]
+    [InlineData(60, 60)]  // exactly at the ceiling - "exceeding it" is what makes marks bogus
+    [InlineData(40, 60)]
+    public void WithholdPartialPush_StillHoldsBackWhenTheServerListIsWithinMaxChapters(
+        int onServer, int maxChapters)
+        => Assert.NotNull(FileProcessor.WithholdPartialPush(
+            Marks(30), complete: false, onServer, maxChapters));
+
     /// <summary>Nothing to send and nothing on the server is still a refusal, and one that does not
     /// claim the server "already has 0".</summary>
     [Fact]
     public void WithholdPartialPush_WithNothingOnEitherSide_SaysSoWithoutACount()
     {
-        var note = FileProcessor.WithholdPartialPush(Marks(0), complete: false, onServer: 0);
+        var note = FileProcessor.WithholdPartialPush(Marks(0), complete: false, onServer: 0, maxChapters: null);
         Assert.NotNull(note);
         Assert.DoesNotContain("already has", note);
     }

@@ -1274,7 +1274,9 @@ book pushed, against a run that has just spent minutes listening to that book.
   than the run is holding — so a book the server has no chapters for gets the
   partial set rather than nothing — and is kept back when the server's list is
   at least as long, since replacing it with a shorter one would leave it that
-  way. Finish the file — see
+  way. **`--max-chapters` overrides that comparison**: a server list longer
+  than the threshold is one you have already declared bogus, so it no longer
+  protects itself and the partial set is sent over it. Finish the file — see
   [Resuming an interrupted run](#resuming-an-interrupted-run) — and run
   `--abs-push` again to send the complete set. `--dry-run` writes nothing and
   sends nothing.
@@ -1366,8 +1368,9 @@ are reported as skipped and neither is touched. Running it twice over the same
 shelf does nothing the second time.
 
 As always with `--abs-push`, a book left with an unresolved chapter-sequence gap
-is sent only where the server has fewer marks for it, and a push that cannot
-happen never fails a file that was marked successfully.
+is sent only where the server has fewer marks for it — or where `--max-chapters`
+condemns the server's list as bogus — and a push that cannot happen never fails
+a file that was marked successfully.
 
 `--abs-sync`
 : Shorthand for `--abs-pull --verify --abs-push`, which is the reconciliation
@@ -2125,6 +2128,10 @@ skipped (reported as "skipped").
   considered bogus (some publishers write a "chapter" every few minutes) and
   discarded, even without `--force`. Files at or below the threshold are
   still skipped unless `--force` is also given.
+  The same judgement applies to Audiobookshelf: a book whose chapter list on
+  the server is longer than `<n>` is one this run will overwrite even with an
+  incomplete set, where an unconvicted list of that length would have held the
+  push back (see [`--abs-push`](#audiobookshelf)).
 
 ### Detection safety nets
 

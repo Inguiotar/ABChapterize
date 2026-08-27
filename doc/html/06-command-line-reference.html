@@ -361,7 +361,9 @@ chapter-sequence gap goes when Audiobookshelf has <em>fewer</em> marks for that 
 than the run is holding — so a book the server has no chapters for gets the
 partial set rather than nothing — and is kept back when the server's list is
 at least as long, since replacing it with a shorter one would leave it that
-way. Finish the file — see
+way. <strong><code>--max-chapters</code> overrides that comparison</strong>: a server list longer
+than the threshold is one you have already declared bogus, so it no longer
+protects itself and the partial set is sent over it. Finish the file — see
 <a href="#resuming-an-interrupted-run">Resuming an interrupted run</a> — and run
 <code>--abs-push</code> again to send the complete set. <code>--dry-run</code> writes nothing and
 sends nothing.</p>
@@ -436,8 +438,9 @@ that has none has them sent and nothing is written; two sides that already agree
 are reported as skipped and neither is touched. Running it twice over the same
 shelf does nothing the second time.</p>
 <p>As always with <code>--abs-push</code>, a book left with an unresolved chapter-sequence gap
-is sent only where the server has fewer marks for it, and a push that cannot
-happen never fails a file that was marked successfully.</p>
+is sent only where the server has fewer marks for it — or where <code>--max-chapters</code>
+condemns the server's list as bogus — and a push that cannot happen never fails
+a file that was marked successfully.</p>
 <p><code>--abs-sync</code>
 : Shorthand for <code>--abs-pull --verify --abs-push</code>, which is the reconciliation
 above with the marks checked against the audio on the way through. It is a
@@ -1132,7 +1135,11 @@ by the detection result.</p>
 : Sanity threshold: a file with more than <code>&lt;n&gt;</code> pre-existing marks has them
 considered bogus (some publishers write a &quot;chapter&quot; every few minutes) and
 discarded, even without <code>--force</code>. Files at or below the threshold are
-still skipped unless <code>--force</code> is also given.</p>
+still skipped unless <code>--force</code> is also given.
+The same judgement applies to Audiobookshelf: a book whose chapter list on
+the server is longer than <code>&lt;n&gt;</code> is one this run will overwrite even with an
+incomplete set, where an unconvicted list of that length would have held the
+push back (see <a href="#audiobookshelf"><code>--abs-push</code></a>).</p>
 <h2 id="detection-safety-nets">Detection safety nets<a class="anchor" href="#detection-safety-nets" aria-label="Permalink to this heading">#</a></h2>
 <p>Bounds on what detection is willing to believe, and on how long it keeps
 looking. None of these is needed for an ordinary book.</p>

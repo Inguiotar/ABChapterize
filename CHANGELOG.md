@@ -17,6 +17,13 @@ earn a round number.
 
 ### Added
 
+- **`--max-chapters` now also applies to what Audiobookshelf holds.** A chapter set left with a
+  gap is normally kept back when the server's list for that book is at least as long, on the
+  grounds that the longer list might be the better one. A list longer than `--max-chapters` is
+  one you have already told the run is bogus, so it no longer earns that protection and the
+  partial set is sent over it — which is what you want for a book the server has filled with a
+  "chapter" every few minutes.
+
 - **`--lang` takes a list of candidate languages.** Give it several codes separated by commas —
   `--lang no,da,sv` — and each file's language is still worked out individually, but only from
   the languages you named. It costs nothing extra: the detector already weighs every language it
