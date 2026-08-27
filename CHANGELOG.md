@@ -52,10 +52,6 @@ earn a round number.
   given them, and **`--abs-sync` is a shorthand for exactly that trio** —
   `--abs-pull --verify --abs-push` — which is the whole of what it does.
 
-  A local file whose play time differs from the book's by more than a minute is passed over
-  rather than marked: it is one part of a split book, or a different edition, and the server's
-  chapter list describes neither.
-
 - **`--abs-retry` waits out a server that is not answering.** Every exchange with
   Audiobookshelf — signing in, listing a library, fetching a book, sending its chapters — is
   tried again for up to three minutes by default, a minute between attempts, so a server
@@ -76,6 +72,12 @@ earn a round number.
   local files you name are matched against the server's libraries by their album tag, their
   title tag, the folder they sit in, or their file name, in that order. Useful for putting a
   shelf you marked long ago onto a server that never saw the marks.
+
+  **A book has to be the same recording as the file, not merely the same title.** One whose
+  play time differs by more than a minute is passed over with a note giving both — it is one
+  part of a split book, or an abridgement, or another edition, and its chapter list describes
+  none of them. This applies wherever a local file is paired with a book, so every mode that
+  sends marks up or brings them down is covered by it.
 
 - **`--abs` takes any format ffmpeg can read**, not only the ones chapter marks can be written
   into. A `.flac` or `.ogg` book on a server is now marked like any other: the marks go into

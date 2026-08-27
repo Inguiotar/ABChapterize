@@ -1300,6 +1300,15 @@ book pushed, against a run that has just spent minutes listening to that book.
   matches several books, is skipped with a note; `--abs item:<id>` is how one
   book is named exactly.
 
+  A name alone is not enough: **the two must also be the same recording.** A
+  book whose play time differs from the file's by more than a minute is passed
+  over with a note saying both. Every part of a split book carries the same
+  album tag as the whole, and Audiobookshelf's marks are positions on the whole
+  item's timeline — so without that test a five-minute part would be sent up as
+  a whole book's chapter list, or given one, nearly all of it past its own end.
+  An abridgement or a different edition of the same title is caught by it too.
+  A book the server reports no play time for is matched on its name alone.
+
   A book with no marks in it is skipped too: the update replaces the server's
   chapter list rather than merging into it, so sending an empty one would delete
   what is there.
@@ -1322,15 +1331,10 @@ book pushed, against a run that has just spent minutes listening to that book.
   done. Everything else about the run is unchanged: a book neither side has
   marked is detected exactly as it would be otherwise.
 
-  Each file is matched against the server's libraries the same way
-  [`--abs-push-only`](#sending-marks-a-book-already-has) matches them, with one
-  extra test: **the two must be the same recording.** A local file whose play
-  time differs from the book's by more than a minute is passed over with a note.
-  Audiobookshelf's marks are positions on the whole item's timeline, and every
-  part of a split book carries the same album tag as the whole — so without that
-  test, a five-minute part would be given a whole book's chapter list, nearly all
-  of it past its own end. An abridgement or a different edition of the same title
-  is caught by it too.
+  Each file is matched against the server's libraries exactly the way
+  [`--abs-push-only`](#sending-marks-a-book-already-has) matches them, the
+  same-recording test included: a book whose play time is not this file's is
+  passed over rather than pulled from.
 
 `--abs-pull-only`
 : Write each file the marks Audiobookshelf holds for it and change nothing else.

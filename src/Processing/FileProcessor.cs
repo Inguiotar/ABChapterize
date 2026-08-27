@@ -2280,10 +2280,11 @@ public sealed class FileProcessor
     /// </para>
     /// <para>
     /// A run that also pulls has done the looking already, and its answer is used rather than
-    /// asked for again - which matters beyond saving a lookup, because the pull refuses a book
-    /// whose play time is not this file's (see <see cref="ABChapterize.Abs.AbsChapterPull"/>) and
-    /// re-matching here would walk straight past that refusal. It is also where the second half of
-    /// the reconciliation lives: a list the server already has is not sent back to it.
+    /// asked for again - which saves a lookup, and is also where the second half of the
+    /// reconciliation lives: a list the server already has is not sent back to it. Either way the
+    /// book has passed the play-time test in
+    /// <see cref="ABChapterize.Abs.AbsItemMatcher.SameRecordingSeconds"/>, that being part of what
+    /// matching a file to a book means rather than something a caller asks for.
     /// </para>
     /// </remarks>
     private async Task<(string Note, bool Mismatch)> PushLocalFileAsync(

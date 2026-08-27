@@ -34,6 +34,15 @@ public readonly record struct AbsMatch(AbsBook? Book, string Reason);
 /// one is "this book is not on the server", the other "say which of these you meant".
 /// </para>
 /// <para>
+/// <b>All four clues are names, and a name is not evidence that two things are the same recording</b>
+/// - so the book a clue settles on has to pass <see cref="SameRecordingSeconds"/> before it is
+/// handed back. That test lives here rather than at any one caller because everything this tool
+/// does across the two sides goes through a match: pulling a chapter list into a local file,
+/// sending one up from a local file, or both at once. A caller that had to remember to ask would
+/// eventually be a caller that forgot, and the failure it forgot to prevent writes a whole book's
+/// marks into one part of it.
+/// </para>
+/// <para>
 /// Pure, and separate from the run for that reason: it is given the books and the probe result and
 /// returns a verdict, which is what makes every branch of it testable without a server.
 /// </para>
@@ -41,11 +50,24 @@ public readonly record struct AbsMatch(AbsBook? Book, string Reason);
 public static class AbsItemMatcher
 {
     /// <summary>
+    /// How far the local file's play time and the server's may differ and still be taken for the
+    /// same recording, in seconds.
+    /// </summary>
+    /// <remarks>
+    /// Generous rather than tight, because what it has to separate is not close: two encodes of one
+    /// book differ by an encoder's padding and a trimmed tail, a second or two at most, while a
+    /// part of a split book, an abridgement or a different edition differ by many minutes. A minute
+    /// sits in the empty space between those, and it is also about the point past which a mark
+    /// taken from the other timeline would be visibly in the wrong place anyway.
+    /// </remarks>
+    public const double SameRecordingSeconds = 60.0;
+
+    /// <summary>
     /// Looks for the one book a local file is a copy of.
     /// </summary>
     /// <param name="books">Every book on the server this account can see.</param>
     /// <param name="localPath">Path of the local audio file.</param>
-    /// <param name="info">What ffprobe found in it, for its container tags.</param>
+    /// <param name="info">What ffprobe found in it, for its container tags and its play time.</param>
     /// <returns>The book and how it was recognized, or no book and why not.</returns>
     public static AbsMatch Find(IReadOnlyList<AbsBook> books, string localPath, MediaInfo info)
     {
@@ -57,7 +79,7 @@ public static class AbsItemMatcher
             var matches = byPath.Count > 0 ? byPath : [.. books.Where(b => Overlaps(b, clue))];
 
             if (matches.Count == 1)
-                return new AbsMatch(matches[0], $"matched \"{matches[0].Title}\" by {source}");
+                return Settle(matches[0], source, info);
             if (matches.Count > 1)
                 return new AbsMatch(null,
                     $"the {source} \"{clue}\" matches {matches.Count} books on the server "
@@ -66,6 +88,44 @@ public static class AbsItemMatcher
         }
         return new AbsMatch(null, "no book on the server matches this file");
     }
+
+    /// <summary>
+    /// Accepts the one book a clue settled on, unless its play time says it is not this recording.
+    /// </summary>
+    /// <param name="book">The book the clue named.</param>
+    /// <param name="source">What the clue was, for the note either way.</param>
+    /// <param name="info">What ffprobe found in the local file.</param>
+    /// <returns>The match, or no book and the play times that ruled it out.</returns>
+    /// <remarks>
+    /// <para>
+    /// The search stops here rather than trying the next clue. A refusal is not "this clue found
+    /// nothing" but "the most trustworthy clue still available named a book that is not this
+    /// audio", and carrying on to a less trustworthy one after that is guessing - which is the
+    /// thing the whole ordering exists to avoid.
+    /// </para>
+    /// <para>
+    /// A book the server reports no play time for is kept. There is then no evidence either way,
+    /// and refusing on its absence would turn a server that answers differently from the one this
+    /// was measured against into a server nothing can be pushed to at all - a failure that looks
+    /// exactly like a broken matcher.
+    /// </para>
+    /// </remarks>
+    private static AbsMatch Settle(AbsBook book, string source, MediaInfo info)
+    {
+        var drift = Math.Abs(book.DurationSeconds - info.DurationSeconds);
+        if (book.DurationSeconds > 0 && drift > SameRecordingSeconds)
+            return new AbsMatch(null,
+                $"\"{book.Title}\" on the server runs {FormatMinutes(book.DurationSeconds)} against "
+                + $"this file's {FormatMinutes(info.DurationSeconds)}, so they are not the same "
+                + "recording - one part of a split book, or a different edition");
+
+        return new AbsMatch(book, $"matched \"{book.Title}\" by {source}");
+    }
+
+    /// <summary>A play time as whole minutes, which is the resolution this comparison works at.
+    /// </summary>
+    /// <param name="seconds">The play time.</param>
+    private static string FormatMinutes(double seconds) => $"{seconds / 60:0} min";
 
     /// <summary>
     /// What this file says it is, most trustworthy first; see the type remarks for why that order.

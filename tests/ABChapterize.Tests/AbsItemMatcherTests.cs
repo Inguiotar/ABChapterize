@@ -10,21 +10,27 @@ namespace ABChapterize.Tests;
 
 /// <summary>
 /// Tests for <see cref="AbsItemMatcher"/>: the order the four clues about a local file are tried
-/// in, and the two ways the search can come back empty-handed.
+/// in, the two ways the search can come back empty-handed, and the play-time test that a book named
+/// by any of them still has to pass.
 /// </summary>
 public sealed class AbsItemMatcherTests
 {
     /// <summary>A book with the given title, everything else being beside the point here.</summary>
     /// <param name="title">The library title.</param>
     /// <param name="relativePath">The item folder, which the folder-name clue matches against.</param>
-    private static AbsBook Book(string title, string relativePath = "")
-        => new(title, title, null, relativePath, 1, 0, 3600);
+    /// <param name="seconds">Play time as the library reports it. The default matches
+    /// <see cref="Tagged"/>'s, so a test that is not about play times need not mention them.</param>
+    /// <param name="audioFiles">How many files the item holds.</param>
+    private static AbsBook Book(
+        string title, string relativePath = "", double seconds = 3600, int audioFiles = 1)
+        => new(title, title, null, relativePath, audioFiles, 0, seconds);
 
     /// <summary>A probe result carrying the given container tags.</summary>
     /// <param name="title">The title tag, or null.</param>
     /// <param name="album">The album tag, or null.</param>
-    private static MediaInfo Tagged(string? title = null, string? album = null)
-        => new(3600, 1000, 0, "aac", "LC", TitleTag: title, AlbumTag: album);
+    /// <param name="seconds">Play time of the local file.</param>
+    private static MediaInfo Tagged(string? title = null, string? album = null, double seconds = 3600)
+        => new(seconds, 1000, 0, "aac", "LC", TitleTag: title, AlbumTag: album);
 
     [Fact]
     public void AlbumTag_IsTriedFirst()
@@ -145,5 +151,109 @@ public sealed class AbsItemMatcherTests
         var match = AbsItemMatcher.Find(books, @"C:\books\x.m4b", Tagged(album: "Mort"));
 
         Assert.Equal("Mort", match.Book?.Title);
+    }
+
+    /// <summary>
+    /// The case the play-time test exists for. Every one of a split book's parts carries the same
+    /// album tag as the whole, so the clues recognize each of them - and the item's chapter list
+    /// describes the concatenated timeline, so a five-minute part would be given a whole book's
+    /// marks, nearly all of them past its own end. It is refused for every mode alike: no book
+    /// means nothing pulled into the file and nothing sent up from it.
+    /// </summary>
+    [Fact]
+    public void OnePartOfASplitBook_IsNotMatchedToTheWholeBook()
+    {
+        var books = new[] { Book("DW35 - Wintersmith", seconds: 36000, audioFiles: 135) };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\part003.m4b", Tagged(album: "DW35 - Wintersmith", seconds: 300));
+
+        Assert.Null(match.Book);
+        Assert.Contains("not the same recording", match.Reason);
+    }
+
+    /// <summary>
+    /// Two encodes of one book differ by an encoder's padding and a trimmed tail, which is well
+    /// inside the tolerance and must not stop a match.
+    /// </summary>
+    [Fact]
+    public void ASecondOrTwoOfDifference_IsStillTheSameRecording()
+    {
+        var books = new[] { Book("Wintersmith", seconds: 36000) };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(album: "Wintersmith", seconds: 36002.5));
+
+        Assert.Equal("Wintersmith", match.Book?.Title);
+    }
+
+    /// <summary>An abridgement, or a different edition of the same title: recognized by name, and
+    /// hours apart. The note carries both play times, that being the whole of what a user needs to
+    /// see which of their two copies this is.</summary>
+    [Fact]
+    public void ADifferentEditionOfTheSameTitle_IsRefusedToo()
+    {
+        var books = new[] { Book("Wintersmith", seconds: 36000) };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(title: "Wintersmith", seconds: 21600));
+
+        Assert.Null(match.Book);
+        Assert.Contains("600 min", match.Reason);
+        Assert.Contains("360 min", match.Reason);
+    }
+
+    /// <summary>
+    /// The file count is deliberately not the test. A book joined into one file locally but kept as
+    /// several on the server is what the sister project produces, and the server's chapter list is
+    /// exactly the right one for that file - which is why the play time decides and the file count
+    /// does not.
+    /// </summary>
+    [Fact]
+    public void ASplitBookJoinedLocally_IsMatched()
+    {
+        var books = new[] { Book("Wintersmith", seconds: 36000, audioFiles: 19) };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(album: "Wintersmith", seconds: 36000));
+
+        Assert.Equal("Wintersmith", match.Book?.Title);
+    }
+
+    /// <summary>
+    /// No play time on the server is no evidence, not evidence against: refusing on its absence
+    /// would leave a server that answers differently from ours one nothing can be pushed to.
+    /// </summary>
+    [Fact]
+    public void ABookTheServerReportsNoPlayTimeFor_IsStillMatched()
+    {
+        var books = new[] { Book("Wintersmith", seconds: 0) };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(album: "Wintersmith", seconds: 36000));
+
+        Assert.Equal("Wintersmith", match.Book?.Title);
+    }
+
+    /// <summary>
+    /// A refusal stops the search instead of falling through to the next clue. The album tag is the
+    /// most trustworthy thing the file says about itself, and a file name that names a different
+    /// book of the right length is not better evidence - it is the guess the clue order exists to
+    /// refuse.
+    /// </summary>
+    [Fact]
+    public void ARefusedBook_StopsTheSearchRatherThanTryingTheNextClue()
+    {
+        var books = new[]
+        {
+            Book("Wintersmith", seconds: 36000),
+            Book("Some Other Book", seconds: 300),
+        };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\Some Other Book.m4b", Tagged(album: "Wintersmith", seconds: 300));
+
+        Assert.Null(match.Book);
+        Assert.Contains("not the same recording", match.Reason);
     }
 }

@@ -38,12 +38,35 @@ public sealed class RevertTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, name + ".bak"), $"original {name}");
     }
 
-    /// <summary>Reverts the temp directory.</summary>
+    /// <summary>Everything the last <see cref="RevertAsync"/> wrote to the console.</summary>
+    /// <remarks>
+    /// A field rather than a return value because the runs worth reading the output of are the ones
+    /// that end in an <see cref="AppError"/>, and a value returned from a method that throws never
+    /// reaches the caller. Recorded in the finally, so it is there either way.
+    /// </remarks>
+    private string _output = "";
+
+    /// <summary>Reverts the temp directory, capturing what it printed.</summary>
+    /// <remarks>
+    /// The run is a <c>--quiet</c> one deliberately: a warning is the reason the run will end in an
+    /// error, so it is the one line quiet mode must not swallow.
+    /// </remarks>
     private async Task RevertAsync()
     {
         var options = CliOptions.Parse(["--revert", "--quiet", _dir])!;
         using var progress = new ProgressRenderer(quiet: true, noBar: true);
-        await new FileProcessor(options, progress).RunAsync(CancellationToken.None);
+        var original = Console.Out;
+        var writer = new StringWriter();
+        Console.SetOut(writer);
+        try
+        {
+            await new FileProcessor(options, progress).RunAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetOut(original);
+            _output = writer.ToString();
+        }
     }
 
     /// <summary>What one file holds now, or null when it is not there at all.</summary>
@@ -95,5 +118,26 @@ public sealed class RevertTests : IDisposable
         Assert.Equal("original c.m4b", Contents("c.m4b"));
         // The one that failed keeps its backup: nothing was thrown away on the way to the error.
         Assert.Equal("original b.m4b", Contents("b.m4b.bak"));
+    }
+
+    /// <summary>
+    /// The warning has to name the file. File.Move's own exceptions carry no path - a book held
+    /// open by a player gives the bare "Access to the path is denied." - so over a folder of
+    /// audiobooks, which one failed would otherwise be the single thing missing from the report,
+    /// and the error at the end only says how many.
+    /// </summary>
+    [Fact]
+    public async Task ABackupThatWillNotMove_IsNamedInTheWarning()
+    {
+        GivenBackedUp("a.m4b");
+        GivenBackedUp("unmovable.m4b");
+        File.Delete(Path.Combine(_dir, "unmovable.m4b"));
+        Directory.CreateDirectory(Path.Combine(_dir, "unmovable.m4b"));
+
+        await Assert.ThrowsAsync<AppError>(RevertAsync);
+
+        Assert.Contains("unmovable.m4b: WARNING - not restored from its backup", _output);
+        // The one that worked is not announced under --quiet, so the warning stands alone.
+        Assert.DoesNotContain("a.m4b: reverted", _output);
     }
 }
