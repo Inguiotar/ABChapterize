@@ -100,6 +100,103 @@ public sealed class CliOptionsTests : IDisposable
     public void Lang_ThreeLetterCode_IsAccepted(string value)
         => Assert.Equal(value.ToLowerInvariant(), ParseFile("--lang", value)!.Language);
 
+    /// <summary>
+    /// A candidate list narrows detection to the languages named, and is re-spelled from the parsed
+    /// codes so that whitespace between them cannot reach the fingerprint or the debug header.
+    /// </summary>
+    /// <param name="value">The list as a user might type it.</param>
+    [Theory]
+    [InlineData("no,da,sv")]
+    [InlineData("no, da, sv")]
+    [InlineData("NO,DA,SV")]
+    [InlineData(" no ,da,  sv ")]
+    public void Lang_CandidateList_IsParsedAndNormalized(string value)
+    {
+        var o = ParseFile("--lang", value)!;
+
+        Assert.Equal(["no", "da", "sv"], o.LanguageCandidates);
+        Assert.Equal("no,da,sv", o.Language);
+        // A list is detected per file exactly as "auto" is - it only narrows what may win.
+        Assert.True(o.AutoLanguage);
+    }
+
+    /// <summary>The user's call: a shelf named "no,da,sv" is mostly Norwegian, and English is not
+    /// on the list at all, so it is the first candidate that stands in - not "en".</summary>
+    [Fact]
+    public void Lang_CandidateList_FallsBackToTheFirstLanguageNamed()
+    {
+        var o = ParseFile("--lang", "da,no,sv")!;
+
+        Assert.Equal("da", o.FallbackLanguage);
+        Assert.Equal("da", o.DefaultProfile.Language);
+        Assert.Equal("Kapitel", o.DefaultProfile.Title);
+    }
+
+    [Fact]
+    public void Lang_SingleCode_IsAPin_NotACandidateListOfOne()
+    {
+        var o = ParseFile("--lang", "de")!;
+
+        Assert.Empty(o.LanguageCandidates);
+        Assert.False(o.AutoLanguage);
+        Assert.Equal("de", o.FallbackLanguage);
+    }
+
+    [Fact]
+    public void Lang_Auto_HasNoCandidates_AndStillFallsBackToEnglish()
+    {
+        var o = ParseFile("--lang", "auto")!;
+
+        Assert.Empty(o.LanguageCandidates);
+        Assert.Equal("en", o.FallbackLanguage);
+    }
+
+    /// <summary>
+    /// A list is checked for shape exactly as a single code is, so a language this tool has no
+    /// number grammar for may be named in one - Whisper still transcribes it, and digits and Roman
+    /// numerals still read. The English defaults then fill in, as they do for a pinned unsupported
+    /// code.
+    /// </summary>
+    [Fact]
+    public void Lang_CandidateList_MayNameLanguagesWithoutANumberGrammar()
+    {
+        var o = ParseFile("--lang", "fi,et,no")!;
+
+        Assert.Equal(["fi", "et", "no"], o.LanguageCandidates);
+        Assert.Equal("fi", o.FallbackLanguage);
+        Assert.Equal("fi", o.DefaultProfile.Language);
+        Assert.Equal("Chapter", o.DefaultProfile.Title);
+    }
+
+    /// <param name="value">A malformed list.</param>
+    /// <param name="expected">Text the error message must carry, so the user is told which part
+    /// of what they typed is wrong.</param>
+    [Theory]
+    [InlineData("no,,sv", "empty entry")]
+    [InlineData("no,sv,", "empty entry")]
+    [InlineData("auto,de", "cannot be combined")]
+    [InlineData("de,auto", "cannot be combined")]
+    [InlineData("no,dansk", "dansk")]
+    [InlineData("no,da,no", "more than once")]
+    public void Lang_MalformedCandidateList_IsRejected(string value, string expected)
+    {
+        var ex = Assert.Throws<CliError>(() => ParseFile("--lang", value));
+        Assert.Contains(expected, ex.Message);
+    }
+
+    [Fact]
+    public void Lang_CandidateList_ChangesTheRunFingerprint()
+    {
+        var nordic = ParseFile("--lang", "no,da,sv")!.RunFingerprint;
+
+        // Order is meaningful - it decides the fallback - so a reordering is a different run.
+        Assert.NotEqual(nordic, ParseFile("--lang", "da,no,sv")!.RunFingerprint);
+        Assert.NotEqual(nordic, ParseFile("--lang", "no,da")!.RunFingerprint);
+        Assert.NotEqual(nordic, ParseFile("--lang", "auto")!.RunFingerprint);
+        // Whitespace is not: the same request typed two ways is the same run.
+        Assert.Equal(nordic, ParseFile("--lang", "no, da, sv")!.RunFingerprint);
+    }
+
     [Fact]
     public void Lang_Auto_WithExplicitOverrides_StillWinsOverEnglishFallback()
     {

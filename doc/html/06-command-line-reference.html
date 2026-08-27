@@ -70,7 +70,7 @@ abchapterize --list-gpus
 <p>Options must precede the file/directory arguments, which must come last.
 Short options that take no parameter may be collapsed: <code>-rb</code> = <code>-r -b</code>.
 Short options that take a parameter — every one shown with a <code>&lt;value&gt;</code>
-placeholder in the reference below, e.g. <code>-l &lt;code|auto&gt;</code> — cannot be
+placeholder in the reference below, e.g. <code>-l &lt;codes|auto&gt;</code> — cannot be
 collapsed with others; each needs its own <code>-x value</code>.</p>
 <p>Options taking a decimal number accept either separator — <code>-n 2.5</code> and
 <code>-n 2,5</code> are the same thing — so you can type whatever your keyboard and
@@ -521,7 +521,7 @@ ABS mode is that same doomed folder, so they cannot be combined with <code>--abs
 <code>--revert</code> and <code>--cleanup</code> work on folders on this machine and have nothing to do
 with a server.</p>
 <h2 id="detection-behaviour">Detection behaviour<a class="anchor" href="#detection-behaviour" aria-label="Permalink to this heading">#</a></h2>
-<p><code>-l</code>, <code>--lang &lt;code|auto&gt;</code>
+<p><code>-l</code>, <code>--lang &lt;codes|auto&gt;</code>
 : Language hint for Whisper, or <code>auto</code> (the default). A code is the language's
 two ISO 639-1 letters (<code>de</code>, <code>fr</code>, <code>ja</code>) or, for the few Whisper spells with
 three, those (<code>haw</code>, <code>yue</code>).
@@ -531,7 +531,13 @@ and used for the rest of that file, falling back to <code>en</code> when the
 detection is inconclusive - see
 <a href="#auto-language-detection">Auto language detection</a> below. An explicit
 code pins the whole run to one language instead, skipping
-detection entirely. The code is checked for shape, not against a list: any
+detection entirely.
+<strong>Several codes separated by commas</strong> - <code>-l no,da,sv</code> - keep the per-file
+detection but let it choose only between those languages, which is what you
+want for a shelf whose range you know. A file that fits none of them falls
+back to the <strong>first</strong> language named rather than to <code>en</code>: a list is also a
+statement of what the shelf mostly is. Order therefore matters, and
+<code>-l no,da</code> is a different run from <code>-l da,no</code>. The code is checked for shape, not against a list: any
 language Whisper knows can be named here, including the ones this tool has no
 number words for, and a code Whisper does <em>not</em> know is passed on and quietly
 gets you whatever it makes of it. Either way, for the languages listed in
@@ -1075,6 +1081,18 @@ wins. This matters more than it sounds - five quiet agreements that a book
 is German are worth more than any one of them alone.</li>
 <li>Only when two languages tie for first place, or nothing decodable could be
 sampled at all, does the file fall back to <code>en</code>.</li>
+</ul>
+<p>Giving <code>--lang</code> several codes (<code>-l no,da,sv</code>) leaves all of this in place and
+only narrows what the detector may answer, at no extra cost - one pass scores
+every language it knows either way, and the list decides which of those scores
+is allowed to win. Two things follow. The probability is the same number it
+would have been unrestricted, so the 0.6 bar above means exactly what it means
+for <code>auto</code>. And the two fallbacks in the last point become the <strong>first</strong>
+language you named instead of <code>en</code>, which is also what a file gets when it is
+in none of the listed languages at all - there the winning score is
+vanishingly small, no sample clears the bar, and the run says so in
+<code>--verbose</code>.</p>
+<ul>
 <li>An explicitly given phrase or title option always wins over the localized
 default, regardless of the detected language.</li>
 </ul>

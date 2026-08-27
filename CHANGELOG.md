@@ -17,6 +17,14 @@ earn a round number.
 
 ### Added
 
+- **`--lang` takes a list of candidate languages.** Give it several codes separated by commas —
+  `--lang no,da,sv` — and each file's language is still worked out individually, but only from
+  the languages you named. It costs nothing extra: the detector already weighs every language it
+  knows in one pass, and the list only decides which of them may win. A file that fits none of
+  them falls back to the **first** language named rather than to English, a list being as much a
+  statement of what a shelf mostly is as of what it might be, so order matters. Codes this tool
+  has no number words for may appear in a list exactly as they may on their own.
+
 - **Norwegian and Czech are now understood**, bringing the count to thirteen: chapter
   announcements, spoken numbers 0–999 as cardinals and ordinals, and the localized `--lang no`
   and `--lang cs` defaults for the chapter phrase, the title words and the prologue/epilogue.

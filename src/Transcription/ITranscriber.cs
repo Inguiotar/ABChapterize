@@ -40,13 +40,18 @@ public interface ITranscriber
 
     /// <summary>
     /// Detects the most likely spoken language of a short audio clip, without transcribing it.
-    /// Used for <c>--lang auto</c> (the default): a clip from the start of each file is passed
-    /// here once, before any transcription of that file happens.
+    /// Used wherever the language is worked out per file rather than pinned - <c>--lang auto</c>
+    /// (the default) and a <c>--lang</c> candidate list alike: clips from inside each file are
+    /// passed here, before any transcription of that file happens.
     /// </summary>
     /// <param name="samples">The audio samples (a short clip is enough).</param>
+    /// <param name="candidateLanguages">The languages the answer may be drawn from, or empty to
+    /// weigh every language Whisper knows. One pass scores them all either way, so restricting the
+    /// set costs nothing and changes only which of the scores may win.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The detected language code and Whisper's probability for it (0-1).</returns>
-    Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct);
+    Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(
+        float[] samples, IReadOnlyList<string> candidateLanguages, CancellationToken ct);
 
     /// <summary>
     /// Switches the language used for subsequent <see cref="TranscribeAsync"/> calls. Used to

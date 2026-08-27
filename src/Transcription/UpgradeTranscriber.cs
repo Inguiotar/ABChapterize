@@ -110,8 +110,10 @@ public sealed class UpgradeTranscriber : ITranscriber, IAsyncDisposable
     /// load the model to answer and the point of it is not to.
     /// </summary>
     /// <param name="samples">Unused.</param>
+    /// <param name="candidateLanguages">Unused.</param>
     /// <param name="ct">Unused.</param>
-    public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct)
+    public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(
+        float[] samples, IReadOnlyList<string> candidateLanguages, CancellationToken ct)
         => throw new NotSupportedException("The upgrade transcriber does not perform language detection.");
 
     /// <summary>Releases the underlying model if it was ever loaded.</summary>

@@ -97,6 +97,7 @@ Chapter detection: window sizes, thresholds, retry budgets and mark placement.
 | `MaxCustomMarksPerFile` | `100` | The most --custom marks one file may produce before the rest are dropped. |
 | `NamedMarkDedupeSeconds` | `10` | How close two matches of the same repeatable phrase must be to count as the same announcement heard twice rather than two announcements. |
 | `AutoLanguageProbabilityThreshold` | `0.6` | Whisper language-detection probability at or above which a single probe settles the file's language outright, with --lang auto. |
+| `AutoLanguageCandidateNoiseThreshold` | `0.05` | With a --lang candidate list, the probability below which the vote's winner is treated as noise and the first-named candidate is used instead. |
 | `AutoLanguageProbeAttempts` | `5` | How many language-detection samples one file may take before the vote decides it. |
 | `AutoLanguageProbeSeconds` | `30` | Length of one language-detection sample. |
 | `AutoLanguageExistingMarkOffsetSeconds` | `20` | How far past an existing chapter mark a language-detection sample starts, on the --verify and resume paths. |

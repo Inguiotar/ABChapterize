@@ -54,7 +54,7 @@ internal static class FolderConfig
     internal static readonly HashSet<string> PerFile =
     [
         // Language, and the profile that follows from it.
-        "Language", "AutoLanguage", "DefaultProfile",
+        "Language", "LanguageCandidates", "AutoLanguage", "FallbackLanguage", "DefaultProfile",
         // What is listened for, and what the marks are called.
         "ChapterPhrase", "Title", "PartTitle", "IntroTitle",
         "ProloguePhrase", "PrologueTitle", "EpiloguePhrase", "EpilogueTitle", "CustomMappings",

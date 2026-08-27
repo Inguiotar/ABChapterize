@@ -982,7 +982,7 @@ abchapterize --list-gpus
 Options must precede the file/directory arguments, which must come last.
 Short options that take no parameter may be collapsed: `-rb` = `-r -b`.
 Short options that take a parameter — every one shown with a `<value>`
-placeholder in the reference below, e.g. `-l <code|auto>` — cannot be
+placeholder in the reference below, e.g. `-l <codes|auto>` — cannot be
 collapsed with others; each needs its own `-x value`.
 
 Options taking a decimal number accept either separator — `-n 2.5` and
@@ -1469,7 +1469,7 @@ with a server.
 
 ### Detection behaviour
 
-`-l`, `--lang <code|auto>`
+`-l`, `--lang <codes|auto>`
 : Language hint for Whisper, or `auto` (the default). A code is the language's
   two ISO 639-1 letters (`de`, `fr`, `ja`) or, for the few Whisper spells with
   three, those (`haw`, `yue`).
@@ -1479,7 +1479,13 @@ with a server.
   detection is inconclusive - see
   [Auto language detection](#auto-language-detection) below. An explicit
   code pins the whole run to one language instead, skipping
-  detection entirely. The code is checked for shape, not against a list: any
+  detection entirely.
+  **Several codes separated by commas** - `-l no,da,sv` - keep the per-file
+  detection but let it choose only between those languages, which is what you
+  want for a shelf whose range you know. A file that fits none of them falls
+  back to the **first** language named rather than to `en`: a list is also a
+  statement of what the shelf mostly is. Order therefore matters, and
+  `-l no,da` is a different run from `-l da,no`. The code is checked for shape, not against a list: any
   language Whisper knows can be named here, including the ones this tool has no
   number words for, and a code Whisper does *not* know is passed on and quietly
   gets you whatever it makes of it. Either way, for the languages listed in
@@ -2051,6 +2057,17 @@ with itself partway through a book.
   is German are worth more than any one of them alone.
 - Only when two languages tie for first place, or nothing decodable could be
   sampled at all, does the file fall back to `en`.
+
+Giving `--lang` several codes (`-l no,da,sv`) leaves all of this in place and
+only narrows what the detector may answer, at no extra cost - one pass scores
+every language it knows either way, and the list decides which of those scores
+is allowed to win. Two things follow. The probability is the same number it
+would have been unrestricted, so the 0.6 bar above means exactly what it means
+for `auto`. And the two fallbacks in the last point become the **first**
+language you named instead of `en`, which is also what a file gets when it is
+in none of the listed languages at all - there the winning score is
+vanishingly small, no sample clears the bar, and the run says so in
+`--verbose`.
 - An explicitly given phrase or title option always wins over the localized
   default, regardless of the detected language.
 

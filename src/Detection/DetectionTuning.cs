@@ -1184,6 +1184,30 @@ internal static class DetectionTuning
     internal static double AutoLanguageProbabilityThreshold = 0.6;
 
     /// <summary>
+    /// With a <c>--lang</c> candidate list, the probability below which the vote's winner is
+    /// treated as noise and the first-named candidate is used instead. A noise floor, not a second
+    /// confidence bar: it separates "one of these languages, weakly" from "none of these
+    /// languages", which are different questions.
+    /// <para>
+    /// It exists because restricting detection cannot make the answer be "no". Whisper's detector
+    /// scores every language it knows and the restriction only picks the best of the named ones, so
+    /// a book in none of them still yields a winner - and the vote, which counts names and ignores
+    /// magnitude, will happily elect it. Measured on a German clip (build 414, ggml-small): the
+    /// unrestricted answer was de p=0.9844, while restricting to no,da,sv gave sv p=0.0001 and to
+    /// da,no gave da p=0.0000. A real language reads 0.4-0.98 in the same setup. The floor sits in
+    /// three orders of magnitude of empty space, so its exact value is not load-bearing - anything
+    /// well under 0.1 and well over 0.001 behaves identically.
+    /// </para>
+    /// <para>
+    /// Deliberately confined to the candidate-list path. Plain <c>--lang auto</c> has no
+    /// user-supplied prior to prefer - English is this tool's guess, not the user's - and its vote
+    /// is calibrated against the corpus as it stands, so putting a floor under that would be a
+    /// behaviour change to every existing run for no stated need.
+    /// </para>
+    /// </summary>
+    internal static double AutoLanguageCandidateNoiseThreshold = 0.05;
+
+    /// <summary>
     /// How many language-detection samples one file may take before the vote decides it. Each
     /// costs a short decode and one detector call - trivial next to a single probe window's
     /// transcription, and the reason re-probing is affordable at all - but five spread across a

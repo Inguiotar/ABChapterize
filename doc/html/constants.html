@@ -437,6 +437,11 @@ test suite when it no longer matches.</em></p>
 <td>Whisper language-detection probability at or above which a single probe settles the file's language outright, with --lang auto.</td>
 </tr>
 <tr>
+<td><code>AutoLanguageCandidateNoiseThreshold</code></td>
+<td><code>0.05</code></td>
+<td>With a --lang candidate list, the probability below which the vote's winner is treated as noise and the first-named candidate is used instead.</td>
+</tr>
+<tr>
 <td><code>AutoLanguageProbeAttempts</code></td>
 <td><code>5</code></td>
 <td>How many language-detection samples one file may take before the vote decides it.</td>

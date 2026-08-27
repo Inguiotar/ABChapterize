@@ -143,8 +143,41 @@ public sealed class CliOptions
     /// </summary>
     public string Language { get; private set; } = "auto";
 
-    /// <summary>True when <see cref="Language"/> is "auto" - the default. See <see cref="ResolveProfile"/>.</summary>
-    public bool AutoLanguage => Language == "auto";
+    /// <summary>
+    /// The languages detection may choose between when <see cref="Language"/> named several
+    /// (<c>--lang no,da,sv</c>), in the order given; empty for "auto" and for a single pinned
+    /// language.
+    /// <para>
+    /// A list narrows the <em>choice</em>, never what the recognizer is told: Whisper's decoder
+    /// prompt carries one language token, so exactly one language reaches it whatever is asked for
+    /// here. Detection is where a set is meaningful - it scores every language it knows in one
+    /// pass and returns the best, and this restricts which of them may win. Codes this tool has no
+    /// number grammar for are allowed, exactly as a single <c>--lang</c> allows one: what a code
+    /// means is Whisper's business (see <see cref="LanguageCodeRegex"/>).
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> LanguageCandidates { get; private set; } = [];
+
+    /// <summary>
+    /// True when each file's language is worked out rather than pinned - "auto", or a candidate
+    /// list, both of which leave <see cref="ChapterDetector"/> to resolve a profile per file. See
+    /// <see cref="ResolveProfile"/>.
+    /// </summary>
+    public bool AutoLanguage => Language == "auto" || LanguageCandidates.Count > 0;
+
+    /// <summary>
+    /// The language whose localized defaults stand in where a file's own detection cannot decide -
+    /// it was skipped, nothing decoded, or no candidate cleared
+    /// <see cref="DetectionTuning.AutoLanguageProbabilityThreshold"/>. English for "auto", the
+    /// **first** candidate for a list (the user's call: someone naming "no,da,sv" has said what
+    /// the shelf mostly is, and English is not on it), and the language itself for a pin.
+    /// <para>
+    /// The one place that decides this, so the parse-time <see cref="DefaultProfile"/>, the
+    /// placeholder <see cref="WhisperTranscriber"/> is constructed with and the per-file
+    /// resolution cannot answer it differently.
+    /// </para>
+    /// </summary>
+    public string FallbackLanguage { get; private set; } = "en";
 
     /// <summary>Raw chapter phrase or "/regexp/" as given on the command line (--chapter-phrase / -c); the default is localized by --lang.</summary>
     public string ChapterPhrase { get; private set; } = "chapter";
@@ -1604,9 +1637,15 @@ public sealed class CliOptions
         }
 
         o.Language = o.Language.ToLowerInvariant();
-        if (o.Language != "auto" && !LanguageCodeRegex.IsMatch(o.Language))
-            throw new CliError(
-                $"Invalid language code \"{o.Language}\": expected a language code like \"en\", or \"auto\".");
+        o.LanguageCandidates = ParseLanguageCandidates(o.Language);
+        // Re-spelled from the parsed list so that whitespace a user wrote between the codes cannot
+        // reach the fingerprint or the debug header, where two runs asking the same thing have to
+        // look the same.
+        if (o.LanguageCandidates.Count > 0)
+            o.Language = string.Join(',', o.LanguageCandidates);
+        o.FallbackLanguage = o.LanguageCandidates.Count > 0 ? o.LanguageCandidates[0]
+            : o.Language == "auto" ? "en"
+            : o.Language;
 
         // Both selectors were validated where they were parsed. Naming --model without --upgrade-model
         // re-points Scan at the chosen model, so `-m large` means large throughout rather than large
@@ -1670,9 +1709,10 @@ public sealed class CliOptions
                 + "exactly one book selector.");
 
         // With an explicit --lang this localizes the chapter phrase, title word and intro title
-        // (unless given explicitly) for every file; with auto-detection it is only the English
-        // fallback, and ChapterDetector resolves a fresh profile per file - see ResolveProfile.
-        var fallbackLanguage = o.AutoLanguage ? "en" : o.Language;
+        // (unless given explicitly) for every file; where the language is worked out per file it is
+        // only what stands in when detection cannot decide, and ChapterDetector resolves a fresh
+        // profile per file - see ResolveProfile and FallbackLanguage.
+        var fallbackLanguage = o.FallbackLanguage;
         o.DefaultProfile = o.ResolveProfile(fallbackLanguage);
         // Where an option was given, its own text stands - the whole spec, not this one language's
         // share of it, because the fingerprint and the debug log both have to tell two specs apart
@@ -2235,11 +2275,60 @@ public sealed class CliOptions
     }
 
     /// <summary>
+    /// Reads a <c>--lang</c> value into its candidate languages, validating every code it holds.
+    /// Returns empty for the two values that name no set: "auto", and a single pinned language.
+    /// <para>
+    /// A one-entry list is deliberately a pin rather than a set of one. The two would behave
+    /// identically anyway - a restricted detection with one candidate can only ever return it -
+    /// but a pin says so without spending five probes proving it, and it keeps
+    /// <c>--lang de</c> meaning exactly what it always meant.
+    /// </para>
+    /// </summary>
+    /// <param name="value">The lowercased option value.</param>
+    /// <exception cref="CliError">The value is not a language code, a list of them, or "auto".</exception>
+    private static IReadOnlyList<string> ParseLanguageCandidates(string value)
+    {
+        var parts = value.Split(',', StringSplitOptions.TrimEntries);
+
+        if (parts.Length == 1)
+        {
+            if (parts[0] != "auto" && !LanguageCodeRegex.IsMatch(parts[0]))
+                throw new CliError(
+                    $"Invalid language code \"{parts[0]}\": expected a language code like \"en\", "
+                    + "several of them separated by commas like \"no,da,sv\", or \"auto\".");
+            return [];
+        }
+
+        foreach (var part in parts)
+        {
+            if (part.Length == 0)
+                throw new CliError(
+                    $"Invalid --lang value \"{value}\": it has an empty entry. Separate the "
+                    + "candidate languages with single commas, e.g. \"no,da,sv\".");
+            // Refused in its own words rather than as a bad code, since "auto" is a value this
+            // option really does take - just not one that can be narrowed.
+            if (part == "auto")
+                throw new CliError(
+                    "--lang \"auto\" weighs every language Whisper knows and cannot be combined "
+                    + "with a candidate list. Give either \"auto\" or the codes to choose between.");
+            if (!LanguageCodeRegex.IsMatch(part))
+                throw new CliError(
+                    $"Invalid language code \"{part}\" in --lang \"{value}\": expected a language "
+                    + "code like \"en\".");
+        }
+
+        if (parts.GroupBy(p => p).FirstOrDefault(g => g.Count() > 1) is { } repeated)
+            throw new CliError(
+                $"Invalid --lang value \"{value}\": \"{repeated.Key}\" is named more than once.");
+        return parts;
+    }
+
+    /// <summary>
     /// Resolves the chapter phrase, title word and intro title for the given language: an
     /// explicit --chapter-phrase/--chapter-title/--part-title/--intro-title always wins; otherwise the localized
     /// default for <paramref name="language"/> is used (English defaults for languages without
-    /// an entry in <see cref="LanguageRegistry"/>). Called once at parse time for an explicit
-    /// --lang (building <see cref="DefaultProfile"/>), and once per file by
+    /// an entry in <see cref="LanguageRegistry"/>). Called once at parse time to build
+    /// <see cref="DefaultProfile"/> from <see cref="FallbackLanguage"/>, and once per file by
     /// <see cref="ChapterDetector"/> when <see cref="AutoLanguage"/> is active.
     /// </summary>
     /// <param name="language">Language code (not "auto") to resolve defaults for.</param>
@@ -2556,12 +2645,18 @@ public sealed class CliOptions
                                     asked for again.
 
         Detection tuning:
-          -l, --lang <code|auto>    Language hint for Whisper - the two-letter code, or the
+          -l, --lang <codes|auto>   Language hint for Whisper - the two-letter code, or the
                                     three-letter one where Whisper uses one ("haw", "yue") -
                                     or "auto" (the
                                     default): each file's language is detected from a short
                                     clip and used for that file, falling back to "en" when
-                                    the detection is inconclusive. Chapter numbers
+                                    the detection is inconclusive. Several codes separated by
+                                    commas ("-l no,da,sv") narrow that detection to those
+                                    languages, for a shelf you know the range of; a file none
+                                    of them fits falls back to the FIRST one named rather than
+                                    to "en". Codes this tool has no number grammar for are
+                                    accepted, alone or in a list - Whisper still transcribes
+                                    them, and digits and Roman numerals still read. Chapter numbers
                                     transcribed as words - cardinals and ordinals, before or
                                     after the phrase ("chapter two", "Erstes Kapitel") - are
                                     understood in

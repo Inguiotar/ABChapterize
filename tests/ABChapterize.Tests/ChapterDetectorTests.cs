@@ -266,10 +266,16 @@ public sealed class ChapterDetectorTests : IDisposable
         /// <summary>Number of times <see cref="DetectLanguageWithProbabilityAsync"/> was called.</summary>
         public int DetectLanguageCalls { get; private set; }
 
+        /// <summary>The candidate list handed to each detection call, in call order - what a
+        /// <c>--lang</c> list is supposed to reach the recognizer as.</summary>
+        public List<IReadOnlyList<string>> DetectCandidates { get; } = [];
+
         /// <inheritdoc/>
-        public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct)
+        public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(
+            float[] samples, IReadOnlyList<string> candidateLanguages, CancellationToken ct)
         {
             DetectLanguageCalls++;
+            DetectCandidates.Add(candidateLanguages);
             return Task.FromResult(LanguageAnswers.Count > 0 ? LanguageAnswers.Dequeue() : DetectedLanguage);
         }
 
@@ -7483,6 +7489,135 @@ public sealed class ChapterDetectorTests : IDisposable
         // The strongest raw guess is still reported, disagreeing with the profile on purpose.
         Assert.Equal("nl", result.DetectedLanguage);
         Assert.Equal(0.45, result.DetectedProbability, 3);
+    }
+
+    /// <summary>
+    /// A <c>--lang</c> candidate list reaches the recognizer as the set detection may choose from.
+    /// Whisper scores every language it knows in one pass either way, so this only restricts which
+    /// score may win - and the winner's probability is the raw one, which is why the conclusive
+    /// threshold means the same thing here as it does unrestricted.
+    /// </summary>
+    [Fact]
+    public async Task LanguageCandidates_AreHandedToTheDetector()
+    {
+        var (result, transcriber) = await DetectWithTranscriberAsync(
+            Options("--lang", "no,da,sv"),
+            [new(595, 600)],
+            s =>
+            {
+                s.LanguageAnswers.Enqueue(("da", 0.92f));
+                s.Add(0, Seg(0.5, " Kapitel et."));
+                s.Add(600, Seg(0.3, " Kapitel to."));
+            });
+
+        Assert.Equal(["no", "da", "sv"], Assert.Single(transcriber.DetectCandidates));
+        Assert.Equal("da", result.Profile.Language);
+        Assert.Equal("Kapitel", result.Profile.Title);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
+    }
+
+    /// <summary>Plain <c>--lang auto</c> restricts nothing, and must keep handing the detector an
+    /// empty set rather than a list of every language it knows.</summary>
+    [Fact]
+    public async Task AutoLanguage_WithoutCandidates_RestrictsNothing()
+    {
+        var (_, transcriber) = await DetectWithTranscriberAsync(
+            Options(),
+            [new(595, 600)],
+            s =>
+            {
+                s.LanguageAnswers.Enqueue(("de", 0.9f));
+                s.Add(0, Seg(0.5, " Kapitel eins."));
+            });
+
+        Assert.Empty(Assert.Single(transcriber.DetectCandidates));
+    }
+
+    /// <summary>
+    /// The candidate-list counterpart of
+    /// <see cref="AutoLanguage_FallsBackToEnglish_WhenTheVoteTies"/>: with a list there is a better
+    /// answer than English available, namely the first language the user named.
+    /// </summary>
+    [Fact]
+    public async Task LanguageCandidates_FallBackToTheFirstNamed_WhenTheVoteTies()
+    {
+        var (result, _) = await DetectWithTranscriberAsync(
+            Options("--lang", "da,no,sv"),
+            [new(595, 600)],
+            s =>
+            {
+                s.LanguageAnswers.Enqueue(("no", 0.3f));
+                s.LanguageAnswers.Enqueue(("sv", 0.45f));
+                s.LanguageAnswers.Enqueue(("no", 0.35f));
+                s.LanguageAnswers.Enqueue(("sv", 0.4f));
+                s.LanguageAnswers.Enqueue(("da", 0.2f));
+                s.Add(0, Seg(0.5, " Kapitel et."));
+                s.Add(600, Seg(0.3, " Kapitel to."));
+            });
+
+        Assert.Equal("da", result.Profile.Language);
+        Assert.Equal("Kapitel", result.Profile.Title);
+        // The strongest raw guess is still reported, disagreeing with the profile as it does for
+        // the English fallback.
+        Assert.Equal("sv", result.DetectedLanguage);
+        Assert.Equal(0.45, result.DetectedProbability, 3);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
+    }
+
+    /// <summary>
+    /// A book in none of the named languages. Restricting detection cannot make it answer "none of
+    /// these" - it still returns the best of the candidates - and the vote counts names without
+    /// looking at how small the scores are, so without a noise floor a plurality of readings at
+    /// p=0.00 would quietly outrank the language the user actually named first. Measured on real
+    /// audio at build 414: a German clip restricted to no,da,sv gave sv four times at p=0.0001.
+    /// </summary>
+    [Fact]
+    public async Task LanguageCandidates_FallBackToTheFirstNamed_WhenEveryCandidateScoresAsNoise()
+    {
+        var (result, _) = await DetectWithTranscriberAsync(
+            Options("--lang", "da,no,sv"),
+            [new(595, 600)],
+            s =>
+            {
+                s.LanguageAnswers.Enqueue(("sv", 0.0001f));
+                s.LanguageAnswers.Enqueue(("sv", 0.0001f));
+                s.LanguageAnswers.Enqueue(("no", 0.0f));
+                s.LanguageAnswers.Enqueue(("sv", 0.0002f));
+                s.LanguageAnswers.Enqueue(("sv", 0.0001f));
+                s.Add(0, Seg(0.5, " Kapitel et."));
+                s.Add(600, Seg(0.3, " Kapitel to."));
+            });
+
+        // "sv" won the vote four to one and is still thrown away: the user said "da" first.
+        Assert.Equal("da", result.Profile.Language);
+        Assert.Equal("sv", result.DetectedLanguage);
+    }
+
+    /// <summary>
+    /// The other side of that floor: weak but real readings are exactly what the vote is for, and a
+    /// candidate list must not stop it working. Here the winner is not the first-named candidate,
+    /// so a rule that simply preferred the head of the list would get this wrong.
+    /// </summary>
+    [Fact]
+    public async Task LanguageCandidates_WeakButRealReadings_StillDecideTheVote()
+    {
+        var (result, _) = await DetectWithTranscriberAsync(
+            Options("--lang", "da,no,sv"),
+            [new(595, 600)],
+            s =>
+            {
+                s.LanguageAnswers.Enqueue(("no", 0.40f));
+                s.LanguageAnswers.Enqueue(("no", 0.45f));
+                s.LanguageAnswers.Enqueue(("da", 0.30f));
+                s.LanguageAnswers.Enqueue(("no", 0.35f));
+                s.LanguageAnswers.Enqueue(("sv", 0.20f));
+                s.Add(0, Seg(0.5, " Kapittel en."));
+                s.Add(600, Seg(0.3, " Kapittel to."));
+            });
+
+        Assert.Equal("no", result.Profile.Language);
+        Assert.Equal("Kapittel", result.Profile.Title);
+        AssertChapters([new(1, 0.25), new(2, 600.05)], result.Chapters);
     }
 
     [Fact]

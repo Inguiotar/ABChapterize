@@ -116,7 +116,8 @@ internal sealed class LanguageResolver
             if (samples.Length < FfmpegClient.SampleRate / 2)
                 continue;
 
-            var (detected, probability) = await _transcriber.DetectLanguageWithProbabilityAsync(samples, ct);
+            var (detected, probability) = await _transcriber.DetectLanguageWithProbabilityAsync(
+                samples, _options.LanguageCandidates, ct);
             var attempt = new Attempt(
                 position, (detected ?? "").Trim().ToLowerInvariant(), probability);
             attempts.Add(attempt);
@@ -137,8 +138,9 @@ internal sealed class LanguageResolver
 
         if (attempts.Count == 0)
         {
-            _log?.Invoke("language auto-detection skipped (nothing decodable to probe); using en");
-            return new LanguageState(_options.ResolveProfile("en"), null, 0);
+            _log?.Invoke("language auto-detection skipped (nothing decodable to probe); using "
+                         + _options.FallbackLanguage);
+            return new LanguageState(_options.ResolveProfile(_options.FallbackLanguage), null, 0);
         }
 
         return ResolveByVote(attempts);
@@ -182,11 +184,23 @@ internal sealed class LanguageResolver
             .ToList();
 
         var decided = tally.Count == 1 || (tally.Count > 1 && tally[0].Votes > tally[1].Votes);
-        if (!decided)
+        // A candidate list cannot make the detector answer "none of these", so a book in none of
+        // the named languages still elects one - on scores three orders of magnitude below a real
+        // reading. Counting names cannot see that, which is what this looks at instead.
+        var noise = _options.LanguageCandidates.Count > 0 && tally.Count > 0
+                    && tally[0].Best < AutoLanguageCandidateNoiseThreshold;
+        if (!decided || noise)
         {
+            var why = noise
+                ? $"every candidate scored below {AutoLanguageCandidateNoiseThreshold:0.00}, so this "
+                  + "file is likely in none of them"
+                : "no clear winner";
             _log?.Invoke($"language auto-detection inconclusive after {attempts.Count} probe(s) " +
-                         $"({DescribeTally(tally)}); no clear winner, falling back to en");
-            return new LanguageState(_options.ResolveProfile("en"), NullIfEmpty(best.Language), best.Probability);
+                         $"({DescribeTally(tally)}); {why}, falling back to " +
+                         _options.FallbackLanguage);
+            return new LanguageState(
+                _options.ResolveProfile(_options.FallbackLanguage),
+                NullIfEmpty(best.Language), best.Probability);
         }
 
         var winner = tally[0];

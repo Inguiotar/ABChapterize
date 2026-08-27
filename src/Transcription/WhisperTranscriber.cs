@@ -101,12 +101,20 @@ public sealed class WhisperTranscriber : ITranscriber, IAsyncDisposable
     }
 
     /// <inheritdoc/>
-    public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(float[] samples, CancellationToken ct)
+    public Task<(string Language, float Probability)> DetectLanguageWithProbabilityAsync(
+        float[] samples, IReadOnlyList<string> candidateLanguages, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        // Snapshotted outside the lambda: a ReadOnlySpan cannot be captured, and the array is what
+        // the restricted overload wants anyway.
+        var candidates = candidateLanguages.Count > 0 ? candidateLanguages.ToArray() : null;
         return Task.Run(() =>
         {
-            var (language, probability) = _processor.DetectLanguageWithProbability(samples);
+            // The unrestricted overload rather than an empty candidate span, which Whisper.net
+            // documents as a filter and would leave nothing able to win.
+            var (language, probability) = candidates == null
+                ? _processor.DetectLanguageWithProbability(samples)
+                : _processor.DetectLanguageWithProbability(samples, candidates);
             return (language ?? "", probability);
         }, ct);
     }

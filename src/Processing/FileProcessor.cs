@@ -510,7 +510,7 @@ public sealed class FileProcessor
         // The initial language is a placeholder: ChapterDetector always calls
         // ChangeLanguage before the first real transcription of every file, resolving
         // the actual language to use (the fixed --lang, or a fresh auto-detection).
-        var initialLanguage = _options.AutoLanguage ? "en" : _options.Language;
+        var initialLanguage = _options.FallbackLanguage;
         var gpu = ResolveGpu();
         var transcriber = new WhisperTranscriber(modelPath, initialLanguage, _options.EffectiveWhisperThreads,
             _options.CpuOnly, gpu.Selected?.Index);
@@ -2137,9 +2137,10 @@ public sealed class FileProcessor
               "--ignore-chapter-numbers"
             : "";
 
-    /// <summary>With --lang auto, the note stating which language this file was actually
-    /// processed in - the detected one, or "en" when detection was inconclusive or skipped.
-    /// Empty for an explicit --lang, where there is nothing to report.</summary>
+    /// <summary>Where the language is worked out per file - --lang auto or a candidate list -
+    /// the note stating which language this file was actually processed in: the detected one, or
+    /// <see cref="CliOptions.FallbackLanguage"/> when detection was inconclusive or skipped.
+    /// Empty for a pinned --lang, where there is nothing to report.</summary>
     /// <param name="result">The file's detection result.</param>
     private string FormatLanguageNote(DetectionResult result)
     {
