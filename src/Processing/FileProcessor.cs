@@ -2270,8 +2270,9 @@ public sealed class FileProcessor
     /// that way - finishing the file afterwards would not push again by itself. Comparing counts is
     /// what separates the two: 34 marks with a hole at chapter 7 are unambiguously more than the
     /// nothing a freshly scanned book carries, so refusing them protected nobody, while a server
-    /// list at least as long is one this run has no evidence it can improve on. See
-    /// <see cref="WithholdPartialPush"/> for why the count is the whole of the test.
+    /// list at least as long is one this run has no evidence it can improve on - unless
+    /// <c>--max-chapters</c> has already condemned it, which is the one thing besides the count
+    /// that gets a say. See <see cref="WithholdPartialPush"/> and <see cref="ServerListIsBogus"/>.
     /// </para>
     /// <para>
     /// Nothing here can fail the file. The marks are in the file by the time this runs, which is
