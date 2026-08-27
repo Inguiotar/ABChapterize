@@ -106,9 +106,18 @@ the book the reading head is, the percentage says how much of the work is done.<
 them: <strong>dark cyan for every stretch the pass is going to read</strong>, and <strong>cyan for
 the one it is reading right now</strong>. A pass that reads the book end to end marks
 nothing — a bar tinted from edge to edge would say nothing at all — and fills in
-the ordinary way, every cell behind the head. The <code>#</code>/<code>-</code> distinction carries
-the same information as the colours, so it survives <code>--no-color</code>, a terminal
-without colour, and a screenshot.</p>
+the ordinary way, every cell behind the head.</p>
+<p>Neither half of that depends on colour. The fill is a character already, and
+where there is no colour to be had — <a href="06-command-line-reference.html#output"><code>--color never</code></a>, a
+terminal without any, a screenshot — the marking becomes one too: a cell inside
+a stretch <strong>still waiting to be read</strong> is drawn <code>~</code> rather than <code>-</code>. So the
+same moment of the same run reads the same way either way:</p>
+<pre><code> [--####---------###----------------------------------]  52%     in colour
+ [--####---------###~~----------------~~~~------------]  52%     without
+</code></pre>
+<p>The first stretch is done, the second is being read and has two cells left, and
+the third has not been reached. Everything still <code>-</code> is audio no stretch covers
+and this pass will never read.</p>
 <p><code>SD-probing...</code> — the
 <a href="03-how-detection-works.html#reading-the-longest-pauses-first">skim of a book's longest pauses</a> — stops
 being a bar altogether, because it has a position in the file but no notion of

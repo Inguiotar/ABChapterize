@@ -56,8 +56,10 @@ public class ProgressRendererTests
     /// <summary>The bar line of a slot, i.e. the first of the block's two lines.</summary>
     /// <param name="slot">The tracker and label to render.</param>
     /// <param name="width">The console width to draw the bar to.</param>
-    private static string Bar((WorkTracker Tracker, string Label) slot, int width = Width)
-        => ConsoleColors.PlainText(ProgressRenderer.BuildBarSpans(slot.Tracker, width));
+    /// <param name="color">Whether to render it for a console that has color.</param>
+    private static string Bar(
+        (WorkTracker Tracker, string Label) slot, int width = Width, bool color = true)
+        => ConsoleColors.PlainText(ProgressRenderer.BuildBarSpans(slot.Tracker, width, color));
 
     /// <summary>Just the cells between the bar's brackets, as text-and-color pairs, so a
     /// highlighting expectation can be written out without the line's other sections.</summary>
@@ -456,6 +458,54 @@ public class ProgressRendererTests
         // it or not. 35 of the 40 bytes of work are done, hence 87 % rather than the file's 75 %.
         Assert.Equal("[####----########------------##----------]  87%",
             Bar((t, "book.m4b")).Trim());
+    }
+
+    /// <summary>
+    /// The other half of that statement - which stretches the pass is going to read at all - is
+    /// carried only by the color, so a colorless console gets it as a character too: a marked cell
+    /// still waiting to be read is "~". Without it the bar above and a stalled whole-file one are
+    /// the same picture.
+    /// </summary>
+    [Fact]
+    public void BuildBarSpans_MarkStretchesStillToRead_WithATilde_WhenThereIsNoColor()
+    {
+        var t = new WorkTracker();
+        t.BeginPhase(PhaseNames.Scan, 100, [(0, 10), (20, 40), (70, 80)]);
+        t.SetPhaseProgress(75);
+
+        // The same bar as above with its two unread marked cells - the tail of the third stretch,
+        // which the head is part way through - drawn "~". The eight cells after it are audio no
+        // stretch covers and stay "-", which is what makes the two readable apart at all.
+        Assert.Equal("[####----########------------##~~--------]  87%",
+            Bar((t, "book.m4b"), color: false).Trim());
+    }
+
+    /// <summary>Both shades mean "a piece of the book", so the piece being read right now loses its
+    /// color to the same substitution - it is the one a reader most needs to see.</summary>
+    [Fact]
+    public void BuildBarSpans_MarkTheRegionBeingWorked_WithATilde_WhenThereIsNoColor()
+    {
+        var (tracker, label) = Slot(50, 100);
+        tracker.RegionSpan = (25, 75);
+
+        // Half of the region's own length is behind the head, hence 50 % beside a bar whose fill
+        // sits in the middle of the file for the same reason.
+        Assert.Equal("[----------##########~~~~~~~~~~----------]  50%",
+            Bar((tracker, label), color: false).Trim());
+    }
+
+    /// <summary>
+    /// A phase that reads the book end to end marks nothing out, so there is no "still to read"
+    /// to distinguish and the bar is the same with color and without. The substitution keys on the
+    /// cell's color rather than on the option, which is what makes this fall out rather than need
+    /// arranging.
+    /// </summary>
+    [Fact]
+    public void BuildBarSpans_LeaveAWholeFilePhaseAlone_WhenThereIsNoColor()
+    {
+        var slot = Slot(50, 100);
+        Assert.DoesNotContain('~', Bar(slot, color: false));
+        Assert.Equal(Bar(slot), Bar(slot, color: false));
     }
 
     /// <summary>

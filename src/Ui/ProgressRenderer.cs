@@ -552,7 +552,7 @@ public sealed class ProgressRenderer : IDisposable
                 return;
 
             var width = SafeWindowWidth() - 1;
-            var block = BuildBlock(slot, width);
+            var block = BuildBlock(slot, width, _color);
             // Below a dozen columns nothing is truncated and the block is left to wrap, which
             // ClearBar - it erases exactly BlockLines lines - then cannot fully undo. Deliberate: a
             // bar cut to ten columns says nothing at all, and a terminal that narrow is not a case
@@ -588,8 +588,11 @@ public sealed class ProgressRenderer : IDisposable
     /// </summary>
     /// <param name="slot">The tracker and label of the file to draw.</param>
     /// <param name="width">The console width the bar is drawn to fill.</param>
-    internal static string BuildLine((WorkTracker Tracker, string Label) slot, int width = DefaultWidth)
-        => string.Join('\n', BuildBlock(slot, width).Select(ConsoleColors.PlainText));
+    /// <param name="color">Whether the console this is drawn for renders color; see
+    /// <see cref="AddBarSpans"/> for the one thing it changes about the characters.</param>
+    internal static string BuildLine(
+        (WorkTracker Tracker, string Label) slot, int width = DefaultWidth, bool color = true)
+        => string.Join('\n', BuildBlock(slot, width, color).Select(ConsoleColors.PlainText));
 
     /// <summary>How many console lines one file's progress block occupies. Named rather than
     /// spelled as a literal because <see cref="ClearBar"/> has to erase exactly as many as
@@ -614,9 +617,11 @@ public sealed class ProgressRenderer : IDisposable
     /// </summary>
     /// <param name="slot">The tracker and label of the file to draw.</param>
     /// <param name="width">The console width the bar is drawn to fill.</param>
+    /// <param name="color">Whether the console this is drawn for renders color; see
+    /// <see cref="AddBarSpans"/> for the one thing it changes about the characters.</param>
     internal static List<List<ColoredSpan>> BuildBlock(
-        (WorkTracker Tracker, string Label) slot, int width = DefaultWidth)
-        => [BuildBarSpans(slot.Tracker, width), BuildStatusSpans(slot)];
+        (WorkTracker Tracker, string Label) slot, int width = DefaultWidth, bool color = true)
+        => [BuildBarSpans(slot.Tracker, width, color), BuildStatusSpans(slot)];
 
     /// <summary>
     /// Builds the bar line as its colored sections: one space, the bracketed bar, the percentage,
@@ -624,7 +629,10 @@ public sealed class ProgressRenderer : IDisposable
     /// </summary>
     /// <param name="tracker">The file's work tracker.</param>
     /// <param name="width">The console width the line is drawn to fill.</param>
-    internal static List<ColoredSpan> BuildBarSpans(WorkTracker tracker, int width = DefaultWidth)
+    /// <param name="color">Whether the console this is drawn for renders color; see
+    /// <see cref="AddBarSpans"/> for the one thing it changes about the characters.</param>
+    internal static List<ColoredSpan> BuildBarSpans(
+        WorkTracker tracker, int width = DefaultWidth, bool color = true)
     {
         // Four cells is not a useful bar, it is the point below which the arithmetic would start
         // producing negative widths; a console this narrow is left with a line that overruns it, as
@@ -650,7 +658,7 @@ public sealed class ProgressRenderer : IDisposable
             new(" ", null),
             new("[", Palette.Structure),
         };
-        AddBarSpans(spans, bar, tracker);
+        AddBarSpans(spans, bar, tracker, color);
         spans.Add(new("]", Palette.Structure));
         // Same width as " 100%", so a phase turning into an ordinary one does not shuffle the
         // bar's right edge by a column.
@@ -832,13 +840,28 @@ public sealed class ProgressRenderer : IDisposable
     /// <param name="spans">The line being built, appended to in place.</param>
     /// <param name="bar">The bar's cells as drawn.</param>
     /// <param name="tracker">The file's work tracker.</param>
+    /// <param name="color">Whether the console this is drawn for renders color. Where it does not,
+    /// a marked cell still waiting to be read is drawn <c>~</c> rather than <c>-</c>: the fill
+    /// already survives a colorless console by being a character, and without this the other half
+    /// of the statement - which stretches the pass is going to read at all - does not, leaving a
+    /// gap Scan's bar indistinguishable from a stalled whole-file one. Only that cell changes: a
+    /// read cell is <c>#</c> whatever its color, and audio outside every stretch stays <c>-</c>,
+    /// which is what keeps <c>~</c> readable as "marked out, not yet read".</param>
     /// <remarks>
     /// Colored cell by cell and then run-length encoded rather than sliced at each stretch's edges,
     /// because the stretches are neither guaranteed disjoint once rounded out to whole cells nor
     /// guaranteed to arrive in bar order - two gaps a few seconds apart share a cell on a narrow
     /// console. Painting is idempotent where slicing would produce overlapping spans.
+    /// <para>
+    /// The <c>~</c> substitution reads the same per-cell color array, deliberately: it is the
+    /// definition of "would be colored" rather than a second calculation of it, so the two cannot
+    /// answer differently for a cell. Rounding is the reason it matters - <see cref="SpanCells"/>
+    /// rounds a stretch outwards, so a set of spans re-derived here would agree with the colors
+    /// almost always and not quite everywhere.
+    /// </para>
     /// </remarks>
-    private static void AddBarSpans(List<ColoredSpan> spans, string bar, WorkTracker tracker)
+    private static void AddBarSpans(
+        List<ColoredSpan> spans, string bar, WorkTracker tracker, bool color)
     {
         var total = tracker.PhaseTotalBytes;
         var planned = tracker.PhaseSpans;
@@ -856,11 +879,17 @@ public sealed class ProgressRenderer : IDisposable
         if (working is { } current)
             Paint(colors, SpanCells(current, total, bar.Length), Palette.Working);
 
+        var cells = bar.ToCharArray();
+        if (!color)
+            for (var i = 0; i < cells.Length; i++)
+                if (cells[i] == '-' && colors[i] != Palette.Bar)
+                    cells[i] = '~';
+
         var start = 0;
-        for (var i = 1; i <= bar.Length; i++)
-            if (i == bar.Length || colors[i] != colors[start])
+        for (var i = 1; i <= cells.Length; i++)
+            if (i == cells.Length || colors[i] != colors[start])
             {
-                spans.Add(new(bar[start..i], colors[start]));
+                spans.Add(new(new string(cells, start, i - start), colors[start]));
                 start = i;
             }
     }

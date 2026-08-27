@@ -2772,6 +2772,11 @@ The details worth knowing:
   and that `xterm` case are the usual ones, and `--color always` overrides it
   for all of them.
 
+  Nothing is only said in color. Where color is off the progress bar draws the
+  stretches it would have tinted as `~` instead, so a bar in a log file says
+  what one on screen does; see
+  [the progress display](#12-output-progress-and-logging) for what that looks like.
+
 `-s`, `--summary`
 : Print a summary at the end of the run: files encountered / processed /
   skipped, warnings, how many processed files had no chapter found at all,
@@ -3646,9 +3651,22 @@ Those stretches are marked out inside the bar so its jumps can be read against
 them: **dark cyan for every stretch the pass is going to read**, and **cyan for
 the one it is reading right now**. A pass that reads the book end to end marks
 nothing — a bar tinted from edge to edge would say nothing at all — and fills in
-the ordinary way, every cell behind the head. The `#`/`-` distinction carries
-the same information as the colours, so it survives `--no-color`, a terminal
-without colour, and a screenshot.
+the ordinary way, every cell behind the head.
+
+Neither half of that depends on colour. The fill is a character already, and
+where there is no colour to be had — [`--color never`](#output), a
+terminal without any, a screenshot — the marking becomes one too: a cell inside
+a stretch **still waiting to be read** is drawn `~` rather than `-`. So the
+same moment of the same run reads the same way either way:
+
+```
+ [--####---------###----------------------------------]  52%     in colour
+ [--####---------###~~----------------~~~~------------]  52%     without
+```
+
+The first stretch is done, the second is being read and has two cells left, and
+the third has not been reached. Everything still `-` is audio no stretch covers
+and this pass will never read.
 
 `SD-probing...` — the
 [skim of a book's longest pauses](#reading-the-longest-pauses-first) — stops

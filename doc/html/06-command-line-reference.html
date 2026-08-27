@@ -1725,6 +1725,10 @@ come out as black on black. Since no terminal can actually be asked whether
 it does color, <code>auto</code> sometimes guesses wrong — Git Bash on Windows, CI logs
 and that <code>xterm</code> case are the usual ones, and <code>--color always</code> overrides it
 for all of them.</p>
+<p>Nothing is only said in color. Where color is off the progress bar draws the
+stretches it would have tinted as <code>~</code> instead, so a bar in a log file says
+what one on screen does; see
+<a href="12-output-progress-and-logging.html#12-output-progress-and-logging">the progress display</a> for what that looks like.</p>
 <p><code>-s</code>, <code>--summary</code>
 : Print a summary at the end of the run: files encountered / processed /
 skipped, warnings, how many processed files had no chapter found at all,

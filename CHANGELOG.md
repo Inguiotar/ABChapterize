@@ -183,6 +183,13 @@ earn a round number.
 
 ### Changed
 
+- **The progress bar marks its stretches with `~` where there is no colour.** The bar tints the
+  parts of the book a pass is going to read, which said nothing at all on a terminal without
+  colour, under `--color never`, or in a screenshot — a gap scan looked exactly like a whole-file
+  pass that had stalled. Those cells now draw as `~` instead of `-` until the pass reads them, so
+  the bar carries the same two facts either way: `~` is marked out and still to come, `#` is read,
+  and `-` is audio this pass skips entirely. Nothing changes on a console that does have colour.
+
 - **`--max-chapters` and `--max-chapter-number` now stand in for one another.** They answer
   related questions — how many marks a book plausibly has, and how high its chapter numbers
   plausibly run — and giving only one left the other on a default far looser than what you had
