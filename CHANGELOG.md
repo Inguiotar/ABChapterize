@@ -183,6 +183,25 @@ earn a round number.
 
 ### Changed
 
+- **`--max-chapters` and `--max-chapter-number` now stand in for one another.** They answer
+  related questions — how many marks a book plausibly has, and how high its chapter numbers
+  plausibly run — and giving only one left the other on a default far looser than what you had
+  just said. Give `--max-chapters` and detection will not believe a chapter number above it, since
+  a book's chapters are a subset of its marks; give `--max-chapter-number` (or `--chapter-count`)
+  and a mark list longer than that many chapters plus ten is written off as bogus, the ten being
+  room for an intro, a prologue, an epilogue and whatever else sits around the chapters, with any
+  `--custom` phrases that declare a limit counted in on top. A `--custom` phrase with no `once`
+  and no `max=<n>` can produce a hundred marks by itself, so none of that second inference is
+  drawn while one is in play, and `--max-chapters 0` — which asks for a file's marks to be thrown
+  away rather than saying how long the book is — implies nothing about chapter numbers. Whichever
+  option you give outright is always used as given.
+
+  One consequence worth knowing before a large `--abs` run: `--max-chapter-number` now implies an
+  opinion about mark counts, so already-marked books are downloaded and judged with the audio in
+  hand instead of being passed over from the library listing. That is what `--max-chapters` has
+  always done, and it is what stops either option quietly skipping a book the other would have
+  processed.
+
 - **The progress bar is now a map of the whole book, in every pass.** The passes that read only
   part of a file — chasing the gaps in a numbering, the stretches a music-first read left over,
   the file's tail — used to give their bar a scale of their own, so it ran a tidy 0 to 100 %
@@ -194,6 +213,18 @@ earn a round number.
   reading stopped.
 
 ### Fixed
+
+- **A chapter number the run could not corroborate no longer takes the rest of the book with
+  it.** Such a number kept its mark and became the count everything after it was measured
+  against, so on a book where one announcement was misheard as a much larger number, every real
+  chapter behind it read as sitting *below* the numbering — which is the shape a book divided
+  into parts has, and three of them in a row were enough to invent one. The result was a
+  one-part book whose titles all named a part, and a wrong number the run could no longer put
+  right, because the invented split hid it from the two later checks that would have caught it.
+  A number nothing corroborates now leaves the count where it was, so the chapters after it stay
+  ordinary chapters and the misreading is usually renumbered from its neighbours without the
+  audio being read again. Where such a number used to displace a real chapter announced behind
+  it, that chapter now survives.
 
 - **`--abs-push` no longer withholds a partial chapter set from a book the server has nothing
   for.** It used to send only a complete set, so a book left with an unresolved chapter-sequence

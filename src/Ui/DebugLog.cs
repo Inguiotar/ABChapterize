@@ -184,7 +184,11 @@ public sealed class DebugLog : IDisposable
                      $"verify {(o.Verify ? (o.Fix ? "on (--fix)" : "on") : "off")}" +
                      (o.VerifyFailThreshold is { } threshold ? $" over {threshold}" : "") + ", " +
                      $"force {(o.Force ? "on" : "off")}, " +
-                     $"max-chapters {o.MaxChapters?.ToString() ?? "-"}, " +
+                     // The effective ceiling, flagged where it was inferred rather than typed, so a
+                     // log that shows a file's marks being discarded also shows what decided it.
+                     $"max-chapters {o.EffectiveMaxChapters?.ToString() ?? "-"}" +
+                     (o.MaxChapters == null && o.EffectiveMaxChapters != null ? " (implied)" : "") +
+                     ", " +
                      $"dry-run {(o.DryRun ? "on" : "off")}";
         // Last because they are the rarest, and first among equals when they are there: a
         // --run-before may hand detection a different file from the one named on the command

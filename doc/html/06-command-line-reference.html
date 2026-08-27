@@ -1140,6 +1140,14 @@ The same judgement applies to Audiobookshelf: a book whose chapter list on
 the server is longer than <code>&lt;n&gt;</code> is one this run will overwrite even with an
 incomplete set, where an unconvicted list of that length would have held the
 push back (see <a href="#audiobookshelf"><code>--abs-push</code></a>).</p>
+<p>It also caps what detection will believe, unless
+<code>--max-chapter-number</code> or <code>--chapter-count</code> says otherwise: a book's chapters
+are a subset of its marks, so telling the run that more than <code>&lt;n&gt;</code> marks are
+implausible tells it that more than <code>&lt;n&gt;</code> chapters are too. That is usually a
+far tighter bound than the 200 it would use instead, and it is the bound that
+throws away a misheard &quot;chapter one hundred&quot; in a thirty-chapter book. The
+one value nothing is inferred from is <code>0</code>, which asks for a file's marks to
+be discarded rather than saying anything about how long the book is.</p>
 <h2 id="detection-safety-nets">Detection safety nets<a class="anchor" href="#detection-safety-nets" aria-label="Permalink to this heading">#</a></h2>
 <p>Bounds on what detection is willing to believe, and on how long it keeps
 looking. None of these is needed for an ordinary book.</p>
@@ -1249,15 +1257,25 @@ or a serial can pass it, and every chapter above the cap is silently dropped.
 Lowering it to roughly the real count is worth it whenever you know that
 figure. The default already throws away a misheard &quot;chapter five hundred and
 ten&quot;, but a misheard &quot;chapter one hundred and fifty&quot; in a twelve-chapter book
-sits comfortably under it: that becomes a mark of its own, and every real
-chapter behind it is then rejected for being numbered below it. Such a number
-no longer drags the rest of the run with it — nothing between it and the last
-real chapter is reported missing, and no pass goes looking there — but the
-mark is still written, and only the file's summary line says so. Lighter
-Whisper models (<code>tiny</code>, <code>base</code>) are the usual source of such numbers. Not to
-be confused with
-<code>--max-chapters</code>, which counts a file's <em>pre-existing</em> marks rather than the
-numbers heard in the audio.</p>
+sits comfortably under it, and that becomes a mark of its own. It does not
+drag the rest of the run with it: the chapters behind it are still measured
+against the last number that <em>was</em> corroborated, nothing between them is
+reported missing, and no pass goes looking there. The stray mark is then
+either renumbered from the chapters bracketing it — which is what happens
+when it stands where a chapter really is missing — or dropped as a phantom
+when they leave no room for it. One with nothing after it to bracket it
+against keeps its number, and only the file's summary line says so. Lighter
+Whisper models (<code>tiny</code>, <code>base</code>) are the usual source of such numbers.</p>
+<p>Not to be confused with <code>--max-chapters</code>, which counts a file's
+<em>pre-existing</em> marks rather than the numbers heard in the audio — though each
+now stands in for the other where only one of them is given. Saying a book
+has at most <code>&lt;n&gt;</code> chapters says a plausible mark list holds at most <code>&lt;n&gt;</code> of
+them plus ten, for the intro, prologue, epilogue and whatever else a book
+puts around its chapters, plus however many marks the <code>--custom</code> phrases have
+declared they may produce. A <code>--custom</code> phrase carrying neither <code>once</code> nor
+<code>max=&lt;n&gt;</code> may produce a hundred marks on its own, so while one of those is in
+play no threshold is inferred at all. <code>--max-chapters</code> given outright is
+never second-guessed.</p>
 <p><code>--ignore-chapter-numbers</code>
 : Detect chapter announcements as usual, but form no opinion about the numbers
 in them: no sequence, no gaps, no missing chapters. The spoken number still

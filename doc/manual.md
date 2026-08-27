@@ -832,6 +832,11 @@ below the sequence is far more likely to be prose mentioning an earlier
 chapter ("as I said in chapter three") than the start of a part; those are
 still passed over, as they always were.
 
+The numbering being built up is made of numbers the run could corroborate. One
+it could not — a misheard number it re-read and still could not place — keeps
+its mark but does not raise the count, so the ordinary chapters after it are
+not mistaken for a part starting over.
+
 What changes in the output is the titles. Every chapter of such a file carries
 its part, including the first part's:
 
@@ -2133,6 +2138,15 @@ skipped (reported as "skipped").
   incomplete set, where an unconvicted list of that length would have held the
   push back (see [`--abs-push`](#audiobookshelf)).
 
+  It also caps what detection will believe, unless
+  `--max-chapter-number` or `--chapter-count` says otherwise: a book's chapters
+  are a subset of its marks, so telling the run that more than `<n>` marks are
+  implausible tells it that more than `<n>` chapters are too. That is usually a
+  far tighter bound than the 200 it would use instead, and it is the bound that
+  throws away a misheard "chapter one hundred" in a thirty-chapter book. The
+  one value nothing is inferred from is `0`, which asks for a file's marks to
+  be discarded rather than saying anything about how long the book is.
+
 ### Detection safety nets
 
 Bounds on what detection is willing to believe, and on how long it keeps
@@ -2258,15 +2272,26 @@ looking. None of these is needed for an ordinary book.
   Lowering it to roughly the real count is worth it whenever you know that
   figure. The default already throws away a misheard "chapter five hundred and
   ten", but a misheard "chapter one hundred and fifty" in a twelve-chapter book
-  sits comfortably under it: that becomes a mark of its own, and every real
-  chapter behind it is then rejected for being numbered below it. Such a number
-  no longer drags the rest of the run with it — nothing between it and the last
-  real chapter is reported missing, and no pass goes looking there — but the
-  mark is still written, and only the file's summary line says so. Lighter
-  Whisper models (`tiny`, `base`) are the usual source of such numbers. Not to
-  be confused with
-  `--max-chapters`, which counts a file's *pre-existing* marks rather than the
-  numbers heard in the audio.
+  sits comfortably under it, and that becomes a mark of its own. It does not
+  drag the rest of the run with it: the chapters behind it are still measured
+  against the last number that *was* corroborated, nothing between them is
+  reported missing, and no pass goes looking there. The stray mark is then
+  either renumbered from the chapters bracketing it — which is what happens
+  when it stands where a chapter really is missing — or dropped as a phantom
+  when they leave no room for it. One with nothing after it to bracket it
+  against keeps its number, and only the file's summary line says so. Lighter
+  Whisper models (`tiny`, `base`) are the usual source of such numbers.
+
+  Not to be confused with `--max-chapters`, which counts a file's
+  *pre-existing* marks rather than the numbers heard in the audio — though each
+  now stands in for the other where only one of them is given. Saying a book
+  has at most `<n>` chapters says a plausible mark list holds at most `<n>` of
+  them plus ten, for the intro, prologue, epilogue and whatever else a book
+  puts around its chapters, plus however many marks the `--custom` phrases have
+  declared they may produce. A `--custom` phrase carrying neither `once` nor
+  `max=<n>` may produce a hundred marks on its own, so while one of those is in
+  play no threshold is inferred at all. `--max-chapters` given outright is
+  never second-guessed.
 
 `--ignore-chapter-numbers`
 : Detect chapter announcements as usual, but form no opinion about the numbers
@@ -3826,16 +3851,20 @@ such as `tiny` and `base` are prone to this); it can also be a number in the
 audio that is not a chapter number at all, which is what `--chapter-phrase
 none` invites. Either way the mark is worth a look. Set
 `--max-chapter-number` to roughly the book's real chapter count and such a
-number is thrown away as it is found instead. Note that a real chapter behind
-it may have been lost, having been rejected for being numbered below it.
+number is thrown away as it is found instead. The chapters behind it are not
+affected: a number nothing corroborated does not become the sequence's floor,
+so the announcements after it are read against the last number that was
+corroborated and stay ordinary chapters.
 
-**A wildly wrong chapter number appeared, and everything below it is now
-"missing"** — the same mishearing, but with something detected *after* it that
-made the sequence believe in it. Set `--max-chapter-number` as above. If the
-run already left the file tagged, note that a tag naming more than ten missing
-chapters is shortened to a plain `.missing-marks` and is *not* resumed
-automatically — rerun it with `--force` (and the new option) once you know
-what went wrong.
+**A wrong chapter number appeared, and everything below it is now "missing"** —
+the same mishearing, but one small enough that the sequence could plausibly
+continue with it, so the run had no reason to question it. A number far too
+large for the book is caught by `--max-chapter-number` as above; one only a few
+chapters out needs the sequence given more to hold it to, which is what
+`--expected-start-chapter` and `--chapter-count` are for. If the run already
+left the file tagged, note that a tag naming more than ten missing chapters is
+shortened to a plain `.missing-marks` and is *not* resumed automatically —
+rerun it with `--force` (and the new option) once you know what went wrong.
 
 **It's slow** — see the speed knobs: `--min-silence-length` (fewer probes, or
 `0` for jingles only, on a book whose every chapter opens with

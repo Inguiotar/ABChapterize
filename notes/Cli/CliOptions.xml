@@ -32,4 +32,23 @@
     and past the classics that run longest - "The Count of Monte Cristo" has 117.
     </para>
   </member>
+
+  <member name="EffectiveMaxChapterNumber">
+    <para>
+    <b>The run that made --max-chapters a term here.</b> "Perry Rhodan Silber-Edition 98 - Die
+    Glaswelt" (build 411, 2026-08-27), a 28-chapter book run under <c>-x 60</c> with no
+    <c>--max-chapter-number</c>. Chapter 7 came back as <c>"Kapitel C."</c>, a Roman numeral for 100,
+    which the 200 default admitted without hesitation; the number then invented a second part and
+    cost 27 marks their titles (the whole case is under
+    <see cref="ABChapterize.Detection.ProbeMark.NumberUnverified"/>). The <c>-x 60</c> on that very
+    command line was already the statement that would have thrown it away - a book whose mark list is
+    bogus above 60 does not have a chapter 100 - and nothing was reading it.
+    </para>
+    <para>
+    The user's call, 2026-08-27, along with the reverse inference in <c>ImpliedMaxChapters</c>. The
+    allowance is taken as-is rather than discounted by the non-chapter marks: chapters are a subset
+    of marks, so <c>-x n</c> bounds the chapter count at n outright, and a bound that is sound
+    without calibration is worth more here than a tighter one that needs it.
+    </para>
+  </member>
 </doc>

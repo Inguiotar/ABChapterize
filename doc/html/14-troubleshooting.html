@@ -67,15 +67,19 @@ no pass went looking there. Usually Whisper misheard a number (lighter models
 such as <code>tiny</code> and <code>base</code> are prone to this); it can also be a number in the
 audio that is not a chapter number at all, which is what <code>--chapter-phrase none</code> invites. Either way the mark is worth a look. Set
 <code>--max-chapter-number</code> to roughly the book's real chapter count and such a
-number is thrown away as it is found instead. Note that a real chapter behind
-it may have been lost, having been rejected for being numbered below it.</p>
-<p><strong>A wildly wrong chapter number appeared, and everything below it is now
-&quot;missing&quot;</strong> — the same mishearing, but with something detected <em>after</em> it that
-made the sequence believe in it. Set <code>--max-chapter-number</code> as above. If the
-run already left the file tagged, note that a tag naming more than ten missing
-chapters is shortened to a plain <code>.missing-marks</code> and is <em>not</em> resumed
-automatically — rerun it with <code>--force</code> (and the new option) once you know
-what went wrong.</p>
+number is thrown away as it is found instead. The chapters behind it are not
+affected: a number nothing corroborated does not become the sequence's floor,
+so the announcements after it are read against the last number that was
+corroborated and stay ordinary chapters.</p>
+<p><strong>A wrong chapter number appeared, and everything below it is now &quot;missing&quot;</strong> —
+the same mishearing, but one small enough that the sequence could plausibly
+continue with it, so the run had no reason to question it. A number far too
+large for the book is caught by <code>--max-chapter-number</code> as above; one only a few
+chapters out needs the sequence given more to hold it to, which is what
+<code>--expected-start-chapter</code> and <code>--chapter-count</code> are for. If the run already
+left the file tagged, note that a tag naming more than ten missing chapters is
+shortened to a plain <code>.missing-marks</code> and is <em>not</em> resumed automatically —
+rerun it with <code>--force</code> (and the new option) once you know what went wrong.</p>
 <p><strong>It's slow</strong> — see the speed knobs: <code>--min-silence-length</code> (fewer probes, or
 <code>0</code> for jingles only, on a book whose every chapter opens with
 music), <code>--no-trailing-scan</code> (skips a final chapter's worth of transcription on

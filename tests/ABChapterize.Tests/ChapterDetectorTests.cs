@@ -1163,6 +1163,30 @@ public sealed class ChapterDetectorTests : IDisposable
         Assert.Contains(log, l => l.Contains("discarded chapter 510"));
     }
 
+    /// <summary>
+    /// The same cap reached through --max-chapters, which bounds chapter numbers as well once
+    /// nothing else does (see <see cref="CliOptions.EffectiveMaxChapterNumber"/>). The line has to
+    /// name the option that was actually typed: a cap of 12 credited to a --max-chapter-number
+    /// nobody passed is a number with no visible source.
+    /// </summary>
+    [Fact]
+    public async Task ChapterNumberAboveTheCapMaxChaptersImplies_IsDiscarded()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            OptionsInOneSweep("--max-chapters", "12"),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(600, Seg(0.3, " Chapter five hundred ten."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        Assert.Contains(log, l => l.Contains("discarded chapter 510") &&
+                                  l.Contains("--max-chapters cap of 12"));
+    }
+
     [Fact]
     public async Task ChapterNumberBelowTheLastAccepted_IsLoggedAsSkipped()
     {
@@ -1404,6 +1428,56 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     /// <summary>
+    /// The third side of that line, and the reason an uncorroborated number is kept off the sequence
+    /// floor (see <see cref="ProbeMark.NumberUnverified"/>). Real-world case, "Perry Rhodan
+    /// Silber-Edition 98 - Die Glaswelt" (2026-08-27): chapter 7 came back as "Kapitel C.", a
+    /// canonical Roman numeral for 100 carrying the trailing period the one-letter guard asks for.
+    /// The number could not be mended, and installing it as the floor made every real chapter after
+    /// it read as below the sequence - which is exactly the shape a new part has, so three of them
+    /// confirmed a restart and 27 marks were written "Teil 2 - Kapitel n" in a book with no parts.
+    /// <para>
+    /// The split was the expensive half: it put the mishearing at the ascending end of a sequence of
+    /// its own, where neither the longest-increasing-subsequence filter nor the outlier repair could
+    /// see it. Held off the floor, the chapters after it stay in one sequence with it, and the
+    /// bracketing chapters name it without any audio being consulted.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AnUncorroboratedNumber_DoesNotRaiseTheFloorAndInventAPart()
+    {
+        var (result, log, _) = await DetectWithLogAsync(
+            Options(),
+            [new(395, 400), new(795, 800), new(1195, 1200),
+             new(1595, 1600), new(1995, 2000), new(2395, 2400)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(400, Seg(0.4, " Chapter two."));
+                s.Add(800, Seg(0.3, " Chapter three."));
+                // The mishearing: 100 leaves an implausible hole, and re-reading it finds the same
+                // thing, so it is kept as a mark whose number nothing corroborates.
+                s.Add(1200, Seg(0.3, " Chapter one hundred."));
+                s.Add(1600, Seg(0.3, " Chapter five."));
+                s.Add(2000, Seg(0.3, " Chapter six."));
+                s.Add(2400, Seg(0.3, " Chapter seven."));
+            });
+
+        // 5, 6 and 7 are an ascending run of three, which is a restart run when read against a floor
+        // of 100 and ordinary chapters when read against the 3 that was actually corroborated.
+        Assert.Equal(1, result.SequenceCount);
+        Assert.DoesNotContain(log, l => l.Contains("the chapter numbering restarts"));
+        Assert.DoesNotContain(log, l => l.Contains("held back as a possible new part"));
+
+        // One sequence means one longest-increasing-subsequence, which drops the 100, and chapters 3
+        // and 5 then leave the repair exactly one number to put back.
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7], result.Chapters.Select(c => c.Number));
+        Assert.Equal(1200, result.Chapters.Single(c => c.Number == 4).TimeSeconds, 0);
+        Assert.True(result.UnverifiedNumbers is null or []);
+        Assert.False(result.GapRemains);
+        Assert.Empty(result.MissingNumbers);
+    }
+
+    /// <summary>
     /// The same script with no option at all: <see cref="CliOptions.DefaultChapterCount"/> caps the
     /// run anyway, so the mishearing never becomes a chapter and the real chapter 2 behind it
     /// survives. Before the default existed this is where a 510 displaced it.
@@ -1432,16 +1506,17 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
-    public async Task ChapterNumberAboveTheSequence_IsAccepted_WhenTheCapAllowsIt()
+    public async Task ChapterNumberAboveTheSequence_CostsNothingBehindIt_WhenTheCapAllowsIt()
     {
-        // A cap raised past the mishearing puts the old behaviour back: 510 becomes a chapter of its
-        // own and displaces the real chapter 2 behind it, which is then "not above the last accepted
-        // chapter 510".
+        // A cap raised past the mishearing lets the 510 be heard, and that is all it lets it do.
+        // Nothing corroborated it, so it does not become the floor (see ProbeMark.NumberUnverified)
+        // and the real chapter 2 behind it is an ordinary continuation of chapter 1 rather than
+        // something "not above the last accepted chapter 510". It used to cost exactly that mark.
         //
-        // What it does not do is declare 2..509 missing. Nothing corroborated the 510, so the
-        // sequence refuses to measure the book by it (see DetectedChapter.NumberUnverified) and no
-        // pass goes hunting behind it; the summary line says so instead.
-        var result = await DetectAsync(
+        // Staying in one sequence with the chapters around it is also what condemns the 510: the
+        // longest-increasing-subsequence filter prefers the two that agree, and chapters 1 and 2
+        // then leave the repair no number to put it back as.
+        var (result, log, _) = await DetectWithLogAsync(
             Options("--max-chapter-number", "5000"),
             [new(595, 600), new(1195, 1200)],
             s =>
@@ -1451,10 +1526,12 @@ public sealed class ChapterDetectorTests : IDisposable
                 s.Add(1200, Seg(0.2, " Chapter two."));
             });
 
-        Assert.Contains(result.Chapters, c => c.Number == 510);
-        Assert.DoesNotContain(result.Chapters, c => c.Number == 2);
+        Assert.Equal([1, 2], result.Chapters.Select(c => c.Number));
+        Assert.Contains(log, l => l.Contains("chapter 510") && l.Contains("dropping the mark"));
+        // Nothing is left to report as uncorroborated, the mark carrying that number having gone.
+        Assert.True(result.UnverifiedNumbers is null or []);
         Assert.False(result.GapRemains);
-        Assert.Equal([510], result.UnverifiedNumbers);
+        Assert.Empty(result.MissingNumbers);
     }
 
     [Fact]

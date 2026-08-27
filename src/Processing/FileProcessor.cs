@@ -2299,7 +2299,7 @@ public sealed class FileProcessor
             if (AbsChapterMerge.SameMarks(chapters, pull.FromServer))
                 return (", not sent to ABS (it already has these marks)", false);
             // The list itself, fetched for this very file, rather than the catalogue's count.
-            if (WithholdPartialPush(chapters, complete, pull.FromServer.Count, _options.MaxChapters)
+            if (WithholdPartialPush(chapters, complete, pull.FromServer.Count, _options.EffectiveMaxChapters)
                 is { } held)
                 return (held, false);
             LogBogusServerList(ctx, complete, pull.FromServer.Count);
@@ -2311,7 +2311,7 @@ public sealed class FileProcessor
         var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
         if (match.Book == null)
             return ($", not sent to ABS ({match.Reason})", false);
-        if (WithholdPartialPush(chapters, complete, match.Book.ChapterCount, _options.MaxChapters)
+        if (WithholdPartialPush(chapters, complete, match.Book.ChapterCount, _options.EffectiveMaxChapters)
             is { } withheld)
             return (withheld, false);
 
@@ -2321,18 +2321,20 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Records that a gapped set was sent only because <c>--max-chapters</c> writes off what the
+    /// Records that a gapped set was sent only because the run's mark ceiling writes off what the
     /// server holds - the one push decision whose reason cannot be read off the summary line, since
-    /// what it produces is an ordinary successful push.
+    /// what it produces is an ordinary successful push. The ceiling is named by its number rather
+    /// than by <c>--max-chapters</c>, which may not be the option that set it (see
+    /// <see cref="CliOptions.EffectiveMaxChapters"/>).
     /// </summary>
     /// <param name="ctx">The file's context, for its log.</param>
     /// <param name="complete">Whether the set being sent has no gap; nothing to explain if so.</param>
     /// <param name="onServer">How many marks the server holds for the book.</param>
     private void LogBogusServerList(FileContext ctx, bool complete, int onServer)
     {
-        if (!complete && ServerListIsBogus(onServer, _options.MaxChapters))
+        if (!complete && ServerListIsBogus(onServer, _options.EffectiveMaxChapters))
             ctx.Logs.Write($"ABS: sending a gapped set over the server's {onServer} mark(s), " +
-                           $"which --max-chapters {_options.MaxChapters} writes off as bogus");
+                           $"which a mark ceiling of {_options.EffectiveMaxChapters} writes off as bogus");
     }
 
     /// <summary>
@@ -2588,7 +2590,7 @@ public sealed class FileProcessor
     {
         if (info.ChapterCount == 0)
             return (false, default);
-        var bogus = _options.MaxChapters is { } max && info.ChapterCount > max;
+        var bogus = _options.EffectiveMaxChapters is { } max && info.ChapterCount > max;
         if (!_options.Force && !bogus)
             return (true, default);
         return (false, new DroppedMarks(info.ChapterCount, bogus && !_options.Force));

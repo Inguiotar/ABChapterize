@@ -120,6 +120,58 @@
     </para>
   </member>
 
+  <member name="ProbeMark.NumberUnverified">
+    <para>
+    <b>The misheard Roman numeral that invented a second part.</b> "Perry Rhodan Silber-Edition 98 -
+    Die Glaswelt" (build 411, 2026-08-27), a 15:53 German book of 28 chapters and no parts at all.
+    Chapter 7's announcement at 3:33:02 came back from the probe window as <c>"Kapitel C."</c>
+    (p=0.52); <c>C</c> is a canonical Roman numeral, and the one-letter guard in
+    <see cref="ABChapterize.Language.NumberWordParser"/> - which asks for a trailing period, because
+    that is how a transcript writes a heading number and not how it writes a pronoun - was satisfied
+    by the period Whisper had put there. The number became 100.
+    </para>
+    <para>
+    All four defences against a misheard number then fired and all four lost, which is what makes
+    this the case on record. <see cref="SuspectNumberMender"/> re-read at 15 s (no number at all) and
+    at 45 s (<c>"Kapitel C."</c> again). <see cref="RefinedNumberVote"/> lost 3-2: of the five
+    refinement probes carrying the phrase, the three 6 s survival probes read <c>C</c> and the two
+    4.1 s onset probes - the tightest framing anything in the run gets - read <c>"Kapitel 7"</c> at
+    p=0.73 and p=0.66. The winner equalled what the window had heard, so the vote abstained.
+    </para>
+    <para>
+    <b>The two remaining defences were disarmed by the consequence rather than beaten.</b> 100 became
+    the floor, so chapters 8, 9 and 10 were each logged "not above last accepted 100 (in-text
+    mention?)", accumulated as a restart run and confirmed one at
+    <see cref="DetectionTuning.SequenceRestartRunLength"/>. From there every mark was written
+    "Teil 1 - Kapitel n" or "Teil 2 - Kapitel n", 27 titles wrong from one misheard letter. And the
+    split is what saved the 100: part 1 read 1,2,3,4,5,6,100 and part 2 read 8..28, both strictly
+    ascending, so <see cref="GapPlanning.Normalize"/> had nothing to drop and
+    <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> no outlier to repair. Unsplit, the flat
+    1..6,100,8..28 has a longest increasing subsequence of 27 against the 7 ending at 100, and the
+    bracketing chapters 6 and 8 leave <see cref="NumberBounds.SoleCandidate"/> exactly one answer -
+    7, reached without consulting the audio at all.
+    </para>
+    <para>
+    Also on the bill: the run reported "still missing: 1, 2, 3, 4, 5, 6, 7" for the whole of the
+    invented part 2, and S-probe went hunting for those phantom chapters through 2:58:03-3:33:02 and
+    3:33:02-4:11:21. The 31 marks were all in the right places throughout - the mishearing cost
+    titles and time, never a position.
+    </para>
+    <para>
+    Two things this case does <em>not</em> argue for. Weighting the refinement's onset probes above
+    its survival probes would have fixed it, but the vote is close to unerring on the corpus it was
+    calibrated against and a 3-2 split is exactly the thin sample it is meant to abstain on.
+    Requiring a restart run to open at the start of a sequence would also have fixed it - 8, 9, 10 is
+    not how a part begins - but only as a hardening <em>on top of</em> the floor rule: on its own it
+    would have rejected chapters 8 to 28 outright as below the sequence, trading 27 wrong titles for
+    21 lost marks.
+    </para>
+    <para>
+    The run's own lever was already documented and simply not used: <c>--max-chapter-number 50</c>
+    on a book of 28 chapters throws the 100 away as it is found.
+    </para>
+  </member>
+
   <member name="ProbeContext.SecondGuessNumbers">
     <para>
     <b>The mishearing that refuted "a wider window is already the remedy".</b> "Die

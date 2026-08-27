@@ -68,6 +68,14 @@ internal static class FolderConfig
         // What the chapter numbering is expected to look like.
         "ExpectedStartChapter", "LastExpectedChapter", "ChapterCount",
         "MaxChapterNumber", "EffectiveMaxChapterNumber",
+        // Listed because it necessarily differs, not because it is honoured per folder - the same
+        // standing as RawArguments below. A folder setting --max-chapter-number moves the mark
+        // ceiling that option implies (see CliOptions.EffectiveMaxChapters), and refusing the file
+        // over a number nobody wrote would be a guard firing on a legal config. What reads the
+        // ceiling - EvaluateExistingChapters, and the ABS push rules - works from the run's own
+        // options and reaches its answer before any folder is consulted, so the value that differs
+        // here is never the one acted on. --max-chapters itself stays off the list entirely.
+        "EffectiveMaxChapters",
         // --ignore-chapter-numbers is deliberately NOT here, though it reads like detection:
         // FileProcessor also consults it to decide whether a ".missing-marks" file may be
         // resumed, which happens before any of this and under the run's own options. Allowing

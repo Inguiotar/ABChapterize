@@ -3061,12 +3061,17 @@ public sealed class ChapterDetector
             {
                 if (_options.EffectiveMaxChapterNumber is { } cap && match.Number > cap)
                 {
-                    // Named the other way round from the fallback chain in EffectiveMaxChapterNumber:
-                    // only --chapter-count can have supplied the cap when it was given, and
-                    // everything else - including the default nobody typed - is
-                    // --max-chapter-number's, which is the option documenting that default and the
-                    // one to reach for after reading this line.
-                    var option = _options.ChapterCount != null ? "--chapter-count" : "--max-chapter-number";
+                    // Walks the same fallback chain EffectiveMaxChapterNumber does, so the line
+                    // names the option the reader actually typed - a cap of 60 attributed to a
+                    // --max-chapter-number nobody passed is a number with no visible source. The
+                    // options being mutually exclusive is what lets these be plain tests rather
+                    // than an ordering. The last case is the default nobody typed, credited to
+                    // --max-chapter-number as the option that documents it and the one to reach
+                    // for after reading this line.
+                    var option =
+                        _options.ChapterCount != null ? "--chapter-count"
+                        : _options.MaxChapterNumber == null && _options.MaxChapters is > 0 ? "--max-chapters"
+                        : "--max-chapter-number";
                     _log?.Invoke($"discarded chapter {match.Number} - above the {option} cap of {cap}");
                     continue;
                 }

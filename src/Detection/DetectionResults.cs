@@ -9,6 +9,8 @@ using ABChapterize.Processing;
 namespace ABChapterize.Detection;
 
 /// <summary>A detected chapter start: number plus position in the file.</summary>
+/// <remarks>Notes: the epilogue year that became a chapter number, and what the phantom gap beneath it cost.
+/// <include file='../../notes/Detection/DetectionResults.xml' path='doc/member[@name="DetectedChapter.NumberUnverified"]/*' /></remarks>
 /// <param name="Number">Chapter number as spoken/parsed.</param>
 /// <param name="TimeSeconds">Position of the chapter mark in seconds.</param>
 /// <param name="Confidence">Whisper's probability for the segment the chapter number was parsed
@@ -66,8 +68,6 @@ public readonly record struct DetectedChapter(
 /// <see cref="FileProcessor.BuildChapters"/>, which merges them by time into the chapter list
 /// actually written.
 /// </summary>
-/// <remarks>Notes: the epilogue year that became a chapter number, and what the phantom gap beneath it cost.
-/// <include file='../../notes/Detection/DetectionResults.xml' path='doc/member[@name="DetectedChapter.NumberUnverified"]/*' /></remarks>
 /// <param name="Kind">The phrase kind that produced it ("prologue", "epilogue", "custom 1", ...),
 /// for log lines and as the key a mark is replaced or deduplicated under.</param>
 /// <param name="Title">The title to write - <see cref="ABChapterize.Language.NamedPhrase.Title"/>

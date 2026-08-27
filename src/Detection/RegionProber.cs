@@ -251,6 +251,8 @@ internal readonly record struct WindowRead(
     List<TranscriptSegment> TrimmedAbs, int? MergeBoundarySegIndex);
 
 /// <summary>One chapter mark a probe window produced.</summary>
+/// <remarks>Notes: the misheard Roman numeral that invented a second part, and the two repairs the split then disarmed.
+/// <include file='../../notes/Detection/RegionProber.xml' path='doc/member[@name="ProbeMark.NumberUnverified"]/*' /></remarks>
 /// <param name="Number">The detected chapter number.</param>
 /// <param name="ThresholdSilence">The silence this mark may teach --min-silence-length auto from,
 /// or null where it must teach it nothing - see <see cref="RegionProber.ThresholdSilenceFor"/>.
@@ -259,8 +261,36 @@ internal readonly record struct WindowRead(
 /// next time something wants to know where a mark landed.</param>
 /// <param name="Confidence">Whisper's confidence for the segment the phrase was found in, which
 /// decides whether this mark settles its whole overlapping window sequence.</param>
+/// <param name="NumberUnverified">True when the sequence could not hold this number and re-reading
+/// the audio produced nothing better - the mark is kept where it was found and nothing under it is
+/// counted missing (see <see cref="DetectedChapter.NumberUnverified"/>, which this becomes).
+/// <para>
+/// Such a number is weak evidence about how far the book has got, so it opens no sequence gap behind
+/// it and may not displace a floor something corroborated (<see cref="RegionProber.AdvanceLastNumber"/>
+/// states the rule). The floor is what every later announcement is judged against, and an
+/// uncorroborated number installed over a corroborated one reclassifies the real chapters after it
+/// as below the sequence - which is precisely the shape a new part has, so a run of three of them
+/// confirms a restart (<see cref="DetectionTuning.SequenceRestartRunLength"/>) and splits the file's
+/// numbering in two.
+/// </para>
+/// <para>
+/// That split is the expensive half, because it also disarms the two repairs that would otherwise
+/// undo the mishearing: <see cref="GapPlanning.Normalize"/> and
+/// <see cref="ChapterDetector.RepairSequenceOutliersAsync"/> both work one sequence at a time, and
+/// inside a part of its own an uncorroborated number is not an outlier to drop but the ascending
+/// last entry. Left off the floor it stays in one sequence with the chapters around it, where the
+/// longest-increasing-subsequence filter drops it and the bracketing chapters usually name its real
+/// number without consulting the audio at all.
+/// </para>
+/// <para>
+/// Only the number is held back. The mark's position is as good as any other's, and
+/// <see cref="RegionProber.TightenThreshold"/> still folds its silence into the auto threshold -
+/// though its own "at least the second mark" test reads <see cref="RegionProber._lastNumber"/>, so
+/// an uncorroborated <em>first</em> mark costs the next one's tightening. That errs loose, which is
+/// the harmless direction: a threshold left wide probes more candidates, never fewer.
+/// </para></param>
 internal readonly record struct ProbeMark(
-    int Number, Silence? ThresholdSilence, double Confidence);
+    int Number, Silence? ThresholdSilence, double Confidence, bool NumberUnverified = false);
 
 /// <summary>
 /// One announcement heard below the running sequence and held back while it is still unclear
@@ -2899,7 +2929,7 @@ internal sealed class RegionProber
                     held.TranscriptAbs, _lastNumber ?? 0, ct) is not { } mark)
                 continue;
             marks.Add(mark);
-            _lastNumber = mark.Number;
+            AdvanceLastNumber(mark, mark.Number);
         }
         return marks;
     }
@@ -3050,7 +3080,8 @@ internal sealed class RegionProber
                          MissingNote(missingNumbers));
 
         _hunting?.Remove(number);
-        return new ProbeMark(number, ThresholdSilenceFor(candidate, markSilence), match.Confidence);
+        return new ProbeMark(
+            number, ThresholdSilenceFor(candidate, markSilence), match.Confidence, unverified);
     }
 
     /// <summary>
@@ -3190,6 +3221,9 @@ internal sealed class RegionProber
     /// Applies everything one probe's marks change about the region's running state: a sequence gap
     /// triggers the re-probe of everything skipped since the last mark, each mark's anchor silence
     /// may tighten the --min-silence-length auto threshold, and the last accepted number advances.
+    /// The first and the last of those are a mark's number speaking for the sequence, so both are
+    /// skipped for one the sequence could not hold (see <see cref="ProbeMark.NumberUnverified"/>);
+    /// the tightening is about its silence and happens either way.
     /// <para>
     /// The order matters and is the order Probe resumes on: a gap re-probe runs first, so the
     /// threshold this mark then adopts and the jingle window the re-probe restores both already
@@ -3219,14 +3253,37 @@ internal sealed class RegionProber
             // framed differently at all). The descending shape keeps it: a hole there is a genuine
             // hole, its candidates having been passed over on a reading that said a chapter cannot
             // be in them, and this is what re-opens the stretch when that reading was wrong.
-            if (_shape != ProbeShape.JinglesOnly &&
+            if (_shape != ProbeShape.JinglesOnly && !mark.NumberUnverified &&
                 _lastNumber is { } previousNumber && mark.Number > previousNumber + 1)
                 await HandleSequenceGapAsync(previousNumber, mark.Number, expectAt, ct);
 
             if (_env.Options.AutoMinSilence && !_sweeping)
                 TightenThreshold(mark);
-            _lastNumber = mark.Number;
+            AdvanceLastNumber(mark, mark.Number);
         }
+    }
+
+    /// <summary>
+    /// Moves <see cref="_lastNumber"/> to <paramref name="number"/>, unless that would let a number
+    /// nothing corroborated displace one something did.
+    /// <para>
+    /// An uncorroborated number is not simply ignored here. Where the region has no floor yet it is
+    /// the only evidence there is, and a floor set from weak evidence still catches what a missing
+    /// floor cannot: a file opening at chapter 5 leaves an implausible hole and so arrives
+    /// uncorroborated, and it is exactly that 5 that makes the next window's "chapter two" worth
+    /// re-reading rather than worth believing. What such a number must not do is overrule the strong
+    /// kind - see <see cref="ProbeMark.NumberUnverified"/> for what that cost on the case it was
+    /// written for.
+    /// </para>
+    /// </summary>
+    /// <param name="mark">The mark just accepted.</param>
+    /// <param name="number">What the floor would become: the mark's own number, or the running
+    /// maximum where a re-detection from outside the stretch being re-probed must not pull it back
+    /// down.</param>
+    private void AdvanceLastNumber(ProbeMark mark, int number)
+    {
+        if (!mark.NumberUnverified || _lastNumber is null)
+            _lastNumber = number;
     }
 
     /// <summary>
@@ -3332,7 +3389,7 @@ internal sealed class RegionProber
                 candidates[si], new WindowPlan(candidates, si, WindowEndFor(candidates, si)), ct);
             foreach (var gapMark in gapMarks)
             {
-                _lastNumber = Math.Max(_lastNumber ?? 0, gapMark.Number);
+                AdvanceLastNumber(gapMark, Math.Max(_lastNumber ?? 0, gapMark.Number));
                 // A gap mark recovered here may well have an anchor silence short enough to have
                 // been skipped - fold it into the running minimum so the threshold can never again
                 // sit above a silence proven to precede a chapter. One whose silence cleared the

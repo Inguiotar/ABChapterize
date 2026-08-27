@@ -2218,6 +2218,114 @@ public sealed class CliOptionsTests : IDisposable
         Assert.Throws<CliError>(() => ParseFile("--chapter-count", "twenty"));
     }
 
+    /// <summary>
+    /// A book's chapters are a subset of its marks, so a run told that more than n pre-existing
+    /// marks are bogus has been told the book has at most n chapters. The default 200 would have
+    /// admitted the misheard "Kapitel C." (100) that cost "Die Glaswelt" its titles, on a command
+    /// line that already carried <c>-x 60</c>.
+    /// </summary>
+    [Fact]
+    public void MaxChapters_BoundsTheChapterNumberCap_WhenNothingElseDoes()
+    {
+        var o = ParseFile("--max-chapters", "60")!;
+        Assert.Equal(60, o.EffectiveMaxChapters);
+        Assert.Equal(60, o.EffectiveMaxChapterNumber);
+        // Counted from where the numbering starts, exactly as the default allowance is.
+        Assert.Equal(159, ParseFile("--max-chapters", "60", "--expected-start-chapter", "100")!
+            .EffectiveMaxChapterNumber);
+    }
+
+    /// <summary>It is the weakest term: anything naming a chapter number directly still wins.</summary>
+    [Fact]
+    public void MaxChapters_LosesToAnOptionThatNamesTheNumber()
+    {
+        Assert.Equal(12, ParseFile("--max-chapters", "60", "--max-chapter-number", "12")!
+            .EffectiveMaxChapterNumber);
+        Assert.Equal(12, ParseFile("--max-chapters", "60", "--chapter-count", "12")!
+            .EffectiveMaxChapterNumber);
+    }
+
+    /// <summary>
+    /// "--max-chapters 0" says no pre-existing mark is plausible - a way to discard a file's marks
+    /// without --force - not that the book has no chapters. Read as a chapter bound it would end
+    /// detection instead of guiding it, so it is the one value no inference is drawn from.
+    /// </summary>
+    [Fact]
+    public void MaxChaptersOfZero_LeavesTheChapterNumberCapAlone()
+    {
+        var o = ParseFile("--max-chapters", "0")!;
+        Assert.Equal(0, o.EffectiveMaxChapters);
+        Assert.Equal(CliOptions.DefaultChapterCount, o.EffectiveMaxChapterNumber);
+    }
+
+    /// <summary>The reverse inference: a stated bound on chapter numbers implies one on marks,
+    /// with room for the front and back matter a real book adds around its chapters.</summary>
+    [Fact]
+    public void AChapterNumberBound_ImpliesAMarkCeiling()
+    {
+        Assert.Equal(
+            30 + CliOptions.NonChapterMarkAllowance,
+            ParseFile("--max-chapter-number", "30")!.EffectiveMaxChapters);
+        // --chapter-count says the same thing more precisely, and counts the same way.
+        Assert.Equal(
+            30 + CliOptions.NonChapterMarkAllowance,
+            ParseFile("--chapter-count", "30")!.EffectiveMaxChapters);
+        // The allowance is chapters, not numbers, so a part starting at 100 gets the same room.
+        Assert.Equal(
+            30 + CliOptions.NonChapterMarkAllowance,
+            ParseFile("--chapter-count", "30", "--expected-start-chapter", "100")!.EffectiveMaxChapters);
+    }
+
+    /// <summary>An explicitly given threshold is never second-guessed by the inference.</summary>
+    [Fact]
+    public void AnExplicitMarkCeiling_WinsOverTheImpliedOne()
+        => Assert.Equal(
+            5, ParseFile("--max-chapters", "5", "--max-chapter-number", "30")!.EffectiveMaxChapters);
+
+    /// <summary>The ordinary run states no bound either way and gets no threshold, which is what
+    /// makes a file arriving with marks a skip rather than a rewrite.</summary>
+    [Fact]
+    public void WithoutEitherOption_ThereIsNoMarkCeiling()
+        => Assert.Null(ParseFile()!.EffectiveMaxChapters);
+
+    /// <summary>
+    /// A --custom phrase that declares how many marks it may produce is counted in; one that does
+    /// not may produce up to MaxCustomMarksPerFile of them, which would put the ceiling a hundred
+    /// marks above any real book. No usable ceiling exists then, so none is derived.
+    /// </summary>
+    [Fact]
+    public void ImpliedMarkCeiling_CountsBoundedCustomPhrasesAndAbstainsOnUnboundedOnes()
+    {
+        Assert.Equal(
+            30 + CliOptions.NonChapterMarkAllowance + 1 + 2,
+            ParseFile("--max-chapter-number", "30",
+                      "--custom", "[once]vorwort:Vorwort;[max=2]zwischenspiel:Zwischenspiel")!
+                .EffectiveMaxChapters);
+        Assert.Null(
+            ParseFile("--max-chapter-number", "30", "--custom", "zwischenspiel:Zwischenspiel")!
+                .EffectiveMaxChapters);
+        // One unbounded phrase is enough to withdraw the whole inference.
+        Assert.Null(
+            ParseFile("--max-chapter-number", "30",
+                      "--custom", "[once]vorwort:Vorwort;zwischenspiel:Zwischenspiel")!
+                .EffectiveMaxChapters);
+    }
+
+    /// <summary>Neither inference may feed the other: each reads only what was actually typed, so
+    /// at most one of the two can fire on any command line.</summary>
+    [Fact]
+    public void TheTwoInferences_DoNotFeedEachOther()
+    {
+        // -x alone moves the number cap, and must not then imply a mark ceiling back off itself.
+        var fromMarks = ParseFile("--max-chapters", "60")!;
+        Assert.Equal(60, fromMarks.EffectiveMaxChapterNumber);
+        Assert.Equal(60, fromMarks.EffectiveMaxChapters);
+        // -N alone implies a mark ceiling, and must not then move the number cap off that.
+        var fromNumber = ParseFile("--max-chapter-number", "30")!;
+        Assert.Equal(30, fromNumber.EffectiveMaxChapterNumber);
+        Assert.Equal(30 + CliOptions.NonChapterMarkAllowance, fromNumber.EffectiveMaxChapters);
+    }
+
     /// <summary>Both name the highest number the book may have; accepting both would mean picking
     /// which of two contradictory answers to believe.</summary>
     [Fact]

@@ -335,7 +335,10 @@ public sealed class CliOptions
 
     /// <summary>
     /// Maximum plausible number of pre-existing chapter marks (--max-chapters / -x).
-    /// Files exceeding it get their marks discarded as bogus. Null when not specified.
+    /// Files exceeding it get their marks discarded as bogus. Null when not specified, which is
+    /// not the same as no threshold - see <see cref="EffectiveMaxChapters"/>, which a stated bound
+    /// on chapter numbers can supply instead. This property is what the user typed and is the right
+    /// thing to name in a message; that one is what every decision reads.
     /// </summary>
     public int? MaxChapters { get; private set; }
 
@@ -478,14 +481,111 @@ public sealed class CliOptions
     public const int DefaultChapterCount = 200;
 
     /// <summary>
+    /// How many marks a book may hold that are not numbered chapters before the count stops looking
+    /// like one mark per chapter: an intro, a prologue, an epilogue, and room for the handful a real
+    /// book adds around them - a foreword, a glossary, a cast list, an outro. Only
+    /// <see cref="ImpliedMaxChapters"/> uses it, to turn a stated bound on chapter *numbers* into a
+    /// plausible bound on *marks*.
+    /// <para>
+    /// Generous on purpose, because the two directions cost differently. Too high and a bogus mark
+    /// list slips under the threshold and is respected, which the run reports and a second run with
+    /// an explicit --max-chapters fixes; too low and a legitimately marked file is written off and
+    /// rewritten without --force ever being asked for, which is the one outcome here that destroys
+    /// something. Ten leaves that needing eleven non-chapter marks beyond what the --custom phrases
+    /// themselves declare, which no correctly marked book has.
+    /// </para>
+    /// </summary>
+    public const int NonChapterMarkAllowance = 10;
+
+    /// <summary>
     /// The highest chapter number a match may carry and still be believed: whichever of
     /// <see cref="MaxChapterNumber"/> and <see cref="LastExpectedChapter"/> was given (never both -
-    /// <see cref="Parse"/> rejects the combination as two answers to one question), else
-    /// <see cref="DefaultChapterCount"/> chapters from where the numbering is expected to start.
-    /// Never null: a run without a cap is what <see cref="DefaultChapterCount"/> exists to prevent.
+    /// <see cref="Parse"/> rejects the combination as two answers to one question), else the
+    /// allowance <see cref="MaxChapters"/> implies, else <see cref="DefaultChapterCount"/> chapters
+    /// from where the numbering is expected to start. Never null: a run without a cap is what
+    /// <see cref="DefaultChapterCount"/> exists to prevent.
+    /// <para>
+    /// --max-chapters gets a say because a book's marks are a superset of its chapters: a run told
+    /// that more than n pre-existing marks are bogus has been told this book has at most n chapters,
+    /// which on the shelves where that option is used at all is a far tighter bound than 200. It is
+    /// the weakest term of the four, so anything naming a number directly still wins.
+    /// </para>
+    /// <para>
+    /// Zero is the one value no inference is drawn from. <c>--max-chapters 0</c> says no
+    /// pre-existing mark is plausible - a way to discard a file's marks without --force - rather
+    /// than that the book has no chapters, and reading it as a chapter bound would end detection
+    /// instead of guiding it.
+    /// </para>
     /// </summary>
+    /// <remarks>Notes: the run that made --max-chapters a term here.
+    /// <include file='../../notes/Cli/CliOptions.xml' path='doc/member[@name="EffectiveMaxChapterNumber"]/*' /></remarks>
     public int? EffectiveMaxChapterNumber
-        => MaxChapterNumber ?? LastExpectedChapter ?? (ExpectedStartChapter ?? 1) + DefaultChapterCount - 1;
+        => MaxChapterNumber ?? LastExpectedChapter
+           ?? (ExpectedStartChapter ?? 1)
+              + (MaxChapters is > 0 ? MaxChapters.Value : DefaultChapterCount) - 1;
+
+    /// <summary>
+    /// How many pre-existing marks a file - or an Audiobookshelf book - may carry before the whole
+    /// list is written off as bogus and discarded without --force: <see cref="MaxChapters"/> where
+    /// it was given, else what a stated bound on chapter numbers implies
+    /// (<see cref="ImpliedMaxChapters"/>). Null for the ordinary run, which sets no threshold at all
+    /// and skips any file that arrives with marks.
+    /// <para>
+    /// This is what every consumer of the threshold reads. <see cref="MaxChapters"/> itself is only
+    /// what the user typed, and is still the right thing to name in a message.
+    /// </para>
+    /// </summary>
+    public int? EffectiveMaxChapters => MaxChapters ?? ImpliedMaxChapters;
+
+    /// <summary>
+    /// The mark threshold a stated bound on chapter numbers implies: that many chapters, plus
+    /// <see cref="NonChapterMarkAllowance"/>, plus whatever the <c>--custom</c> phrases have said
+    /// they may produce. Null when nothing states such a bound, and null when any <c>--custom</c>
+    /// phrase is unbounded.
+    /// <para>
+    /// The unbounded case is not a technicality. A phrase with no <c>once</c> and no
+    /// <c>max=&lt;n&gt;</c> may produce up to
+    /// <see cref="ABChapterize.Detection.DetectionTuning.MaxCustomMarksPerFile"/> marks, so counting
+    /// it in would put the threshold a hundred marks above any real book and counting it out would
+    /// put the threshold below files the run itself is going to mark. Neither is a threshold worth
+    /// having, so no threshold is derived.
+    /// </para>
+    /// <para>
+    /// Read from <see cref="MaxChapterNumber"/> and <see cref="LastExpectedChapter"/> rather than
+    /// from <see cref="EffectiveMaxChapterNumber"/>, which is what keeps this and that property from
+    /// deriving each other in a circle: each falls back on the other's option only when its own was
+    /// not given, so at most one of the two inferences can ever fire.
+    /// </para>
+    /// </summary>
+    private int? ImpliedMaxChapters
+        => (MaxChapterNumber ?? LastExpectedChapter) is { } highest && BoundedCustomMarks is { } custom
+            ? highest - (ExpectedStartChapter ?? 1) + 1 + NonChapterMarkAllowance + custom
+            : null;
+
+    /// <summary>
+    /// How many marks the <c>--custom</c> mappings may produce between them, or null when even one
+    /// of them declines to say - <c>once</c> counting as one and <c>max=&lt;n&gt;</c> as n. Zero for
+    /// a run with no custom mappings, which is the ordinary case and a perfectly good answer.
+    /// </summary>
+    private int? BoundedCustomMarks
+    {
+        get
+        {
+            var total = 0;
+            foreach (var mapping in _customMappings)
+            {
+                if (mapping.Tag is not { } tag)
+                    return null;
+                if (tag.Once)
+                    total++;
+                else if (tag.MaxMarks is { } max)
+                    total += max;
+                else
+                    return null;
+            }
+            return total;
+        }
+    }
 
     /// <summary>
     /// Check pre-existing chapter marks against the audio instead of trusting them
@@ -499,9 +599,9 @@ public sealed class CliOptions
     /// or nothing confirmed at all - leave the file completely alone with a warning, rather than
     /// discarding a mark set that was probably never one-per-numbered-chapter to begin with.
     /// A file with no checkable number in any mark is skipped as having nothing to verify.
-    /// With --max-chapters, a file already over the threshold is still assumed bogus outright
-    /// and skips verification entirely - --verify only decides borderline cases, it never
-    /// makes a --max-chapters rejection stricter.
+    /// With a mark ceiling in force (<see cref="EffectiveMaxChapters"/>), a file already over it is
+    /// still assumed bogus outright and skips verification entirely - --verify only decides
+    /// borderline cases, it never makes that rejection stricter.
     /// </summary>
     public bool Verify { get; private set; }
 
@@ -2563,7 +2663,10 @@ public sealed class CliOptions
           -f, --force               Discard pre-existing chapter marks. Without --force, files
                                     that already have chapter marks are skipped.
           -x, --max-chapters <n>    If a file has more than <n> pre-existing chapter marks,
-                                    they are considered bogus and are discarded.
+                                    they are considered bogus and are discarded. Unless
+                                    --max-chapter-number or --chapter-count says otherwise, it
+                                    also caps what detection will believe: a book's chapters are
+                                    a subset of its marks. Nothing is inferred from 0.
 
         Audiobookshelf:
           -A, --abs                 Work on books held by an Audiobookshelf server instead of
@@ -2970,11 +3073,15 @@ public sealed class CliOptions
                                     the cap is dropped silently. Lower it to roughly the real count
                                     when you know it: the default already throws away a misheard
                                     "chapter 510", but a misheard "chapter 150" in a
-                                    twelve-chapter book sits under it, becomes a mark of its own
-                                    and pushes the real chapters behind it out of the sequence. Not
-                                    to be confused with --max-chapters, which counts a file's
-                                    pre-existing marks rather than the numbers heard in the
-                                    audio.
+                                    twelve-chapter book sits under it and becomes a mark of its
+                                    own - which costs a title rather than the chapters behind it,
+                                    those being measured against the last number that was
+                                    corroborated. Not to be confused with --max-chapters, which
+                                    counts a file's pre-existing marks rather than the numbers
+                                    heard in the audio - though this implies one: that many
+                                    chapters plus ten, plus whatever the --custom phrases say
+                                    they may produce. An unbounded --custom phrase withdraws
+                                    that inference.
               --chapter-count <n>   How many numbered chapters this book has, exactly (default:
                                     none - whatever the last number heard turns out to be). Takes
                                     exactly one file, never a directory: it is a statement about

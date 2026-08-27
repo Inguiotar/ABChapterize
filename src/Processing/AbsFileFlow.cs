@@ -184,17 +184,25 @@ internal sealed class AbsFileFlow : IDisposable
     /// </para>
     /// <para>
     /// Deliberately conservative, and it can only ever refuse a book the file-level policy would
-    /// refuse too: <c>--verify</c> and <c>--max-chapters</c> both decide with the audio in hand, so
-    /// a book either of them has an opinion about is fetched and left to the ordinary decision.
+    /// refuse too: <c>--verify</c> and a mark ceiling both decide with the audio in hand, so a book
+    /// either of them has an opinion about is fetched and left to the ordinary decision.
     /// What the server reports is also its own chapter list rather than the file - which is exactly
     /// the list the merge rule would have gone on to prefer anyway (see
     /// <see cref="ABChapterize.Abs.AbsChapterMerge"/>).
+    /// </para>
+    /// <para>
+    /// The ceiling asked for is <see cref="CliOptions.EffectiveMaxChapters"/> and not
+    /// <c>--max-chapters</c> itself, which is what keeps the subset property true now that a stated
+    /// bound on chapter numbers can imply one: a book this skipped while the file-level policy would
+    /// have written its list off is a book silently passed over. The cost is that
+    /// <c>--max-chapter-number</c> under <c>--abs</c> now fetches the already-marked books too,
+    /// which is the same cost <c>--max-chapters</c> has always had and is paid for the same reason.
     /// </para>
     /// </remarks>
     private bool AlreadyMarked(AbsBook book)
         => book.ChapterCount > 0
            && !_options.Force && !_options.Verify && !_options.AbsPushOnly
-           && _options.MaxChapters == null;
+           && _options.EffectiveMaxChapters == null;
 
     /// <summary>
     /// Applies the merge rule to a freshly probed copy, so the rest of the run sees the marks the
