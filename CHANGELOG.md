@@ -17,6 +17,14 @@ earn a round number.
 
 ### Added
 
+- **The progress bar fills in only the stretches a pass actually reads**, and its percentage now
+  counts that work rather than the file. A pass working a handful of sequence gaps leaves the
+  audio between them empty instead of filling it in as it goes past — that audio was skipped, not
+  read — and reaches 100 % when the gaps are done, though its bar stops well short of the file's
+  end. The fill still says where in the book the reading head is; the percentage now says how much
+  of the work is done. Marked with `#` against `-` rather than by colour alone, so it reads the
+  same under `--no-color` or in a screenshot.
+
 - **`--max-chapters` now also applies to what Audiobookshelf holds.** A chapter set left with a
   gap is normally kept back when the server's list for that book is at least as long, on the
   grounds that the longer list might be the better one. A list longer than `--max-chapters` is

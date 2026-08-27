@@ -406,10 +406,11 @@ public class ProgressRendererTests
         var (tracker, _) = Slot(50, 100);
         tracker.RegionSpan = (25, 75);
 
-        // Cells 0-9 and 30-39 are outside the region and stay white; the ten filled and ten empty
-        // cells between them are the region.
+        // Cells 0-9 and 30-39 are outside the region and stay white. Only the region's own cells
+        // are ever drawn as done, so the ten white cells the fill has passed read "-" rather than
+        // "#": that audio is not work this phase did, it is audio it skipped.
         Assert.Equal(
-            [(new string('#', 10), ConsoleColor.White),
+            [(new string('-', 10), ConsoleColor.White),
              (new string('#', 10) + new string('-', 10), ConsoleColor.Cyan),
              (new string('-', 10), ConsoleColor.White)],
             BarCells(tracker));
@@ -428,12 +429,95 @@ public class ProgressRendererTests
         t.RegionSpan = (10, 20);
 
         Assert.Equal(
-            [(new string('#', 4), ConsoleColor.White),
+            [(new string('-', 4), ConsoleColor.White),
              (new string('#', 2) + new string('-', 2), ConsoleColor.Cyan),
              (new string('-', 16), ConsoleColor.White),
              (new string('-', 8), ConsoleColor.DarkCyan),
              (new string('-', 8), ConsoleColor.White)],
             BarCells(t));
+    }
+
+    /// <summary>
+    /// The distinction between work done and audio skipped is carried by the character, not only by
+    /// the color, so it survives a terminal with no color at all - which is what
+    /// <see cref="ConsoleColors.PlainText(System.Collections.Generic.IEnumerable{ColoredSpan})"/>
+    /// renders.
+    /// </summary>
+    [Fact]
+    public void BuildBarSpans_MarkWorkDoneWithTheCharacter_NotOnlyWithTheColor()
+    {
+        var t = new WorkTracker();
+        t.BeginPhase(PhaseNames.Scan, 100, [(0, 10), (20, 40), (70, 80)]);
+        t.SetPhaseProgress(75);
+
+        // Every "#" sits inside one of the three stretches and behind the reading head, which is at
+        // cell 30 - part way through the last stretch, so that one is half drawn. Everything
+        // between the stretches is audio this phase skips and stays "-" whether the head has passed
+        // it or not. 35 of the 40 bytes of work are done, hence 87 % rather than the file's 75 %.
+        Assert.Equal("[####----########------------##----------]  87%",
+            Bar((t, "book.m4b")).Trim());
+    }
+
+    /// <summary>
+    /// The percentage counts the work the phase actually has to do. A gap re-probe reading two
+    /// short stretches of a nine-hour book is not 3 % done when it has finished the first of them,
+    /// which is what a figure about the file rather than about the work used to say.
+    /// </summary>
+    [Fact]
+    public void BuildBarSpans_PercentIsProgressThroughTheStretches_NotThroughTheFile()
+    {
+        var t = new WorkTracker();
+        t.BeginPhase(PhaseNames.Scan, 1000, [(100, 200), (800, 900)]);
+        t.SetPhaseProgress(200);
+
+        // 200 bytes into a 1000-byte file is 20 % of it, but the first of two equal stretches is
+        // half the work.
+        Assert.Contains(" 50%", Bar((t, "book.m4b")));
+    }
+
+    /// <summary>The other end of the same rule: a phase that has finished its stretches reads
+    /// 100 %, though its bar stops well short of the file's end.</summary>
+    [Fact]
+    public void BuildBarSpans_PercentReachesAHundred_WhenTheStretchesAreDone()
+    {
+        var t = new WorkTracker();
+        t.BeginPhase(PhaseNames.Scan, 1000, [(100, 200), (300, 400)]);
+        t.SetPhaseProgress(400);
+
+        Assert.Contains(" 100%", Bar((t, "book.m4b")));
+    }
+
+    /// <summary>
+    /// A stretch the reading head has passed is drawn done to its last cell. Its cells are rounded
+    /// outwards so that a very short one still shows, while the fill rounds to nearest, so without
+    /// this a phase reading 100 % could sit beside a stretch with a cell still empty.
+    /// </summary>
+    [Fact]
+    public void BuildBarSpans_DrawAFinishedStretchToItsLastCell()
+    {
+        var t = new WorkTracker();
+        // 4 cells of bar per 10 bytes here, and 25 rounds the fill to cell 10 while the stretch's
+        // own cells are rounded out to 11 - so the last cell is only drawn by knowing it is done.
+        t.BeginPhase(PhaseNames.Scan, 100, [(15, 26)]);
+        t.SetPhaseProgress(26);
+
+        var stretch = BarCells(t).Single(c => c.Color == ConsoleColor.DarkCyan);
+
+        Assert.DoesNotContain('-', stretch.Text);
+        Assert.Contains(" 100%", Bar((t, "book.m4b")));
+    }
+
+    /// <summary>Two stretches that overlap once rounded are merged before they are divided by, or
+    /// the double-counted length would leave a finished phase reading short of 100 %.</summary>
+    [Fact]
+    public void BuildBarSpans_PercentDoesNotDoubleCountOverlappingStretches()
+    {
+        var t = new WorkTracker();
+        t.BeginPhase(PhaseNames.Scan, 1000, [(100, 300), (200, 400)]);
+        t.SetPhaseProgress(400);
+        t.RegionSpan = (200, 400);
+
+        Assert.Contains(" 100%", Bar((t, "book.m4b")));
     }
 
     /// <summary>A gap far shorter than one bar cell still has to show, or a fill jumping about the

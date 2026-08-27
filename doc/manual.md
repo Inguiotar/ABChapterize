@@ -3594,20 +3594,36 @@ announcement without a number, the state shows the plain total instead:
 `mk 12`.
 
 **The bar always spans the whole file**, whatever fraction of it the pass is
-reading, and its percentage is a position in the book rather than a share of
-that pass's own work. So the fill moves nonlinearly, jumps from one stretch to
-the next, and — briefly — runs backwards when a sequence gap makes the detector
-re-probe earlier candidates; the label gains a `(<<)` for exactly that stretch,
-so a falling percentage is recognisable as the re-probe rather than as the bar
-misbehaving. A pass that reads only part of the book — the gaps in a numbering,
-the stretches a music-first read left over, the file's tail — finishes well
-short of 100 %, which is the honest answer to where in the book the reading
-stopped.
+reading, so where the fill sits is always a position in the book. The fill moves
+nonlinearly, jumps from one stretch to the next, and — briefly — runs backwards
+when a sequence gap makes the detector re-probe earlier candidates; the label
+gains a `(<<)` for exactly that stretch, so a backward jump is recognisable as
+the re-probe rather than as the bar misbehaving.
+
+A pass that reads only part of the book — the gaps in a numbering, the stretches
+a music-first read left over, the file's tail — **fills in only the stretches it
+actually reads**. The audio between them stays `-` even once the reading head
+has gone past it, because that is audio the pass skipped rather than work it
+did:
+
+```
+ [----###----------------####-----------------###----] 100%
+ Scanning... | ch 28(-1) | 12:04 | My Audiobook.m4b
+```
+
+**The percentage is a share of that pass's own work**, not of the file, so a
+pass reading three short gaps out of nine hours reaches 100 % when it has read
+them — as above, where the bar stops well short of the file's end. The two
+numbers on the line therefore answer different questions: the fill says where in
+the book the reading head is, the percentage says how much of the work is done.
 
 Those stretches are marked out inside the bar so its jumps can be read against
 them: **dark cyan for every stretch the pass is going to read**, and **cyan for
 the one it is reading right now**. A pass that reads the book end to end marks
-nothing, a bar tinted from edge to edge saying nothing at all.
+nothing — a bar tinted from edge to edge would say nothing at all — and fills in
+the ordinary way, every cell behind the head. The `#`/`-` distinction carries
+the same information as the colours, so it survives `--no-color`, a terminal
+without colour, and a screenshot.
 
 `SD-probing...` — the
 [skim of a book's longest pauses](#reading-the-longest-pauses-first) — stops

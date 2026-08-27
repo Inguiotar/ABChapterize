@@ -631,14 +631,18 @@ public sealed class ProgressRenderer : IDisposable
         // Render's own truncation note describes.
         var barWidth = Math.Max(4, width - BarLineOverhead);
         var fraction = tracker.Fraction;
-        var percent = (int)Math.Floor(fraction * 100);
         var filled = (int)Math.Round(fraction * barWidth);
+        // Both the fill character and the percentage read off the same stretches, so a bar showing
+        // work outside them and a percentage counting it are not expressible.
+        var highlights = HighlightSpans(tracker);
+        var position = fraction * tracker.PhaseTotalBytes;
+        var percent = (int)Math.Floor(WorkFraction(highlights, position, fraction) * 100);
         // A phase that does not work through the file in order gets a position marker instead of a
         // fill, and a count of what it has looked at instead of a percentage - see
         // WorkTracker.LocationsExplored for why a bar would be a lie there.
         var explored = tracker.LocationsExplored;
         var bar = explored is null
-            ? new string('#', filled).PadRight(barWidth, '-')
+            ? BuildFill(filled, barWidth, highlights, tracker.PhaseTotalBytes, position)
             : PositionMarker(filled, barWidth);
 
         var spans = new List<ColoredSpan>(7)
@@ -683,6 +687,121 @@ public sealed class ProgressRenderer : IDisposable
         spans.Add(Separator);
         spans.Add(new(slot.Label, Palette.Label));
         return spans;
+    }
+
+    /// <summary>
+    /// The stretches the bar marks out, merged and in file order, or empty for a phase that reads
+    /// the book end to end and marks nothing. The union of both highlights, because both say "this
+    /// is a piece of the book" - <see cref="WorkTracker.RegionSpan"/> is normally one of
+    /// <see cref="WorkTracker.PhaseSpans"/>, and where a phase sets only the one it is still a
+    /// piece.
+    /// </summary>
+    /// <param name="tracker">The file's work tracker.</param>
+    /// <remarks>
+    /// Merged rather than concatenated because <see cref="WorkFraction"/> divides by their summed
+    /// length: two stretches counted twice would inflate the denominator and leave a phase that
+    /// finished its work reading short of 100 %. The same merged list drives
+    /// <see cref="BuildFill"/>, so the cells drawn as done and the percentage saying how many are
+    /// done cannot disagree. Empty on a phase with no total, matching
+    /// <see cref="AddBarSpans"/>'s own bail-out so the characters and the colors agree there too.
+    /// </remarks>
+    private static List<(long From, long To)> HighlightSpans(WorkTracker tracker)
+    {
+        if (tracker.PhaseTotalBytes <= 0)
+            return [];
+        var raw = new List<(long From, long To)>(tracker.PhaseSpans ?? []);
+        if (tracker.RegionSpan is { } working)
+            raw.Add(working);
+        if (raw.Count == 0)
+            return [];
+
+        raw.Sort((a, b) => a.From.CompareTo(b.From));
+        var merged = new List<(long From, long To)> { raw[0] };
+        foreach (var span in raw.Skip(1))
+        {
+            var last = merged[^1];
+            if (span.From <= last.To)
+                merged[^1] = (last.From, Math.Max(last.To, span.To));
+            else
+                merged.Add(span);
+        }
+        return merged;
+    }
+
+    /// <summary>
+    /// What the percentage states: how much of the work this phase actually has to do is behind the
+    /// bar's fill. For a phase that reads the book end to end that is the fill itself; for one
+    /// working a handful of gaps it is progress through those gaps, not through the file they sit
+    /// in.
+    /// </summary>
+    /// <param name="highlights">The phase's stretches, from <see cref="HighlightSpans"/>.</param>
+    /// <param name="position">Where the reading head is, in the progress bytes the bar is drawn in.</param>
+    /// <param name="fraction">The whole-file fraction, returned as-is for a phase marking nothing.</param>
+    /// <remarks>
+    /// This does <em>not</em> reinstate the per-phase compressed timeline that build 411 removed,
+    /// and the difference is the whole point of that change: the bar is still a map of the file, so
+    /// the fill still says where in the book the reading head is. Only the number beside it changed
+    /// meaning, from "how far into the file" - which on a phase reading two gaps out of nine hours
+    /// was a figure about the file rather than about the work - to "how much of the work is done".
+    /// The two answer different questions and are now both on screen.
+    /// </remarks>
+    private static double WorkFraction(
+        List<(long From, long To)> highlights, double position, double fraction)
+    {
+        if (highlights.Count == 0)
+            return fraction;
+        double covered = 0, work = 0;
+        foreach (var (from, to) in highlights)
+        {
+            // Defensively ordered: a zero-length or inverted stretch contributes nothing rather
+            // than throwing, since a gap far too short to fill a cell is a case the bar already has.
+            var end = Math.Max(from, to);
+            work += end - from;
+            covered += Math.Min(Math.Max(position, from), end) - from;
+        }
+        return work > 0 ? Math.Clamp(covered / work, 0, 1) : fraction;
+    }
+
+    /// <summary>
+    /// The bar's cells for an ordinary filling bar: "#" for work done, "-" for everything else.
+    /// </summary>
+    /// <param name="filled">How many cells the reading head has passed.</param>
+    /// <param name="barWidth">The bar's width in cells.</param>
+    /// <param name="highlights">The phase's stretches, from <see cref="HighlightSpans"/>.</param>
+    /// <param name="total">The phase's total, i.e. what the whole bar stands for.</param>
+    /// <param name="position">Where the reading head is, in the progress bytes the bar is drawn in.</param>
+    /// <remarks>
+    /// <para>
+    /// Where a phase marks out stretches, only cells inside one of them are ever drawn as done -
+    /// the audio between two gaps is not work this phase did, it is audio it skipped, and filling
+    /// it in claimed otherwise. The distinction is carried by the character and not only by the
+    /// color, so it survives a terminal with no color, <c>--no-color</c>, and a log or screenshot
+    /// where the color is gone: "[##----####---##--]" reads the same in black and white.
+    /// </para>
+    /// <para>
+    /// A stretch the head has gone past is drawn done to its last cell rather than to wherever the
+    /// fill rounded. <see cref="SpanCells"/> rounds a stretch <em>outwards</em> so that even a very
+    /// short one shows, while the fill rounds to nearest, so the two can differ by a cell - and the
+    /// place that shows is the end of a phase, where a stretch the percentage has already counted
+    /// as finished would sit there with a cell still empty beside a bar reading 100 %.
+    /// </para>
+    /// </remarks>
+    private static string BuildFill(
+        int filled, int barWidth, List<(long From, long To)> highlights, long total, double position)
+    {
+        if (highlights.Count == 0)
+            return new string('#', filled).PadRight(barWidth, '-');
+
+        var cells = new char[barWidth];
+        Array.Fill(cells, '-');
+        foreach (var span in highlights)
+        {
+            var (from, to) = SpanCells(span, total, barWidth);
+            var end = position >= span.To ? to : Math.Min(to, filled);
+            for (var i = from; i < end; i++)
+                cells[i] = '#';
+        }
+        return new string(cells);
     }
 
     /// <summary>

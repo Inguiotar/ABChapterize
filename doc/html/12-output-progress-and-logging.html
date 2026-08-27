@@ -84,19 +84,31 @@ where every mark is an
 announcement without a number, the state shows the plain total instead:
 <code>mk 12</code>.</p>
 <p><strong>The bar always spans the whole file</strong>, whatever fraction of it the pass is
-reading, and its percentage is a position in the book rather than a share of
-that pass's own work. So the fill moves nonlinearly, jumps from one stretch to
-the next, and — briefly — runs backwards when a sequence gap makes the detector
-re-probe earlier candidates; the label gains a <code>(&lt;&lt;)</code> for exactly that stretch,
-so a falling percentage is recognisable as the re-probe rather than as the bar
-misbehaving. A pass that reads only part of the book — the gaps in a numbering,
-the stretches a music-first read left over, the file's tail — finishes well
-short of 100 %, which is the honest answer to where in the book the reading
-stopped.</p>
+reading, so where the fill sits is always a position in the book. The fill moves
+nonlinearly, jumps from one stretch to the next, and — briefly — runs backwards
+when a sequence gap makes the detector re-probe earlier candidates; the label
+gains a <code>(&lt;&lt;)</code> for exactly that stretch, so a backward jump is recognisable as
+the re-probe rather than as the bar misbehaving.</p>
+<p>A pass that reads only part of the book — the gaps in a numbering, the stretches
+a music-first read left over, the file's tail — <strong>fills in only the stretches it
+actually reads</strong>. The audio between them stays <code>-</code> even once the reading head
+has gone past it, because that is audio the pass skipped rather than work it
+did:</p>
+<pre><code> [----###----------------####-----------------###----] 100%
+ Scanning... | ch 28(-1) | 12:04 | My Audiobook.m4b
+</code></pre>
+<p><strong>The percentage is a share of that pass's own work</strong>, not of the file, so a
+pass reading three short gaps out of nine hours reaches 100 % when it has read
+them — as above, where the bar stops well short of the file's end. The two
+numbers on the line therefore answer different questions: the fill says where in
+the book the reading head is, the percentage says how much of the work is done.</p>
 <p>Those stretches are marked out inside the bar so its jumps can be read against
 them: <strong>dark cyan for every stretch the pass is going to read</strong>, and <strong>cyan for
 the one it is reading right now</strong>. A pass that reads the book end to end marks
-nothing, a bar tinted from edge to edge saying nothing at all.</p>
+nothing — a bar tinted from edge to edge would say nothing at all — and fills in
+the ordinary way, every cell behind the head. The <code>#</code>/<code>-</code> distinction carries
+the same information as the colours, so it survives <code>--no-color</code>, a terminal
+without colour, and a screenshot.</p>
 <p><code>SD-probing...</code> — the
 <a href="03-how-detection-works.html#reading-the-longest-pauses-first">skim of a book's longest pauses</a> — stops
 being a bar altogether, because it has a position in the file but no notion of
