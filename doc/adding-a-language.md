@@ -62,7 +62,7 @@ are called. That is deliberate, and it is why this is a small job.
 
 ### Which alphabets this works for
 
-All eleven languages shipped so far are written in the Latin alphabet, but
+All thirteen languages shipped so far are written in the Latin alphabet, but
 nothing in the machinery requires that, and it was checked rather than assumed
 (2026-08-22, build 383). Matching is case-insensitive across the whole of
 Unicode, the word boundaries the number pattern uses are the Unicode ones, and
@@ -105,9 +105,9 @@ is not purely ISO 639-1 — Hawaiian is `haw` and Cantonese is `yue` — so
 
 ## 2. Step 1 — the language class
 
-Say you are adding Czech (`cs`). Copy an existing file that is structurally
+Say you are adding Romanian (`ro`). Copy an existing file that is structurally
 close to your language — `GermanLanguage.cs` is the simplest one — to
-`src\Language\Languages\CzechLanguage.cs`, and edit it:
+`src\Language\Languages\RomanianLanguage.cs`, and edit it:
 
 ```csharp
 // ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
@@ -118,23 +118,23 @@ using ABChapterize.Language.Parsers;
 
 namespace ABChapterize.Language.Languages;
 
-/// <summary>Czech.</summary>
-public sealed class CzechLanguage : ILanguage
+/// <summary>Romanian.</summary>
+public sealed class RomanianLanguage : ILanguage
 {
     /// <inheritdoc/>
-    public string Code => "cs";
+    public string Code => "ro";
 
     /// <inheritdoc/>
-    public string ChapterPhrase => "/(?:^kapitol ()|^() kapitol|^kapitol)/";
+    public string ChapterPhrase => "/(?:^capitol ()|^() capitol|^capitol)/";
 
     /// <inheritdoc/>
-    public string ChapterTitle => "Kapitola";
+    public string ChapterTitle => "Capitolul";
 
     /// <inheritdoc/>
-    public string PartTitle => "Část";
+    public string PartTitle => "Partea";
 
     /// <inheritdoc/>
-    public string IntroTitle => "Úvod";
+    public string IntroTitle => "Introducere";
 
     /// <inheritdoc/>
     public string ProloguePhrase => "/prolog/";
@@ -149,7 +149,7 @@ public sealed class CzechLanguage : ILanguage
     public string EpilogueTitle => "Epilog";
 
     /// <inheritdoc/>
-    public INumberWordParser NumberParser { get; } = new CzechNumberParser();
+    public INumberWordParser NumberParser { get; } = new RomanianNumberParser();
 }
 ```
 
@@ -166,7 +166,7 @@ The chapter phrase has one more thing in it. Every built-in language spells it
 `/(?:^WORD ()|^() WORD|^WORD)/`: three alternatives of one phrase, where `()`
 stands for a chapter number in your language's own notation and captures it.
 The first alternative takes the number that follows the word directly
-("Kapitola 12"), the second the number that precedes it ("První kapitola"), and
+("Capitolul 12"), the second the number that precedes it ("Primul capitol"), and
 the third is the bare word, where the number is read off whatever stands around
 it. Copy the shape and change the word; the parts that vary by language are the
 word itself and the number grammar in step 3.
@@ -232,9 +232,13 @@ audiobooks in that language get nothing. Write it as one alternation,
 `/(?:^(?:woord|kapittel) ()|^() (?:woord|kapittel)|^(?:woord|kapittel))/`, and
 the earlier note applies: `(?:...)`, never
 `(...)`. Test it against prose before you commit to it. The bar is high on
-purpose, and no built-in language has cleared it so far: all eleven get by on
+purpose, and no built-in language has cleared it so far: all thirteen get by on
 a single word, and the only alternations among them (Swedish and Danish
-`kapit(?:el|let)`) are two endings of one word rather than two words.
+`kapit(?:el|let)`, Norwegian `kapit(?:tel|let)`) are two endings of one word
+rather than two words. Czech bends the shape a different way and still stays
+within the rule: its bare alternative stops at the stem `kapitol` where the two
+number-bearing ones spell the nominative `kapitola`, which is one word written
+to two lengths, not two words.
 
 For the prologue and the epilogue, prefer your language's Latin-derived form
 ("Prolog", "Prólogo", …) over a native near-synonym. Words like German
@@ -243,12 +247,12 @@ whereas a prologue is part of the story, and that is what gets announced.
 
 ### The four titles
 
-`ChapterTitle` is the word marks are named after: with `Kapitola`, chapters
-come out as "Kapitola 1", "Kapitola 2", …. Write it the way it should appear
+`ChapterTitle` is the word marks are named after: with `Capitolul`, chapters
+come out as "Capitolul 1", "Capitolul 2", …. Write it the way it should appear
 in a player — properly capitalized, with all its accents.
 
 `PartTitle` is only used for a book whose chapters count from one again in
-every part, where the marks come out as "Část 2 - Kapitola 1". Pick the word
+every part, where the marks come out as "Partea 2 - Capitolul 1". Pick the word
 for a *structural division of a book*, not a synonym of the chapter word —
 Turkish uses "Bölüm" for a chapter and "Kısım" here, and reusing one for both
 would produce "Bölüm 2 - Bölüm 1". Two rules follow from how it is read back
@@ -274,12 +278,12 @@ language's parser, so handing over `new EnglishNumberParser()` directly turns th
 suite red:
 
 ```csharp
-public sealed class CzechNumberParser : INumberWordParser
+public sealed class RomanianNumberParser : INumberWordParser
 {
     private static readonly EnglishNumberParser Borrowed = new();
 
     /// <inheritdoc/>
-    public string LanguageCode => "cs";
+    public string LanguageCode => "ro";
 
     /// <inheritdoc/>
     public string DigitOrdinalSuffixPattern => Borrowed.DigitOrdinalSuffixPattern;
@@ -294,10 +298,10 @@ public sealed class CzechNumberParser : INumberWordParser
 ```
 
 ```csharp
-public INumberWordParser NumberParser { get; } = new CzechNumberParser();
+public INumberWordParser NumberParser { get; } = new RomanianNumberParser();
 ```
 
-Digits and Roman numerals still work that way; spelled-out Czech numbers will
+Digits and Roman numerals still work that way; spelled-out Romanian numbers will
 not, until step 3 replaces the borrowed tables.
 
 One thing you do *not* have to worry about: your language's number words are
@@ -320,7 +324,7 @@ Open `src\Language\LanguageRegistry.cs` and add one line to the `All` array:
         new GermanLanguage(),
         ...
         new DanishLanguage(),
-        new CzechLanguage(),      // <- yours
+        new RomanianLanguage(),   // <- yours
     ];
 ```
 
@@ -344,7 +348,7 @@ for exactly that reason: the words above are ones no narrator would say. Go as
 far as the language stays regular, say where you stopped in the class doc
 comment, and let the digit ordinals cover the rest.
 
-Create `src\Language\Parsers\CzechNumberParser.cs` implementing
+Create `src\Language\Parsers\RomanianNumberParser.cs` implementing
 `INumberWordParser`. Read `INumberWordParser.cs` first; it is short and states
 the contract precisely. Then pick the existing parser whose language works
 most like yours and adapt it:
@@ -429,7 +433,7 @@ three files.
 Finally, try it on a real book:
 
 ```
-abchapterize --lang cs --dry-run kniha.m4b
+abchapterize --lang ro --dry-run carte.m4b
 ```
 
 `--dry-run` detects everything and writes nothing, so it is safe to run
@@ -447,7 +451,7 @@ Three tables in `doc\manual.md`, section 7 ("Languages and number recognition"):
   title, and the prologue/epilogue phrases and titles).
 
 `README.md`'s feature list also names the supported languages and counts them
-("**Eleven languages** of number recognition out of the box …"), with one
+("**Thirteen languages** of number recognition out of the box …"), with one
 spelled-out example number each: bump the count, add your language, add a
 number word. It is the first thing anyone reads, and nothing generates it.
 
@@ -458,8 +462,8 @@ Add a line to `CHANGELOG.md` under the unreleased version, written for
 someone using the tool:
 
 ```markdown
-- **Czech is now understood**: chapter announcements, spoken numbers 0–999 and
-  the localized `--lang cs` defaults.
+- **Romanian is now understood**: chapter announcements, spoken numbers 0–999 and
+  the localized `--lang ro` defaults.
 ```
 
 ---

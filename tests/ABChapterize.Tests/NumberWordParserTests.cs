@@ -157,7 +157,7 @@ public class NumberWordParserTests
     public void SupportedLanguages_ListsAllParsers()
     {
         Assert.Equal(
-            ["da", "de", "en", "es", "fr", "it", "nl", "pl", "pt", "sv", "tr"],
+            ["cs", "da", "de", "en", "es", "fr", "it", "nl", "no", "pl", "pt", "sv", "tr"],
             LanguageRegistry.SupportedCodes);
     }
 

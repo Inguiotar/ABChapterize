@@ -3063,6 +3063,8 @@ The chapter number in an announcement is recognized in three ways:
 | Polish | `pl` | rozdział dwadzieścia jeden | rozdział dwudziesty pierwszy |
 | Swedish | `sv` | kapitel tjugoett | tjugoförsta kapitlet |
 | Danish | `da` | kapitel enogtyve | enogtyvende kapitel |
+| Norwegian | `no` | kapittel tjueen | tjueførste kapittel |
+| Czech | `cs` | kapitola dvacet jedna | dvacátá první kapitola |
 
 Cardinals are understood from 0 to 999 in every language, ordinals as far as
 the language spells them compositionally (see below), and
@@ -3080,7 +3082,10 @@ Spelling variants are covered rather than assumed: masculine and feminine
 ("vigésima primera"), fused and separate ("decimoctavo" as well as "décimo
 octavo"), accented and not, European and Brazilian Portuguese, and both the
 formal and the everyday Danish tens ("halvtredsindstyvende" and
-"halvtredsende" for 50th).
+"halvtredsende" for 50th). Norwegian is read in both of the systems its books
+use — the modern "tjueen" for 21 and the older "enogtyve" it replaced, along
+with the conservative spellings that go with it ("syv" for 7, "tyve" for 20) —
+and Czech in both the formal "dvacet jedna" and the everyday "jedenadvacet".
 
 Where two of the three readings would fit the same word, the language's own
 number words win over the Roman reading: French "dix" is ten, not 509.
@@ -3101,6 +3106,8 @@ For these languages, `--lang` also localizes the defaults of
 | `pl` | `/(?:^rozdzia[łl] ()\|^() rozdzia[łl]\|^rozdzia[łl])/` | Rozdział | Część | Wstęp |
 | `sv` | `/(?:^kapit(?:el\|let) ()\|^() kapit(?:el\|let)\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
 | `da` | `/(?:^kapit(?:el\|let) ()\|^() kapit(?:el\|let)\|^kapit(?:el\|let))/` | Kapitel | Del | Introduktion |
+| `no` | `/(?:^kapit(?:tel\|let) ()\|^() kapit(?:tel\|let)\|^kapit(?:tel\|let))/` | Kapittel | Del | Introduksjon |
+| `cs` | `/(?:^kapitola ()\|^() kapitola\|^kapitol)/` | Kapitola | Část | Úvod |
 
 Every one of them is the same shape: three alternatives, the first taking the
 number that follows the word directly ("Kapitel 12"), the second the number that
@@ -3109,6 +3116,11 @@ language's only order), and the third the bare word, which leaves the number to
 be read off whatever stands around it. All three carry a `^`, since an
 announcement is by definition set off from what precedes it — either by a pause
 or by the recognizer writing it as a segment of its own.
+
+Czech is the one row whose third alternative is shorter than its first two. The
+two that sit next to a number take the nominative `kapitola`, which is how a
+heading is announced, while the bare one stops at the stem so that every other
+case ending — `kapitole`, `kapitoly`, `kapitolu` — is still found.
 
 Where two of them read the same words differently, the announcement is decided
 by the chapter sequence rather than by which alternative got there first: a
@@ -3143,6 +3155,8 @@ and `--epilogue-phrase`/`--epilogue-title` (see
 | `pl` | `/prolog/` | Prolog | `/epilog/` | Epilog |
 | `sv` | `/prolog/` | Prolog | `/epilog/` | Epilog |
 | `da` | `/prolog/` | Prolog | `/epilog/` | Epilog |
+| `no` | `/prolog/` | Prolog | `/epilog/` | Epilog |
+| `cs` | `/prolog/` | Prolog | `/epilog/` | Epilog |
 
 The English phrases cover the American "prolog"/"epilog" spellings simply by
 stopping short of the ending.
@@ -3155,7 +3169,7 @@ what a narrator actually announces. Where a particular book disagrees,
 
 Other languages work too: give `--lang` for transcription and a
 `--chapter-phrase` (plain or regexp); announcements with digit numbers are
-then fully supported, e.g. `--lang cs --chapter-phrase kapitola`. If you would
+then fully supported, e.g. `--lang fi --chapter-phrase luku`. If you would
 rather have your language supported properly — its spoken numbers included —
 [doc/adding-a-language.md](adding-a-language.md) walks through adding one; it
 is a self-contained job that needs no knowledge of the rest of the codebase.

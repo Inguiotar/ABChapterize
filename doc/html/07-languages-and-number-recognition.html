@@ -133,6 +133,18 @@ every English &quot;chapter I wrote&quot; would become a chapter 1.</li>
 <td>kapitel enogtyve</td>
 <td>enogtyvende kapitel</td>
 </tr>
+<tr>
+<td>Norwegian</td>
+<td><code>no</code></td>
+<td>kapittel tjueen</td>
+<td>tjueførste kapittel</td>
+</tr>
+<tr>
+<td>Czech</td>
+<td><code>cs</code></td>
+<td>kapitola dvacet jedna</td>
+<td>dvacátá první kapitola</td>
+</tr>
 </tbody>
 </table>
 <p>Cardinals are understood from 0 to 999 in every language, ordinals as far as
@@ -150,7 +162,10 @@ value regardless of language.</p>
 (&quot;vigésima primera&quot;), fused and separate (&quot;decimoctavo&quot; as well as &quot;décimo
 octavo&quot;), accented and not, European and Brazilian Portuguese, and both the
 formal and the everyday Danish tens (&quot;halvtredsindstyvende&quot; and
-&quot;halvtredsende&quot; for 50th).</p>
+&quot;halvtredsende&quot; for 50th). Norwegian is read in both of the systems its books
+use — the modern &quot;tjueen&quot; for 21 and the older &quot;enogtyve&quot; it replaced, along
+with the conservative spellings that go with it (&quot;syv&quot; for 7, &quot;tyve&quot; for 20) —
+and Czech in both the formal &quot;dvacet jedna&quot; and the everyday &quot;jedenadvacet&quot;.</p>
 <p>Where two of the three readings would fit the same word, the language's own
 number words win over the Roman reading: French &quot;dix&quot; is ten, not 509.</p>
 <p>For these languages, <code>--lang</code> also localizes the defaults of
@@ -243,6 +258,20 @@ number words win over the Roman reading: French &quot;dix&quot; is ten, not 509.
 <td>Del</td>
 <td>Introduktion</td>
 </tr>
+<tr>
+<td><code>no</code></td>
+<td><code>/(?:^kapit(?:tel\|let) ()\|^() kapit(?:tel\|let)\|^kapit(?:tel\|let))/</code></td>
+<td>Kapittel</td>
+<td>Del</td>
+<td>Introduksjon</td>
+</tr>
+<tr>
+<td><code>cs</code></td>
+<td><code>/(?:^kapitola ()\|^() kapitola\|^kapitol)/</code></td>
+<td>Kapitola</td>
+<td>Část</td>
+<td>Úvod</td>
+</tr>
 </tbody>
 </table>
 <p>Every one of them is the same shape: three alternatives, the first taking the
@@ -252,6 +281,10 @@ language's only order), and the third the bare word, which leaves the number to
 be read off whatever stands around it. All three carry a <code>^</code>, since an
 announcement is by definition set off from what precedes it — either by a pause
 or by the recognizer writing it as a segment of its own.</p>
+<p>Czech is the one row whose third alternative is shorter than its first two. The
+two that sit next to a number take the nominative <code>kapitola</code>, which is how a
+heading is announced, while the bare one stops at the stem so that every other
+case ending — <code>kapitole</code>, <code>kapitoly</code>, <code>kapitolu</code> — is still found.</p>
 <p>Where two of them read the same words differently, the announcement is decided
 by the chapter sequence rather than by which alternative got there first: a
 number that cannot follow the chapters already found is put aside and the next
@@ -356,6 +389,20 @@ and <code>--epilogue-phrase</code>/<code>--epilogue-title</code> (see
 <td><code>/epilog/</code></td>
 <td>Epilog</td>
 </tr>
+<tr>
+<td><code>no</code></td>
+<td><code>/prolog/</code></td>
+<td>Prolog</td>
+<td><code>/epilog/</code></td>
+<td>Epilog</td>
+</tr>
+<tr>
+<td><code>cs</code></td>
+<td><code>/prolog/</code></td>
+<td>Prolog</td>
+<td><code>/epilog/</code></td>
+<td>Epilog</td>
+</tr>
 </tbody>
 </table>
 <p>The English phrases cover the American &quot;prolog&quot;/&quot;epilog&quot; spellings simply by
@@ -367,7 +414,7 @@ what a narrator actually announces. Where a particular book disagrees,
 <code>--prologue-phrase</code>/<code>--epilogue-phrase</code> override it.</p>
 <p>Other languages work too: give <code>--lang</code> for transcription and a
 <code>--chapter-phrase</code> (plain or regexp); announcements with digit numbers are
-then fully supported, e.g. <code>--lang cs --chapter-phrase kapitola</code>. If you would
+then fully supported, e.g. <code>--lang fi --chapter-phrase luku</code>. If you would
 rather have your language supported properly — its spoken numbers included —
 <a href="adding-a-language.html">doc/adding-a-language.md</a> walks through adding one; it
 is a self-contained job that needs no knowledge of the rest of the codebase.</p>

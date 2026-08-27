@@ -73,11 +73,12 @@ Prebuilt binaries for Windows and Linux are available on the
   file (falling back to English when the detection is inconclusive), so a
   mixed-language collection just works with no `--lang` at all. Pin it to one
   language with `--lang de` if you'd rather skip per-file detection.
-- **Eleven languages** of number recognition out of the box — English, German,
-  French, Spanish, Italian, Dutch, Turkish, Portuguese, Polish, Swedish and
-  Danish. Whisper likes to write numbers out as words ("twenty-one",
-  "einundzwanzig", "vingt et un", "veintiuno", "ventuno", "eenentwintig",
-  "yirmi bir", "vinte e um", "dwadzieścia jeden", "tjugoett", "enogtyve"),
+- **Thirteen languages** of number recognition out of the box — English, German,
+  French, Spanish, Italian, Dutch, Turkish, Portuguese, Polish, Swedish,
+  Danish, Norwegian and Czech. Whisper likes to write numbers out as words
+  ("twenty-one", "einundzwanzig", "vingt et un", "veintiuno", "ventuno",
+  "eenentwintig", "yirmi bir", "vinte e um", "dwadzieścia jeden", "tjugoett",
+  "enogtyve", "tjueen", "dvacet jedna"),
   and ABChapterize understands them all; other languages work with a custom
   phrase/regexp. Ordinal
   announcements are understood too, before or after the phrase — "Erstes
@@ -296,7 +297,7 @@ document that long. Grouped below exactly as `--help` groups them:
 
 | Option | What it does |
 | --- | --- |
-| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from short samples taken inside the book — up to five, from different places, until one is confident or they can be voted on — and used for that file, falling back to `en` only when they cannot agree. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`; digits (`12`, `2nd`, `2e`) and Roman numerals (`XIII`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--chapter-title`, `--part-title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
+| `-l`, `--lang <code\|auto>` | Language hint for Whisper, or `auto` (the default): each file's language is detected from short samples taken inside the book — up to five, from different places, until one is confident or they can be voted on — and used for that file, falling back to `en` only when they cannot agree. Numbers transcribed as words — cardinal and ordinal, before or after the phrase — are understood in `en`, `de`, `fr`, `es`, `it`, `nl`, `tr`, `pt`, `pl`, `sv`, `da`, `no`, `cs`; digits (`12`, `2nd`, `2e`) and Roman numerals (`XIII`) in every language. Also localizes the defaults of `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--chapter-title`, `--part-title`, `--intro-title`, `--prologue-title` and `--epilogue-title` (per-file with `auto`). |
 | `-m`, `--model <name>` | Whisper model used to find the chapters: `tiny`, `base`, `small` (default), `medium`, `turbo`, `large`, or `custom:<path>` for a GGML model file of your own (used as-is: not downloaded, not checksum-verified, ranked against the built-in models by file size). Bigger is not better here — this model listens to short windows a few seconds long, and the large ones are markedly worse at those (see [Tuning tips](#tuning-tips)). `tiny`/`base` are not recommended for real audiobooks either. |
 | `-M`, `--upgrade-model <name>` | Whisper model for Scan (gap filling) only; same choices as `--model`, `custom:<path>` included (default: `turbo`, or whatever `--model` says if you set that and not this). Scan transcribes long stretches of audio, where the heavier models really are the better recognizers. Lighter to speed Scan up, or `large` for one last attempt at the gaps. A model heavier than `--model`'s also enables Re-probe — which the default pairing does. Downloaded and loaded lazily, the first time a file actually needs it — Re-probe, Scan, or one of the second opinions Probe asks a heavier recognizer for. |
 | `-j`, `--mark-before-jingle` | Walk the mark backward from the default placement, back through the jingle's own music, to the end of the previous chapter's actual narration — or to the start of the last jingle, where several play back to back — instead of the default fixed offset before the phrase (see [How it works](#how-it-works)). Where the walk ends on a pause, the mark backs into it by `-k` seconds; a chapter with no jingle at all keeps its ordinary placement. Best left alongside the default refinement: with `-Q` the walk starts from raw default placement, which occasionally overshoots the announcement and leaves the mark after it. |

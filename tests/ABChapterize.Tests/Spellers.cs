@@ -708,4 +708,213 @@ public static class Spellers
         var tens = (colloquialTens ? shortTens : formalTens)[n / 10];
         return n % 10 == 0 ? tens : units[n % 10] + "og" + tens;
     }
+
+    /// <summary>
+    /// Spells 0-999 in Norwegian Bokmal ("ett hundre og tjueen"), in the post-1951 tens-first
+    /// system: unit and tens fuse into one word, the hundreds stay separate and are joined on
+    /// with "og".
+    /// </summary>
+    /// <param name="n">Number to spell.</param>
+    /// <param name="conservative">Use the older spellings of the words the reform changed -
+    /// "syv" for 7, "tyve" for 20, "tredve" for 30 - which narrators still say.</param>
+    public static string Norwegian(int n, bool conservative = false)
+    {
+        string[] units =
+            ["null", "en", "to", "tre", "fire", "fem", "seks", "sju", "åtte", "ni"];
+        string[] teens =
+        [
+            "ti", "elleve", "tolv", "tretten", "fjorten", "femten", "seksten", "sytten",
+            "atten", "nitten",
+        ];
+        string[] tens =
+            ["", "", "tjue", "tretti", "førti", "femti", "seksti", "sytti", "åtti", "nitti"];
+        if (conservative)
+        {
+            units[7] = "syv";
+            tens[2] = "tyve";
+            tens[3] = "tredve";
+        }
+
+        string Sub100(int m)
+        {
+            if (m < 10) return units[m];
+            if (m < 20) return teens[m - 10];
+            var u = m % 10;
+            return tens[m / 10] + (u > 0 ? units[u] : "");
+        }
+
+        if (n < 100)
+            return Sub100(n);
+        var h = n / 100;
+        var rest = n % 100;
+        var head = (h == 1 ? "ett" : units[h]) + " hundre";
+        return rest > 0 ? head + " og " + Sub100(rest) : head;
+    }
+
+    /// <summary>
+    /// Spells 1-999 as a Norwegian ordinal ("tjueførste", "ett hundre og tjueførste").
+    /// </summary>
+    /// <remarks>
+    /// Only the number's last part inflects, as in Swedish and Polish: a tens word carrying a unit
+    /// after it stays cardinal ("tjue" + "første"), and so does a hundreds word ahead of a nonzero
+    /// remainder. A round hundred is itself the last part and takes the ordinal "hundrede", which
+    /// is the cardinal "hundre" plus one letter.
+    /// </remarks>
+    /// <param name="n">Number to spell, 1-999.</param>
+    /// <param name="conservative">Use the older spellings, as for <see cref="Norwegian"/>.</param>
+    public static string NorwegianOrdinal(int n, bool conservative = false)
+    {
+        string[] below20 =
+        [
+            "", "første", "andre", "tredje", "fjerde", "femte", "sjette", "sjuende",
+            "åttende", "niende", "tiende", "ellevte", "tolvte", "trettende", "fjortende",
+            "femtende", "sekstende", "syttende", "attende", "nittende",
+        ];
+        string[] tensOrd =
+        [
+            "", "", "tjuende", "trettiende", "førtiende", "femtiende", "sekstiende",
+            "syttiende", "åttiende", "nittiende",
+        ];
+        string[] tensCard =
+            ["", "", "tjue", "tretti", "førti", "femti", "seksti", "sytti", "åtti", "nitti"];
+        string[] units =
+            ["null", "en", "to", "tre", "fire", "fem", "seks", "sju", "åtte", "ni"];
+        if (conservative)
+        {
+            below20[7] = "syvende";
+            tensOrd[2] = "tyvende";
+            tensOrd[3] = "tredevte";
+            tensCard[2] = "tyve";
+            tensCard[3] = "tredve";
+            units[7] = "syv";
+        }
+
+        string OrdSub100(int m)
+        {
+            if (m < 20) return below20[m];
+            var u = m % 10;
+            return u == 0 ? tensOrd[m / 10] : tensCard[m / 10] + below20[u];
+        }
+
+        if (n < 100)
+            return OrdSub100(n);
+        var h = n / 100;
+        var rest = n % 100;
+        var head = h == 1 ? "ett" : units[h];
+        return rest == 0
+            ? head + " hundrede"
+            : head + " hundre og " + OrdSub100(rest);
+    }
+
+    /// <summary>
+    /// Spells 0-999 in Czech ("tři sta dvacet jedna"), hundreds, tens and units as separate words
+    /// with no connector. The counted word of a hundreds pair changes with its multiplier -
+    /// "dvě stě", "tři sta", "pět set" - which is the one irregularity in the system.
+    /// </summary>
+    /// <param name="n">Number to spell.</param>
+    public static string Czech(int n)
+    {
+        string[] units =
+        [
+            "nula", "jedna", "dva", "tři", "čtyři", "pět", "šest", "sedm", "osm", "devět",
+        ];
+        string[] teens =
+        [
+            "deset", "jedenáct", "dvanáct", "třináct", "čtrnáct", "patnáct", "šestnáct",
+            "sedmnáct", "osmnáct", "devatenáct",
+        ];
+        string[] tens =
+        [
+            "", "", "dvacet", "třicet", "čtyřicet", "padesát", "šedesát", "sedmdesát",
+            "osmdesát", "devadesát",
+        ];
+        string[] hundreds =
+        [
+            "", "sto", "dvě stě", "tři sta", "čtyři sta", "pět set", "šest set",
+            "sedm set", "osm set", "devět set",
+        ];
+
+        string Sub100(int m)
+        {
+            if (m == 0) return "";
+            if (m < 10) return units[m];
+            if (m < 20) return teens[m - 10];
+            var u = m % 10;
+            return tens[m / 10] + (u > 0 ? " " + units[u] : "");
+        }
+
+        if (n == 0)
+            return "nula";
+        var parts = new List<string>();
+        if (n / 100 > 0)
+            parts.Add(hundreds[n / 100]);
+        var sub = Sub100(n % 100);
+        if (sub.Length > 0)
+            parts.Add(sub);
+        return string.Join(' ', parts);
+    }
+
+    /// <summary>
+    /// Spells 1-999 as a Czech ordinal in the feminine, which is the gender "kapitola" wants
+    /// ("dvacátá první", "stá").
+    /// </summary>
+    /// <remarks>
+    /// Czech marks both parts of a compound ordinal - "dvacátá první", not "dvacet první" - which
+    /// is the Polish rule rather than the Swedish one. A hundreds word ahead of a nonzero
+    /// remainder stays cardinal; a round hundred takes its own ordinal, which from five up is
+    /// built on the counting form ("pětistá", not "pětstá").
+    /// </remarks>
+    /// <param name="n">Number to spell, 1-999.</param>
+    /// <param name="masculine">Spell the masculine "-ý" endings instead of the feminine "-á"
+    /// ones, which a narrator uses for any masculine word the number modifies.</param>
+    public static string CzechOrdinal(int n, bool masculine = false)
+    {
+        string[] unitsOrd =
+        [
+            "", "první", "druhá", "třetí", "čtvrtá", "pátá", "šestá", "sedmá", "osmá",
+            "devátá",
+        ];
+        string[] teensOrd =
+        [
+            "desátá", "jedenáctá", "dvanáctá", "třináctá", "čtrnáctá", "patnáctá",
+            "šestnáctá", "sedmnáctá", "osmnáctá", "devatenáctá",
+        ];
+        string[] tensOrd =
+        [
+            "", "", "dvacátá", "třicátá", "čtyřicátá", "padesátá", "šedesátá",
+            "sedmdesátá", "osmdesátá", "devadesátá",
+        ];
+        string[] hundredsCard =
+        [
+            "", "sto", "dvě stě", "tři sta", "čtyři sta", "pět set", "šest set",
+            "sedm set", "osm set", "devět set",
+        ];
+        string[] hundredsOrd =
+        [
+            "", "stá", "dvoustá", "třístá", "čtyřstá", "pětistá", "šestistá", "sedmistá",
+            "osmistá", "devítistá",
+        ];
+
+        // The masculine differs from the feminine only in the ending, and the two soft ordinals
+        // ("první", "třetí") do not inflect for gender at all.
+        string Gender(string word) => !masculine || word.EndsWith('í')
+            ? word
+            : word[..^1] + "ý";
+
+        string OrdSub100(int m)
+        {
+            if (m < 10) return Gender(unitsOrd[m]);
+            if (m < 20) return Gender(teensOrd[m - 10]);
+            var u = m % 10;
+            return u == 0
+                ? Gender(tensOrd[m / 10])
+                : Gender(tensOrd[m / 10]) + " " + Gender(unitsOrd[u]);
+        }
+
+        var h = n / 100;
+        var rest = n % 100;
+        if (rest == 0)
+            return Gender(hundredsOrd[h]);
+        return h > 0 ? hundredsCard[h] + " " + OrdSub100(rest) : OrdSub100(rest);
+    }
 }

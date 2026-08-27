@@ -31,6 +31,8 @@ public static class LanguageRegistry
         new PolishLanguage(),
         new SwedishLanguage(),
         new DanishLanguage(),
+        new NorwegianLanguage(),
+        new CzechLanguage(),
     ];
 
     /// <summary>Lookup by ISO 639-1 code, case-insensitive because Whisper's detected code and a

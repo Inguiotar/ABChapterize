@@ -154,6 +154,58 @@ public class ExhaustiveNumberWordTests
         }
     }
 
+    /// <summary>
+    /// Norwegian counts two ways and an audiobook may use either, so both go through the parser:
+    /// the post-1951 tens-first system and the conservative spellings it replaced.
+    /// </summary>
+    [Fact]
+    public void Norwegian_AllNumbers_BothCountingSystemsAndAsciiVariants()
+    {
+        for (var n = 0; n <= 999; n++)
+        {
+            var word = Spellers.Norwegian(n);
+            AssertParses(word + ".", "no", n);
+            AssertParses(AsciifyNorwegian(word) + ".", "no", n);
+            // "ett hundre" is often just "hundre" in natural speech.
+            AssertParses(word.Replace("ett hundre", "hundre") + ".", "no", n);
+            var conservative = Spellers.Norwegian(n, conservative: true);
+            AssertParses(conservative + ".", "no", n);
+            AssertParses(AsciifyNorwegian(conservative) + ".", "no", n);
+        }
+    }
+
+    [Fact]
+    public void Czech_AllNumbers_AccentedAndAsciiVariants()
+    {
+        for (var n = 0; n <= 999; n++)
+        {
+            var word = Spellers.Czech(n);
+            AssertParses(word + ".", "cs", n);
+            AssertParses(AsciifyCzech(word) + ".", "cs", n);
+        }
+    }
+
+    /// <summary>
+    /// The units-first compounds both languages still hear, which no reference speller produces:
+    /// Norwegian's pre-reform system, which is the Danish one, and the Czech everyday fusion.
+    /// </summary>
+    /// <param name="text">The spelling as a transcript would carry it.</param>
+    /// <param name="language">Language code.</param>
+    /// <param name="expected">The number it means.</param>
+    [Theory]
+    [InlineData("enogtyve", "no", 21)]
+    [InlineData("toogtredve", "no", 32)]
+    [InlineData("niognitti", "no", 99)]
+    [InlineData("to hundre og enogtyve", "no", 221)]
+    [InlineData("tohundreogtjueen", "no", 221)]
+    [InlineData("jedenadvacet", "cs", 21)]
+    [InlineData("petadvacet", "cs", 25)]
+    [InlineData("dvěstě", "cs", 200)]
+    [InlineData("třista", "cs", 300)]
+    public void FusedCompounds_NoReferenceSpellerProduces_StillParse(
+        string text, string language, int expected)
+        => AssertParses(text, language, expected);
+
     [Theory]
     // The historical long tens forms, standalone.
     [InlineData("fyrretyve", "da", 40)]
@@ -198,6 +250,17 @@ public class ExhaustiveNumberWordTests
     /// <summary>Replaces the Swedish diacritics by their plain ASCII look-alikes.</summary>
     private static string AsciifySwedish(string s) => s
         .Replace('å', 'a').Replace('ä', 'a').Replace('ö', 'o');
+
+    /// <summary>Replaces the Norwegian diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyNorwegian(string s) => s
+        .Replace('å', 'a').Replace('ø', 'o').Replace('æ', 'a');
+
+    /// <summary>Replaces the Czech diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyCzech(string s) => s
+        .Replace('á', 'a').Replace('č', 'c').Replace('ď', 'd').Replace('é', 'e')
+        .Replace('ě', 'e').Replace('í', 'i').Replace('ň', 'n').Replace('ó', 'o')
+        .Replace('ř', 'r').Replace('š', 's').Replace('ť', 't').Replace('ú', 'u')
+        .Replace('ů', 'u').Replace('ý', 'y').Replace('ž', 'z');
 
     /// <summary>Replaces German umlauts/ß by their ASCII transliterations.</summary>
     private static string Transliterate(string s) => s

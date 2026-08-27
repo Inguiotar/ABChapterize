@@ -1273,6 +1273,11 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("pl", "rozdziału pierwszego", "prolog", "epilog")]
     [InlineData("sv", "Första kapitlet", "prolog", "epilog")]
     [InlineData("da", "kapitel et", "prolog", "epilog")]
+    // The definite "kapitlet" is the awkward half of the Norwegian phrase, so that is the one
+    // written here; the plain "kapittel" is the easy case.
+    [InlineData("no", "Tjueførste kapitlet", "prolog", "epilog")]
+    // Genitive "kapitoly", which only the bare third alternative can reach.
+    [InlineData("cs", "kapitoly dvacáté první", "prolog", "epilog")]
     public void DefaultPhrases_MatchTheirLanguagesAnnouncements(
         string code, string chapter, string prologue, string epilogue)
     {
@@ -1294,7 +1299,9 @@ public sealed class CliOptionsTests : IDisposable
     [InlineData("pl", "Wstęp")]
     [InlineData("sv", "Introduktion")]
     [InlineData("da", "Introduktion")]
-    [InlineData("cs", "Intro")] // no dedicated language support: English-ish defaults
+    [InlineData("no", "Introduksjon")]
+    [InlineData("cs", "Úvod")]
+    [InlineData("fi", "Intro")] // no dedicated language support: English-ish defaults
     public void IntroTitle_Default_IsLocalized(string lang, string expected)
     {
         Assert.Equal(expected, ParseFile("--lang", lang)!.IntroTitle);

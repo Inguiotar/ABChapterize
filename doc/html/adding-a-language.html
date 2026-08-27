@@ -101,7 +101,7 @@ words is genuinely useful.</p>
 <p>Nothing outside <code>src\Language\</code> knows how many languages exist or what they
 are called. That is deliberate, and it is why this is a small job.</p>
 <h3 id="which-alphabets-this-works-for">Which alphabets this works for<a class="anchor" href="#which-alphabets-this-works-for" aria-label="Permalink to this heading">#</a></h3>
-<p>All eleven languages shipped so far are written in the Latin alphabet, but
+<p>All thirteen languages shipped so far are written in the Latin alphabet, but
 nothing in the machinery requires that, and it was checked rather than assumed
 (2026-08-22, build 383). Matching is case-insensitive across the whole of
 Unicode, the word boundaries the number pattern uses are the Unicode ones, and
@@ -142,9 +142,9 @@ is not purely ISO 639-1 — Hawaiian is <code>haw</code> and Cantonese is <code>
 <code>--lang</code>, the <code>[xx]</code> tag and <code>ILanguage.Code</code> all take two or three letters.</p>
 <hr />
 <h2 id="2-step-1--the-language-class">2. Step 1 — the language class<a class="anchor" href="#2-step-1--the-language-class" aria-label="Permalink to this heading">#</a></h2>
-<p>Say you are adding Czech (<code>cs</code>). Copy an existing file that is structurally
+<p>Say you are adding Romanian (<code>ro</code>). Copy an existing file that is structurally
 close to your language — <code>GermanLanguage.cs</code> is the simplest one — to
-<code>src\Language\Languages\CzechLanguage.cs</code>, and edit it:</p>
+<code>src\Language\Languages\RomanianLanguage.cs</code>, and edit it:</p>
 <pre><code class="language-csharp">// ABChapterize - mark chapter starts in audiobooks using Whisper speech recognition
 // Copyright (c) 2026 Jan O. Gretza. Written with Claude (Anthropic).
 // MIT license - see the LICENSE file in the repository root.
@@ -153,23 +153,23 @@ using ABChapterize.Language.Parsers;
 
 namespace ABChapterize.Language.Languages;
 
-/// &lt;summary&gt;Czech.&lt;/summary&gt;
-public sealed class CzechLanguage : ILanguage
+/// &lt;summary&gt;Romanian.&lt;/summary&gt;
+public sealed class RomanianLanguage : ILanguage
 {
     /// &lt;inheritdoc/&gt;
-    public string Code =&gt; &quot;cs&quot;;
+    public string Code =&gt; &quot;ro&quot;;
 
     /// &lt;inheritdoc/&gt;
-    public string ChapterPhrase =&gt; &quot;/(?:^kapitol ()|^() kapitol|^kapitol)/&quot;;
+    public string ChapterPhrase =&gt; &quot;/(?:^capitol ()|^() capitol|^capitol)/&quot;;
 
     /// &lt;inheritdoc/&gt;
-    public string ChapterTitle =&gt; &quot;Kapitola&quot;;
+    public string ChapterTitle =&gt; &quot;Capitolul&quot;;
 
     /// &lt;inheritdoc/&gt;
-    public string PartTitle =&gt; &quot;Část&quot;;
+    public string PartTitle =&gt; &quot;Partea&quot;;
 
     /// &lt;inheritdoc/&gt;
-    public string IntroTitle =&gt; &quot;Úvod&quot;;
+    public string IntroTitle =&gt; &quot;Introducere&quot;;
 
     /// &lt;inheritdoc/&gt;
     public string ProloguePhrase =&gt; &quot;/prolog/&quot;;
@@ -184,7 +184,7 @@ public sealed class CzechLanguage : ILanguage
     public string EpilogueTitle =&gt; &quot;Epilog&quot;;
 
     /// &lt;inheritdoc/&gt;
-    public INumberWordParser NumberParser { get; } = new CzechNumberParser();
+    public INumberWordParser NumberParser { get; } = new RomanianNumberParser();
 }
 </code></pre>
 <p>That is the whole class. A few notes on filling it in.</p>
@@ -197,7 +197,7 @@ built-in language does, for consistency.</p>
 <code>/(?:^WORD ()|^() WORD|^WORD)/</code>: three alternatives of one phrase, where <code>()</code>
 stands for a chapter number in your language's own notation and captures it.
 The first alternative takes the number that follows the word directly
-(&quot;Kapitola 12&quot;), the second the number that precedes it (&quot;První kapitola&quot;), and
+(&quot;Capitolul 12&quot;), the second the number that precedes it (&quot;Primul capitol&quot;), and
 the third is the bare word, where the number is read off whatever stands around
 it. Copy the shape and change the word; the parts that vary by language are the
 word itself and the number grammar in step 3.</p>
@@ -280,19 +280,23 @@ audiobooks in that language get nothing. Write it as one alternation,
 <code>/(?:^(?:woord|kapittel) ()|^() (?:woord|kapittel)|^(?:woord|kapittel))/</code>, and
 the earlier note applies: <code>(?:...)</code>, never
 <code>(...)</code>. Test it against prose before you commit to it. The bar is high on
-purpose, and no built-in language has cleared it so far: all eleven get by on
+purpose, and no built-in language has cleared it so far: all thirteen get by on
 a single word, and the only alternations among them (Swedish and Danish
-<code>kapit(?:el|let)</code>) are two endings of one word rather than two words.</p>
+<code>kapit(?:el|let)</code>, Norwegian <code>kapit(?:tel|let)</code>) are two endings of one word
+rather than two words. Czech bends the shape a different way and still stays
+within the rule: its bare alternative stops at the stem <code>kapitol</code> where the two
+number-bearing ones spell the nominative <code>kapitola</code>, which is one word written
+to two lengths, not two words.</p>
 <p>For the prologue and the epilogue, prefer your language's Latin-derived form
 (&quot;Prolog&quot;, &quot;Prólogo&quot;, …) over a native near-synonym. Words like German
 &quot;Vorwort&quot; or Turkish &quot;Önsöz&quot; mean <em>foreword</em> — front matter <em>about</em> the book —
 whereas a prologue is part of the story, and that is what gets announced.</p>
 <h3 id="the-four-titles">The four titles<a class="anchor" href="#the-four-titles" aria-label="Permalink to this heading">#</a></h3>
-<p><code>ChapterTitle</code> is the word marks are named after: with <code>Kapitola</code>, chapters
-come out as &quot;Kapitola 1&quot;, &quot;Kapitola 2&quot;, …. Write it the way it should appear
+<p><code>ChapterTitle</code> is the word marks are named after: with <code>Capitolul</code>, chapters
+come out as &quot;Capitolul 1&quot;, &quot;Capitolul 2&quot;, …. Write it the way it should appear
 in a player — properly capitalized, with all its accents.</p>
 <p><code>PartTitle</code> is only used for a book whose chapters count from one again in
-every part, where the marks come out as &quot;Část 2 - Kapitola 1&quot;. Pick the word
+every part, where the marks come out as &quot;Partea 2 - Capitolul 1&quot;. Pick the word
 for a <em>structural division of a book</em>, not a synonym of the chapter word —
 Turkish uses &quot;Bölüm&quot; for a chapter and &quot;Kısım&quot; here, and reusing one for both
 would produce &quot;Bölüm 2 - Bölüm 1&quot;. Two rules follow from how it is read back
@@ -312,12 +316,12 @@ English's tables through a stub that still declares <em>your</em> code — a tes
 <code>NumberWordParserTests.cs</code>) checks that no language is reachable under another
 language's parser, so handing over <code>new EnglishNumberParser()</code> directly turns the
 suite red:</p>
-<pre><code class="language-csharp">public sealed class CzechNumberParser : INumberWordParser
+<pre><code class="language-csharp">public sealed class RomanianNumberParser : INumberWordParser
 {
     private static readonly EnglishNumberParser Borrowed = new();
 
     /// &lt;inheritdoc/&gt;
-    public string LanguageCode =&gt; &quot;cs&quot;;
+    public string LanguageCode =&gt; &quot;ro&quot;;
 
     /// &lt;inheritdoc/&gt;
     public string DigitOrdinalSuffixPattern =&gt; Borrowed.DigitOrdinalSuffixPattern;
@@ -330,9 +334,9 @@ suite red:</p>
         =&gt; Borrowed.TryParse(tokens, out number, out consumed);
 }
 </code></pre>
-<pre><code class="language-csharp">public INumberWordParser NumberParser { get; } = new CzechNumberParser();
+<pre><code class="language-csharp">public INumberWordParser NumberParser { get; } = new RomanianNumberParser();
 </code></pre>
-<p>Digits and Roman numerals still work that way; spelled-out Czech numbers will
+<p>Digits and Roman numerals still work that way; spelled-out Romanian numbers will
 not, until step 3 replaces the borrowed tables.</p>
 <p>One thing you do <em>not</em> have to worry about: your language's number words are
 tried before the Roman-numeral reading, so a word that happens to be spelled
@@ -348,7 +352,7 @@ good Roman 509.</p>
         new GermanLanguage(),
         ...
         new DanishLanguage(),
-        new CzechLanguage(),      // &lt;- yours
+        new RomanianLanguage(),   // &lt;- yours
     ];
 </code></pre>
 <p>That is the entire wiring. The <code>--lang</code> help text, the supported-language
@@ -366,7 +370,7 @@ words of their own rather than deriving them from the cardinals. Spanish
 for exactly that reason: the words above are ones no narrator would say. Go as
 far as the language stays regular, say where you stopped in the class doc
 comment, and let the digit ordinals cover the rest.</p>
-<p>Create <code>src\Language\Parsers\CzechNumberParser.cs</code> implementing
+<p>Create <code>src\Language\Parsers\RomanianNumberParser.cs</code> implementing
 <code>INumberWordParser</code>. Read <code>INumberWordParser.cs</code> first; it is short and states
 the contract precisely. Then pick the existing parser whose language works
 most like yours and adapt it:</p>
@@ -462,7 +466,7 @@ written twice, so a misunderstanding of it cannot agree with itself. Copy the
 reference speller closest to your language, then add your language to those
 three files.</p>
 <p>Finally, try it on a real book:</p>
-<pre><code>abchapterize --lang cs --dry-run kniha.m4b
+<pre><code>abchapterize --lang ro --dry-run carte.m4b
 </code></pre>
 <p><code>--dry-run</code> detects everything and writes nothing, so it is safe to run
 repeatedly. Add <code>--verbose</code> to watch each announcement being recognized.</p>
@@ -476,15 +480,15 @@ announcement) — only if you wrote a number parser;</li>
 title, and the prologue/epilogue phrases and titles).</li>
 </ul>
 <p><code>README.md</code>'s feature list also names the supported languages and counts them
-(&quot;<strong>Eleven languages</strong> of number recognition out of the box …&quot;), with one
+(&quot;<strong>Thirteen languages</strong> of number recognition out of the box …&quot;), with one
 spelled-out example number each: bump the count, add your language, add a
 number word. It is the first thing anyone reads, and nothing generates it.</p>
 <p>If your language is the first to need some trick — a script issue, a
 transcription quirk worth warning about — say so in a sentence there.</p>
 <p>Add a line to <code>CHANGELOG.md</code> under the unreleased version, written for
 someone using the tool:</p>
-<pre><code class="language-markdown">- **Czech is now understood**: chapter announcements, spoken numbers 0–999 and
-  the localized `--lang cs` defaults.
+<pre><code class="language-markdown">- **Romanian is now understood**: chapter announcements, spoken numbers 0–999 and
+  the localized `--lang ro` defaults.
 </code></pre>
 <hr />
 <h2 id="7-building-and-running">7. Building and running<a class="anchor" href="#7-building-and-running" aria-label="Permalink to this heading">#</a></h2>

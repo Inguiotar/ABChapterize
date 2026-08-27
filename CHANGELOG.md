@@ -17,6 +17,14 @@ earn a round number.
 
 ### Added
 
+- **Norwegian and Czech are now understood**, bringing the count to thirteen: chapter
+  announcements, spoken numbers 0–999 as cardinals and ordinals, and the localized `--lang no`
+  and `--lang cs` defaults for the chapter phrase, the title words and the prologue/epilogue.
+  Norwegian is read in both of the counting systems its audiobooks use — the modern "tjueen"
+  for 21 and the older "enogtyve" it replaced, along with the conservative spellings that
+  travel with it — and Czech in both the formal "dvacet jedna" and the everyday
+  "jedenadvacet", with the ordinal agreeing in gender as the language requires.
+
 - **`--newer-than` (`-w`) works only on what arrived recently.** Give it an age — `12h`, `7d`,
   `1.5d` — and everything older is passed over, which is what you want for a shelf you keep
   marked as it fills up rather than re-walking it from the top each time. Local files are judged

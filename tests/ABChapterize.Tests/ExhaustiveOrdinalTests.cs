@@ -176,6 +176,56 @@ public class ExhaustiveOrdinalTests
         }
     }
 
+    /// <summary>
+    /// Norwegian ordinals run the full range in both counting systems. The ASCII sweep skips
+    /// <c>n % 100 == 8</c>: dropping the ring off "attende" (8th) spells "attende", which is 18th,
+    /// and in that position - alone, or after a hundreds word - a teen is a real possibility, so
+    /// there is nothing to tell the two apart. Inside a compound there is, and
+    /// <see cref="Norwegian_AnEighthInsideACompound_SurvivesLosingItsRing"/> covers that half.
+    /// </summary>
+    [Fact]
+    public void Norwegian_AllOrdinals_BothCountingSystemsAndAsciiVariants()
+    {
+        for (var n = 1; n <= 999; n++)
+        {
+            AssertRoundTrip(Spellers.NorwegianOrdinal(n), "no", n);
+            AssertRoundTrip(Spellers.NorwegianOrdinal(n, conservative: true), "no", n);
+            if (n % 100 == 8)
+                continue;
+            AssertRoundTrip(AsciifyNorwegian(Spellers.NorwegianOrdinal(n)), "no", n);
+            AssertRoundTrip(
+                AsciifyNorwegian(Spellers.NorwegianOrdinal(n, conservative: true)), "no", n);
+        }
+    }
+
+    /// <summary>
+    /// The half of the "attende"/"attende" collision that is recoverable: no Norwegian compound
+    /// ends in a teen, so a tens word followed by one can only be an eighth that lost its ring.
+    /// </summary>
+    [Fact]
+    public void Norwegian_AnEighthInsideACompound_SurvivesLosingItsRing()
+    {
+        for (var n = 1; n <= 999; n++)
+        {
+            if (n % 10 != 8 || n % 100 is < 20 or 8)
+                continue;
+            AssertRoundTrip(AsciifyNorwegian(Spellers.NorwegianOrdinal(n)), "no", n);
+        }
+    }
+
+    /// <summary>Czech ordinals agree in gender with what they name, so both the feminine that
+    /// "kapitola" wants and the masculine a narrator uses elsewhere must read back.</summary>
+    [Fact]
+    public void Czech_AllOrdinals_BothGendersAndAsciiVariants()
+    {
+        for (var n = 1; n <= 999; n++)
+        {
+            AssertRoundTrip(Spellers.CzechOrdinal(n), "cs", n);
+            AssertRoundTrip(Spellers.CzechOrdinal(n, masculine: true), "cs", n);
+            AssertRoundTrip(AsciifyCzech(Spellers.CzechOrdinal(n)), "cs", n);
+        }
+    }
+
     /// <summary>Strips the acute accents Spanish and Portuguese ordinals carry, which a
     /// transcript may or may not reproduce.</summary>
     private static string Deaccent(string s) => s
@@ -291,4 +341,15 @@ public class ExhaustiveOrdinalTests
     /// <summary>Replaces the Swedish diacritics by their plain ASCII look-alikes.</summary>
     private static string AsciifySwedish(string s) => s
         .Replace('å', 'a').Replace('ä', 'a').Replace('ö', 'o');
+
+    /// <summary>Replaces the Norwegian diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyNorwegian(string s) => s
+        .Replace('å', 'a').Replace('ø', 'o').Replace('æ', 'a');
+
+    /// <summary>Replaces the Czech diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyCzech(string s) => s
+        .Replace('á', 'a').Replace('č', 'c').Replace('ď', 'd').Replace('é', 'e')
+        .Replace('ě', 'e').Replace('í', 'i').Replace('ň', 'n').Replace('ó', 'o')
+        .Replace('ř', 'r').Replace('š', 's').Replace('ť', 't').Replace('ú', 'u')
+        .Replace('ů', 'u').Replace('ý', 'y').Replace('ž', 'z');
 }

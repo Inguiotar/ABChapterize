@@ -93,6 +93,8 @@ public sealed class ExistingMarkTitleTests : IDisposable
         new("es", Spellers.Spanish, n => Spellers.SpanishOrdinal(n), 199),
         new("pt", Spellers.Portuguese, n => Spellers.PortugueseOrdinal(n), 199),
         new("da", Spellers.Danish, n => Spellers.DanishOrdinal(n), 100),
+        new("no", n => Spellers.Norwegian(n), n => Spellers.NorwegianOrdinal(n), 999),
+        new("cs", Spellers.Czech, n => Spellers.CzechOrdinal(n), 999),
     ];
 
     /// <summary>Every language's spelling table entry, as xUnit theory data.</summary>
@@ -281,6 +283,8 @@ public sealed class ExistingMarkTitleTests : IDisposable
     [InlineData("tr")]
     [InlineData("es")]
     [InlineData("pt")]
+    [InlineData("no")]
+    [InlineData("cs")]
     public void APartPrefixedTitle_GivesBackBothItsNumbers(string language)
     {
         var profile = Profile(language);

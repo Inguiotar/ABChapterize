@@ -168,6 +168,37 @@ public class NumberWordPatternTests
     }
 
     [Fact]
+    public void Norwegian_EveryCardinalAndOrdinal_BothCountingSystemsAndAscii()
+    {
+        for (var n = 0; n <= 999; n++)
+            foreach (var conservative in new[] { false, true })
+            {
+                AssertMatches(Spellers.Norwegian(n, conservative), "no");
+                AssertMatches(AsciifyNorwegian(Spellers.Norwegian(n, conservative)), "no");
+                if (n == 0)
+                    continue;
+                AssertMatches(Spellers.NorwegianOrdinal(n, conservative), "no");
+                AssertMatches(
+                    AsciifyNorwegian(Spellers.NorwegianOrdinal(n, conservative)), "no");
+            }
+    }
+
+    [Fact]
+    public void Czech_EveryCardinalAndOrdinal_BothGendersAndAscii()
+    {
+        for (var n = 0; n <= 999; n++)
+        {
+            AssertMatches(Spellers.Czech(n), "cs");
+            AssertMatches(AsciifyCzech(Spellers.Czech(n)), "cs");
+            if (n == 0)
+                continue;
+            AssertMatches(Spellers.CzechOrdinal(n), "cs");
+            AssertMatches(Spellers.CzechOrdinal(n, masculine: true), "cs");
+            AssertMatches(AsciifyCzech(Spellers.CzechOrdinal(n)), "cs");
+        }
+    }
+
+    [Fact]
     public void Spanish_EveryCardinal_AndOrdinalsToOneNinetyNine()
     {
         for (var n = 0; n <= 999; n++)
@@ -304,6 +335,17 @@ public class NumberWordPatternTests
     /// <summary>Replaces the Swedish diacritics by their plain ASCII look-alikes.</summary>
     private static string AsciifySwedish(string s) => s
         .Replace('å', 'a').Replace('ä', 'a').Replace('ö', 'o');
+
+    /// <summary>Replaces the Norwegian diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyNorwegian(string s) => s
+        .Replace('å', 'a').Replace('ø', 'o').Replace('æ', 'a');
+
+    /// <summary>Replaces the Czech diacritics by their plain ASCII look-alikes.</summary>
+    private static string AsciifyCzech(string s) => s
+        .Replace('á', 'a').Replace('č', 'c').Replace('ď', 'd').Replace('é', 'e')
+        .Replace('ě', 'e').Replace('í', 'i').Replace('ň', 'n').Replace('ó', 'o')
+        .Replace('ř', 'r').Replace('š', 's').Replace('ť', 't').Replace('ú', 'u')
+        .Replace('ů', 'u').Replace('ý', 'y').Replace('ž', 'z');
 
     /// <summary>Strips the acute accents Spanish and Portuguese carry.</summary>
     private static string Deaccent(string s) => s
