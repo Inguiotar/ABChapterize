@@ -164,6 +164,9 @@ public sealed class AbsCliTests : IDisposable
     [InlineData("--abs-pull-only --verify f")]
     [InlineData("--abs-pull-only --force f")]
     [InlineData("--abs-pull-only --lang de f")]
+    // Neither half of --max-chapters means anything here: this mode replaces the file's marks
+    // whatever they are, and it transcribes nothing for the implied number cap to cap.
+    [InlineData("--abs-pull-only --max-chapters 60 f")]
     [InlineData("--abs-pull --no-op --filter m4b f")]
     public void PullCombinationsThatContradictThemselves_AreRefused(string line)
         => Assert.Throws<CliError>(() => CliOptions.Parse(
@@ -327,14 +330,21 @@ public sealed class AbsCliTests : IDisposable
     [InlineData("--import")]
     [InlineData("--export")]
     [InlineData("--backup")]
+    // Named on the list rather than reached through the detection settings, which it is not
+    // one of: it decides whether a file's existing marks are bogus enough to discard, and
+    // this mode is the one that sends them instead of judging them.
+    [InlineData("--max-chapters")]
     // Reached through the shared detection-setting list rather than named on its own.
     [InlineData("--verify")]
     [InlineData("--lang")]
     public void AbsPushOnly_RefusesWhatItWouldIgnore(string option)
     {
-        var line = option == "--lang"
-            ? new[] { "--abs-push-only", "--lang", "de", "x" }
-            : ["--abs-push-only", option, "x"];
+        string[] line = option switch
+        {
+            "--lang" => ["--abs-push-only", "--lang", "de", "x"],
+            "--max-chapters" => ["--abs-push-only", "--max-chapters", "60", "x"],
+            _ => ["--abs-push-only", option, "x"],
+        };
         Assert.Throws<CliError>(() => CliOptions.Parse(["--abs-url", "host:9", "--abs-key", "k", .. line]));
     }
 

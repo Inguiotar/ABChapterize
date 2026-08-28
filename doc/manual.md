@@ -1322,7 +1322,9 @@ book pushed, against a run that has just spent minutes listening to that book.
   what is there.
 
   Because nothing is detected, `--abs-push-only` cannot be combined with the
-  detection options, nor with `--import`, `--export`, `--force` or `--backup`.
+  detection options, nor with `--import`, `--export`, `--force`, `--backup` or
+  `--max-chapters` — the last of these decides whether a file's marks are worth
+  keeping, and this mode is the one that sends them rather than judging them.
   `--dry-run` works and reports what would be sent.
 
 #### Taking the server's marks
@@ -1352,6 +1354,9 @@ book pushed, against a run that has just spent minutes listening to that book.
   Unlike an ordinary run it does *not* leave an already-marked file alone —
   replacing what the file has with what the server has is the whole of what it
   was asked to do. `--backup` keeps the old version beside the new one.
+
+  Because nothing is detected, `--abs-pull-only` cannot be combined with the
+  detection options, nor with `--verify`, `--fix`, `--force` or `--max-chapters`.
 
 ##### Reconciling both ways
 

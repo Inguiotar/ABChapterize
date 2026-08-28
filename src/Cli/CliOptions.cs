@@ -1681,11 +1681,18 @@ public sealed class CliOptions
                 "--backup keeps the file as it was beside the one it changed, which in ABS mode is a "
                 + "temporary download; it cannot be combined with --abs. The book on the server is "
                 + "left as it is until the run succeeds either way.");
-        if (o.AbsPushOnly && (o.Import || o.Export || o.Fix || o.Force || o.Backup))
+        // --max-chapters is on this list although it is not a detection setting and so is not
+        // caught by the check below (the user's call, 2026-08-28). It decides two things - whether
+        // a file's existing marks are bogus enough to discard, and, through
+        // EffectiveMaxChapterNumber, which numbers a transcript may yield - and this mode does
+        // neither: it reads the marks a file already has and sends them, loading no model at all.
+        // It was accepted and silently ignored, which is the one thing the rest of this block
+        // exists not to do.
+        if (o.AbsPushOnly && (o.Import || o.Export || o.Fix || o.Force || o.Backup || o._maxSet))
             throw new CliError(
                 "--abs-push-only sends the marks a book already carries and changes no file, so --import, "
-                + "--export, --fix, --force and --backup have nothing to act on and cannot be "
-                + "combined with it.");
+                + "--export, --fix, --force, --backup and --max-chapters have nothing to act on and "
+                + "cannot be combined with it.");
         if (o.AbsPushOnly && o.AnyDetectionSettingGiven)
             throw new CliError(
                 $"--abs-push-only detects nothing, so {DetectionSettingOptions} have no effect and cannot "
@@ -1721,10 +1728,16 @@ public sealed class CliOptions
                 "--import and --export read and write the chapter list as a sidecar file, which is a "
                 + "different answer to where a file's marks come from than --abs-pull is. Use one or "
                 + "the other.");
-        if (o.AbsPullOnly && (o.Fix || o.Force || o.Verify))
+        // --max-chapters for the same reason it is refused above, from the other side: this mode
+        // replaces a file's marks with the server's whatever they are, so "discard the file's if
+        // there are more than n of them" has nothing to decide - and it transcribes nothing, so
+        // the implied number cap has nothing to cap either. --abs-pull itself is untouched: that
+        // one really does detect, and there the option means what it always meant.
+        if (o.AbsPullOnly && (o.Fix || o.Force || o.Verify || o._maxSet))
             throw new CliError(
                 "--abs-pull-only writes the marks Audiobookshelf holds and detects nothing, so "
-                + "--verify, --fix and --force have nothing to act on and cannot be combined with it.");
+                + "--verify, --fix, --force and --max-chapters have nothing to act on and cannot be "
+                + "combined with it.");
         if (o.AbsPullOnly && o.AnyDetectionSettingGiven)
             throw new CliError(
                 $"--abs-pull-only detects nothing, so {DetectionSettingOptions} have no effect and "

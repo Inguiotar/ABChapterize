@@ -395,7 +395,9 @@ A book the server reports no play time for is matched on its name alone.</p>
 chapter list rather than merging into it, so sending an empty one would delete
 what is there.</p>
 <p>Because nothing is detected, <code>--abs-push-only</code> cannot be combined with the
-detection options, nor with <code>--import</code>, <code>--export</code>, <code>--force</code> or <code>--backup</code>.
+detection options, nor with <code>--import</code>, <code>--export</code>, <code>--force</code>, <code>--backup</code> or
+<code>--max-chapters</code> — the last of these decides whether a file's marks are worth
+keeping, and this mode is the one that sends them rather than judging them.
 <code>--dry-run</code> works and reports what would be sent.</p>
 <h3 id="taking-the-servers-marks">Taking the server's marks<a class="anchor" href="#taking-the-servers-marks" aria-label="Permalink to this heading">#</a></h3>
 <p><code>--abs-pull</code>
@@ -419,6 +421,8 @@ chapters for, or that no local file matches, is skipped with a note.</p>
 <p>Unlike an ordinary run it does <em>not</em> leave an already-marked file alone —
 replacing what the file has with what the server has is the whole of what it
 was asked to do. <code>--backup</code> keeps the old version beside the new one.</p>
+<p>Because nothing is detected, <code>--abs-pull-only</code> cannot be combined with the
+detection options, nor with <code>--verify</code>, <code>--fix</code>, <code>--force</code> or <code>--max-chapters</code>.</p>
 <h4 id="reconciling-both-ways">Reconciling both ways<a class="anchor" href="#reconciling-both-ways" aria-label="Permalink to this heading">#</a></h4>
 <p><code>--abs-pull --abs-push</code> together make the file and the server agree, and it is
 the one combination of modes that is allowed. In order:</p>

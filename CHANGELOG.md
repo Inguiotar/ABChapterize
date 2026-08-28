@@ -183,6 +183,12 @@ earn a round number.
 
 ### Changed
 
+- **`--max-chapters` is now refused with `--abs-push-only` and `--abs-pull-only` instead of
+  being quietly ignored.** Neither mode detects anything or judges the marks it is given: one
+  sends the file's own list to the server, the other writes the server's list into the file.
+  The option had no effect in either, which is worse than an error message — it read as though
+  a ceiling were in force. Every other option those modes cannot honour was already refused.
+
 - **The progress bar marks its stretches with `~` where there is no colour.** The bar tints the
   parts of the book a pass is going to read, which said nothing at all on a terminal without
   colour, under `--color never`, or in a screenshot — a gap scan looked exactly like a whole-file
@@ -220,6 +226,17 @@ earn a round number.
   reading stopped.
 
 ### Fixed
+
+- **`--summary`'s per-file average no longer under-reports a `--verify --fix` run.** Files whose
+  marks were nudged onto their announcements counted toward the average but contributed none of
+  their time to it, so a run made up of them reported an average of nothing at all. Every other
+  figure in the summary was right.
+
+- **A `--set:` chunk overlap at or above its own chunk length no longer hangs a run.** Giving
+  `GapRetryChunkOverlapSeconds` a value at or above `GapRetryChunkSeconds` left one step of the
+  `--verify` gap re-read unable to move, so it re-transcribed the same few seconds for ever.
+  Such a pair is now skipped rather than followed. Only reachable through `--set:`; the
+  same combination was already handled everywhere else it occurs.
 
 - **An Audiobookshelf key or password typed on the command line no longer ends up in the log.**
   Every log a run opens records the command that produced it, and it recorded it exactly as
