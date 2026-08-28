@@ -726,8 +726,9 @@ Points worth knowing:
   the first `<n>` and dropping the rest, which is why `max=1` is rejected with
   an error pointing at `once` rather than quietly meaning something else.
 - **A leading `^` is the check the prologue and epilogue always get**: the match
-  must sit behind a real pause, which is what tells a heading read aloud from
-  the same word buried in a sentence. `--custom` does not get it by default,
+  must be set off from what precedes it — see "`^` and `$`" for the three ways
+  it can be — which is what tells a heading read aloud from the same word buried
+  in a sentence. `--custom` does not get it by default,
   because a mapping names whatever recurring element the user says it does, at
   whatever position — write the `^` when you want it.
 - **`after-last-chapter` is applied at the end of the run**, not while probing.
@@ -1828,14 +1829,19 @@ A `^` at the start of an alternative and a `$` at its end are **not** anchors.
 They say what the audio around a match has to look like before a mark is
 written:
 
-- `^` — the announcement must be set off from what precedes it, either by at
-  least 0.85 s of real non-speech (silence, or the jingle music a book plays
-  into its chapters) **or** by the recognizer having written it as a transcript
-  segment of its own. That is what a heading has and a sentence in the middle of
-  a paragraph does not, and it is how a `--custom` mapping asks to be treated as
-  a heading. The one exception is `none`, a number spoken alone: its
-  entire claim to being an announcement is the pause around it, so there the
-  pause is required outright.
+- `^` — the announcement must be set off from what precedes it, by any one of
+  three things: at least 0.85 s of real non-speech (silence, or the jingle music
+  a book plays into its chapters); the recognizer having written it as a
+  transcript segment of its own; or a punctuation mark and a space directly in
+  front of it. The last two are the same evidence in two forms — the recognizer
+  saying where the break is — and they matter for a book that announces a
+  chapter as "*the Milky Way. Chapter 14.*", where the setting and the number
+  land in one segment with only a short breath between them. That is what a
+  heading has and a sentence in the middle of a paragraph does not, and it is
+  how a `--custom` mapping asks to be treated as a heading. The one exception is
+  `none`, a number spoken alone: its entire claim to being an announcement is
+  the pause around it, so there the pause is required outright and neither
+  shortcut applies.
 - `$` — the announcement must be followed by at least 0.3 s of non-speech.
   Only sensible for something spoken alone, such as a bare number: a narrator
   routinely runs straight from a heading into the text behind it.
@@ -1854,10 +1860,13 @@ microseconds — and the usual cause is repetition nested inside repetition,
 not match.
 
 The built-in chapter phrases carry a `^` and no `$`. The `^` is affordable only
-because a transcript segment start satisfies it too: against a pause alone it
-would have cost a real chapter of the reference corpus, one whose announcement
-follows the previous chapter's last words by 0.64 s — but which the recognizer
-wrote as a segment of its own, so it passes.
+because the other two routes satisfy it too: against a pause alone it would have
+cost a real chapter of the reference corpus, one whose announcement follows the
+previous chapter's last words by 0.64 s — but which the recognizer wrote as a
+segment of its own, so it passes. The punctuation route covers the case that
+one cannot see, a chapter announced behind a spoken heading in the same breath;
+across a 159-book library it recovered three chapters and let nothing else
+through.
 
 ##### `[xx]` — restricting an alternative to one language
 

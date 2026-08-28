@@ -271,6 +271,26 @@ earn a round number.
 
 ### Fixed
 
+- **A chapter announced behind a spoken heading is no longer thrown away.** Some books name the
+  setting before the number — "*the Milky Way. Chapter 14.*" — with barely a breath between the
+  two, and the recognizer writes both as one line. That left the announcement looking like a
+  phrase in mid-sentence rather than a heading, and the chapter was dropped even though it had
+  been heard perfectly, several times over. A punctuation mark and a space in front of the
+  announcement now count as setting it off, alongside the pause and the transcript-segment start
+  that counted before. Over a 159-book library the change recovered three chapters and admitted
+  nothing that was not one. A number spoken alone is unaffected: its claim to being an
+  announcement is still the pause around it.
+
+- **A run of missing chapters under a chapter number the run distrusted is now looked for.** When
+  a number leaves an implausibly large hole beneath it, that number is treated as possibly misheard
+  and the hole is not reported or hunted — which is right, because hunting an imaginary hole can
+  cost hours. But it also meant the one cheap pass that could have settled the question, the
+  re-read of the gap on the larger model, skipped the very stretch that needed it. That pass now
+  looks there too: it re-reads only the pauses already found in the stretch, so it costs minutes,
+  and if it turns the missing chapters up they are marked and the number is taken off suspicion.
+  Everything that *reports* a gap still waits for that proof. One audiobook in testing was missing
+  six real chapters this way — all six announced, all six heard cleanly by the larger model.
+
 - **`--summary`'s per-file average no longer under-reports a `--verify --fix` run.** Files whose
   marks were nudged onto their announcements counted toward the average but contributed none of
   their time to it, so a run made up of them reported an average of nothing at all. Every other

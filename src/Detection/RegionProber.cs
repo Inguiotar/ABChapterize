@@ -2704,13 +2704,14 @@ internal sealed class RegionProber
     /// segment is the announcement itself.</param>
     internal static IsolationCheck NamedIsolationFor(NamedMatch match, double phraseAbs)
     {
-        var rule = match.Guards |
-                   (match.Phrase.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None);
-        // A match the recognizer set off as a segment of its own has answered the lead-in question
-        // already; see AnnouncementIsolation.ForChapter. The Italian "riepilogo" this guard was
-        // built for is unaffected, having matched in the middle of a sentence.
-        if (match.OpensSegment)
-            rule &= ~IsolationRule.LeadIn;
+        // A match the recognizer set off by itself - as a segment of its own, or behind punctuation
+        // and a space - has answered the lead-in question already. Through the shared helper so a
+        // named mark and a chapter cannot come to different answers about one `^`. The Italian
+        // "riepilogo" this guard was built for is unaffected either way, having matched inside a
+        // word in the middle of a sentence, with neither a segment start nor a space in front of it.
+        var rule = AnnouncementIsolation.WithoutSatisfiedLeadIn(
+            match.Guards | (match.Phrase.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None),
+            match.OpensSegment || match.FollowsPunctuation);
         return rule == IsolationCheck.None.Rule
             ? IsolationCheck.None
             : new IsolationCheck(rule, phraseAbs);

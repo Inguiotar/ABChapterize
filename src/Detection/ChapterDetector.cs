@@ -1662,6 +1662,14 @@ public sealed class ChapterDetector
     /// recovered is unchanged - it refines on the probe model like every other mark, including
     /// Scan's own (see <see cref="ProbeContext.Transcriber"/>).
     /// </para>
+    /// <para>
+    /// The one pass that asks <see cref="GapPlanning.FindGaps"/> for the gaps under a written-off
+    /// number too (<c>beneathUnverified</c>), and the only one that may: it re-reads a stretch's own
+    /// candidate pauses rather than transcribing it, so looking where the doubt may be unfounded
+    /// costs minutes instead of the hours that made the write-off worth having. Everything that
+    /// <em>reports</em> a hole still declines to believe in this one until the re-probe has filled
+    /// it, at which point <see cref="VindicateGapBound"/> retires the doubt as well.
+    /// </para>
     /// </summary>
     /// <remarks>Notes: the gap that re-probed for most of an hour and recovered nothing.
     /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="RunReprobeAsync"]/*' /></remarks>
@@ -1694,7 +1702,8 @@ public sealed class ChapterDetector
         // Only the gaps that actually name a missing chapter are worth re-probing, and only those
         // are marked out on the bar below - a gap whose numbers are all accounted for would
         // otherwise be highlighted as work this pass is going to do and then silently skipped.
-        var reprobeWork = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter)
+        var reprobeWork = FindGaps(chapters, info.DurationSeconds, ExpectedStartChapter,
+                                   beneathUnverified: true)
             .Select(gap => (Gap: gap, Missing: MissingNumbersInGap(chapters, gap, ExpectedStartChapter)))
             .Where(g => g.Missing.Count > 0)
             .ToList();
@@ -1748,6 +1757,7 @@ public sealed class ChapterDetector
             // the gap is booked as passed here, or the bar would sit behind the pass by up to a
             // whole gap.
             work.SetPhaseProgress(WorkTracker.Position(gap.ToSeconds, bytesPerSecond));
+            VindicateGapBound(found, gap, missing);
         }
 
         var recovered = found.Count - knownCount;
@@ -1757,6 +1767,41 @@ public sealed class ChapterDetector
             ? $"Re-probe finished - recovered {recovered} chapter(s) without a full transcription"
             : "Re-probe finished - nothing recovered, falling through to the Scan pass");
         return chapters;
+    }
+
+    /// <summary>
+    /// Clears <see cref="DetectedChapter.NumberUnverified"/> on the chapter closing a gap the
+    /// re-probe has just filled completely. A number is written off for leaving a hole under it
+    /// that nothing corroborates; once every number in that hole has been found and placed, the
+    /// hole is gone and the reason with it - the chapter now has an immediate predecessor, which is
+    /// the whole of what it was doubted for.
+    /// <para>
+    /// Only where the gap was filled <em>entirely</em>, and only for the chapter that bounds it
+    /// from above. A partially filled hole is still a hole, and a number still standing over one has
+    /// lost none of its doubt. Nothing re-derives the sequence rule here on purpose: the question
+    /// "does this number fit" belongs to <see cref="RegionProber"/> and asking it a second time in
+    /// its own words is how two rules end up wearing one name. This asks a different and far
+    /// narrower question - "is the specific hole this flag was raised over now closed?" - which the
+    /// gap's own missing list answers outright.
+    /// </para>
+    /// <para>
+    /// Almost always cosmetic, and worth doing anyway: the flag's live effect is to withhold a
+    /// number from the corroborated set <see cref="GapPlanning.Normalize"/> takes its highest from,
+    /// which changes an answer only where the doubted chapter is the highest one found. Leaving a
+    /// vindicated number marked doubtful would be a state that contradicts the list it sits in.
+    /// </para>
+    /// </summary>
+    /// <param name="found">The chapters known so far, updated in place.</param>
+    /// <param name="gap">The gap just re-probed.</param>
+    /// <param name="missing">The numbers that gap was asked to recover.</param>
+    private static void VindicateGapBound(
+        List<DetectedChapter> found, GapPlanning.GapRegion gap, List<int> missing)
+    {
+        if (!missing.All(n => found.Any(c => c.Number == n && c.Sequence == gap.Sequence)))
+            return;
+        var i = found.FindIndex(c => c.TimeSeconds == gap.ToSeconds && c.NumberUnverified);
+        if (i >= 0)
+            found[i] = found[i] with { NumberUnverified = false };
     }
 
     /// <summary>

@@ -3,6 +3,59 @@
      Measurements, dated case studies, rejected alternatives and removed-feature
      histories live here; contract, behaviour and usage stay in the source. -->
 <doc>
+  <member name="FindGapsBeneathUnverified">
+    <para>
+    <b>The six chapters the write-off cost.</b> "Ovaron" (Perry Rhodan Silber-Edition 48,
+    16:38:37, build 411, run 2026-08-26; investigated 2026-08-28). Chapter 14 sits at 7:15:21.68 and
+    chapter 21 at 10:19:08.62, and chapters 15-20 fill the three hours between them. Every one of the
+    six <em>is</em> announced - confirmed against the user's Google Play Books copy of the same
+    book, whose chapter lengths from 14 on (38:40, 23:32, 19:32, 25:15, 18:30, 29:49, 28:19) chain
+    to within 10 s of where the run itself put chapter 21, and then by reading each position with
+    <c>ggml-large-v3-turbo</c>, which hears all six cleanly.
+    </para>
+    <para>
+    <b>What went wrong.</b> Those six breaks carry no jingle - all 34 of the book's jingles lie
+    outside the span - so the jingle-first pass could not reach them, and the silence pass read all
+    40 of the gap's pauses of 1.5 s and over with <c>ggml-small</c> and came back with nothing. The
+    recognizer had swallowed each announcement while writing a confident transcript of the narration
+    behind it: the run's own window <c>probe 29.9s@7:53:53.21</c> opens
+    <c>0.0-11.2 (p=0.71) "Auf den Bildschirm stand Leftrans duesteres Gesicht."</c> - eleven seconds
+    of segment carrying one short sentence, with "Kapitel 15. Bericht Ovaron." (2.5 s of clear
+    speech, 1.75 s into the window) simply absent. Reproduced byte-for-byte offline with the same
+    model and framing, so it is neither machine nor thread-count dependent. It is the same failure
+    <c>SweepSubFloorSilencesAsync</c> already records ("Whisper's long-form decode swallowed the
+    announcement ... while any short window aimed at the same audio read them cleanly").
+    </para>
+    <para>
+    None of the three re-reads in <c>RegionProber</c> can fire on that shape: two want a window that
+    came back <em>empty</em>, the third a window that heard the number but not the word. Ovaron's
+    windows came back full of plausible narration with neither - indistinguishable from the
+    overwhelmingly common case of a pause that is not a chapter break at all.
+    </para>
+    <para>
+    <b>Why the re-probe never got its turn.</b> The empty 14-21 stretch left a six-chapter jump,
+    which tripped the implausible-hole rule against a chapter 21 that was perfectly correct. Two
+    re-reads confirmed "Kapitel 21", so the mark was kept and the number written off - and
+    <c>FindGaps</c> then refused to pair 14 with 21 at all, which took the stretch away from the one
+    pass that would have read it. The same run's re-probe ran for chapter 23
+    (<c>10:45:30.75-11:29:18.00</c>) and chapter 30 (<c>12:55:07.11-13:52:22.03</c>) and recovered
+    both.
+    </para>
+    <para>
+    <b>What it costs to let the re-probe look.</b> Measured from that run's own log: 31 s for the
+    44 min gap and 59 s for the 57 min one, so on the order of three minutes for Ovaron's three-hour
+    stretch. The re-probe reads candidate pauses, not the whole region, which is what makes looking
+    affordable where Scan transcribing the stretch would not be.
+    </para>
+    <para>
+    <b>The residual lead the first investigation dismissed.</b> That investigation recorded 9:50:34
+    as the only place in three hours where Whisper began a segment with a number -
+    "20 Tarakan hatte das Tal jetzt zum vierten Mal ueberflogen" - and let it go. It was chapter 20,
+    with the word swallowed exactly as above. A bare number surfacing where the chapter word went
+    missing is evidence, not noise.
+    </para>
+  </member>
+
   <member name="Normalize">
     <para>
     <b>What a greedy left-to-right scan cost.</b> On "Die Cyber-Brutzellen" (2026-08-01) chapter 14's

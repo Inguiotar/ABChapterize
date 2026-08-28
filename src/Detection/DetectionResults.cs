@@ -23,6 +23,14 @@ namespace ABChapterize.Detection;
 /// no gap beneath it and <see cref="GapPlanning.ChapterProgress"/> counts nothing under it as
 /// missing.
 /// <para>
+/// With one exception, and it is the one that keeps this from being a trapdoor: the upgrade-model
+/// re-probe does look under a written-off number (<see cref="GapPlanning.FindGaps"/>'s
+/// <c>beneathUnverified</c>). Doubt is a reason to read the stretch, not to assume what is in it,
+/// and that pass reads candidate pauses rather than transcribing - minutes, not the hours this flag
+/// exists to save. Six real chapters were lost to the write-off before it was let through; the case
+/// is on <see cref="GapPlanning.FindGaps"/>.
+/// </para>
+/// <para>
 /// The shape this exists for is a number heard perfectly that belongs to something other than a
 /// chapter, which every other defence is blind to because they all reason about mishearing.
 /// A year or a date spoken alone as part of a heading is the case on record: it is flanked by real

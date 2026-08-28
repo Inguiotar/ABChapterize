@@ -43,10 +43,14 @@ internal static partial class PhraseMatching
     /// <param name="OpensSegment">Whether the match begins where its transcript segment begins,
     /// which is the second way a <c>^</c> can be satisfied - see
     /// <see cref="AnnouncementIsolation.ForChapter"/>.</param>
+    /// <param name="FollowsPunctuation">Whether a punctuation mark and whitespace sit directly in
+    /// front of the match, which is the third way - see
+    /// <see cref="PrecededByPunctuation"/>.</param>
     internal readonly record struct PhraseMatch(
         int Number, double PhraseStartSeconds, double PhraseEndSeconds, double Confidence,
         bool SpansMerge = false, bool SpokenAlone = true,
-        PhraseAlternative? Wording = null, bool OpensSegment = false)
+        PhraseAlternative? Wording = null, bool OpensSegment = false,
+        bool FollowsPunctuation = false)
     {
         /// <summary>The pauses <see cref="Wording"/> asked for with its <c>^</c> and <c>$</c>, as
         /// the check that enforces them spells it.</summary>
@@ -83,10 +87,13 @@ internal static partial class PhraseMatching
     /// (<see cref="NamedPhrase.RequiresLeadIn"/>).</param>
     /// <param name="OpensSegment">Whether the match begins where its transcript segment begins; see
     /// <see cref="PhraseMatch.OpensSegment"/>.</param>
+    /// <param name="FollowsPunctuation">Whether punctuation and whitespace sit directly in front of
+    /// the match; see <see cref="PrecededByPunctuation"/>.</param>
     internal readonly record struct NamedMatch(
         NamedPhrase Phrase, string Title,
         double PhraseStartSeconds, double PhraseEndSeconds, double Confidence, string Text = "",
-        IsolationRule Guards = IsolationRule.None, bool OpensSegment = false);
+        IsolationRule Guards = IsolationRule.None, bool OpensSegment = false,
+        bool FollowsPunctuation = false);
 
     /// <summary>
     /// Searches the transcribed segments for the chapter phrase and parses the chapter number,
@@ -196,7 +203,8 @@ internal static partial class PhraseMatching
                 readings.Add(new PhraseMatch(
                     number, segments[segIndex].StartSeconds, segments[segIndex].EndSeconds,
                     segments[segIndex].Probability, spansMerge, Wording: hit.Alternative,
-                    OpensSegment: hit.Match.Index == segStartChar[segIndex]));
+                    OpensSegment: hit.Match.Index == segStartChar[segIndex],
+                    FollowsPunctuation: PrecededByPunctuation(text, hit.Match.Index)));
             }
             if (readings.Count > 0)
                 yield return readings;
@@ -457,7 +465,8 @@ internal static partial class PhraseMatching
                     phrase, phrase.ResolveTitle(hit.Match, profile.Language),
                     segment.StartSeconds, segment.EndSeconds, segment.Probability,
                     NormalizeWhitespace(segment.Text), GuardsOf(hit.Alternative),
-                    hit.Match.Index == segStartChar[segIndex]);
+                    hit.Match.Index == segStartChar[segIndex],
+                    PrecededByPunctuation(text, hit.Match.Index));
             }
         }
     }
@@ -483,6 +492,41 @@ internal static partial class PhraseMatching
             sb.Append(' ');
         }
         return (sb.ToString(), segStartChar);
+    }
+
+    /// <summary>
+    /// Whether the recognizer wrote a punctuation break directly in front of a match: punctuation,
+    /// then whitespace, then the match. The third way a <c>^</c> can be satisfied, and the same
+    /// kind of evidence as <see cref="PhraseMatch.OpensSegment"/> - the recognizer setting the
+    /// announcement off by itself - only inside a segment rather than by starting one.
+    /// <para>
+    /// The whitespace is required, not incidental: without it every announcement glued to the
+    /// punctuation of an abbreviation in front of it would qualify, which is the shape a false
+    /// positive actually takes. It costs nothing real, since <see cref="Flatten"/> joins segments
+    /// with a single space and a narrator's break is written with one.
+    /// </para>
+    /// <para>
+    /// <see cref="char.IsPunctuation(char)"/> rather than a hand-kept set of marks. One predicate
+    /// covers the sentence enders, the clause separators, the dashes and the closing quotes at
+    /// once, cannot fall behind a language whose punctuation nobody thought to list, and keeps this
+    /// file free of the non-ASCII literals such a list would need. A closing quote counts on its
+    /// own account rather than by being seen through: <c>?"</c> ends a sentence either way.
+    /// </para>
+    /// </summary>
+    /// <remarks>Notes: the corpus histogram of what precedes an announcement, and the three chapters this recovers against zero false positives.
+    /// <include file='../../notes/Detection/PhraseMatching.xml' path='doc/member[@name="PrecededByPunctuation"]/*' /></remarks>
+    /// <param name="text">The flattened window text the match was found in.</param>
+    /// <param name="index">Character index the match begins at.</param>
+    internal static bool PrecededByPunctuation(string text, int index)
+    {
+        var i = Math.Min(index, text.Length);
+        var sawSpace = false;
+        while (i > 0 && char.IsWhiteSpace(text[i - 1]))
+        {
+            i--;
+            sawSpace = true;
+        }
+        return sawSpace && i > 0 && char.IsPunctuation(text[i - 1]);
     }
 
     /// <summary>Collapses every run of whitespace to one space and trims the ends, so that what a

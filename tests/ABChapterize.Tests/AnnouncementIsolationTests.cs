@@ -194,9 +194,49 @@ public class AnnouncementIsolationTests
     }
 
     /// <summary>
-    /// A number spoken alone is excepted, and that exception is the whole calibration of that
-    /// wording: its claim to being an announcement <em>is</em> the pause around it, and the mode
-    /// exists because Whisper's segmentation cannot be trusted to say where one is.
+    /// The third way, for the blind spot the second one has: a book announcing "&lt;setting&gt;.
+    /// Chapter N." hands the recognizer one segment holding both, so the match opens nothing while
+    /// the only pause it has is the one between banner and number. "Der Loower und das Auge"
+    /// chapter 14 is the case - "Milchstraße, Kapitel 14" with 0.70 s in front of the number, lost
+    /// outright until punctuation counted.
+    /// </summary>
+    [Fact]
+    public void ForChapter_TakesPunctuationInFrontForTheLeadIn()
+    {
+        var match = new PhraseMatching.PhraseMatch(
+            14, 10, 11, 0.9, Wording: Wording(IsolationRule.Both));
+        Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(match, 10, false).Rule);
+        Assert.Equal(
+            IsolationRule.LeadOut,
+            AnnouncementIsolation.ForChapter(match with { FollowsPunctuation = true }, 10, false).Rule);
+    }
+
+    /// <summary>
+    /// The waiver is one rule for both kinds of announcement: a prologue's <c>^</c> and a chapter's
+    /// are the same <c>^</c>, so the named path calls the same helper rather than carrying a copy
+    /// that could answer differently. The Italian "riepilogo" this guard was built for is unaffected
+    /// by the new route - it matched inside a word, with no whitespace in front of it at all.
+    /// </summary>
+    [Fact]
+    public void WithoutSatisfiedLeadIn_IsTheOneRuleBothPathsAsk()
+    {
+        Assert.Equal(
+            IsolationRule.LeadIn,
+            AnnouncementIsolation.WithoutSatisfiedLeadIn(IsolationRule.LeadIn, setOff: false));
+        Assert.Equal(
+            IsolationRule.None,
+            AnnouncementIsolation.WithoutSatisfiedLeadIn(IsolationRule.LeadIn, setOff: true));
+        // A lead-out demand is never touched: only the lead-in has a second and third route.
+        Assert.Equal(
+            IsolationRule.LeadOut,
+            AnnouncementIsolation.WithoutSatisfiedLeadIn(IsolationRule.Both, setOff: true));
+    }
+
+    /// <summary>
+    /// A number spoken alone is excepted from both routes, and that exception is the whole
+    /// calibration of that wording: its claim to being an announcement <em>is</em> the pause around
+    /// it, and the mode exists because Whisper's segmentation cannot be trusted to say where one is.
+    /// A comma in front of a lone number says even less than a segment start does.
     /// </summary>
     [Fact]
     public void ForChapter_DoesNotTakeASegmentStartForABareNumber()
@@ -205,6 +245,12 @@ public class AnnouncementIsolationTests
             9, 10, 11, 0.9, Wording: Wording(IsolationRule.Both, bare: true), OpensSegment: true);
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, false).Rule);
         Assert.Equal(IsolationRule.Both, AnnouncementIsolation.ForChapter(bare, 10, true).Rule);
+
+        var behindPunctuation = bare with { OpensSegment = false, FollowsPunctuation = true };
+        Assert.Equal(
+            IsolationRule.Both, AnnouncementIsolation.ForChapter(behindPunctuation, 10, false).Rule);
+        Assert.Equal(
+            IsolationRule.Both, AnnouncementIsolation.ForChapter(behindPunctuation, 10, true).Rule);
     }
 
     /// <summary>

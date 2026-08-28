@@ -40,6 +40,24 @@
     mark of the sixteen-book corpus with under 0.85 s in front of it (0.64 s), is transcribed as a
     segment of its own and passes on that.
     </para>
+    <para>
+    <b>Why a second route was added (2026-08-28).</b> The segment-start route has a blind spot the
+    sixteen-book corpus never showed: a book announcing a chapter as "&lt;setting&gt;. Chapter N."
+    hands Whisper one segment holding both, so the match opens nothing, while the only pause it has
+    is the one between banner and number. Both routes then fail together. Found across the Perry
+    Rhodan Silber-Edition library (159 books), where 11 books announce chapters that way at some 17
+    positions; three lost a chapter to it outright and a fourth was saved only by a re-read that
+    happened to frame the announcement differently. The punctuation route recovers all three and
+    admits nothing else anywhere in the library - the measurement is in
+    <c>notes\Detection\PhraseMatching.xml</c> under <c>PrecededByPunctuation</c>.
+    </para>
+    <para>
+    <b>Why it is one helper rather than two.</b> Until this change
+    <c>RegionProber.NamedIsolationFor</c> carried its own copy of the waiver
+    (<c>if (match.OpensSegment) rule &amp;= ~IsolationRule.LeadIn;</c>). A prologue's <c>^</c> and a
+    chapter's are the same <c>^</c>, so the copies were an invitation for the two to drift; the
+    named path now calls this.
+    </para>
   </member>
 
   <member name="IsolationRule.LeadIn">

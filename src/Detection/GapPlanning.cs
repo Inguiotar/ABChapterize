@@ -159,12 +159,30 @@ internal static class GapPlanning
     /// <param name="expectedStartChapter">The chapter number the book is expected to start at
     /// (--expected-start-chapter), or null to disable the leading-gap search entirely - see
     /// <see cref="CliOptions.ExpectedStartChapter"/>.</param>
-    internal static List<GapRegion> FindGaps(List<DetectedChapter> chapters, double duration, int? expectedStartChapter = null)
+    /// <param name="beneathUnverified">Whether a chapter whose number
+    /// <see cref="DetectedChapter.NumberUnverified"/> has written off may still bound a gap from
+    /// above. False everywhere the answer is bookkeeping - the ".missing-marks" tag, the progress
+    /// bar, Scan's own gap recovery - because a hole beneath a number nobody believes is as likely
+    /// to be the number's fault as the book's, and reporting it as missing or transcribing hours to
+    /// hunt it is the damage <see cref="DetectedChapter.NumberUnverified"/> exists to bound. True
+    /// for the upgrade-model re-probe alone
+    /// (<see cref="ABChapterize.Detection.ChapterDetector"/>'s <c>RunReprobeAsync</c>), where the
+    /// trade runs the other way: it re-reads only this stretch's own candidate pauses with a
+    /// heavier recognizer, costing minutes rather than hours, and it can only ever <em>add</em>
+    /// marks that pass every acceptance rule. "I do not trust this number" is a reason to look
+    /// before writing the gap off, and the re-probe is the cheapest look there is - if it fills the
+    /// hole the number is vindicated, and if it finds nothing the write-off has been confirmed
+    /// rather than assumed.</param>
+    /// <remarks>Notes: the six chapters the write-off cost before the re-probe was let through it.
+    /// <include file='../../notes/Detection/GapPlanning.xml' path='doc/member[@name="FindGapsBeneathUnverified"]/*' /></remarks>
+    internal static List<GapRegion> FindGaps(
+        List<DetectedChapter> chapters, double duration, int? expectedStartChapter = null,
+        bool beneathUnverified = false)
     {
         var gaps = new List<GapRegion>();
         if (chapters.Count == 0)
             return gaps;
-        if (expectedStartChapter is { } expected && !chapters[0].NumberUnverified &&
+        if (expectedStartChapter is { } expected && (beneathUnverified || !chapters[0].NumberUnverified) &&
             chapters[0].Number > expected && chapters[0].TimeSeconds > MinLeadingGapSeconds)
             gaps.Add(new GapRegion(0, chapters[0].TimeSeconds, chapters[0].Sequence));
         for (var i = 1; i < chapters.Count; i++)
@@ -172,7 +190,7 @@ internal static class GapPlanning
             // Skipping the entry rather than filtering it out of the list keeps its neighbours from
             // being paired across it: an unverified number is still a real position in the book, it
             // just may not be the far end of a hole (see DetectedChapter.NumberUnverified).
-            if (chapters[i].NumberUnverified)
+            if (chapters[i].NumberUnverified && !beneathUnverified)
                 continue;
             var expectedHere = chapters[i].Sequence != chapters[i - 1].Sequence
                 ? StartOfSequence(chapters[i].Sequence, expectedStartChapter) ?? chapters[i].Number

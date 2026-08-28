@@ -76,7 +76,11 @@ internal static class AnnouncementIsolation
     internal static IsolationCheck ForChapter(
         PhraseMatching.PhraseMatch match, double phraseAbs, bool wideReading)
     {
-        var rule = WithoutSatisfiedLeadIn(match.Guards, match.OpensSegment && !match.IsBareNumber);
+        // Both routes are denied to a number spoken alone, for the one reason: they are the
+        // recognizer's own word for where a boundary is, and that is exactly what a bare number
+        // may not lean on.
+        var setOff = (match.OpensSegment || match.FollowsPunctuation) && !match.IsBareNumber;
+        var rule = WithoutSatisfiedLeadIn(match.Guards, setOff);
         if (match.IsBareNumber && wideReading)
             rule |= IsolationRule.Both;
         return rule == IsolationCheck.None.Rule
@@ -85,10 +89,18 @@ internal static class AnnouncementIsolation
     }
 
     /// <summary>
-    /// Drops the lead-in requirement where the recognizer already answered it: a match that begins
-    /// exactly where its transcript segment begins is one Whisper set off by itself. That is the
-    /// second way a <c>^</c> can be satisfied, and it is why a heading whose pause is a shade too
+    /// Drops the lead-in requirement where the recognizer already answered it. There are two ways
+    /// it can have: the match begins exactly where its transcript segment begins, or a punctuation
+    /// mark and a space sit directly in front of it
+    /// (<see cref="PhraseMatching.PrecededByPunctuation"/>). Both say the same thing - Whisper set
+    /// this announcement off by itself - and both are why a heading whose pause is a shade too
     /// short for the threshold is not thrown away.
+    /// <para>
+    /// The second route exists because the first has a blind spot: a book that announces a chapter
+    /// as "&lt;setting&gt;. Chapter N." gets banner and number in one segment, so the match opens
+    /// nothing, while the pause it is left with is only the one between the two - well under the
+    /// threshold. Both routes then fail on an announcement that is plainly an announcement.
+    /// </para>
     /// <para>
     /// Deliberately <em>not</em> extended to a number spoken alone, whose whole claim to being an
     /// announcement is the pause around it. That mode exists because Whisper's segmentation is not
@@ -99,13 +111,18 @@ internal static class AnnouncementIsolation
     /// cannot. Note the segmentation's <em>unreliable</em> direction is the harmless one here: a
     /// real announcement Whisper failed to set off simply falls back on the pause test.
     /// </para>
+    /// <para>
+    /// Shared with <see cref="RegionProber.NamedIsolationFor"/> rather than restated there: a
+    /// prologue's <c>^</c> and a chapter's are the same <c>^</c>, and two copies of this rule could
+    /// answer it differently.
+    /// </para>
     /// </summary>
-    /// <remarks>Notes: the one corpus mark whose pause falls short, and what it rides on instead.
+    /// <remarks>Notes: the one corpus mark whose pause falls short, and what each route is worth measured over the corpus.
     /// <include file='../../notes/Detection/AnnouncementIsolation.xml' path='doc/member[@name="WithoutSatisfiedLeadIn"]/*' /></remarks>
     /// <param name="rule">What the wording asked for.</param>
-    /// <param name="opensSegment">Whether the recognizer began a segment at the match.</param>
-    private static IsolationRule WithoutSatisfiedLeadIn(IsolationRule rule, bool opensSegment)
-        => opensSegment ? rule & ~IsolationRule.LeadIn : rule;
+    /// <param name="setOff">Whether the recognizer set the match off by itself, by either route.</param>
+    internal static IsolationRule WithoutSatisfiedLeadIn(IsolationRule rule, bool setOff)
+        => setOff ? rule & ~IsolationRule.LeadIn : rule;
 
     /// <summary>
     /// Measures the non-speech either side of the announcement at <paramref name="onset"/>: finds

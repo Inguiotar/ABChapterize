@@ -8,6 +8,39 @@
     </para>
   </member>
 
+  <member name="PrecededByPunctuation">
+    <para>
+    <b>What actually precedes an announcement.</b> Measured 2026-08-28 over the Perry Rhodan
+    Silber-Edition library (159 books, build 411 debug logs), counting every "Kapitel N" appearing
+    anywhere in a transcript segment - 31,294 readings. 31,006 of them (99.1%) open their segment
+    and were already covered by the segment-start route. Of the rest, all of which sit mid-segment
+    behind whitespace: 152 follow a comma, 31 a full stop, 6 a hyphen, and 94 follow a letter or a
+    digit. That last group is the one that must stay out - it is narration ("Der erste Kapitel 5"),
+    and requiring whitespace plus punctuation excludes every one of them.
+    </para>
+    <para>
+    <b>What the route is worth, and what it costs.</b> Restricted to the window transcripts whose
+    match actually reaches <c>AnnouncementIsolation.ForChapter</c> - so excluding the refinement's
+    own short probes, which routinely do give the announcement a segment of its own without that
+    ever reaching the guard - 16 chapter positions across the library were heard only behind
+    punctuation. 13 of them were marked anyway, another window having opened a segment for them.
+    <b>Exactly 3 were newly admitted, and they are exactly the 3 chapters the library lost</b>:
+    "Der Loower und das Auge" 14 (0.70 s of lead-in), "Die Ewigen Diener" 23 (0.58 s) and
+    "Die Gravo-Katastrophe" 25 (0.64 s), each announced as "&lt;Schauplatz&gt;, Kapitel N" and each
+    discarded for want of the 0.85 s the pause route asks. <b>Zero false positives.</b> A fourth,
+    "Laire" 16 (0.83 s), had been discarded and then recovered 20 s later by a re-read that framed
+    the announcement differently - the evidence that the margin here is knife-edge rather than
+    categorical.
+    </para>
+    <para>
+    <b>Why the whitespace is required rather than assumed.</b> Five of the library's readings have
+    the announcement glued straight onto the character before it with no space. Admitting those
+    would mean admitting a chapter word that is the tail of another token, which is the shape the
+    lead-in guard exists to reject - the Italian "riepilogo" case in
+    <c>notes\Detection\AnnouncementIsolation.xml</c> is the same shape one level down, inside a word.
+    </para>
+  </member>
+
   <member name="NormalizeWhitespace">
     <para>
     <b>The chapter the double space cost.</b> Found on "Paula Monti.m4b" with

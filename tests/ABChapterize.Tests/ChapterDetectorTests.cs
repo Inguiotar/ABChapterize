@@ -7383,6 +7383,34 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public void FindGaps_OpensTheGapBeneathAnUnverifiedNumber_ForTheReprobeAlone()
+    {
+        // "Ovaron" (2026-08-28): chapters 15-20 really were announced, ggml-small swallowed all six,
+        // and the six-chapter hole that left made a perfectly correct chapter 21 look implausible.
+        // Writing the gap off then took the stretch away from the one pass that reads it - so the
+        // re-probe, and only the re-probe, is allowed to look under the doubt.
+        List<DetectedChapter> chapters =
+            [new(14, 1000), new(21, 4000, 1.0, NumberUnverified: true), new(22, 5000)];
+
+        Assert.Empty(GapPlanning.FindGaps(chapters, Duration));
+
+        var gap = Assert.Single(GapPlanning.FindGaps(chapters, Duration, beneathUnverified: true));
+        Assert.Equal(new GapPlanning.GapRegion(1000, 4000), gap);
+        Assert.Equal([15, 16, 17, 18, 19, 20], GapPlanning.MissingNumbersInGap(chapters, gap));
+    }
+
+    [Fact]
+    public void FindGaps_BeneathUnverified_RaisesNoGapWhereTheSequenceIsWhole()
+    {
+        // The opt-in only lifts the write-off; it does not invent holes. A doubted number sitting
+        // directly on its predecessor still bounds nothing.
+        List<DetectedChapter> chapters =
+            [new(14, 1000), new(15, 4000, 1.0, NumberUnverified: true), new(16, 5000)];
+
+        Assert.Empty(GapPlanning.FindGaps(chapters, Duration, beneathUnverified: true));
+    }
+
+    [Fact]
     public async Task ANumberNothingCouldMend_KeepsItsMark_AndDeclaresNothingMissing()
     {
         // Every re-framing hears "Chapter ninety" too, so the mender has nothing better to offer and
