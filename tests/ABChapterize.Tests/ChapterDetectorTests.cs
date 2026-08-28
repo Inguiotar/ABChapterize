@@ -6901,8 +6901,88 @@ public sealed class ChapterDetectorTests : IDisposable
 
     /// <summary>One refinement probe transcript reading the given text, as
     /// <see cref="PreciseMarkResult.PhraseReadings"/> carries them.</summary>
-    private static List<TranscriptSegment> Reading(string text)
-        => [new TranscriptSegment(0, 2, text, 0.9)];
+    /// <param name="text">What the probe heard.</param>
+    /// <param name="probability">Whisper's probability for that segment - the quantity
+    /// <see cref="RefinedConfidence"/> takes its median over.</param>
+    private static List<TranscriptSegment> Reading(string text, double probability = 0.9)
+        => [new TranscriptSegment(0, 2, text, probability)];
+
+    /// <summary>Runs <see cref="RefinedConfidence.Median"/> against the run's default (English)
+    /// profile and uncapped phrase matching, exactly as <see cref="MarkPlacer"/> does.</summary>
+    /// <param name="readings">The refinement's probe transcripts.</param>
+    /// <param name="number">The number the mark settled on.</param>
+    private double? RefinedMedian(IReadOnlyList<List<TranscriptSegment>> readings, int number)
+        => RefinedConfidence.Median(
+            readings, Options().DefaultProfile,
+            (segments, profile, merge) => PhraseMatching.FindPhraseMatches(segments, profile, merge),
+            number);
+
+    [Fact]
+    public void RefinedConfidence_TakesTheMedianOfTheAnnouncementsOwnReadings()
+    {
+        // The window's figure describes a half-minute segment that swallowed the jingle; these
+        // describe the announcement. Odd count, so the median is a reading rather than a blend.
+        List<List<TranscriptSegment>> readings =
+        [
+            Reading("Chapter fourteen.", 0.40),
+            Reading("Chapter fourteen.", 0.70),
+            Reading("Chapter fourteen.", 0.90),
+        ];
+
+        Assert.Equal(0.70, RefinedMedian(readings, 14)!.Value, 3);
+    }
+
+    [Fact]
+    public void RefinedConfidence_AveragesTheTwoMiddleReadings_OnAnEvenCount()
+    {
+        List<List<TranscriptSegment>> readings =
+        [
+            Reading("Chapter fourteen.", 0.40), Reading("Chapter fourteen.", 0.60),
+            Reading("Chapter fourteen.", 0.80), Reading("Chapter fourteen.", 1.00),
+        ];
+
+        Assert.Equal(0.70, RefinedMedian(readings, 14)!.Value, 3);
+    }
+
+    [Fact]
+    public void RefinedConfidence_PassesOverReadingsNamingAnotherChapter()
+    {
+        // A probe that read a different number was looking at a different announcement, so its
+        // certainty says nothing about this one - averaging it in would be measuring the neighbour.
+        List<List<TranscriptSegment>> readings =
+        [
+            Reading("Chapter fourteen.", 0.60),
+            Reading("Chapter fifteen.", 0.10),
+            Reading("Chapter fourteen.", 0.80),
+        ];
+
+        Assert.Equal(0.70, RefinedMedian(readings, 14)!.Value, 3);
+    }
+
+    [Fact]
+    public void RefinedConfidence_CountsOneValuePerReading_NotOnePerMatch()
+    {
+        // The reading is the observation. Were both matches of the doubled announcement counted,
+        // the values would be 0.20, 1.00 and 0.60 for a median of 0.60; one per reading leaves
+        // 0.20 and 0.60.
+        List<List<TranscriptSegment>> readings =
+        [
+            [new TranscriptSegment(0, 2, "Chapter fourteen.", 0.20),
+             new TranscriptSegment(2, 4, "Chapter fourteen.", 1.00)],
+            Reading("Chapter fourteen.", 0.60),
+        ];
+
+        Assert.Equal(0.40, RefinedMedian(readings, 14)!.Value, 3);
+    }
+
+    [Fact]
+    public void RefinedConfidence_IsNullWhenNothingConfirmedTheAnnouncement()
+    {
+        // Nothing better to offer, so the caller keeps the window's own figure rather than being
+        // handed a number derived from no reading at all.
+        Assert.Null(RefinedMedian([], 14));
+        Assert.Null(RefinedMedian([Reading("The details are deleted entirely.", 0.9)], 14));
+    }
 
     /// <summary>Runs <see cref="RefinedNumberVote.Recount"/> against the run's default (English)
     /// profile and uncapped phrase matching.</summary>

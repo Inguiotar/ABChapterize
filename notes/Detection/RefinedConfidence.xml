@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\RefinedConfidence.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="RefinedConfidence">
+    <para>
+    <b>What the window figure was really measuring.</b> Investigated 2026-08-28, prompted by the
+    user asking whether later readings ever raise a mark's confidence. They never did: the value was
+    fixed at the first accepted match and carried unchanged for ever, while the refinement's own
+    probes - typically six per mark, up to eighteen - read the same announcement again and again and
+    were thrown away. Measured over 32,320 announcement segments in the 159-book Perry Rhodan
+    Silber-Edition logs, the recorded figure rises steadily with segment length: median p 0.68 at 12
+    characters or fewer, 0.72 at 20-40, 0.80 at 40-80, 0.97 above 160. So it partly measures how much
+    narration Whisper packed into the segment, not how sure it is of the announcement. Worse, the
+    window's announcement segment is routinely the one that swallowed the jingle - 8-12 s of duration
+    holding three words, median p 0.62 - which makes the recorded value the <em>worst-framed</em>
+    reading of the announcement the run ever takes.
+    </para>
+    <para>
+    <b>The false-alarm rates that chose the median.</b> The reference corpus is the only labelled
+    data that exists here: 508 chapter marks whose positions the user confirmed <em>by ear</em>, so
+    every one is known-correct and every flag raised on them is a false alarm. Measured over the
+    frozen baseline logs:
+    </para>
+    <para>
+    recorded confidence (before this change) flagged <b>13</b> of 508 (2.6%); median of readings
+    <b>6</b> (1.2%); 75th percentile <b>2</b> (0.4%); <c>min(recorded, median)</c> <b>18</b> (3.5%);
+    minimum of readings <b>51</b> (10.0%). Ten of the thirteen the old rule flagged are
+    "Corsa nello spazio", the Italian bare-number book, where the announcement is a number spoken
+    alone and so the shortest segment there is - the flag was largely reporting announcement style.
+    Examples of what the refinement said about marks the old rule flagged: chapter 64 recorded 0.40
+    against readings of 0.89-1.00 across ten probes, chapter 32 recorded 0.45 against 0.45-1.00,
+    chapter 8 recorded 0.47 against 0.44-0.99.
+    </para>
+    <para>
+    The median was the user's call over the quieter 75th percentile, on the ground that the
+    false-alarm rate can only ever argue for flagging less - on a corpus where every mark is correct,
+    "flag nothing" scores perfectly - so it cannot by itself justify the more optimistic of two
+    rules. There is no known-wrong population anywhere to weigh against it: across the whole
+    159-book library the number machinery corrected or questioned exactly <b>one</b> mark in 4,388,
+    and the reference corpus was curated to correctness by construction.
+    </para>
+    <para>
+    <b>Why not the best reading.</b> Taking the maximum raises 80.6% of marks by a median of +0.140
+    and would make a mark look more certain the more probes the search needed. The 75th percentile
+    raises 71.8% by +0.100, the median 57.4% by +0.045.
+    </para>
+    <para>
+    <b>Rejected: the spread as a flag.</b> The readings of one announcement - same audio, same model,
+    window starts 0.1 s apart - disagree by a median of 0.150, p90 0.350, max 0.470, which is roughly
+    the distance from a typical mark to the 0.5 threshold. That looked like the better signal until
+    it was measured against the ear-verified corpus: a "spread &gt;= 0.30" rule flags <b>143 of 507
+    (28.2%)</b> marks known to be correct. Wide disagreement between framings is simply normal.
+    Do not re-propose it.
+    </para>
+    <para>
+    <b>Rejected: an inverse-length weighted mean</b> (weighting each reading by 1/characters, to
+    prefer the purest look at the announcement). It lands within 0.001 of the plain median
+    (+0.046 against +0.045, 56.4% raised against 57.4%): the refinement probes are 4-9 s windows
+    aimed at the announcement, so their segments are nearly all short and there is almost nothing
+    for the weighting to separate. The sophistication buys nothing measurable.
+    </para>
+    <para>
+    <b>The knock-on nobody should be surprised by.</b> <c>RegionProber.SkipSettledWindows</c> reads
+    the same figure: a low-confidence mark deliberately refuses to settle the windows it overlaps, so
+    they keep their chance to re-detect. Raising confidences therefore makes a run skip slightly more
+    and re-check slightly less. That is the intended consequence of the figure becoming honest, not a
+    side effect to compensate for.
+    </para>
+  </member>
+</doc>

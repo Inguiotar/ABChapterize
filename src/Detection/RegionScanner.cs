@@ -571,16 +571,19 @@ internal sealed class RegionScanner
         // gap's remaining-numbers bookkeeping has to follow what they settled on.
         time = placed.TimeSeconds;
         var number = placed.Number!.Value;
-        _found.Add(new DetectedChapter(number, time, match.Confidence, Sequence: _sequence));
+        // As in Probe: the refinement's own readings of the announcement where it produced any,
+        // this chunk's figure otherwise. See RefinedConfidence.
+        var confidence = placed.Confidence ?? match.Confidence;
+        _found.Add(new DetectedChapter(number, time, confidence, Sequence: _sequence));
         _remaining?.Remove(number);
         var (highest, missingNumbers) =
             ChapterProgress(_knownChapters.Concat(_found), _ctx.ExpectedStartChapter);
         _ctx.Work.HighestChapters = highest;
         _ctx.Work.MissingChapters = missingNumbers.Count;
         _env.Log?.Invoke($"chapter {number} found in gap, mark placed at {FormatTimestamp(time)} " +
-                     $"(confidence {match.Confidence:0.00}" +
+                     $"(confidence {confidence:0.00}" +
                      await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
-                     $"){LowConfidenceNote(match.Confidence)}" +
+                     $"){LowConfidenceNote(confidence)}" +
                      MissingNote(missingNumbers));
     }
 

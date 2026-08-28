@@ -373,7 +373,11 @@ announcement to follow a real pause; out-of-order detections and duplicates of
 an already-marked chapter are dropped, keeping the earliest position. Each
 mark also carries Whisper's own confidence, and marks below 0.5 are flagged
 for a spot-check rather than trusted silently (see
-[section 12](#12-output-progress-and-logging)).
+[section 12](#12-output-progress-and-logging)). That figure is taken from the
+short re-readings the mark refinement makes of the announcement itself — the
+median of them — rather than from the wide window that first found it, whose
+segment usually holds a jingle and several sentences of narration besides and
+so says more about those than about the announcement.
 
 By default (`--min-silence-length auto`), Probe does not probe every silence
 from Analyze. As chapters are found it learns how long this book's real

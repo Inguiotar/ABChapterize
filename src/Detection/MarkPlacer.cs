@@ -89,7 +89,11 @@ internal readonly record struct NumberCheck(
 /// <param name="TimeSeconds">The final mark position.</param>
 /// <param name="Number">The chapter number to record it under - the one that came in, unless the
 /// refinement's probes overruled it; null for a named mark.</param>
-internal readonly record struct MarkPlacement(double TimeSeconds, int? Number);
+/// <param name="Confidence">How sure the recognizer is of the announcement, measured on the
+/// refinement's own narrowly framed readings of it (<see cref="RefinedConfidence"/>); null when
+/// there were none, which leaves the caller its window figure.</param>
+internal readonly record struct MarkPlacement(
+    double TimeSeconds, int? Number, double? Confidence = null);
 
 /// <summary>
 /// Turns a default-mode mark into the final one and records what the file's statistics need to
@@ -216,6 +220,7 @@ internal sealed class MarkPlacer
         var phraseHeard = false;
         double? onset = null;
         var number = chapter?.Number;
+        double? confidence = null;
         if (_options.PreciseMark)
         {
             // statRegion is this mark's own resolved jingle, so its end is where the music in front
@@ -238,6 +243,11 @@ internal sealed class MarkPlacer
                     refined.PhraseReadings, check.Profile, _findMatches, check.Number, check.Bounds,
                     check.CollidingNumber, phraseAbs, _log) is { } recounted)
                 number = recounted;
+            // After the vote, so the readings are measured against the number the mark actually
+            // settled on rather than the one the window heard.
+            if (chapter is { } profiled && number is { } settled)
+                confidence = RefinedConfidence.Median(
+                    refined.PhraseReadings, profiled.Profile, _findMatches, settled);
         }
         if (!IsolationHolds(onset, isolation, number, ctx))
             return null;
@@ -247,7 +257,7 @@ internal sealed class MarkPlacer
         // refinement vote above can only replace it inside the branch that already matched chapter.
         if (chapter is { } identified && number is { } chapterNumber)
             Record(identified.Sequence, chapterNumber, statSilence, statRegion, phraseAbs);
-        return new MarkPlacement(time, number);
+        return new MarkPlacement(time, number, confidence);
     }
 
     /// <summary>

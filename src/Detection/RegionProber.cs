@@ -3048,6 +3048,9 @@ internal sealed class RegionProber
         // below reports and records what those settled on rather than what the window heard.
         time = placed.TimeSeconds;
         var number = placed.Number!.Value;
+        // The refinement's own readings where it produced any, the window's figure otherwise; see
+        // RefinedConfidence for why the window's is the worst-framed look at the announcement.
+        var confidence = placed.Confidence ?? match.Confidence;
 
         if (match.SpansMerge)
             _env.Log?.Invoke($"chapter {number} spans the reused/fresh transcript merge " +
@@ -3065,7 +3068,7 @@ internal sealed class RegionProber
                 $"chapter {number} still does not fit the sequence after re-reading - mark kept, " +
                 "chapters under it not counted as missing");
 
-        _found.Add(new DetectedChapter(number, time, match.Confidence, unverified, _sequence));
+        _found.Add(new DetectedChapter(number, time, confidence, unverified, _sequence));
         // Through ExpectedStartFor rather than off the option, so the "still missing" note starts
         // counting the chapters under the first one found the moment a prologue says this file
         // holds the book's beginning - which the progress display would otherwise only learn of
@@ -3074,15 +3077,15 @@ internal sealed class RegionProber
         _ctx.Work.HighestChapters = highest;
         _ctx.Work.MissingChapters = missingNumbers.Count;
         _env.Log?.Invoke($"chapter {number} detected, mark placed at {FormatTimestamp(time)} " +
-                         $"(confidence {match.Confidence:0.00}" +
+                         $"(confidence {confidence:0.00}" +
                          await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
                          CandidateNote(candidate) +
-                         $"){LowConfidenceNote(match.Confidence)}" +
+                         $"){LowConfidenceNote(confidence)}" +
                          MissingNote(missingNumbers));
 
         _hunting?.Remove(number);
         return new ProbeMark(
-            number, ThresholdSilenceFor(candidate, markSilence), match.Confidence, unverified);
+            number, ThresholdSilenceFor(candidate, markSilence), confidence, unverified);
     }
 
     /// <summary>

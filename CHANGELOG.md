@@ -273,6 +273,16 @@ earn a round number.
 
 ### Fixed
 
+- **The confidence on a chapter mark is now measured on the announcement, not on the window that
+  found it.** It used to come from the wide probe window — a segment that usually swallows the
+  jingle and a few sentences of narration, so the number described those more than the words it was
+  supposed to be about. It now comes from the short re-readings the mark refinement already makes
+  of the announcement itself: the median of them, so a mark cannot look more certain merely for
+  having needed more probes. Marks are unaffected in position and number; only the reported figure
+  and the `--summary` low-confidence list change. Against a reference set of marks confirmed by
+  ear, the old figure raised a flag on thirteen of them and the new one on six, so expect fewer
+  spot-checks asked of you and fewer of those wasted.
+
 - **A chapter announced behind a spoken heading is no longer thrown away.** Some books name the
   setting before the number — "*the Milky Way. Chapter 14.*" — with barely a breath between the
   two, and the recognizer writes both as one line. That left the announcement looking like a
