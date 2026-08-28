@@ -687,7 +687,10 @@ dotnet publish -c Release -r osx-arm64    # -> bin/publish/osx-arm64
 **Linux ARM64** (a Raspberry Pi or similar acting as a small home server) is
 CPU-only: the GPU backends have no ARM64 build, so the existing
 CUDA → Vulkan → CPU fallback simply lands on CPU. Expect it to be slow rather
-than broken, and prefer a small model.
+than broken, and prefer a small model. Unlike the Mac it can be cross-published
+from any machine and copied over. Details, including an Alpine trap that builds
+cleanly and then cannot transcribe, are in
+[Building on Linux ARM64](doc/building-on-linux-arm64.md).
 
 **Apple Silicon** has more caveats than fit here, including one that will stop
 you before you start — build it on the Mac itself, not from another machine.
