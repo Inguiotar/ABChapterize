@@ -365,6 +365,70 @@ public sealed class FileProcessorTests : IDisposable
     }
 
     /// <summary>
+    /// The result line's clause is built out of the listing's reason rather than beside it, so the
+    /// two cannot come to describe one outcome differently.
+    /// </summary>
+    [Fact]
+    public void PushResult_BuildsTheResultLineClauseOutOfTheListedReason()
+    {
+        var result = FileProcessor.PushResult.NotSent("no book on the server matches this file");
+
+        Assert.Equal(", not sent to ABS (no book on the server matches this file)", result.Note);
+        Assert.Equal("no book on the server matches this file", result.NotSentReason);
+    }
+
+    /// <summary>
+    /// A book the server already holds these very marks for is reported on the file's own line and
+    /// deliberately left out of the closing listing (the user's call, 2026-08-28): the marks did
+    /// reach the server, on an earlier run, so it is not an answer to what that listing asks - and
+    /// an --abs-sync over a library already in step would otherwise name every book in it.
+    /// </summary>
+    [Fact]
+    public void PushResult_LeavesAServerThatAlreadyHasTheMarks_OutOfTheListing()
+    {
+        var result = FileProcessor.PushResult.AlreadyThere;
+
+        Assert.Contains("already has these marks", result.Note);
+        Assert.Null(result.NotSentReason);
+    }
+
+    /// <summary>A push that happened is not a push that is missing, mismatch or no mismatch: the
+    /// read-back warning is a separate report and is counted separately.</summary>
+    /// <param name="mismatch">Whether the read-back disagreed.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PushResult_LeavesASentFile_OutOfTheListing(bool mismatch)
+    {
+        var result = FileProcessor.PushResult.Sent((", 30 chapter(s) sent to ABS (Stalker)", mismatch));
+
+        Assert.Null(result.NotSentReason);
+        Assert.Equal(mismatch, result.Mismatch);
+    }
+
+    /// <summary>A run with no server to talk to says nothing and lists nothing.</summary>
+    [Fact]
+    public void PushResult_ForARunThatPushesNothing_IsSilent()
+    {
+        Assert.Equal("", FileProcessor.PushResult.NoPushWanted.Note);
+        Assert.Null(FileProcessor.PushResult.NoPushWanted.NotSentReason);
+    }
+
+    /// <summary>The withheld-partial reason is a fragment that can follow a file name in the
+    /// listing, which is the same thing the result line wraps in its clause.</summary>
+    [Fact]
+    public void WithholdPartialPush_ReadsAsAListingEntryAndAsAResultLineClause()
+    {
+        var reason = FileProcessor.WithholdPartialPush(
+            Marks(12), complete: false, onServer: 34, maxChapters: null);
+
+        Assert.Equal("chapters are still missing and the server already has 34 mark(s)", reason);
+        Assert.Equal(
+            ", not sent to ABS (chapters are still missing and the server already has 34 mark(s))",
+            FileProcessor.PushResult.NotSent(reason!).Note);
+    }
+
+    /// <summary>
     /// --no-rename holds back a rename that would <em>put</em> a ".missing-marks" tag on a name,
     /// and only that one. Taking one off still happens: it gives the file its own name back rather
     /// than imposing a new one, and without it a completed file would stay tagged for ever and be

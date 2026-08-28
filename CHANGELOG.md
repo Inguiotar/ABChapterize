@@ -17,6 +17,15 @@ earn a round number.
 
 ### Added
 
+- **`--summary` now closes a pushing run with the books Audiobookshelf did not get.** After the
+  listings of skipped, empty, unfinished and low-confidence files comes a fifth: every file whose
+  marks did not reach the server, and why — a title that matched several books, a file that
+  matched none, a chapter set held back because it still has a gap. The marks are in the files
+  either way, so on a shelf of two hundred audiobooks this is the list to act on once the per-file
+  lines have scrolled away. A book the server already holds the same marks for is left out: nothing
+  was sent for it, but nothing needed to be. `--abs-push-only` reports the same refusals under
+  *skipped*, sending being the whole of what it does with a file.
+
 - **`--version` now also says which platform build you are running, and on what system.**
   A second line reads `win-x64 on Microsoft Windows 10.0.26200`, or whatever the equivalent is
   where you are — and says so too when the process is running as one architecture on a
@@ -200,6 +209,12 @@ earn a round number.
   same test it would have faced had the name pointed at it alone. Two books that both fit are
   still reported as ambiguous, and the note now lists only those two rather than every book
   sharing the name.
+
+- **A chapter set held back from the server words its reason like the other push refusals.** The
+  result line now reads `not sent to ABS (chapters are still missing and the server already has 34
+  mark(s))` where it used to read `not sent to ABS while chapters are missing (it already has 34)`.
+  Same rule, same decision; the wording is now the one the new `--summary` listing prints, so the
+  two cannot describe an outcome differently.
 
 - **A file that matches several books but is none of them says so.** Where every book a name
   matched is the wrong length — most often one part of a split book that has not been joined

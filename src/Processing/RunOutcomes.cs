@@ -11,16 +11,17 @@ namespace ABChapterize.Processing;
 /// <summary>
 /// The run's roster of per-file outcomes worth naming at the end: which files were skipped and for
 /// what reason, which came out of detection with no chapters at all, which were left with chapter
-/// marks still missing, and which were finished but carry marks Whisper was unsure of. Where
-/// <see cref="RunStatistics"/> accumulates measurements, this accumulates names - the four listings
-/// <c>--summary</c> closes a run with.
+/// marks still missing, which were finished but carry marks Whisper was unsure of, and which a
+/// pushing run did not send to Audiobookshelf. Where <see cref="RunStatistics"/> accumulates
+/// measurements, this accumulates names - the listings <c>--summary</c> closes a run with.
 /// </summary>
 /// <remarks>
 /// The point of the listings is a batch of two hundred audiobooks, where the per-file result lines
 /// have long scrolled away (and under <c>--quiet</c> were never printed at all): the questions left
 /// at the end are "which ones did you not do", "which ones came back empty-handed", "which ones
-/// are not finished" and "which ones should I check by hand", and none should require reading a log
-/// back. Filled one file at a time by <see cref="FileProcessor"/>, so nothing here is synchronized.
+/// are not finished", "which ones should I check by hand" and "which ones never reached the
+/// server", and none should require reading a log back. Filled one file at a time by
+/// <see cref="FileProcessor"/>, so nothing here is synchronized.
 /// </remarks>
 internal sealed class RunOutcomes
 {
@@ -42,6 +43,17 @@ internal sealed class RunOutcomes
     /// those numbers and whether the file was read in <c>--chapter-phrase none</c> mode.</summary>
     private readonly List<(string Name, IReadOnlyList<DetectedChapter> Chapters, int SequenceCount,
         bool BareNumbers)> _lowConfidence = [];
+
+    /// <summary>Files a pushing run marked but did not send to Audiobookshelf, each with the
+    /// reason its own result line gave.</summary>
+    /// <remarks>
+    /// A book the server already holds these very marks for is <b>not</b> in here (the user's call,
+    /// 2026-08-28), even though nothing was sent for it either. The question this listing answers is
+    /// "which books did not get this run's marks", and that one did - on an earlier run. Listing it
+    /// would also make the block useless at the size it matters: an <c>--abs-sync</c> over a library
+    /// already in step would name every book in it and bury the handful that need doing.
+    /// </remarks>
+    private readonly List<(string Name, string Reason)> _notSentToAbs = [];
 
     /// <summary>Files <c>--verify-only</c> could not confirm every mark of, each with the marks
     /// that did not check out.</summary>
@@ -87,6 +99,18 @@ internal sealed class RunOutcomes
     /// <param name="missingNumbers">The chapter numbers still missing.</param>
     internal void RecordMissingMarks(string name, IReadOnlyList<int> missingNumbers)
         => _missingMarks.Add((name, missingNumbers));
+
+    /// <summary>
+    /// Records one file that was marked but whose marks did not reach Audiobookshelf.
+    /// </summary>
+    /// <param name="name">The bare name the file carries once the run is done, for the same reason
+    /// <see cref="RecordMissingMarks"/> takes that one - a set withheld for a gap is a set whose
+    /// file has just been re-tagged.</param>
+    /// <param name="reason">Why nothing was sent, as a sentence fragment following the name, and
+    /// the same wording the file's own result line used so the two cannot describe the outcome
+    /// differently.</param>
+    internal void RecordNotSentToAbs(string name, string reason)
+        => _notSentToAbs.Add((name, reason));
 
     /// <summary>
     /// Records one file <c>--verify-only</c> could not confirm every mark of.
@@ -171,6 +195,9 @@ internal sealed class RunOutcomes
             $"(below p={LowConfidenceThreshold:0.00}, worth a manual check):",
             [.. _lowConfidence.Select(f => (f.Name, DescribeLowConfidence(f.Chapters, f.SequenceCount)))],
             BareNumberFootnote());
+        // After the four that are about the file, because this one is about the other side: these
+        // books were marked, and it is the server that did not get them.
+        AppendBlock(lines, $"Not sent to Audiobookshelf: {_notSentToAbs.Count} file(s):", _notSentToAbs);
         // Last, and only ever filled by --verify-only: they answer that mode's whole question, and
         // a reader who ran it is looking for them rather than for the four blocks above.
         AppendBlock(lines, $"Failed verification in {_verifyFailed.Count} file(s):", _verifyFailed);

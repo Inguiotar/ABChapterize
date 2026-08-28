@@ -9,7 +9,7 @@ using ABChapterize.Ui;
 
 namespace ABChapterize.Tests;
 
-/// <summary>Tests for <see cref="RunOutcomes"/>: the four per-file listings closing a
+/// <summary>Tests for <see cref="RunOutcomes"/>: the per-file listings closing a
 /// <c>--summary</c> run, and the file names in them being marked as titles rather than left to the
 /// highlighter's pattern rules.</summary>
 public class RunOutcomesTests
@@ -253,6 +253,56 @@ public class RunOutcomesTests
     {
         var outcomes = new RunOutcomes();
         outcomes.RecordSkipped("Der Fall (Teil 2).m4b", "has 3 chapter mark(s)");
+
+        var entry = outcomes.FormatListings()[1];
+        Assert.Contains(entry, s => s == SummarySegment.Title("Der Fall (Teil 2).m4b"));
+    }
+
+    /// <summary>
+    /// The question a pushing run leaves open: the marks are in the files, and the per-file lines
+    /// saying which books never got them have long scrolled away.
+    /// </summary>
+    [Fact]
+    public void FormatListings_NamesEveryFileTheServerDidNotGet()
+    {
+        var outcomes = new RunOutcomes();
+        outcomes.RecordNotSentToAbs("Stalker.m4b",
+            "the title tag \"Stalker\" matches 2 books on the server");
+        outcomes.RecordNotSentToAbs("Atlan.missing-marks-7.m4b",
+            "chapters are still missing and the server already has 34 mark(s)");
+
+        Assert.Equal(
+            ["Not sent to Audiobookshelf: 2 file(s):",
+             "  Stalker.m4b: the title tag \"Stalker\" matches 2 books on the server",
+             "  Atlan.missing-marks-7.m4b: chapters are still missing and the server already has " +
+             "34 mark(s)"],
+            Lines(outcomes));
+    }
+
+    /// <summary>
+    /// It comes after the four listings about the file itself, being about the other side: these
+    /// books were marked, and it is the server that did not get them.
+    /// </summary>
+    [Fact]
+    public void FormatListings_PutsTheNotSentBlockAfterTheOnesAboutTheFile()
+    {
+        var outcomes = new RunOutcomes();
+        outcomes.RecordSkipped("Mort.m4b", "has 24 chapter mark(s)");
+        outcomes.RecordNotSentToAbs("Stalker.m4b", "no book on the server matches this file");
+
+        Assert.Equal(
+            ["Skipped 1 file(s):",
+             "  Mort.m4b: has 24 chapter mark(s)",
+             "Not sent to Audiobookshelf: 1 file(s):",
+             "  Stalker.m4b: no book on the server matches this file"],
+            Lines(outcomes));
+    }
+
+    [Fact]
+    public void FormatListings_MarksANotSentFileNameAsATitle()
+    {
+        var outcomes = new RunOutcomes();
+        outcomes.RecordNotSentToAbs("Der Fall (Teil 2).m4b", "no book on the server matches this file");
 
         var entry = outcomes.FormatListings()[1];
         Assert.Contains(entry, s => s == SummarySegment.Title("Der Fall (Teil 2).m4b"));

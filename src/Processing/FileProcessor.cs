@@ -1354,18 +1354,21 @@ public sealed class FileProcessor
         // complete: true - there is no gap to speak of. This path forms no opinion about chapter
         // numbers at all, so it cannot be holding a partial sequence back the way a detection run
         // that failed to close a gap is (see PushLocalFileAsync).
-        var (pushNote, pushMismatch) = sendIt
+        var push = sendIt
             ? await PushLocalFileAsync(ctx, [.. settled], complete: true, ct)
-            : ("", false);
-        if (pushMismatch)
+            : PushResult.NoPushWanted;
+        if (push.Mismatch)
             _warnings++;
+        // This path renames nothing, so the file's own name is the one a reader will find.
+        if (push.NotSentReason is { } notSent)
+            _outcomes.RecordNotSentToAbs(ctx.Name, notSent);
         // Where nothing was written the source is not worth naming: a list this file already had is
         // its own by definition, and "from the file already in the file" is what saying so gets.
         _progress.FinishWithSummary(ctx.Work,
             $"{ctx.Name}: " + (writeIt
                 ? $"{settled.Count} chapter mark(s) from {source} written to the file"
                 : $"{settled.Count} chapter mark(s) already in the file")
-            + writeNote + pushNote);
+            + writeNote + push.Note);
         return null;
     }
 
@@ -2232,23 +2235,28 @@ public sealed class FileProcessor
         // file received, including a partial write left by an unresolved gap - which is worth
         // having on the server, since the alternative is nothing at all. A file the run declined to
         // write never gets here and so never sends anything.
-        var (pushNote, pushMismatch) = ctx.Abs is { } abs
-            ? await _abs!.PushAsync(abs.Book, chapters, ctx.Info.DurationSeconds, ct)
+        var push = ctx.Abs is { } abs
+            ? PushResult.Sent(await _abs!.PushAsync(abs.Book, chapters, ctx.Info.DurationSeconds, ct))
             : _options.AbsPush
                 ? await PushLocalFileAsync(ctx, chapters, complete, ct)
-                : ("", false);
+                : PushResult.NoPushWanted;
         // Counted here rather than at the six callers: a push that the server did not store as sent
         // is a warning about the run, not about the outcome any one of them was reporting, and every
         // one of them would have had to remember to ask.
-        if (pushMismatch)
+        if (push.Mismatch)
             _warnings++;
         // The one place a rename is performed, so the one place --no-rename has to be applied.
         var finalPath = RenameCommitted(ctx.File, TagRenameSuppressed(renameTo) ? null : renameTo);
+        // After the rename, so the listing names the file a reader will find in the folder: the
+        // commonest entry here is a set withheld for a gap, which is exactly the file that has just
+        // been re-tagged.
+        if (push.NotSentReason is { } notSent)
+            _outcomes.RecordNotSentToAbs(Path.GetFileName(finalPath), notSent);
         // The sidecar last of all, for the same reason the push is here at all: this is where the
         // file's final name is known, and a sidecar is looked up by the audio file's name. Written
         // from here rather than by the six callers, so a gap, a resume and a --verify --fix all
         // export what they wrote instead of only the run that had nothing left to find.
-        return (finalPath, writeNote + pushNote + await ExportSidecarAsync(ctx, chapters, finalPath, ct));
+        return (finalPath, writeNote + push.Note + await ExportSidecarAsync(ctx, chapters, finalPath, ct));
     }
 
     /// <summary>
@@ -2259,8 +2267,7 @@ public sealed class FileProcessor
     /// <param name="chapters">The chapters just written into the file.</param>
     /// <param name="complete">Whether the chapter sequence has no gaps left in it.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The clause the summary line closes with about the push, and whether the server was
-    /// found afterwards to be holding something other than what was sent.</returns>
+    /// <returns>What the push amounted to - see <see cref="PushResult"/>.</returns>
     /// <remarks>
     /// <para>
     /// A complete set always goes. A set with a gap still in it goes only when the server has
@@ -2277,9 +2284,9 @@ public sealed class FileProcessor
     /// </para>
     /// <para>
     /// Nothing here can fail the file. The marks are in the file by the time this runs, which is
-    /// what the user asked for first; a book that cannot be matched, or a server that has gone
-    /// away, is reported in the summary line and nowhere else. Failing a written file over a
-    /// push that did not happen would be the one outcome nobody wants.
+    /// what the user asked for first; a book that cannot be matched is reported on the file's own
+    /// line and again in <c>--summary</c>'s closing listing, and nowhere else. Failing a written
+    /// file over a push that did not happen would be the one outcome nobody wants.
     /// </para>
     /// <para>
     /// A run that also pulls has done the looking already, and its answer is used rather than
@@ -2290,35 +2297,82 @@ public sealed class FileProcessor
     /// matching a file to a book means rather than something a caller asks for.
     /// </para>
     /// </remarks>
-    private async Task<(string Note, bool Mismatch)> PushLocalFileAsync(
+    private async Task<PushResult> PushLocalFileAsync(
         FileContext ctx, List<Chapter> chapters, bool complete, CancellationToken ct)
     {
         if (ctx.Pull is { } pull)
         {
             if (pull.Book == null)
-                return ($", not sent to ABS ({pull.Note})", false);
+                return PushResult.NotSent(pull.Note);
             if (AbsChapterMerge.SameMarks(chapters, pull.FromServer))
-                return (", not sent to ABS (it already has these marks)", false);
+                return PushResult.AlreadyThere;
             // The list itself, fetched for this very file, rather than the catalogue's count.
             if (WithholdPartialPush(chapters, complete, pull.FromServer.Count, _options.EffectiveMaxChapters)
                 is { } held)
-                return (held, false);
+                return PushResult.NotSent(held);
             LogBogusServerList(ctx, complete, pull.FromServer.Count);
-            return await _abs!.PushAsync(pull.Book, chapters, ctx.Info.DurationSeconds, ct);
+            return PushResult.Sent(
+                await _abs!.PushAsync(pull.Book, chapters, ctx.Info.DurationSeconds, ct));
         }
 
         // Asked for even when the set has a gap, unlike before: what the server already holds is
         // the thing that decides whether a gapped set may be sent, and the book is what carries it.
         var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
         if (match.Book == null)
-            return ($", not sent to ABS ({match.Reason})", false);
+            return PushResult.NotSent(match.Reason);
         if (WithholdPartialPush(chapters, complete, match.Book.ChapterCount, _options.EffectiveMaxChapters)
             is { } withheld)
-            return (withheld, false);
+            return PushResult.NotSent(withheld);
 
         ctx.Logs.Write(match.Reason);
         LogBogusServerList(ctx, complete, match.Book.ChapterCount);
-        return await _abs.PushAsync(match.Book, chapters, ctx.Info.DurationSeconds, ct);
+        return PushResult.Sent(
+            await _abs.PushAsync(match.Book, chapters, ctx.Info.DurationSeconds, ct));
+    }
+
+    /// <summary>
+    /// What one file's dealings with Audiobookshelf amounted to: the clause its result line closes
+    /// with, whether a read-back disagreed, and - when nothing was sent - the reason in the words
+    /// <c>--summary</c>'s listing wants it.
+    /// </summary>
+    /// <param name="Note">The clause appended to the file's result line, empty when the run has no
+    /// server to talk to.</param>
+    /// <param name="Mismatch">Whether the server was afterwards found to be holding something other
+    /// than what was sent.</param>
+    /// <param name="NotSentReason">Why the marks did not reach the server, or null when they did -
+    /// or when there was nothing to report, which is the same thing to a listing that only answers
+    /// "which books did not get this run's marks".</param>
+    /// <remarks>
+    /// <b>The note is built from the reason rather than beside it</b>, so the result line and the
+    /// closing listing cannot come to describe one outcome differently - the same reasoning that
+    /// has <see cref="RunOutcomes.SkippedCount"/> counting its own listing instead of keeping a
+    /// tally. <see cref="AlreadyThere"/> is the one non-push that reports no reason, and its
+    /// remarks say why.
+    /// Internal for unit testing.
+    /// </remarks>
+    internal readonly record struct PushResult(string Note, bool Mismatch, string? NotSentReason)
+    {
+        /// <summary>A run with nothing to send: no clause, nothing to list.</summary>
+        internal static PushResult NoPushWanted => new("", false, null);
+
+        /// <summary>
+        /// A book the server already holds these very marks for. Reported on the file's own line,
+        /// but deliberately absent from the listing: the marks did reach the server, on an earlier
+        /// run, so it is not an answer to the question the listing asks.
+        /// </summary>
+        internal static PushResult AlreadyThere
+            => new(", not sent to ABS (it already has these marks)", false, null);
+
+        /// <summary>Marks that reached the server, or a dry run that would have sent them.</summary>
+        /// <param name="push">What <see cref="AbsFileFlow.PushAsync"/> made of it.</param>
+        internal static PushResult Sent((string Note, bool Mismatch) push)
+            => new(push.Note, push.Mismatch, null);
+
+        /// <summary>Marks that did not reach the server, and are worth naming at the end for it.
+        /// </summary>
+        /// <param name="reason">Why not, as a sentence fragment that can follow a file name.</param>
+        internal static PushResult NotSent(string reason)
+            => new($", not sent to ABS ({reason})", false, reason);
     }
 
     /// <summary>
@@ -2348,7 +2402,8 @@ public sealed class FileProcessor
     /// <param name="maxChapters">The run's <c>--max-chapters</c>, or null when it was not given;
     /// a server list longer than it is not one this rule protects. See
     /// <see cref="ServerListIsBogus"/>.</param>
-    /// <returns>The clause the summary line closes with when nothing is to be sent, or null when
+    /// <returns>Why nothing is to be sent, as a sentence fragment <see cref="PushResult.NotSent"/>
+    /// makes both the result line's clause and the closing listing's entry out of - or null when
     /// the push should go ahead.</returns>
     /// <remarks>
     /// <para>
@@ -2379,8 +2434,8 @@ public sealed class FileProcessor
         if (complete || chapters.Count > onServer || ServerListIsBogus(onServer, maxChapters))
             return null;
         return onServer > 0
-            ? $", not sent to ABS while chapters are missing (it already has {onServer})"
-            : ", not sent to ABS while chapters are missing";
+            ? $"chapters are still missing and the server already has {onServer} mark(s)"
+            : "chapters are still missing";
     }
 
     /// <summary>

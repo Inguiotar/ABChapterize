@@ -2818,12 +2818,24 @@ The details worth knowing:
   every file that was **skipped** and why, every file **no chapters were found
   in** and which of the reasons applied, every file left **still missing
   chapter marks**, with how many are missing and — up to ten of them — which
-  chapters those are, and every file carrying **low-confidence chapter marks**,
+  chapters those are, every file carrying **low-confidence chapter marks**,
   meaning marks whose chapter number was read at a Whisper probability below
-  0.50 and which are therefore worth a look by hand. Files appear under the name
-  they carry once the run is over, so a book tagged
+  0.50 and which are therefore worth a look by hand, and — in a run that pushes
+  — every file whose marks were **not sent to Audiobookshelf**, with the reason.
+  Files appear under the name they carry once the run is over, so a book tagged
   [`.missing-marks-…`](#re-scan--the-shifted-second-reading) is listed under its
   tagged name and can be found in the folder as printed.
+
+  The last of those is the one to read after
+  [`--abs-push`](#marking-local-files-and-telling-the-server) or
+  [`--abs-sync`](#reconciling-both-ways) over a shelf: the marks are
+  in the files either way, and this says which books the server did not get and
+  what to do about each — a title that matched several books, a file that
+  matched none, a chapter set held back because it still has a gap. A book the
+  server *already* holds the same marks for is deliberately left out: nothing
+  was sent for it, but nothing needed to be, and listing it would bury the
+  entries that do need acting on. `--abs-push-only` reports the same refusals
+  under **skipped**, sending being the whole of what it does with a file.
 
   Where any of the low-confidence files was read with
   [`--chapter-phrase none`](#bare-numbers-as-announcements),
@@ -2848,6 +2860,14 @@ The details worth knowing:
     The Forever War.m4b: 3 mark(s) (part 1 chapter 4, 9; part 2 chapter 3)
   ```
 
+  A run that pushes closes with one more, after the four above:
+
+  ```
+  Not sent to Audiobookshelf: 2 file(s):
+    Raumschiff Erde.m4b: no book on the server matches this file
+    Die Dritte Macht.missing-marks-3-7.m4b: chapters are still missing and the server already has 34 mark(s)
+  ```
+
   A book whose numbering restarts names the part alongside the chapter, as the
   second entry above does: every part counts from one again, so "chapter 4" on
   its own would not say which one to go and listen to. Parts are numbered from
@@ -2865,7 +2885,7 @@ The details worth knowing:
   The heading counts the files the run *started*, which is not the same as the
   ones it finished: the file it was working on when it stopped is among them and
   is in neither of the figures after it. Everything below the heading — the
-  statistics and the four listings — covers what was done, so the listing of
+  statistics and the listings — covers what was done, so the listing of
   files still missing chapter marks is the one to build the next command line
   from. `--revert` and `--cleanup` mark their own summaries the same way.
 
