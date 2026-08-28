@@ -87,6 +87,68 @@ body {
     font-size: 0.85rem;
 }
 
+/* Pushed to the far end rather than ordered after the version, so it stays put whatever the
+   version string's length. */
+.topbar-download {
+    margin-left: auto;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--link);
+    text-decoration: none;
+}
+
+.topbar-download:hover,
+.topbar-download:focus {
+    text-decoration: underline;
+}
+
+/* --- download block (landing page) -------------------------------------- */
+
+.download {
+    margin: 1.6rem 0 2rem;
+    padding: 1.1rem 1.3rem;
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    border-radius: 6px;
+    background: var(--bg-soft);
+}
+
+/* h2 carries a border-top as a section rule, which inside a bordered box draws a second line
+   just under its own edge. */
+.download h2 {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+
+.download p { margin: 0.5rem 0; }
+
+.download-actions { margin-top: 0.9rem; }
+
+/* Colours are stated rather than inherited: the link sits on the accent, where the default link
+   colour would be close to unreadable in both themes. */
+.download .button {
+    display: inline-block;
+    padding: 0.45rem 1.1rem;
+    border-radius: 5px;
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.download .button:visited { color: var(--bg); }
+
+.download .button:hover,
+.download .button:focus {
+    text-decoration: underline;
+}
+
+.download-note {
+    color: var(--fg-soft);
+    font-size: 0.9rem;
+}
+
 .layout {
     display: flex;
     align-items: flex-start;
