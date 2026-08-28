@@ -2475,7 +2475,7 @@ public sealed class ChapterDetector
 
         var checkedCount = 0;
         var failed = 0;
-        // Mirrors Probe/3's found-chapters list, but of confirmed marks rather than fresh
+        // Mirrors Probe/Scan's found-chapters list, but of confirmed marks rather than fresh
         // detections, so the same ChapterProgress/bar display applies: the highest confirmed
         // number, with any lower unconfirmed one shown as a "(-N)" gap beneath it.
         var confirmedChapters = new List<DetectedChapter>();

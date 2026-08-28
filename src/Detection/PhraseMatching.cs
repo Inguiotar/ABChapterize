@@ -50,10 +50,7 @@ internal static partial class PhraseMatching
     {
         /// <summary>The pauses <see cref="Wording"/> asked for with its <c>^</c> and <c>$</c>, as
         /// the check that enforces them spells it.</summary>
-        internal IsolationRule Guards => Wording is null
-            ? IsolationRule.None
-            : (Wording.RequiresLeadIn ? IsolationRule.LeadIn : IsolationRule.None) |
-              (Wording.RequiresLeadOut ? IsolationRule.LeadOut : IsolationRule.None);
+        internal IsolationRule Guards => Wording is null ? IsolationRule.None : GuardsOf(Wording);
 
         /// <summary>Whether the wording that matched is a number spoken alone. What decides whether a
         /// pass hunting known numbers has to vouch for the position on top of whatever

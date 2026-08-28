@@ -186,7 +186,7 @@ internal static class TuningOverrides
 
     /// <summary>
     /// Refuses a length of time that is not one. Every exposed constant whose name ends in
-    /// <c>Seconds</c> is a duration, a window or a tolerance, and none of the 93 of them is zero or
+    /// <c>Seconds</c> is a duration, a window or a tolerance, and not one of them is zero or
     /// negative by default - so a value that is says nothing this code can act on.
     /// </summary>
     /// <remarks>

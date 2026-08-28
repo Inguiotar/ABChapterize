@@ -633,6 +633,12 @@ internal sealed class RegionScanner
             var sliceStart = Math.Max(chunkStart, silStart - GapRetryPaddingSeconds);
             var sliceEnd = Math.Min(chunkEnd, silEnd + GapRetryPaddingSeconds);
             var subStep = GapRetryChunkSeconds - GapRetryChunkOverlapSeconds;
+            // An overlap at or above the chunk length leaves the walk standing still, re-reading
+            // one chunk for ever. Only reachable through --set:, which validates a value for type
+            // and finiteness but not for whether it leaves a loop able to advance - the same guard
+            // ChapterDetector's --verify gap retry carries over the very same two constants.
+            if (subStep <= 0)
+                continue;
             for (var subStart = sliceStart;
                  subStart < sliceEnd && _remaining is null or { Count: > 0 };
                  subStart += subStep)
