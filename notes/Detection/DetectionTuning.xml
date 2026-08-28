@@ -254,7 +254,7 @@
   <member name="VerifyRereadAttempts">
     <para>
     <b>The framing sweep.</b> Chapter 1 of "De vandrande djaeknarne", ggml-small, window length
-    21.70 s (2026-08-17, Jan-PC): window starts 23.915 / 23.920 / 23.925 s read
+    21.70 s (2026-08-17, the second test machine): window starts 23.915 / 23.920 / 23.925 s read
     "1. Kapitlet - Gaknupptag" / "- Gjaknupptag" / "- Jacknupptag", and 23.930 - production's own
     offset - reads "1. Jaknuktag" with the chapter word gone. Twenty-one starts over 23.80-24.20 at
     20 ms steps: <b>10 recover the word</b>, flipping every 20-40 ms on identical audio at p=0.45-0.65.
