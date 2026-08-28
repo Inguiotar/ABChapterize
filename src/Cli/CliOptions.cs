@@ -1543,8 +1543,8 @@ public sealed class CliOptions
         // around, and with it every option that reasons in those numbers. Rejecting them outright
         // beats silently ignoring them: each one names an expectation about numbers this run will
         // never form an opinion about, so accepting it would promise something that cannot happen.
-        // --chapter-phrase and --chapter-title stay legal - the phrase is still what is listened for
-        // title word is still what the mark is called.
+        // --chapter-phrase and --chapter-title stay legal - the phrase is still what is listened
+        // for and the title word is still what the mark is called.
         // A bare number is recognized as an announcement only by being in sequence - see
         // PhraseMatching's FindBareNumbers - and --ignore-chapter-numbers is exactly the switch that
         // takes that check away, leaving every number spoken alone anywhere in the book a chapter

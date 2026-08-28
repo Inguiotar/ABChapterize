@@ -32,7 +32,7 @@ namespace ABChapterize.Language;
 public interface ILanguage
 {
     /// <summary>The code <c>--lang</c> and Whisper name this language by - ISO 639-1's two letters
-    /// for all eleven registered so far, though Whisper's own list also holds three-letter codes
+    /// for every language registered so far, though Whisper's own list also holds three-letter codes
     /// ("haw", "yue") and <c>--lang</c> accepts those, so nothing here assumes a width.</summary>
     string Code { get; }
 
@@ -54,9 +54,9 @@ public interface ILanguage
     /// <para>
     /// The number-first wording is what gives an ordinal-first language that same rescue. Without it
     /// "Birinci Bölüm" is found by the bare word, whose match starts at "Bölüm" and so never opens
-    /// its segment however the recognizer split it - leaving Turkish, alone among the eleven,
-    /// dependent on the pause. It also earns the ordinal-first order a <c>${number}</c> a title can
-    /// be built from, which reading the number off the surrounding words does not.
+    /// its segment however the recognizer split it - leaving Turkish, alone among the registered
+    /// languages, dependent on the pause. It also earns the ordinal-first order a <c>${number}</c> a
+    /// title can be built from, which reading the number off the surrounding words does not.
     /// </para>
     /// <para>
     /// It is also the one wording that can be claimed by words the narrator never said. Matches are

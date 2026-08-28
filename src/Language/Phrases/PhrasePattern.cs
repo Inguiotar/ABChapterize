@@ -97,20 +97,6 @@ public sealed record PhrasePattern(IReadOnlyList<PhraseAlternative> Alternatives
         => MatchGroups(text).Select(g => g[0]);
 
     /// <summary>
-    /// The same, but keeping the hits each winner displaced: one group per position, the wording
-    /// that claimed it first and then the ones it superseded, in the order they were written.
-    /// <para>
-    /// A superseded wording is not noise. Two wordings of one phrase can read the same words
-    /// differently - "Der erste Kapitel 5" is "erste Kapitel" to one and "Kapitel 5" to another -
-    /// and which of them is right is a question about the audio, not about character positions. So
-    /// detection keeps the losers within reach and lets the sequence, and then the announcement's
-    /// own re-transcription, settle it (see
-    /// <see cref="ABChapterize.Detection.RegionProber"/>'s accept loop). Every other caller takes
-    /// <see cref="Matches"/> and sees only the winners, which is what a single alternation would
-    /// have given them.
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// How long one wording may spend on one transcript before the run gives up on it.
     /// </summary>
     /// <remarks>
@@ -157,6 +143,20 @@ public sealed record PhrasePattern(IReadOnlyList<PhraseAlternative> Alternatives
         return hits;
     }
 
+    /// <summary>
+    /// The same, but keeping the hits each winner displaced: one group per position, the wording
+    /// that claimed it first and then the ones it superseded, in the order they were written.
+    /// <para>
+    /// A superseded wording is not noise. Two wordings of one phrase can read the same words
+    /// differently - "Der erste Kapitel 5" is "erste Kapitel" to one and "Kapitel 5" to another -
+    /// and which of them is right is a question about the audio, not about character positions. So
+    /// detection keeps the losers within reach and lets the sequence, and then the announcement's
+    /// own re-transcription, settle it (see
+    /// <see cref="ABChapterize.Detection.RegionProber"/>'s accept loop). Every other caller takes
+    /// <see cref="Matches"/> and sees only the winners, which is what a single alternation would
+    /// have given them.
+    /// </para>
+    /// </summary>
     /// <param name="text">The window's transcript, flattened and whitespace-normalized.</param>
     /// <exception cref="AppError">Thrown when a wording takes longer than
     /// <see cref="MatchTimeout"/> on one transcript - see <see cref="HitsIn"/>.</exception>

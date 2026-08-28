@@ -1687,7 +1687,7 @@ public sealed class FileProcessor
             // --fix may have found marks worth moving even where every one of them checked out;
             // that is the point of it, and the file then gets rewritten rather than skipped.
             if (verify.Outcomes.Any(m => m.CorrectedStartSeconds != null))
-                return await ApplyMarkFixesAsync(ctx, verify, ct);
+                return await ApplyMarkFixesAsync(ctx, verify, watch, ct);
             // A pulling run has more to do than skip: the marks that just checked out may be the
             // server's and not yet in the file, or the file's and not yet on the server. Verifying
             // them was the "if present" half of --abs-pull --verify --abs-push; this is the rest.
@@ -1795,11 +1795,12 @@ public sealed class FileProcessor
     /// </remarks>
     /// <param name="ctx">The file's context.</param>
     /// <param name="verify">The verification result carrying the corrections.</param>
+    /// <param name="watch">The file's running stopwatch.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Always null: the file is finished here, and the caller's detection path must not
     /// run for it.</returns>
     private async Task<(DetectionResult Result, DroppedMarks Dropped, string Note)?> ApplyMarkFixesAsync(
-        FileContext ctx, VerifyResult verify, CancellationToken ct)
+        FileContext ctx, VerifyResult verify, Stopwatch watch, CancellationToken ct)
     {
         var corrections = verify.Outcomes
             .Where(m => m.CorrectedStartSeconds != null)
@@ -1814,7 +1815,7 @@ public sealed class FileProcessor
         var what = $"{corrections.Count} of {verify.Checked} verified mark(s) nudged onto their " +
                    $"announcements (largest correction {largest:0.##} s)";
 
-        _processed++;
+        RecordProcessed(watch);
         if (_options.DryRun)
         {
             _progress.FinishWithSummary(ctx.Work,

@@ -48,8 +48,8 @@ internal static class ExistingMarkTitle
     /// <see cref="ABChapterize.Cli.CliOptions.ResolveProfile"/>: a fallback language is only ever
     /// consulted when its own chapter word literally appears in the title, which is what keeps the
     /// net from catching prose. Without that, an explicit <c>--chapter-phrase</c> would hand the same
-    /// anchor to all eleven number grammars at once, and an English "Chapter to the End" would come
-    /// back as chapter 2 because Danish "to" means two.
+    /// anchor to every registered number grammar at once, and an English "Chapter to the End" would
+    /// come back as chapter 2 because Danish "to" means two.
     /// </summary>
     private static readonly LanguageProfile[] Registered =
     [
