@@ -81,6 +81,8 @@ public sealed class DutchNumberParser : INumberWordParser
     }
 
     /// <summary>Parses a single cardinal compound word ("drieenveertig", "honderdvijf").</summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseCardinal(string s, out int number)
     {
         if (Simple.TryGetValue(s, out number))
@@ -134,6 +136,8 @@ public sealed class DutchNumberParser : INumberWordParser
     /// undoing the irregular stems (eerste-, derde-) and stripping the regular -ste/-de
     /// suffix back to the cardinal, which is then parsed normally.
     /// </summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseOrdinal(string s, out int number)
     {
         number = 0;
@@ -156,6 +160,7 @@ public sealed class DutchNumberParser : INumberWordParser
     }
 
     /// <summary>Lowercases and strips the diacritics Dutch numbers can contain (ë, é).</summary>
+    /// <param name="token">The word as Whisper transcribed it.</param>
     private static string Normalize(string token) =>
         token.ToLowerInvariant().Replace('ë', 'e').Replace('é', 'e');
 
@@ -164,6 +169,7 @@ public sealed class DutchNumberParser : INumberWordParser
     /// "&lt;unit&gt;en&lt;tens&gt;" compound, so its leading "een" must not be eaten
     /// as a connector (e.g. "honderdeenentwintig" = 121, not 100 + "entwintig").
     /// </summary>
+    /// <param name="s">The normalized word to test.</param>
     private static bool StartsWithCompoundUnit(string s)
     {
         foreach (var (word, _) in UnitsForCompound)

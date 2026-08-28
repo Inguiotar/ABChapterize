@@ -65,6 +65,7 @@ internal static class JingleGeometry
     /// </para>
     /// Internal for unit testing.
     /// </summary>
+    /// <param name="speech">The VAD pre-pass's speech segments, in chronological order.</param>
     internal static List<NonSpeechRegion> ComputeNonSpeechRegions(List<SpeechSegment> speech)
     {
         var merged = new List<NonSpeechRegion>();

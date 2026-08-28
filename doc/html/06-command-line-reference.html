@@ -132,7 +132,7 @@ you asked the tool to process is ever read.</p>
 phrases and titles, <code>--custom</code>, <code>--lang</code>, <code>--mark-lead</code>, <code>--quick-marks</code>,
 <code>--mark-before-jingle</code>, <code>--min-silence-length</code>, <code>--noise-floor</code>,
 <code>--early-abort</code>, <code>--expected-start-chapter</code>, <code>--chapter-count</code>,
-<code>--max-chapter-number</code>, <code>--jingle-first</code>, <code>--no-denoise</code> and
+<code>--max-chapter-number</code>, <code>--named-mark-distance</code>, <code>--jingle-first</code>, <code>--no-denoise</code> and
 <code>--no-trailing-scan</code> are all fair game. Anything belonging to the run as a
 whole is not — the models, the thread and GPU options, <code>--recurse</code> and
 <code>--filter</code>, the output and logging options, the mode options, <code>--force</code>,
@@ -309,13 +309,13 @@ rather than ending the run.</li>
 or <code>--verify</code> says otherwise — the same rule local files follow, only applied one
 step earlier, so a library that is already marked is not downloaded in full just to
 be passed over book by book. (<code>--max-chapters</code> and <code>--verify</code> both need the audio in
-hand to decide, so a book either of them has an opinion about <em>is</em> fetched.)
-Formats are <em>not</em> a reason to skip a book here. The
+hand to decide, so a book either of them has an opinion about <em>is</em> fetched.)</li>
+</ul>
+<p>Formats are <em>not</em> a reason to skip a book here. The
 <a href="02-supported-file-formats.html#2-supported-file-formats">table in section 2</a> governs writing marks into a
 file, and this mode does not: any format ffmpeg can decode is fetched and
 processed, <code>.flac</code> and <code>.ogg</code> included. A file ffmpeg cannot read at all fails
-that one book with ffprobe's own complaint, and the run carries on.</li>
-</ul>
+that one book with ffprobe's own complaint, and the run carries on.</p>
 <h3 id="which-marks-a-book-already-has">Which marks a book &quot;already has&quot;<a class="anchor" href="#which-marks-a-book-already-has" aria-label="Permalink to this heading">#</a></h3>
 <p>A book can have two chapter lists that disagree: the one Audiobookshelf keeps in
 its database, and whatever is embedded in the audio file it sends. <strong>The server's
@@ -479,7 +479,9 @@ Ctrl+C or a failure.</p>
 separately, so a server and key exported once still let a single command name a
 different account. <strong>Prefer this to typing a key or a password on the command
 line</strong>, where it is visible to anything that can list processes; a
-<a href="#options-from-a-file"><code>--config</code> file</a> does the same job.</p>
+<a href="#options-from-a-file"><code>--config</code> file</a> does the same job. Logs are not a way for one to
+escape either: the command line a <code>--log-file</code> or a <code>.debug.log</code> records at the top has the
+value of <code>--abs-key</code> and <code>--abs-password</code> replaced with <code>***</code>.</p>
 <p><code>--abs-retry &lt;minutes&gt;</code>
 : How long to keep trying a server that is not answering, in minutes — 3 by
 default, 0 to give up at the first failure. It covers <em>every</em> exchange with
@@ -1834,7 +1836,7 @@ message suggesting <code>--export</code>. Because there is nothing to detect,
 <code>--import</code> cannot be combined with any detection option — <code>--lang</code>,
 <code>--chapter-phrase</code>, <code>--prologue-phrase</code>, <code>--epilogue-phrase</code>, <code>--custom</code>,
 <code>--custom-file</code>, <code>--ignore-chapter-numbers</code>, <code>--model</code>, <code>--upgrade-model</code>,
-<code>--mark-before-jingle</code>, <code>--quick-marks</code>, <code>--mark-lead</code>,
+<code>--mark-before-jingle</code>, <code>--jingle-first</code>, <code>--quick-marks</code>, <code>--mark-lead</code>,
 <code>--min-silence-length</code>, <code>--noise-floor</code>,
 <code>--early-abort</code>, <code>--expected-start-chapter</code>, <code>--max-chapter-number</code>,
 <code>--chapter-count</code>, <code>--no-trailing-scan</code>, <code>--no-denoise</code>, <code>--verify</code>,
@@ -1925,7 +1927,7 @@ the same budget — the two never run at the same time, so there is nothing to
 divide between them.</p>
 <p>Both counts are recorded in the <code>--verbose</code> log at the start of a run, together
 with what the machine actually has:</p>
-<pre><code>[14:32:07] threads: Whisper 12, voice-activity pre-Analyze2 (cores: 12 physical, 24 logical)
+<pre><code>[14:32:07] threads: Whisper 12, voice-activity pre-pass 12 (cores: 12 physical, 24 logical)
 </code></pre>
 <h2 id="tuning-constants">Tuning constants<a class="anchor" href="#tuning-constants" aria-label="Permalink to this heading">#</a></h2>
 <p><code>--set:&lt;class&gt;.&lt;constant&gt;=&lt;value&gt;</code> (repeatable)</p>

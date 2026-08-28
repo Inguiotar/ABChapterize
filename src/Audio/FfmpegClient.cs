@@ -658,6 +658,7 @@ public sealed partial class FfmpegClient : IAudioSource
 
     /// <summary>Escapes the characters '=', ';', '#', '\' and newline for FFMETADATA files.
     /// Internal for unit testing.</summary>
+    /// <param name="s">The text to escape, e.g. a chapter title.</param>
     internal static string EscapeMeta(string s)
     {
         var sb = new StringBuilder(s.Length);
@@ -673,6 +674,7 @@ public sealed partial class FfmpegClient : IAudioSource
 
     /// <summary>Reverses <see cref="EscapeMeta"/>: strips the backslash before an escaped
     /// '=', ';', '#', '\' or newline. Internal for unit testing.</summary>
+    /// <param name="s">The escaped text, as read out of an FFMETADATA file.</param>
     internal static string UnescapeMeta(string s)
     {
         var sb = new StringBuilder(s.Length);
@@ -702,9 +704,10 @@ public sealed partial class FfmpegClient : IAudioSource
     /// code page tried, because InvariantGlobalization leaves .NET unable to build a legacy code page
     /// and its fallback is UTF-8 - but that makes the behaviour
     /// hostage to a csproj switch it has nothing to do with, so it is stated here instead. Harmless
-    /// <include file='../../notes/Audio/FfmpegClient.xml' path='doc/member[@name="StartProcess"]/*' />
     /// for the two callers that want bytes: DecodePcmAsync and DetectSilencesAndStreamPcmAsync read
     /// StandardOutput.BaseStream, which never goes near the decoder.
+    /// <para>Notes: what an unpinned read actually does under every console code page tried.
+    /// <include file='../../notes/Audio/FfmpegClient.xml' path='doc/member[@name="StartProcess"]/*' /></para>
     /// </remarks>
     /// <param name="exe">Executable to start.</param>
     /// <param name="args">Arguments, passed through ArgumentList so the OS quotes them.</param>
@@ -765,6 +768,7 @@ public sealed partial class FfmpegClient : IAudioSource
     }
 
     /// <summary>Kills a process, ignoring races with normal termination.</summary>
+    /// <param name="proc">The child process to stop.</param>
     private static void TryKill(Process proc)
     {
         try
@@ -786,6 +790,7 @@ public sealed partial class FfmpegClient : IAudioSource
     }
 
     /// <summary>Deletes a file if it exists, ignoring any error.</summary>
+    /// <param name="path">The file to remove.</param>
     private static void TryDelete(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }

@@ -133,6 +133,8 @@ public sealed class ItalianNumberParser : INumberWordParser
     }
 
     /// <summary>Parses a single cardinal compound word ("trecentoventidue", "centottanta").</summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseCardinal(string s, out int number)
     {
         if (TrySub100(s, out number))
@@ -177,6 +179,8 @@ public sealed class ItalianNumberParser : INumberWordParser
     /// by stripping the suffix and restoring the final vowel the formation elides, then
     /// parsing the resulting cardinal normally.
     /// </summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseRegularOrdinal(string s, out int number)
     {
         number = 0;

@@ -1065,7 +1065,7 @@ you asked the tool to process is ever read.
 phrases and titles, `--custom`, `--lang`, `--mark-lead`, `--quick-marks`,
 `--mark-before-jingle`, `--min-silence-length`, `--noise-floor`,
 `--early-abort`, `--expected-start-chapter`, `--chapter-count`,
-`--max-chapter-number`, `--jingle-first`, `--no-denoise` and
+`--max-chapter-number`, `--named-mark-distance`, `--jingle-first`, `--no-denoise` and
 `--no-trailing-scan` are all fair game. Anything belonging to the run as a
 whole is not — the models, the thread and GPU options, `--recurse` and
 `--filter`, the output and logging options, the mode options, `--force`,
@@ -1218,6 +1218,7 @@ for "and everything below this".
   step earlier, so a library that is already marked is not downloaded in full just to
   be passed over book by book. (`--max-chapters` and `--verify` both need the audio in
   hand to decide, so a book either of them has an opinion about *is* fetched.)
+
 Formats are *not* a reason to skip a book here. The
 [table in section 2](#2-supported-file-formats) governs writing marks into a
 file, and this mode does not: any format ffmpeg can decode is fetched and
@@ -1423,7 +1424,9 @@ All five can be given in the environment instead:
 separately, so a server and key exported once still let a single command name a
 different account. **Prefer this to typing a key or a password on the command
 line**, where it is visible to anything that can list processes; a
-[`--config` file](#options-from-a-file) does the same job.
+[`--config` file](#options-from-a-file) does the same job. Logs are not a way for one to
+escape either: the command line a `--log-file` or a `.debug.log` records at the top has the
+value of `--abs-key` and `--abs-password` replaced with `***`.
 
 `--abs-retry <minutes>`
 : How long to keep trying a server that is not answering, in minutes — 3 by
@@ -2900,7 +2903,7 @@ touching Whisper at all.
   `--import` cannot be combined with any detection option — `--lang`,
   `--chapter-phrase`, `--prologue-phrase`, `--epilogue-phrase`, `--custom`,
   `--custom-file`, `--ignore-chapter-numbers`, `--model`, `--upgrade-model`,
-  `--mark-before-jingle`, `--quick-marks`, `--mark-lead`,
+  `--mark-before-jingle`, `--jingle-first`, `--quick-marks`, `--mark-lead`,
   `--min-silence-length`, `--noise-floor`,
   `--early-abort`, `--expected-start-chapter`, `--max-chapter-number`,
   `--chapter-count`, `--no-trailing-scan`, `--no-denoise`, `--verify`,
@@ -3012,7 +3015,7 @@ Both counts are recorded in the `--verbose` log at the start of a run, together
 with what the machine actually has:
 
 ```
-[14:32:07] threads: Whisper 12, voice-activity pre-Analyze2 (cores: 12 physical, 24 logical)
+[14:32:07] threads: Whisper 12, voice-activity pre-pass 12 (cores: 12 physical, 24 logical)
 ```
 
 ### Tuning constants
@@ -3827,7 +3830,7 @@ always shown, even with `--quiet`, and never abort the rest of a batch run.
 | Code | Meaning |
 | --- | --- |
 | 0 | Success. Files skipped or finished with warnings still count as success. |
-| 1 | Fatal error — a file could not be processed (the run stops), or a `--cleanup` finished with failed steps. |
+| 1 | Fatal error — a file could not be processed (the run stops), or a `--revert` or `--cleanup` finished with failed steps. |
 | 2 | Command line usage error. |
 | 130 | Aborted with Ctrl+C. |
 

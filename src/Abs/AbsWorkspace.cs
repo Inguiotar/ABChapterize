@@ -51,7 +51,7 @@ public sealed class AbsWorkspace : IDisposable
 
     /// <summary>Environment variable naming the download folder, read when <c>--abs-temp</c> is
     /// absent. It lives here rather than beside the connection variables because what it settles is
-    /// this class own business - where a book lands - and not who the server is.</summary>
+    /// this class's own business - where a book lands - and not who the server is.</summary>
     public const string TempVariable = "ABCHAPTERIZE_ABS_TEMP";
 
     /// <summary>

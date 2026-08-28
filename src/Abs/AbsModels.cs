@@ -218,21 +218,6 @@ internal static class AbsWire
         public List<Item>? Books { get; set; }
     }
 
-    /// <summary>Response of <c>GET /api/libraries/{id}/search</c>.</summary>
-    internal sealed class SearchResult
-    {
-        /// <summary>The book hits; the response also carries author, series and tag hits, which
-        /// ABS mode has no use for.</summary>
-        public List<SearchHit> Book { get; set; } = [];
-    }
-
-    /// <summary>One search hit, which wraps the item rather than being one.</summary>
-    internal sealed class SearchHit
-    {
-        /// <summary>The item that matched.</summary>
-        public Item? LibraryItem { get; set; }
-    }
-
     /// <summary>Response of <c>POST /login</c> and of <c>POST /api/authorize</c>, which agree on
     /// the part this tool reads.</summary>
     internal sealed class Session

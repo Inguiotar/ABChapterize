@@ -209,6 +209,7 @@ public sealed class PortugueseNumberParser : INumberWordParser
 
     /// <summary>Lowercases and strips the accents the ordinal tables are keyed without
     /// ("sétimo" and "setimo" are one entry).</summary>
+    /// <param name="token">The word as Whisper transcribed it.</param>
     private static string Normalize(string token) => token.ToLowerInvariant()
         .Replace('á', 'a').Replace('â', 'a').Replace('ã', 'a').Replace('é', 'e')
         .Replace('ê', 'e').Replace('í', 'i').Replace('ó', 'o').Replace('ô', 'o')

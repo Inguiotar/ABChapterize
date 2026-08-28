@@ -167,6 +167,7 @@ public sealed class TurkishNumberParser : INumberWordParser
     }
 
     /// <summary>Tells whether a normalized word is a known cardinal building block.</summary>
+    /// <param name="word">The normalized word to test.</param>
     private static bool IsCardinalWord(string word) =>
         word == "yuz" || Units.ContainsKey(word) || Tens.ContainsKey(word);
 
@@ -176,6 +177,7 @@ public sealed class TurkishNumberParser : INumberWordParser
     /// A dotted capital I (U+0130) is mapped to plain i, whether lowercasing left it
     /// unchanged or turned it into "i" plus a combining dot above (U+0307).
     /// </summary>
+    /// <param name="token">The word as Whisper transcribed it.</param>
     private static string Normalize(string token) => token.ToLowerInvariant()
         .Replace('İ', 'i')
         .Replace("̇", "")

@@ -189,6 +189,8 @@ public sealed class PolishNumberParser : INumberWordParser
     }
 
     /// <summary>Finalizes a successful parse, rejecting out-of-range totals.</summary>
+    /// <param name="total">The value accumulated so far.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool Finish(int total, out int number)
     {
         number = total;
@@ -196,6 +198,7 @@ public sealed class PolishNumberParser : INumberWordParser
     }
 
     /// <summary>Lowercases and strips the Polish diacritics (ą, ć, ę, ł, ń, ó, ś, ź, ż).</summary>
+    /// <param name="token">The word as Whisper transcribed it.</param>
     private static string Normalize(string token) => token.ToLowerInvariant()
         .Replace('ą', 'a').Replace('ć', 'c').Replace('ę', 'e').Replace('ł', 'l')
         .Replace('ń', 'n').Replace('ó', 'o').Replace('ś', 's').Replace('ź', 'z').Replace('ż', 'z');

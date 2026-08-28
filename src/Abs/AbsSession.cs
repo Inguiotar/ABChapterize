@@ -460,7 +460,7 @@ public sealed class AbsSession : IDisposable
     /// <para>
     /// <see cref="HttpCompletionOption.ResponseHeadersRead"/> is what takes the body out of
     /// <see cref="RequestTimeout"/>: an audiobook is a gigabyte and a fixed deadline over the whole
-    /// transfer would be a guess about the user network. What bounds a stalled download instead is
+    /// transfer would be a guess about the user's network. What bounds a stalled download instead is
     /// Ctrl+C, which every other long step of a run is bounded by too.
     /// </para>
     /// <para>
@@ -579,7 +579,7 @@ public sealed class AbsSession : IDisposable
         if (response.IsSuccessStatusCode)
             return;
 
-        // The body is Audiobookshelf own explanation ("Bad Request", "Invalid chapters") and is
+        // The body is Audiobookshelf's own explanation ("Bad Request", "Invalid chapters") and is
         // usually the only thing that says which part of the request it disliked. Truncated because
         // an error page from a reverse proxy in front of the server is HTML and would fill the
         // console with markup.

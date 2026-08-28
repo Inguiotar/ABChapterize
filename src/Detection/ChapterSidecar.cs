@@ -160,5 +160,6 @@ public static partial class ChapterSidecar
     /// (millisecond precision, matching FFMETADATA's own timebase, for lossless round-trips).
     /// Hours are cumulative - see <see cref="TimeFormat"/> - which is what keeps the round trip
     /// lossless past the 24-hour mark; <see cref="ParseSimple"/> has always read them that way.</summary>
+    /// <param name="seconds">Position in the file.</param>
     private static string FormatTimestamp(double seconds) => TimeFormat.Hms(seconds, 3);
 }

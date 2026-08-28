@@ -187,6 +187,8 @@ public sealed class DanishNumberParser : INumberWordParser
     }
 
     /// <summary>Parses a single word as a cardinal or ordinal value 0-99.</summary>
+    /// <param name="token">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseSub100(string token, out int number)
     {
         var s = Normalize(token);
@@ -235,6 +237,7 @@ public sealed class DanishNumberParser : INumberWordParser
     }
 
     /// <summary>Lowercases and strips the Danish diacritics (æ, ø, å) - only "første" needs it.</summary>
+    /// <param name="token">The word as Whisper transcribed it.</param>
     private static string Normalize(string token) => token.ToLowerInvariant()
         .Replace('æ', 'a').Replace('ø', 'o').Replace('å', 'a');
 }

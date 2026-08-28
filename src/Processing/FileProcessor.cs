@@ -522,7 +522,7 @@ public sealed class FileProcessor
         try
         {
             // A different --upgrade-model gets one lazily-loaded instance for the whole run (see
-            // UpgradeTranscriber). Only gap work (Re-probe and 3) uses it, so a book that never opens
+            // UpgradeTranscriber). Only gap work (Re-probe and Scan) uses it, so a book that never opens
             // a gap never pays for the second model at all. The same model as --model means no
             // separate instance either way - gap work reuses the run's own transcriber.
             upgrade = _options.UpgradeModel != _options.Model

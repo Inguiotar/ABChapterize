@@ -114,6 +114,8 @@ public sealed class SwedishNumberParser : INumberWordParser
     }
 
     /// <summary>Parses a single cardinal compound word ("tjugoett", "hundratjugotre").</summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseCardinal(string s, out int number)
     {
         if (Simple.TryGetValue(s, out number))
@@ -165,6 +167,8 @@ public sealed class SwedishNumberParser : INumberWordParser
     /// prefix or tens prefix and parsing the remainder as an ordinal, since only the last
     /// part of a compound number is ever ordinal-marked.
     /// </summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseOrdinal(string s, out int number)
     {
         number = 0;
@@ -216,6 +220,7 @@ public sealed class SwedishNumberParser : INumberWordParser
     }
 
     /// <summary>Lowercases and strips the Swedish diacritics (å, ä, ö).</summary>
+    /// <param name="token">The word as Whisper transcribed it.</param>
     private static string Normalize(string token) => token.ToLowerInvariant()
         .Replace('å', 'a').Replace('ä', 'a').Replace('ö', 'o');
 }

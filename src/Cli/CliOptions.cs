@@ -1384,6 +1384,7 @@ public sealed class CliOptions
     public static string? BuildTimestamp => GetAssemblyMetadata("BuildTimestamp");
 
     /// <summary>Reads a value written into the assembly via [AssemblyMetadata(key, value)].</summary>
+    /// <param name="key">The metadata key to read.</param>
     private static string? GetAssemblyMetadata(string key) => typeof(CliOptions).Assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>()
         .FirstOrDefault(a => a.Key == key)?.Value;
@@ -2314,6 +2315,7 @@ public sealed class CliOptions
 
     /// <summary>Parses the --early-abort parameter into 0 (disables the feature) or a number of
     /// minutes between 0 and 1440 (24 hours).</summary>
+    /// <param name="value">The raw parameter.</param>
     private static double ParseEarlyAbort(string value)
     {
         if (!NumberCulture.TryParseDecimal(value, out var n) || n < 0 || n > 1440)
@@ -2336,6 +2338,7 @@ public sealed class CliOptions
     /// <summary>Parses the --max-chapter-number parameter into a chapter number of 1 or higher.
     /// Zero is rejected rather than treated as "disabled": a cap of 0 would discard every chapter
     /// there is, which is never what anyone means.</summary>
+    /// <param name="value">The raw parameter.</param>
     private static int ParseMaxChapterNumber(string value)
     {
         if (!int.TryParse(value, out var n) || n < 1)
@@ -2357,6 +2360,7 @@ public sealed class CliOptions
     }
 
     /// <summary>Parses the --expected-start-chapter parameter into a chapter number of 1 or higher.</summary>
+    /// <param name="value">The raw parameter.</param>
     private static int ParseExpectedStartChapter(string value)
     {
         if (!int.TryParse(value, out var n) || n < 1)
@@ -2367,6 +2371,7 @@ public sealed class CliOptions
     /// <summary>Parses the --chapter-count parameter into a count of 1 or higher. Zero is rejected
     /// rather than read as "no chapters at all": a book with none is one this tool has nothing to
     /// do to, and the value would only ever be a typo for a real count.</summary>
+    /// <param name="value">The raw parameter.</param>
     private static int ParseChapterCount(string value)
     {
         if (!int.TryParse(value, out var n) || n < 1)
@@ -2830,7 +2835,9 @@ public sealed class CliOptions
                                     play time, unless one of your own --custom mappings may
                                     be announced between two chapters - which is the one
                                     thing it would stop looking for. Give this option to use
-                                    it anyway, on a file that qualifies for neither reason.
+                                    it anyway, on a file that qualifies for neither reason. Cannot
+                                    be combined with --ignore-chapter-numbers, which leaves no
+                                    chapter sequence for the second half to be scoped by.
                                     --verbose says which shape a file ran under.
           -k, --mark-lead <seconds> How far before the announcement a mark is placed (default
                                     0.35). Purely a matter of taste: marks are located to the
@@ -3102,12 +3109,12 @@ public sealed class CliOptions
                                     Detect chapter announcements as usual, but form no opinion about
                                     the numbers in them. Every announcement heard becomes a mark
                                     where it is heard, keeping whatever number was spoken in its
-                                    title, and no sequence gap is ever found or filled: passes 2.5
-                                    and 3 never run and no file is tagged ".missing-marks". For
+                                    title, and no sequence gap is ever found or filled: Re-probe and
+                                    Scan never run and no file is tagged ".missing-marks". For
                                     books that restart their count per part, or number nothing at
                                     all. Cannot be combined with --upgrade-model,
                                     --expected-start-chapter, --max-chapter-number,
-                                    --chapter-count or --verify.
+                                    --chapter-count, --verify or --jingle-first.
           -V, --verify              Check pre-existing chapter marks against the audio
                                     instead of trusting them blindly: a short window around
                                     each mark is probed for the chapter phrase and the

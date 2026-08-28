@@ -107,7 +107,8 @@ public static class Program
     /// written to disk (the sidecar, the ffmetadata and the logs all name their own UTF-8), which
     /// is why the damage stayed invisible for so long: the marks were right and only the report
     /// of them was wrong. Nothing this tool draws is at risk either - the progress bar is
-    /// <c>#</c>, <c>-</c> and <c>X</c> - so there is no legacy-console rendering to trade away.
+    /// <c>#</c>, <c>-</c>, <c>~</c> and <c>X</c> - so there is no legacy-console rendering to trade
+    /// away.
     /// </para>
     /// <para>
     /// First statement of the run, ahead of <c>--version</c> and the usage text, because a

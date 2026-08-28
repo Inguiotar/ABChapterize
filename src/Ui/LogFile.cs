@@ -53,7 +53,10 @@ public sealed class LogFile : IDisposable
             // contradicts the current sources cannot be told from one that merely predates a fix.
             var build = CliOptions.BuildNumber is { } n ? $" (build {n})" : "";
             log.WriteRaw($"=== abchapterize {CliOptions.Version}{build} run started {Timestamp()} ===");
-            log.WriteRaw($"=== {Environment.CommandLine} ===");
+            // Redacted, because this line is the one place a key or a password typed on the command
+            // line would reach a file meant to be kept - and, for a --debug log, attached to a bug
+            // report. See CommandLineRedaction.
+            log.WriteRaw($"=== {CommandLineRedaction.Redact(Environment.CommandLine)} ===");
             return log;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException

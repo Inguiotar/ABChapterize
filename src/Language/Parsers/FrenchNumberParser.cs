@@ -178,6 +178,7 @@ public sealed class FrenchNumberParser : INumberWordParser
     }
 
     /// <summary>Tells whether a word part is a known cardinal building block.</summary>
+    /// <param name="part">One hyphen-separated piece of the word.</param>
     private static bool IsCardinalPart(string part) =>
         part is "vingt" or "cent" || Values.ContainsKey(part);
 }

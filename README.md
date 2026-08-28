@@ -571,6 +571,7 @@ use `.`, whatever the machine's locale says.
    sound, and `--chapter-count` replaces it with a search that knows what it is
    looking for. Skipped when no chapter was found at all, and after an
    `--early-abort` or `--expected-start-chapter` abort.
+
 `--custom "phrase:Title;..."` adds marks for anything else a book announces —
 an interlude, a timeline, a cast list. Such a phrase may be a `/regexp/` whose
 capturing groups the title writes out (`${name}`, `${number}`), and is matched

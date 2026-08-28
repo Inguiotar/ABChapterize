@@ -46,7 +46,7 @@ public sealed record AbsBook(
     /// Whether this book is one ABS mode can work on at all: exactly one audio file.
     /// </summary>
     /// <remarks>
-    /// A split book is refused rather than handled. Audiobookshelf chapter list addresses the
+    /// A split book is refused rather than handled. Audiobookshelf's chapter list addresses the
     /// concatenated timeline of the whole item, which no single-file run can see; detecting each
     /// part separately would restart the chapter-number sequence at every file boundary, and the
     /// sequence is what almost every safeguard in <c>src\Detection\</c> reasons in. Joining a split
@@ -130,7 +130,7 @@ public sealed record AbsBook(
 /// <param name="FileName">The file name on the server, reused for the local temporary copy so that
 /// every log line and summary names something recognizable.</param>
 /// <param name="SizeBytes">Size in bytes, which is the download progress bar total.</param>
-/// <param name="Chapters">The chapter list from Audiobookshelf own database, in start order and
+/// <param name="Chapters">The chapter list from Audiobookshelf's own database, in start order and
 /// possibly empty. Held as ordinary <see cref="Chapter"/> values, without their ends, because an
 /// end is always the next start and the tool has exactly one chapter type for that reason.</param>
 public sealed record AbsBookFile(

@@ -23,7 +23,7 @@ earn a round number.
   read — and reaches 100 % when the gaps are done, though its bar stops well short of the file's
   end. The fill still says where in the book the reading head is; the percentage now says how much
   of the work is done. Marked with `#` against `-` rather than by colour alone, so it reads the
-  same under `--no-color` or in a screenshot.
+  same under `--color never` or in a screenshot.
 
 - **`--max-chapters` now also applies to what Audiobookshelf holds.** A chapter set left with a
   gap is normally kept back when the server's list for that book is at least as long, on the
@@ -220,6 +220,13 @@ earn a round number.
   reading stopped.
 
 ### Fixed
+
+- **An Audiobookshelf key or password typed on the command line no longer ends up in the log.**
+  Every log a run opens records the command that produced it, and it recorded it exactly as
+  typed — so an `--abs-key` or `--abs-password` given there went into the `--log-file` and into
+  every `.debug.log`, which is the file you are asked to attach to a bug report. Both values are
+  now replaced with `***`; everything else about the line is unchanged. A key kept in the
+  environment or in a `--config` file was never affected, and still is not.
 
 - **A chapter number the run could not corroborate no longer takes the rest of the book with
   it.** Such a number kept its mark and became the count everything after it was measured

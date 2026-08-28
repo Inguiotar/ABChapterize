@@ -11,7 +11,7 @@ namespace ABChapterize.Transcription;
 /// <summary>
 /// The run's Scan Whisper model, loaded (and downloaded) on the first gap that actually needs it
 /// and never before. Used only when <c>--upgrade-model</c> selects a model other than <c>--model</c>:
-/// Probe keeps the run's own transcriber, while gap work (Re-probe and 3) routes through this one,
+/// Probe keeps the run's own transcriber, while gap work (Re-probe and Scan) routes through this one,
 /// so a heavier - or lighter - model can take the last shot at the missing chapters.
 /// <para>
 /// Lazy because that is the whole economy of the feature: most books never open a chapter-sequence

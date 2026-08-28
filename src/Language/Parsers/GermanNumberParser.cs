@@ -82,6 +82,8 @@ public sealed class GermanNumberParser : INumberWordParser
     }
 
     /// <summary>Parses a single cardinal compound word ("dreiundvierzig", "zweihundertfünf").</summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseCardinal(string s, out int number)
     {
         if (Simple.TryGetValue(s, out number))
@@ -135,6 +137,8 @@ public sealed class GermanNumberParser : INumberWordParser
     /// stems (erst-, dritt-, siebt-) and reducing the regular -t/-st suffix back to the
     /// cardinal, which is then parsed normally.
     /// </summary>
+    /// <param name="s">The normalized word to read.</param>
+    /// <param name="number">The value read, when this returns true.</param>
     private static bool TryParseOrdinal(string s, out int number)
     {
         number = 0;

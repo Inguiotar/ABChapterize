@@ -265,6 +265,7 @@ public sealed class SpanishNumberParser : INumberWordParser
 
     /// <summary>Lowercases and strips the acute accents the ordinal tables are keyed without,
     /// so that "vigésimo" and the accentless "vigesimo" of the fused forms share one entry.</summary>
+    /// <param name="token">The word as Whisper transcribed it.</param>
     private static string Normalize(string token) => token.ToLowerInvariant()
         .Replace('á', 'a').Replace('é', 'e').Replace('í', 'i').Replace('ó', 'o').Replace('ú', 'u');
 }

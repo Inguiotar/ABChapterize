@@ -783,7 +783,7 @@ public sealed class ProgressRenderer : IDisposable
     /// Where a phase marks out stretches, only cells inside one of them are ever drawn as done -
     /// the audio between two gaps is not work this phase did, it is audio it skipped, and filling
     /// it in claimed otherwise. The distinction is carried by the character and not only by the
-    /// color, so it survives a terminal with no color, <c>--no-color</c>, and a log or screenshot
+    /// color, so it survives a terminal with no color, <c>--color never</c>, and a log or screenshot
     /// where the color is gone: "[##----####---##--]" reads the same in black and white.
     /// </para>
     /// <para>

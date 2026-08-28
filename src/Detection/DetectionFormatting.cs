@@ -14,11 +14,13 @@ internal static class DetectionFormatting
 {
     /// <summary>Trailing note for a detection log line listing the chapter numbers still missing
     /// below the highest found; empty when the sequence so far is complete.</summary>
+    /// <param name="missing">The chapter numbers still missing below the highest found.</param>
     internal static string MissingNote(List<int> missing)
         => missing.Count > 0 ? $" - still missing: {string.Join(", ", missing)}" : "";
 
     /// <summary>Trailing note appended to a --verbose detection log line when the segment
     /// confidence is below <see cref="DetectionTuning.LowConfidenceThreshold"/>.</summary>
+    /// <param name="confidence">Whisper's probability for the segment the number was read from.</param>
     internal static string LowConfidenceNote(double confidence)
         => confidence < LowConfidenceThreshold ? " - LOW CONFIDENCE, worth a manual check" : "";
 

@@ -198,10 +198,7 @@ public sealed class DebugLog : IDisposable
         // AbsConnection.Describe is written not to render. An ABS run probes a temporary copy in a
         // folder named after a guid, so without this the log does not say what book it is about.
         if (o.AbsServer is { } server)
-            yield return $"audiobookshelf {server.Describe}"
-                         + (o.AbsPushOnly ? ", abs-push-only"
-                            : o.Abs ? ", ABS mode"
-                            : o.AbsPush ? ", abs-push" : "");
+            yield return $"audiobookshelf {server.Describe}, {DescribeAbsModes(o)}";
         if (o.RunBefore is { } before)
             yield return $"run-before {before.Raw}";
         if (o.RunAfter is { } after)
@@ -212,5 +209,35 @@ public sealed class DebugLog : IDisposable
         // other numbers explains nothing until you know which.
         foreach (var change in o.TuningChanges)
             yield return $"set {change}";
+    }
+
+    /// <summary>
+    /// Which of the Audiobookshelf modes this run is in, for the header line above.
+    /// </summary>
+    /// <param name="o">The run's validated options.</param>
+    /// <remarks>
+    /// A list rather than a chain of alternatives, because <c>--abs-pull</c> and <c>--abs-push</c>
+    /// are the one pair that combine and a chain reports such a run as whichever of the two it
+    /// tested first. Every mode is named for the same reason the server is: a debug log arrives
+    /// detached from the command that produced it, and which direction the marks were travelling
+    /// is not something the rest of the file says.
+    /// </remarks>
+    private static string DescribeAbsModes(CliOptions o)
+    {
+        var modes = new List<string>();
+        if (o.Abs)
+            modes.Add("ABS mode");
+        if (o.AbsPushOnly)
+            modes.Add("abs-push-only");
+        if (o.AbsPullOnly)
+            modes.Add("abs-pull-only");
+        if (o.AbsPull)
+            modes.Add("abs-pull");
+        if (o.AbsPush)
+            modes.Add("abs-push");
+        // Never empty in practice - a server is only resolved once a mode asked for one (see
+        // CliOptions.Parse) - but a header that silently said nothing would be the one thing this
+        // line exists to prevent.
+        return modes.Count > 0 ? string.Join(" ", modes) : "no mode";
     }
 }
