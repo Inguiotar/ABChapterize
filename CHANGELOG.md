@@ -190,6 +190,22 @@ earn a round number.
 
 ### Changed
 
+- **A file whose name matches several Audiobookshelf books is now settled by its play time.**
+  Matching a local file against the server has always insisted the two be the same recording,
+  to within a minute, before anything is sent or pulled. That test now also breaks a tie: where
+  a title matches more than one book — a series carrying both *Stalker* and *Stalker Strikes
+  Back*, say — the books that cannot be this recording drop out, and if one is left, it is the
+  match. Files that used to be skipped with "matches 2 books on the server" now go through.
+  Nothing is matched on weaker evidence than before: a book settled this way had to clear the
+  same test it would have faced had the name pointed at it alone. Two books that both fit are
+  still reported as ambiguous, and the note now lists only those two rather than every book
+  sharing the name.
+
+- **A file that matches several books but is none of them says so.** Where every book a name
+  matched is the wrong length — most often one part of a split book that has not been joined
+  yet — the note no longer asks which of them you meant, an answer that would only have been
+  refused a step later, and reports that the file is none of them instead.
+
 - **`--max-chapters` is now refused with `--abs-push-only` and `--abs-pull-only` instead of
   being quietly ignored.** Neither mode detects anything or judges the marks it is given: one
   sends the file's own list to the server, the other writes the server's list into the file.

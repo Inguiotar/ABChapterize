@@ -43,6 +43,14 @@ public readonly record struct AbsMatch(AbsBook? Book, string Reason);
 /// marks into one part of it.
 /// </para>
 /// <para>
+/// <b>The same test breaks a tie</b> before a crowded stage gives up, because it is the one piece
+/// of evidence here that is not a name: a clue naming several books drops the ones that cannot be
+/// this recording, and a single survivor is the match. This lowers no bar - what it accepts is a
+/// book that would have had to pass <see cref="SameRecordingSeconds"/> anyway had the clue named it
+/// alone - so it is the same rule reaching further rather than a weaker rule for a crowded field.
+/// Where several survive, or where none does, the stage still refuses.
+/// </para>
+/// <para>
 /// Pure, and separate from the run for that reason: it is given the books and the probe result and
 /// returns a verdict, which is what makes every branch of it testable without a server.
 /// </para>
@@ -69,6 +77,11 @@ public static class AbsItemMatcher
     /// <param name="localPath">Path of the local audio file.</param>
     /// <param name="info">What ffprobe found in it, for its container tags and its play time.</param>
     /// <returns>The book and how it was recognized, or no book and why not.</returns>
+    /// <remarks>
+    /// Notes: the Silber Edition 150/157 collision the play-time tie-break was written for, and the
+    /// two name rules that would also have settled it but were not taken.
+    /// <include file='../../notes/Abs/AbsItemMatcher.xml' path='doc/member[@name="Find"]/*' />
+    /// </remarks>
     public static AbsMatch Find(IReadOnlyList<AbsBook> books, string localPath, MediaInfo info)
     {
         foreach (var (clue, source) in Clues(localPath, info))
@@ -81,13 +94,64 @@ public static class AbsItemMatcher
             if (matches.Count == 1)
                 return Settle(matches[0], source, info);
             if (matches.Count > 1)
-                return new AbsMatch(null,
-                    $"the {source} \"{clue}\" matches {matches.Count} books on the server "
-                    + $"({string.Join(", ", matches.Take(3).Select(m => $"\"{m.Title}\""))}"
-                    + $"{(matches.Count > 3 ? ", ..." : "")}); use --abs with item:<id> to name one");
+            {
+                var plausible = matches.Where(b => CouldBeThisRecording(b, info)).ToList();
+                if (plausible.Count == 1)
+                    return Settle(plausible[0], source, info);
+                if (plausible.Count == 0)
+                    return NoneIsThisRecording(matches, clue, source, info);
+                return Ambiguous(plausible, clue, source);
+            }
         }
         return new AbsMatch(null, "no book on the server matches this file");
     }
+
+    /// <summary>
+    /// Reports a clue that still names more than one book after the play time has thinned the
+    /// field, naming a few of them and how to say which.
+    /// </summary>
+    /// <param name="matches">The books still in the running, at least two.</param>
+    /// <param name="clue">What the local file said it was.</param>
+    /// <param name="source">Which clue that was, in the words a skip line uses.</param>
+    /// <returns>A match holding no book and the ambiguity.</returns>
+    /// <remarks>
+    /// Only the survivors are named. A book the play time has already ruled out is not one of the
+    /// answers to "which of these did you mean", and listing it would send the reader off to name a
+    /// book that would then be refused for its length.
+    /// </remarks>
+    private static AbsMatch Ambiguous(IReadOnlyList<AbsBook> matches, string clue, string source)
+        => new(null,
+            $"the {source} \"{clue}\" matches {matches.Count} books on the server "
+            + $"({Titles(matches)}); use --abs with item:<id> to name one");
+
+    /// <summary>
+    /// Reports a clue that names several books of which none is the recording in this file.
+    /// </summary>
+    /// <param name="matches">Every book the clue named, at least two.</param>
+    /// <param name="clue">What the local file said it was.</param>
+    /// <param name="source">Which clue that was, in the words a skip line uses.</param>
+    /// <param name="info">What ffprobe found in the local file.</param>
+    /// <returns>A match holding no book and the play time that ruled all of them out.</returns>
+    /// <remarks>
+    /// Its own message rather than the ambiguity's, because the two ask different things of the
+    /// reader. "Say which one you meant" is unanswerable here - naming any of them by item id would
+    /// only reach the same refusal one step later - where "this file is none of them" points at the
+    /// real cause, most often one part of a split book that has not been joined yet.
+    /// </remarks>
+    private static AbsMatch NoneIsThisRecording(
+        IReadOnlyList<AbsBook> matches, string clue, string source, MediaInfo info)
+        => new(null,
+            $"the {source} \"{clue}\" matches {matches.Count} books on the server "
+            + $"({Titles(matches)}), and none of them runs this file's "
+            + $"{FormatMinutes(info.DurationSeconds)}, so it is not one of them - one part of a "
+            + "split book, or a different edition");
+
+    /// <summary>A few of the books by title, for a message that has to name them without running
+    /// to the width of a library.</summary>
+    /// <param name="matches">The books to name.</param>
+    private static string Titles(IReadOnlyList<AbsBook> matches)
+        => string.Join(", ", matches.Take(3).Select(m => $"\"{m.Title}\""))
+           + (matches.Count > 3 ? ", ..." : "");
 
     /// <summary>
     /// Accepts the one book a clue settled on, unless its play time says it is not this recording.
@@ -97,23 +161,14 @@ public static class AbsItemMatcher
     /// <param name="info">What ffprobe found in the local file.</param>
     /// <returns>The match, or no book and the play times that ruled it out.</returns>
     /// <remarks>
-    /// <para>
     /// The search stops here rather than trying the next clue. A refusal is not "this clue found
-    /// nothing" but "the most trustworthy clue still available named a book that is not this
-    /// audio", and carrying on to a less trustworthy one after that is guessing - which is the
-    /// thing the whole ordering exists to avoid.
-    /// </para>
-    /// <para>
-    /// A book the server reports no play time for is kept. There is then no evidence either way,
-    /// and refusing on its absence would turn a server that answers differently from the one this
-    /// was measured against into a server nothing can be pushed to at all - a failure that looks
-    /// exactly like a broken matcher.
-    /// </para>
+    /// nothing" but "the most trustworthy clue still available named a book that is not this audio",
+    /// and carrying on to a less trustworthy one after that is guessing - which is the thing the
+    /// whole ordering exists to avoid.
     /// </remarks>
     private static AbsMatch Settle(AbsBook book, string source, MediaInfo info)
     {
-        var drift = Math.Abs(book.DurationSeconds - info.DurationSeconds);
-        if (book.DurationSeconds > 0 && drift > SameRecordingSeconds)
+        if (!CouldBeThisRecording(book, info))
             return new AbsMatch(null,
                 $"\"{book.Title}\" on the server runs {FormatMinutes(book.DurationSeconds)} against "
                 + $"this file's {FormatMinutes(info.DurationSeconds)}, so they are not the same "
@@ -121,6 +176,24 @@ public static class AbsItemMatcher
 
         return new AbsMatch(book, $"matched \"{book.Title}\" by {source}");
     }
+
+    /// <summary>
+    /// Whether a book's play time allows it to be the recording in this file.
+    /// </summary>
+    /// <param name="book">The candidate book.</param>
+    /// <param name="info">What ffprobe found in the local file.</param>
+    /// <returns>True when the two agree to within <see cref="SameRecordingSeconds"/>, or when the
+    /// server reports no play time at all.</returns>
+    /// <remarks>
+    /// A book the server reports no play time for passes. There is then no evidence either way, and
+    /// refusing on its absence would turn a server that answers differently from the one this was
+    /// measured against into a server nothing can be pushed to at all - a failure that looks exactly
+    /// like a broken matcher. The same silence keeps such a book in the running when this decides
+    /// between several, which is why a tie-break can still end in a refusal.
+    /// </remarks>
+    private static bool CouldBeThisRecording(AbsBook book, MediaInfo info)
+        => book.DurationSeconds <= 0
+           || Math.Abs(book.DurationSeconds - info.DurationSeconds) <= SameRecordingSeconds;
 
     /// <summary>A play time as whole minutes, which is the resolution this comparison works at.
     /// </summary>

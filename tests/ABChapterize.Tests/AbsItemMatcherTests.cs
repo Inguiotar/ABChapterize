@@ -10,8 +10,8 @@ namespace ABChapterize.Tests;
 
 /// <summary>
 /// Tests for <see cref="AbsItemMatcher"/>: the order the four clues about a local file are tried
-/// in, the two ways the search can come back empty-handed, and the play-time test that a book named
-/// by any of them still has to pass.
+/// in, the three ways the search can come back empty-handed, and the play-time test that a book
+/// named by any of them still has to pass - which is also what breaks a tie between several.
 /// </summary>
 public sealed class AbsItemMatcherTests
 {
@@ -141,6 +141,113 @@ public sealed class AbsItemMatcherTests
         Assert.Null(match.Book);
         Assert.Contains("matches 3 books", match.Reason);
         Assert.Contains("item:", match.Reason);
+    }
+
+    /// <summary>
+    /// The collision the tie-break was written for: a Perry Rhodan file whose title tag "Stalker"
+    /// names both "Silber Edition 150: Stalker" and "Silber Edition 157: Stalker gegen Stalker".
+    /// The play time is the one clue here that is not a name, so it is what can separate them.
+    /// </summary>
+    [Fact]
+    public void SeveralBooksMatching_AreSettledByTheOneThatCouldBeThisRecording()
+    {
+        var books = new[]
+        {
+            Book("Perry Rhodan Silber Edition 150: Stalker", seconds: 48474),
+            Book("Perry Rhodan Silber Edition 157: Stalker gegen Stalker", seconds: 3282),
+        };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\Stalker.m4b", Tagged(title: "Stalker", seconds: 48474));
+
+        Assert.Equal("Perry Rhodan Silber Edition 150: Stalker", match.Book?.Title);
+        Assert.Contains("title tag", match.Reason);
+    }
+
+    /// <summary>
+    /// The tie-break adds evidence; it does not lower the bar. Two books this file's play time fits
+    /// equally well are still two books, and the user is still the one who says which.
+    /// </summary>
+    [Fact]
+    public void SeveralBooksOfTheRightLength_AreStillReportedRatherThanGuessedAt()
+    {
+        var books = new[]
+        {
+            Book("Silber Edition 150: Stalker", seconds: 48474),
+            Book("Silber Edition 157: Stalker gegen Stalker", seconds: 48474),
+        };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(title: "Stalker", seconds: 48474));
+
+        Assert.Null(match.Book);
+        Assert.Contains("matches 2 books", match.Reason);
+        Assert.Contains("item:", match.Reason);
+    }
+
+    /// <summary>
+    /// No play time is no evidence, in a tie as much as in a lone match - so a book the server says
+    /// nothing about stays in the running and the ambiguity survives. Refusing it here would let a
+    /// server that reports play times patchily settle ties by silence.
+    /// </summary>
+    [Fact]
+    public void ABookTheServerReportsNoPlayTimeFor_KeepsATieOpen()
+    {
+        var books = new[]
+        {
+            Book("Silber Edition 150: Stalker", seconds: 48474),
+            Book("Silber Edition 157: Stalker gegen Stalker", seconds: 0),
+        };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(title: "Stalker", seconds: 48474));
+
+        Assert.Null(match.Book);
+        Assert.Contains("matches 2 books", match.Reason);
+    }
+
+    /// <summary>
+    /// A book already ruled out by its length is not one of the answers to "which did you mean", so
+    /// naming it would only send the reader off to a refusal one step later.
+    /// </summary>
+    [Fact]
+    public void AnAmbiguity_NamesOnlyTheBooksThatCouldBeThisRecording()
+    {
+        var books = new[]
+        {
+            Book("Silber Edition 150: Stalker", seconds: 48474),
+            Book("Silber Edition 151: Stalker Again", seconds: 48474),
+            Book("Silber Edition 157: Stalker gegen Stalker", seconds: 3282),
+        };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(title: "Stalker", seconds: 48474));
+
+        Assert.Null(match.Book);
+        Assert.Contains("matches 2 books", match.Reason);
+        Assert.DoesNotContain("157", match.Reason);
+    }
+
+    /// <summary>
+    /// Where the clue names several and none of them is this recording, "say which one you meant"
+    /// is unanswerable - every one of them would be refused for its length. The commonest cause is
+    /// one part of a split book, so the note says that instead.
+    /// </summary>
+    [Fact]
+    public void SeveralBooksMatchingAndNoneOfThemThisRecording_SaysSoRatherThanAskingWhich()
+    {
+        var books = new[]
+        {
+            Book("Silber Edition 150: Stalker", seconds: 48474),
+            Book("Silber Edition 157: Stalker gegen Stalker", seconds: 40000),
+        };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(title: "Stalker", seconds: 300));
+
+        Assert.Null(match.Book);
+        Assert.Contains("none of them runs this file's 5 min", match.Reason);
+        Assert.DoesNotContain("item:", match.Reason);
     }
 
     [Fact]

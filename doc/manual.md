@@ -1315,7 +1315,18 @@ book pushed, against a run that has just spent minutes listening to that book.
   item's timeline — so without that test a five-minute part would be sent up as
   a whole book's chapter list, or given one, nearly all of it past its own end.
   An abridgement or a different edition of the same title is caught by it too.
-  A book the server reports no play time for is matched on its name alone.
+
+  **The play time also decides between books**, and not only about one. Where a
+  name matches several — a library holding both *Stalker* and *Stalker Strikes
+  Back* under one series, say — the ones that cannot be this recording drop out,
+  and if a single book is left, it is the match. Two that both fit are still
+  reported as ambiguous, listing only those two; where *none* of them fits, the
+  note says so rather than asking which you meant, since naming any of them
+  would only be refused for its length a step later.
+
+  A book the server reports no play time for is matched on its name alone, and
+  for the same reason cannot be ruled out of a tie — a server that reports play
+  times only patchily will still say "several books" rather than pick one.
 
   A book with no marks in it is skipped too: the update replaces the server's
   chapter list rather than merging into it, so sending an empty one would delete

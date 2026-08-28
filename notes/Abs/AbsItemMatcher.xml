@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Abs\AbsItemMatcher.cs. -->
+<doc>
+  <member name="Find">
+    <para>
+    <b>The case the tie-break was written for.</b> 2026-08-28, an <c>--abs-push</c> run over
+    Stalker.m4b (Perry Rhodan Silber Edition 150) against the project's test server. The album tag
+    matched nothing, so the search fell through to the title tag "Stalker", which matched two books
+    - "Perry Rhodan Silber Edition 150: Stalker" and "Perry Rhodan Silber Edition 157: Stalker gegen
+    Stalker" - and the push was skipped with the file left correctly marked. Measured play times:
+    the file 48474.270 s, book 150 48474.2695 s (equal to the millisecond, the server holding a copy
+    of this very encode), book 157 3281.79 s.
+    </para>
+    <para>
+    <b>That 55 minutes is a bad Audiobookshelf scan, not book 157's real length</b> (the user's
+    identification, same day), so this case is settled by wrong data on the server that happens to
+    point the right way. It is therefore evidence that the tie-break <em>fires</em>, and not evidence
+    of how far apart two same-named books usually are. The argument for the rule is the other one:
+    it applies the <see cref="ABChapterize.Abs.AbsItemMatcher.SameRecordingSeconds"/> test a lone
+    match already has to pass, so it can accept nothing the single-match path would have refused,
+    and two genuinely same-length editions of a same-named book still end in a refusal.
+    </para>
+    <para>
+    <b>Why the album tag missed, and the wider name rule that was not taken.</b> The tag read
+    "Stalker: Perry Rhodan Silber Edition 150. Der 18. Zyklus. Chronofossilien" and carried
+    everything needed to pick book 150 on its own, including the number.
+    <see cref="ABChapterize.Abs.AbsSelector.Matches"/> is normalized <em>substring</em> containment,
+    though, so it needs the words contiguous and in the same order: the library spells the book
+    "perry rhodan silber edition 150 stalker" and the tag spells it "stalker perry rhodan silber
+    edition 150 der 18 zyklus chronofossilien", the same words differently arranged, and neither
+    contains the other. Word-set containment - every word of the shorter name appearing somewhere in
+    the longer - would have settled this at the <em>first</em> and most trustworthy clue rather than
+    the third. It was left alone (2026-08-28) because looser matching creates ambiguities elsewhere
+    for a gain the tie-break already delivers; if it is ever revisited, do it with the tie-break
+    standing behind it.
+    </para>
+    <para>
+    <b>Also rejected, same day:</b> treating an exact match on a title's tail after its series prefix
+    as its own tier, above mere containment ("...150: Stalker" matching "Stalker" exactly where
+    "...157: Stalker gegen Stalker" does not). It settles this case in one line, but it is a guess
+    about punctuation conventions - the Perry Rhodan library separates with ": " and Discworld with
+    " - " - and it would decide on thin evidence, which is what the clue ordering exists to avoid.
+    </para>
+  </member>
+</doc>
