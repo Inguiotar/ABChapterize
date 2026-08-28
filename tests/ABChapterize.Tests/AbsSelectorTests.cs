@@ -16,14 +16,10 @@ public sealed class AbsSelectorTests
 {
     [Theory]
     [InlineData("library:Discworld", AbsSelectorKind.Library, "Discworld")]
-    [InlineData("lib:Discworld", AbsSelectorKind.Library, "Discworld")]
     [InlineData("series:Zyklus 02", AbsSelectorKind.Series, "Zyklus 02")]
     [InlineData("collection:Favourites", AbsSelectorKind.Collection, "Favourites")]
-    [InlineData("coll:Favourites", AbsSelectorKind.Collection, "Favourites")]
     [InlineData("item:abc-123", AbsSelectorKind.Item, "abc-123")]
-    [InlineData("id:abc-123", AbsSelectorKind.Item, "abc-123")]
     [InlineData("title:Mort", AbsSelectorKind.Title, "Mort")]
-    [InlineData("book:Mort", AbsSelectorKind.Title, "Mort")]
     [InlineData("LIBRARY:Discworld", AbsSelectorKind.Library, "Discworld")]
     public void Prefixes_AreRecognized(string argument, AbsSelectorKind kind, string value)
     {
@@ -57,6 +53,15 @@ public sealed class AbsSelectorTests
     [InlineData("Perry Rhodan Silber Edition 001: Die Dritte Macht")]
     [InlineData("Discworld: The Colour of Magic")]
     [InlineData("nonsense:something")]
+    // The four shorthands removed 2026-08-28. "book:" is the one that mattered - it is an
+    // ordinary word, so while it was a keyword a book really called "Book: A Novel" was read
+    // as a request for a title called "A Novel". The other three go with it because a
+    // grammar with an undocumented half is what made that possible; see AbsSelector.Prefixes.
+    [InlineData("book:Mort")]
+    [InlineData("Book: A Novel")]
+    [InlineData("lib:Discworld")]
+    [InlineData("coll:Favourites")]
+    [InlineData("id:abc-123")]
     public void AColonThatIsNotAKnownPrefix_StaysPartOfTheTitle(string argument)
     {
         var selector = AbsSelector.Parse(argument);

@@ -39,18 +39,29 @@ public enum AbsSelectorKind
 /// <param name="Raw">The selector exactly as typed, for error messages.</param>
 public sealed record AbsSelector(AbsSelectorKind Kind, string Value, string Raw)
 {
-    /// <summary>The prefixes, and what each selects. Aliases share a value.</summary>
+    /// <summary>
+    /// The prefixes, and what each selects. This table is the whole grammar, and
+    /// <see cref="Syntax"/> is it written out - so nothing is accepted here that the manual, the
+    /// usage text and every error message do not name.
+    /// </summary>
+    /// <remarks>
+    /// There were once four undocumented shorthands as well - <c>lib</c>, <c>coll</c>, <c>id</c>
+    /// and <c>book</c> - and they were removed (2026-08-28, the user's call) rather than written
+    /// up. What made them worth removing instead is <c>book</c>: a prefix is only recognized when
+    /// the word in front of the colon is one, which is what lets a title keep its own colon, and
+    /// "book" is an ordinary word that can open a real title. A selector for a book called
+    /// "Book: A Novel" was read as a request for a title called "A Novel", and a user who had
+    /// never been told <c>book:</c> was a keyword had no way to see why. The other three were
+    /// harmless and go with it, because a grammar with a documented half and an undocumented half
+    /// is the thing that made the trap possible.
+    /// </remarks>
     private static readonly Dictionary<string, AbsSelectorKind> Prefixes = new(StringComparer.OrdinalIgnoreCase)
     {
         ["library"] = AbsSelectorKind.Library,
-        ["lib"] = AbsSelectorKind.Library,
         ["series"] = AbsSelectorKind.Series,
         ["collection"] = AbsSelectorKind.Collection,
-        ["coll"] = AbsSelectorKind.Collection,
         ["item"] = AbsSelectorKind.Item,
-        ["id"] = AbsSelectorKind.Item,
         ["title"] = AbsSelectorKind.Title,
-        ["book"] = AbsSelectorKind.Title,
     };
 
     /// <summary>The three spellings of "everything on the server".</summary>
