@@ -181,10 +181,21 @@ This is the part to set expectations on, because it is the difference between
 ARM it is CPU-only.
 
 The tool reports its own throughput at the end of every run as a percentage of
-real time — "transcription speed 793% of real-time" means it processed audio
-793 times faster than you could listen to it. On a desktop with a GPU that
-figure runs in the hundreds of percent. On a small ARM board on CPU, expect it
-to be a small multiple of real time, or less than real time with a large model.
+real time: audio handed to Whisper, divided by the wall-clock time it took.
+100% is break-even, a minute of audio per minute of work — so "transcription
+speed 793% of real-time" is just under eight times faster than listening, not
+793 times. On a desktop with a GPU the figure runs in the high hundreds to the
+low thousands of percent. On a small ARM board on CPU, expect a fraction of
+that, and do not be alarmed by a number below 100%.
+
+Below 100% is slower than listening, but it is not the same as a run that
+outlasts the book, because only a fraction of a book is ever transcribed —
+the passes probe pauses and jingles rather than reading the whole thing. Across
+a 134-book reference library that share came out at a median of 12%, and under
+19% for nine books in ten. So a board managing 50% of real time on a
+twelve-hour book is looking at roughly three hours of transcription, not
+twenty-four. The share is the second figure on the same summary line, so your
+own runs will tell you what it is for your material.
 
 Two things follow:
 

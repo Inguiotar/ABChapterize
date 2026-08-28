@@ -145,12 +145,14 @@ earn a round number.
 
 - **Two more platforms build from source: Linux ARM64 and Apple Silicon.** Neither is
   released, and neither has ever been run by anyone on this project — the Windows and
-  Linux x64 builds on the Releases page remain the only ones anybody can vouch for. Linux
-  ARM64 suits a small ARM home server and is CPU-only, the GPU backends having no ARM64
-  build of their own. Apple Silicon gets a page to itself,
-  [doc/building-on-macos.md](doc/building-on-macos.md): what should work, what is a coin
-  flip, and the one thing that will stop you before you start. Intel Macs are out of scope
-  permanently, for a reason spelled out there.
+  Linux x64 builds on the Releases page remain the only ones anybody can vouch for. Each
+  gets a page of its own saying what should work, what is a coin flip, and what to expect
+  in the way of speed: [doc/building-on-linux-arm64.md](doc/building-on-linux-arm64.md)
+  and [doc/building-on-macos.md](doc/building-on-macos.md). Linux ARM64 suits a small ARM
+  home server, is CPU-only whatever GPU the board has, and can be cross-built and copied
+  over; Alpine and other musl systems are the trap to know about, since they build cleanly
+  and then cannot transcribe. Apple Silicon has one thing that will stop you before you
+  start, and Intel Macs are out of scope permanently — both spelled out there.
 
 - **macOS is no longer handed Linux's advice.** Where ffmpeg is looked for, what `--help`
   says about it, and what the `could not be found` error suggests installing now name
