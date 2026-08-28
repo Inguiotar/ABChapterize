@@ -266,9 +266,8 @@ Run `abchapterize --help` for a quick reference, or see the
 [what is kept and what is stripped](doc/manual.md#5-what-is-kept-and-what-is-stripped)
 when chapters are written. The same manual is at
 [abchapterize.anetos.de](https://abchapterize.anetos.de), split into pages with
-a navigation column — the friendlier way to read a document this long — and in a
-clone it is `doc/html/index.html` offline. Grouped below exactly as `--help`
-groups them:
+a navigation column — the friendlier way to read a document this long. Grouped
+below exactly as `--help` groups them:
 
 | Option | What it does |
 | --- | --- |

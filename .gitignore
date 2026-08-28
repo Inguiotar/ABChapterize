@@ -7,3 +7,4 @@ tools/
 local/
 .claude/
 doc/diagrams/src/
+doc/html/

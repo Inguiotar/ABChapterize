@@ -210,6 +210,12 @@ earn a round number.
   still reported as ambiguous, and the note now lists only those two rather than every book
   sharing the name.
 
+- **The manual now lives on the web, and no longer as HTML inside the repository.** It is at
+  <https://abchapterize.anetos.de>, published with each release. A clone previously also carried
+  a rendered copy under `doc/html`; that copy is gone, since the website makes it redundant.
+  `doc/manual.md` is unchanged and still the source of truth, readable in a clone and on GitHub
+  as it always was, and the release archives never contained the HTML in the first place.
+
 - **A chapter set held back from the server words its reason like the other push refusals.** The
   result line now reads `not sent to ABS (chapters are still missing and the server already has 34
   mark(s))` where it used to read `not sent to ABS while chapters are missing (it already has 34)`.
