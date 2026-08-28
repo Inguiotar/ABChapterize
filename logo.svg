@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img"
+     aria-label="ABChapterize">
+  <title>ABChapterize</title>
+  <rect width="64" height="64" rx="13" fill="#4b3c6e"/>
+  <path d="M17.31 7.14 L46.69 7.14 L46.69 56.86 L32 43.3 L17.31 56.86 Z" fill="#ffffff"/>
+  <rect x="17.762" y="21.83" width="4.746" height="13.56" rx="2.373" fill="#4b3c6e"/>
+  <rect x="23.694" y="17.31" width="4.746" height="22.6" rx="2.373" fill="#4b3c6e"/>
+  <rect x="29.627" y="12.79" width="4.746" height="31.64" rx="2.373" fill="#4b3c6e"/>
+  <rect x="35.559" y="17.31" width="4.746" height="22.6" rx="2.373" fill="#4b3c6e"/>
+  <rect x="41.492" y="21.83" width="4.746" height="13.56" rx="2.373" fill="#4b3c6e"/>
+</svg>

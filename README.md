@@ -1,3 +1,5 @@
+<img src="logo.svg" alt="" width="88">
+
 # ABChapterize
 
 **Correct chapter marks for your audiobooks — by actually listening to them.**
