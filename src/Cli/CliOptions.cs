@@ -3346,7 +3346,7 @@ public sealed class CliOptions
 
         Info:
           -?, --help                Show this help.
-              --version             Show version information.
+              --version             Show version, build and platform information.
               --list-gpus           List this machine's Vulkan GPUs with their names, as
                                     --use-gpu matches them, then exit.
 

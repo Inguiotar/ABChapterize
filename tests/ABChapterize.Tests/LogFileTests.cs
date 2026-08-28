@@ -143,6 +143,18 @@ public sealed class LogFileTests : IDisposable
         Assert.Contains("run finished", file);
     }
 
+    /// <summary>
+    /// The header names the machine as well as the build. A log is read detached from both, and
+    /// this is the half of its provenance that nothing else in the file can be made to give up -
+    /// see <see cref="ABChapterize.Cli.HostPlatform"/>.
+    /// </summary>
+    [Fact]
+    public void TheHeader_NamesThePlatform()
+    {
+        var (_, file) = Capture(r => r.Log("working"));
+        Assert.Contains($"=== {ABChapterize.Cli.HostPlatform.Description} ===", file);
+    }
+
     [Fact]
     public void AnUnwritablePath_FailsImmediately()
     {

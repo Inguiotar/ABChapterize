@@ -53,6 +53,11 @@ public sealed class LogFile : IDisposable
             // contradicts the current sources cannot be told from one that merely predates a fix.
             var build = CliOptions.BuildNumber is { } n ? $" (build {n})" : "";
             log.WriteRaw($"=== abchapterize {CliOptions.Version}{build} run started {Timestamp()} ===");
+            // The machine, on a line of its own between the build and the command: those three are
+            // what a log needs to say about its own provenance, and this is the one of them that
+            // cannot be reconstructed from anything else in the file. See HostPlatform, which also
+            // explains why it earns a line in a --log-file and not only in a .debug.log.
+            log.WriteRaw($"=== {HostPlatform.Description} ===");
             // Redacted, because this line is the one place a key or a password typed on the command
             // line would reach a file meant to be kept - and, for a --debug log, attached to a bug
             // report. See CommandLineRedaction.

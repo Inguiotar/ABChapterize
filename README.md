@@ -392,7 +392,7 @@ document that long. Grouped below exactly as `--help` groups them:
 | Option | What it does |
 | --- | --- |
 | `-?`, `--help` | Show the usage info, from which these groups are taken. |
-| `--version` | Show version and build information. |
+| `--version` | Show version and build information, and which platform build is running on what system. |
 | `--list-gpus` | List this machine's Vulkan GPUs as `--use-gpu` matches them, then exit. |
 
 Short options without parameters can be collapsed (`-rb` = `-r -b`). Decimal

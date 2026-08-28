@@ -3079,10 +3079,19 @@ values will not resume under another.
 
 `--version`
 : Show the version number, plus the auto-incrementing build number and UTC
-  build timestamp (e.g. `abchapterize 0.9.0 (build 42, built 2026-07-20
-  14:33:12 UTC)`). `--help`'s banner shows the plain version number only; the
-  build number otherwise appears just in the opening line of a `--log-file` or
-  a `--debug` log, which outlives the build that wrote it.
+  build timestamp, and on a second line the platform build this copy is and the
+  system it is running on:
+
+  ```
+  abchapterize 0.9.0 (build 42, built 2026-07-20 14:33:12 UTC)
+  win-x64 on Microsoft Windows 10.0.26200
+  ```
+
+  A process running as one architecture on a machine that is another - an
+  x64 build under Windows-on-ARM, say - says so as well. `--help`'s banner shows
+  the plain version number only; the build number and the platform line
+  otherwise appear just in the opening lines of a `--log-file` or a `--debug`
+  log, which outlive both the build and the machine that wrote them.
 
 `--list-gpus`
 : List this machine's Vulkan GPUs by name, as `--use-gpu` matches them, then
@@ -3793,8 +3802,10 @@ everything `--verbose` would have printed, `-o run.log -T` adds the
 transcripts. The console keeps its progress bar and per-file result lines,
 which the file also receives, so a run stays watchable while the detail is
 kept for later. Timestamps in the file carry the date as well, and each run
-appends a header and a footer line rather than replacing what is already
-there, so one log can collect a whole library's worth of runs.
+appends its own header and footer rather than replacing what is already there,
+so one log can collect a whole library's worth of runs. The header is three
+lines naming what produced the run: the version and build, the platform and
+system, and the command line itself.
 
 **`--debug`** writes a separate log for *each* processed file, named after it
 (`book.m4b.debug.log`), holding everything the ordinary log carries plus the

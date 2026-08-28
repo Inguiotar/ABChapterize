@@ -222,8 +222,10 @@ everything <code>--verbose</code> would have printed, <code>-o run.log -T</code>
 transcripts. The console keeps its progress bar and per-file result lines,
 which the file also receives, so a run stays watchable while the detail is
 kept for later. Timestamps in the file carry the date as well, and each run
-appends a header and a footer line rather than replacing what is already
-there, so one log can collect a whole library's worth of runs.</p>
+appends its own header and footer rather than replacing what is already there,
+so one log can collect a whole library's worth of runs. The header is three
+lines naming what produced the run: the version and build, the platform and
+system, and the command line itself.</p>
 <p><strong><code>--debug</code></strong> writes a separate log for <em>each</em> processed file, named after it
 (<code>book.m4b.debug.log</code>), holding everything the ordinary log carries plus the
 raw material behind it: the settings and probe result the run worked from,

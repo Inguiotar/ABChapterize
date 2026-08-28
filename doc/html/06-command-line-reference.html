@@ -1977,9 +1977,16 @@ values will not resume under another.</p>
 : Show the usage information.</p>
 <p><code>--version</code>
 : Show the version number, plus the auto-incrementing build number and UTC
-build timestamp (e.g. <code>abchapterize 0.9.0 (build 42, built 2026-07-20 14:33:12 UTC)</code>). <code>--help</code>'s banner shows the plain version number only; the
-build number otherwise appears just in the opening line of a <code>--log-file</code> or
-a <code>--debug</code> log, which outlives the build that wrote it.</p>
+build timestamp, and on a second line the platform build this copy is and the
+system it is running on:</p>
+<pre><code>abchapterize 0.9.0 (build 42, built 2026-07-20 14:33:12 UTC)
+win-x64 on Microsoft Windows 10.0.26200
+</code></pre>
+<p>A process running as one architecture on a machine that is another - an
+x64 build under Windows-on-ARM, say - says so as well. <code>--help</code>'s banner shows
+the plain version number only; the build number and the platform line
+otherwise appear just in the opening lines of a <code>--log-file</code> or a <code>--debug</code>
+log, which outlive both the build and the machine that wrote them.</p>
 <p><code>--list-gpus</code>
 : List this machine's Vulkan GPUs by name, as <code>--use-gpu</code> matches them, then
 exit. Needs neither a file nor a model, and a machine with no Vulkan GPU is

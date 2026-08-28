@@ -17,6 +17,13 @@ earn a round number.
 
 ### Added
 
+- **`--version` now also says which platform build you are running, and on what system.**
+  A second line reads `win-x64 on Microsoft Windows 10.0.26200`, or whatever the equivalent is
+  where you are — and says so too when the process is running as one architecture on a
+  machine that is another, such as an x64 build under Windows-on-ARM. The same line now opens
+  every `--log-file` and every `.debug.log`, between the version and the command line, so a log
+  attached to a bug report answers "which platform" without being asked.
+
 - **The progress bar fills in only the stretches a pass actually reads**, and its percentage now
   counts that work rather than the file. A pass working a handful of sequence gaps leaves the
   audio between them empty instead of filling it in as it goes past — that audio was skipped, not

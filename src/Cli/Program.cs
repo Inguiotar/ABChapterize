@@ -33,6 +33,11 @@ public static class Program
                 ? $" (build {CliOptions.BuildNumber}, built {CliOptions.BuildTimestamp})"
                 : "";
             Console.WriteLine($"abchapterize {CliOptions.Version}{buildInfo}");
+            // A line of its own rather than a fourth clause in the parenthetical above: the first
+            // line says which build this is, this one says what it is running on, and somebody
+            // pasting an answer into a bug report wants both without having to read past the
+            // punctuation to find the second.
+            Console.WriteLine(HostPlatform.Description);
             return 0;
         }
 
