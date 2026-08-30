@@ -225,6 +225,7 @@ internal sealed class AbsFileFlow : IDisposable
     /// </summary>
     /// <param name="localPath">Path of the local audio file.</param>
     /// <param name="info">What ffprobe found in it, before any merge.</param>
+    /// <param name="mappings">The <c>--abs-map</c> entries in force for this file.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>What may be taken from the server, and the note describing it.</returns>
     /// <remarks>
@@ -233,9 +234,11 @@ internal sealed class AbsFileFlow : IDisposable
     /// but a book's own chapter list is not in it (a library listing arrives minified, carrying
     /// counts rather than lists).
     /// </remarks>
-    public async Task<AbsPull> PullAsync(string localPath, MediaInfo info, CancellationToken ct)
+    public async Task<AbsPull> PullAsync(
+        string localPath, MediaInfo info, IReadOnlyList<AbsBookMapping> mappings,
+        CancellationToken ct)
     {
-        var match = await MatchAsync(localPath, info, ct);
+        var match = await MatchAsync(localPath, info, mappings, ct);
         var fromServer = match.Book is { } book
             ? await _workspace.ChaptersOfAsync(book, ct)
             : [];
@@ -283,17 +286,62 @@ internal sealed class AbsFileFlow : IDisposable
     }
 
     /// <summary>
-    /// Finds the book a local file belongs to, for <c>--abs-push</c> and for <c>--abs-push-only</c>
-    /// outside ABS mode.
+    /// Finds the book a local file belongs to, for the push and pull modes outside ABS mode.
     /// </summary>
     /// <param name="localPath">Path of the local audio file.</param>
     /// <param name="info">What ffprobe found in it.</param>
+    /// <param name="mappings">The <c>--abs-map</c> entries in force for this file, which come from
+    /// its own folder chain rather than from the run - see
+    /// <see cref="ABChapterize.Cli.FolderConfig"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The book and how it was recognized, or no book and why not.</returns>
-    public async Task<AbsMatch> MatchAsync(string localPath, MediaInfo info, CancellationToken ct)
+    /// <remarks>
+    /// Two stages, and the second one only where the first came back having named nothing at all.
+    /// Everything the free clues can do is done off the one whole-catalogue listing this run
+    /// fetched; asking the server what its own files are called costs a request per candidate book,
+    /// so it is the last resort rather than a fifth clue. A refusal or an ambiguity is not passed on
+    /// to it: both are a stop, and looking further after one is the guess the clue ordering exists
+    /// to refuse.
+    /// </remarks>
+    public async Task<AbsMatch> MatchAsync(
+        string localPath, MediaInfo info, IReadOnlyList<AbsBookMapping> mappings,
+        CancellationToken ct)
     {
         _everyBook ??= await _workspace.EveryBookAsync(ct);
-        return AbsItemMatcher.Find(_everyBook, localPath, info);
+        var match = AbsItemMatcher.Find(_everyBook, localPath, info, mappings);
+        return match.NoClueNamedABook
+            ? await MatchByServerFileNameAsync(localPath, info, match, ct)
+            : match;
+    }
+
+    /// <summary>
+    /// The last resort: asks the server what it calls the audio files of the books whose play time
+    /// this file could be, and matches against those.
+    /// </summary>
+    /// <param name="localPath">Path of the local audio file.</param>
+    /// <param name="info">What ffprobe found in it.</param>
+    /// <param name="unmatched">What the free clues came back with, returned unchanged where this
+    /// stage does not run or finds nothing better.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The book and how it was recognized, or the original outcome.</returns>
+    /// <remarks>
+    /// The original outcome is handed back rather than this stage's own where nothing is found, so
+    /// that a run whose real problem is a missing book says so in the same words whether or not the
+    /// server happened to hold anything of the right length.
+    /// </remarks>
+    private async Task<AbsMatch> MatchByServerFileNameAsync(
+        string localPath, MediaInfo info, AbsMatch unmatched, CancellationToken ct)
+    {
+        var candidates = AbsItemMatcher.PossibleRecordings(_everyBook!, info);
+        if (candidates.Count == 0 || candidates.Count > AbsItemMatcher.MaxServerFileNameLookups)
+            return unmatched;
+
+        var named = new List<AbsBookFiles>(candidates.Count);
+        foreach (var book in candidates)
+            named.Add(new AbsBookFiles(book, await _workspace.FileNamesOfAsync(book, ct)));
+
+        var match = AbsItemMatcher.FindByServerFileName(named, localPath, info);
+        return match.NoClueNamedABook ? unmatched : match;
     }
 
     /// <summary>Removes a book's temporary copy once the run is finished with it.</summary>

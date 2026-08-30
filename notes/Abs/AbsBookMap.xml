@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Abs\AbsBookMap.cs. -->
+<doc>
+  <member name="AbsBookMap">
+    <para>
+    <b>An item id is opaque, and its shape has moved.</b> Checked against the project's test server
+    (Audiobookshelf 2.36.0, 2026-08-30): every item id it reports is a plain UUID -
+    <c>914ccbcc-ee3c-46c3-b018-62ba0c147823</c> for "Perry Rhodan Silber Edition 014: Rhodans
+    Sohn" - and not the <c>li_...</c> form that older write-ups about Audiobookshelf show. Nothing
+    here validates the shape and nothing should start: an entry's id is passed through to a
+    catalogue lookup as written, so a server that spells ids differently again costs this code
+    nothing. The consequence for the documentation is the part that nearly went wrong -
+    <c>doc\manual.md</c> says the id is what Audiobookshelf's own address for a book ends in, and
+    deliberately does not say what one looks like.
+    </para>
+    <para>
+    <b>Why the separator is <c>=</c> and not the <c>:</c> its sibling uses.</b> <c>--custom-file</c>
+    reads <c>phrase:title</c> and can, because its left-hand side is either a bare word or a
+    <c>/regexp/</c> whose closing slash delimits. Here the <em>right</em>-hand side carries colons
+    twice over: the <c>item:</c> prefix is one, and a library title routinely holds another - the
+    corpus's own "Perry Rhodan Silber Edition 087: Das Spiel des Laren" is the example the manual
+    uses. A colon separator would have needed a rule to decide which colon, and any such rule would
+    be a guess about punctuation conventions - the same objection that sank the series-prefix tier in
+    <see cref="ABChapterize.Abs.AbsItemMatcher"/>'s own notes.
+    </para>
+  </member>
+</doc>

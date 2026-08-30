@@ -17,6 +17,22 @@ earn a round number.
 
 ### Added
 
+- **`--abs-map` says which Audiobookshelf book a local file is**, for the files nothing about
+  them names one for. One `<file name> = <book>` entry per line, where the book is either
+  `item:ID` or its title, and `none` — or an empty right-hand side — marks a file the server
+  simply has no book for, so it stops being reported on every sweep. A folder can carry its own
+  mapping as `.abchapterize-abs`, picked up for the books in it the way `.abchapterize-config`
+  is picked up for their settings, and mappings layer from the library down to the shelf. An
+  entry says *which* book and nothing more: a book whose play time is not the file's is still
+  refused, since a typo here would write a whole book's chapter list into one part of it.
+
+- **A local file is now also recognized by the name the server holds its audio file under.**
+  Where the album tag, the title tag, the folder name and the file name have all failed to name
+  a book, ABChapterize asks Audiobookshelf what it calls the book's own file — over just the
+  books whose play time this file could be, so usually none or one, and only after everything
+  free has come up empty. A copy on your disk is very often the server's own file, so this
+  quietly matches books whose title nobody ever wrote into the tags.
+
 - **`--summary` now closes a pushing run with the books Audiobookshelf did not get.** After the
   listings of skipped, empty, unfinished and low-confidence files comes a fifth: every file whose
   marks did not reach the server, and why — a title that matched several books, a file that

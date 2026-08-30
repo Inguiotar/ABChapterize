@@ -42,4 +42,33 @@
     " - " - and it would decide on thin evidence, which is what the clue ordering exists to avoid.
     </para>
   </member>
+  <member name="FindByServerFileName">
+    <para>
+    <b>What the two responses really carry</b>, checked against the project's test server
+    (Audiobookshelf 2.36.0, 2026-08-30). The library listing this tool matches against is asked for
+    with <c>minified=1</c> and carries <c>numAudioFiles</c> where the full item carries the files
+    themselves, so a file name is reachable only through <c>GET /api/items/{id}</c>, at one request
+    per book. The full item's shape is <c>media.audioFiles[].metadata.filename</c>, which is the
+    same field <see cref="ABChapterize.Abs.AbsCatalog.LoadFileAsync"/> has always read for the
+    download.
+    </para>
+    <para>
+    <b>How far the three names on the server can diverge.</b> One item off that server, all of it
+    one book: the library title "Perry Rhodan Silber Edition 014: Rhodans Sohn", the item folder
+    "14 - Rhodans Sohn", and the audio file "Rhodans Sohn.m4b". Two things follow. The file name is
+    the shortest and plainest of the three, which is why a local copy tends to carry it and why this
+    stage is worth the requests at all; and this particular book would have matched on its title
+    anyway by containment, so the case the stage really earns its keep on is the one where the tags
+    are empty <em>and</em> the local name is nothing like the title.
+    </para>
+    <para>
+    <b>Why the field is narrowed by play time and not by a cap alone.</b> The narrowing is what
+    makes the cost bearable - on a real library it leaves nought to a handful of books - but it
+    cannot bound the pathological case by itself, a shelf of equal-length recordings defeating it
+    entirely. Hence
+    <see cref="ABChapterize.Abs.AbsItemMatcher.MaxServerFileNameLookups"/> on top of it. The reverse
+    was considered and is wrong: a cap without the narrowing would fetch an arbitrary twenty books
+    out of two hundred, and which twenty would decide the answer.
+    </para>
+  </member>
 </doc>

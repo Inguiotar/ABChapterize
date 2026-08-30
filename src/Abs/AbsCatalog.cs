@@ -40,6 +40,10 @@ public sealed class AbsCatalog
     /// <summary>Every collection on the server, fetched once.</summary>
     private IReadOnlyList<AbsWire.Collection>? _collections;
 
+    /// <summary>Each book's audio file names, by item id, fetched once per book that is asked
+    /// about. See <see cref="FileNamesOfAsync"/>.</summary>
+    private readonly Dictionary<string, IReadOnlyList<string>> _fileNames = new(StringComparer.Ordinal);
+
     /// <summary>
     /// How many items one listing request asks for. Audiobookshelf accepts limit=0 for "everything",
     /// but a paged loop costs one extra request on a small library and keeps working if that ever
@@ -176,6 +180,41 @@ public sealed class AbsCatalog
         var books = await EveryBookAsync(ct);
         var exact = books.Where(b => AbsSelector.MatchesExactly(b.Title, selector.Value)).ToList();
         return exact.Count > 0 ? exact : [.. books.Where(b => AbsSelector.Matches(b.Title, selector.Value))];
+    }
+
+    /// <summary>
+    /// The names Audiobookshelf holds one book's audio files under, for the last-resort stage of
+    /// matching a local file to a book (see
+    /// <see cref="AbsItemMatcher.FindByServerFileName"/>).
+    /// </summary>
+    /// <param name="book">The book to look at.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Its audio file names, possibly none.</returns>
+    /// <remarks>
+    /// Deliberately without <see cref="LoadFileAsync"/>'s demand that the item hold exactly one
+    /// audio file, and it must stay that way: a book split on the server but joined into one file
+    /// locally is a book this tool works on perfectly well, and refusing to read its names would
+    /// hide the one candidate a joined file is most likely to be. Names of a book that really is
+    /// several files are harmless here, since the play time has already had its say about which
+    /// books reach this at all.
+    /// <para>
+    /// Cached per item, because a run over a folder asks about the same handful of candidate books
+    /// once per unmatched file.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<string>> FileNamesOfAsync(AbsBook book, CancellationToken ct)
+    {
+        if (_fileNames.TryGetValue(book.ItemId, out var cached))
+            return cached;
+
+        var item = await _session.GetAsync<AbsWire.Item>(
+            $"/api/items/{Uri.EscapeDataString(book.ItemId)}", ct);
+        var names = item.Media?.AudioFiles?
+            .Select(f => f.Metadata?.Filename ?? "")
+            .Where(n => n.Length > 0)
+            .ToList() ?? [];
+        _fileNames[book.ItemId] = names;
+        return names;
     }
 
     /// <summary>Fetches one item by its identifier.</summary>

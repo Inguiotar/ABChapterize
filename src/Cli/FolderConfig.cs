@@ -29,6 +29,10 @@ internal static class FolderConfig
     /// <summary>Name of the per-folder <c>--custom</c> mapping file.</summary>
     internal const string CustomName = ".abchapterize-custom";
 
+    /// <summary>Name of the per-folder <c>--abs-map</c> file, pairing the folder's audio files with
+    /// Audiobookshelf books by hand.</summary>
+    internal const string BookMapName = ".abchapterize-abs";
+
     /// <summary>
     /// The only settings a per-folder file may change: everything whose whole effect is on how one
     /// book is read. Anything else is refused.
@@ -58,6 +62,10 @@ internal static class FolderConfig
         // What is listened for, and what the marks are called.
         "ChapterPhrase", "Title", "PartTitle", "IntroTitle",
         "ProloguePhrase", "PrologueTitle", "EpiloguePhrase", "EpilogueTitle", "CustomMappings",
+        // Which Audiobookshelf book each of a folder's files is. Not "how a book is read" like its
+        // neighbours here, but per-file in exactly the same sense: it says something about one file
+        // rather than about the run, and the shelf the files sit on is the natural place to say it.
+        "AbsBookMappings",
         // Where a mark lands.
         "MarkLeadSeconds", "PreciseMark", "QuickMarks", "MarkBeforeJingle",
         "NamedMarkDistanceSeconds",
@@ -169,13 +177,21 @@ internal static class FolderConfig
 
     /// <summary>
     /// The option tokens the folders contribute, outermost folder first - a
-    /// <c>.abchapterize-config</c>'s own lines, and a <c>--custom-file</c> for a
-    /// <c>.abchapterize-custom</c>.
+    /// <c>.abchapterize-config</c>'s own lines, a <c>--custom-file</c> for a
+    /// <c>.abchapterize-custom</c>, and an <c>--abs-map</c> for a <c>.abchapterize-abs</c>.
     /// </summary>
     /// <param name="folders">The chain from <see cref="FoldersFor"/>.</param>
+    /// <param name="usesAbs">Whether this run talks to an Audiobookshelf server at all
+    /// (<see cref="CliOptions.UsesAbs"/>).</param>
     /// <exception cref="CliError">Thrown for an unreadable or malformed file, named with its
     /// line.</exception>
-    internal static List<string> TokensFor(IEnumerable<string> folders)
+    /// <remarks>
+    /// A book mapping is contributed only by a run that has a server to apply it to. The option
+    /// itself is refused without one, deliberately - it describes a server and would otherwise be
+    /// accepted and never consulted - and a folder's standing note about where its books live must
+    /// not turn an ordinary local run over that folder into a usage error.
+    /// </remarks>
+    internal static List<string> TokensFor(IEnumerable<string> folders, bool usesAbs)
     {
         var tokens = new List<string>();
         foreach (var folder in folders)
@@ -201,19 +217,23 @@ internal static class FolderConfig
             var custom = Path.Combine(folder, CustomName);
             if (File.Exists(custom))
                 tokens.AddRange(["--custom-file", custom]);
+
+            var books = Path.Combine(folder, BookMapName);
+            if (usesAbs && File.Exists(books))
+                tokens.AddRange(["--abs-map", books]);
         }
         return tokens;
     }
 
     /// <summary>
     /// The options one file is to be detected with: the run's own, with any
-    /// <c>.abchapterize-config</c> and <c>.abchapterize-custom</c> along its folder chain layered
-    /// underneath.
+    /// <c>.abchapterize-config</c>, <c>.abchapterize-custom</c> and <c>.abchapterize-abs</c> along
+    /// its folder chain layered underneath.
     /// </summary>
     /// <remarks>
     /// Returns the run's own instance unchanged - not a copy - when no folder in the chain carries
-    /// either file, which is the overwhelmingly common case and keeps a run that uses none of this
-    /// exactly as it was.
+    /// any of those files, which is the overwhelmingly common case and keeps a run that uses none of
+    /// this exactly as it was.
     /// </remarks>
     /// <param name="run">The options the command line resolved to.</param>
     /// <param name="file">Absolute path of the audio file.</param>
@@ -227,7 +247,7 @@ internal static class FolderConfig
         List<string> tokens;
         try
         {
-            tokens = TokensFor(folders);
+            tokens = TokensFor(folders, run.UsesAbs);
         }
         catch (CliError ex)
         {

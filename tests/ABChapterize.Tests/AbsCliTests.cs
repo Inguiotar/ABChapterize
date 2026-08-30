@@ -479,4 +479,60 @@ public sealed class AbsCliTests : IDisposable
         foreach (var variable in Variables)
             Assert.Contains(variable, usage);
     }
+
+    /// <summary>Writes a book mapping file and returns its path.</summary>
+    /// <param name="lines">Its entries.</param>
+    private string MapFile(params string[] lines)
+    {
+        var path = Path.Combine(_dir, $"{Guid.NewGuid():N}.abs");
+        File.WriteAllLines(path, lines);
+        return path;
+    }
+
+    [Fact]
+    public void BookMappings_AreReadForAModeThatMatchesLocalFiles()
+    {
+        var options = CliOptions.Parse(
+            ["--abs-url", "host:9", "--abs-key", "k", "--abs-push",
+             "--abs-map", MapFile("book.m4b = item:li_one"), _file])!;
+
+        Assert.Equal("li_one", Assert.Single(options.AbsBookMappings).Book?.Value);
+    }
+
+    /// <summary>
+    /// It describes a server, so it needs one of the modes that talks to one - the same rule the
+    /// connection options follow.
+    /// </summary>
+    [Fact]
+    public void BookMappings_NeedAModeThatTalksToAServer()
+        => Assert.Throws<CliError>(() => CliOptions.Parse(
+            ["--abs-map", MapFile("book.m4b = item:li_one"), _file]));
+
+    /// <summary>
+    /// Refused rather than ignored: <c>--abs</c> works on books the selectors already named, so
+    /// there is no local file to recognize and a mapping would never be consulted.
+    /// </summary>
+    [Fact]
+    public void BookMappings_AreRefusedByAbsModeItself()
+    {
+        var ex = Assert.Throws<CliError>(() => Parse(
+            "--abs", "--abs-map", MapFile("book.m4b = item:li_one"), "all"));
+
+        Assert.Contains("--abs-map", ex.Message);
+    }
+
+    /// <summary>
+    /// A mapping decides which book a file's marks reach, so a run given one is not the run that
+    /// could not match that file - and must not read its checkpoint as work already done.
+    /// </summary>
+    [Fact]
+    public void ABookMapping_ChangesTheRunFingerprint()
+    {
+        string[] connection = ["--abs-url", "host:9", "--abs-key", "k", "--abs-push"];
+        var plain = CliOptions.Parse([.. connection, _file])!;
+        var mapped = CliOptions.Parse(
+            [.. connection, "--abs-map", MapFile("book.m4b = item:li_one"), _file])!;
+
+        Assert.NotEqual(plain.RunFingerprint, mapped.RunFingerprint);
+    }
 }

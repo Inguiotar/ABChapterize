@@ -1135,6 +1135,21 @@ public sealed class CliOptions
     private readonly List<AbsSelector> _absSelectors = [];
 
     /// <summary>
+    /// The <c>--abs-map</c> entries pairing local files with Audiobookshelf books by hand, in
+    /// reading order - outermost folder first, the command line last, which is what makes a nearer
+    /// entry win (see <see cref="ABChapterize.Abs.AbsBookMap"/>).
+    /// </summary>
+    /// <remarks>
+    /// Accumulates rather than replaces, the way <see cref="CustomMappings"/> does: a library-wide
+    /// mapping file and a shelf's own are both worth having, and neither is a correction of the
+    /// other. Per-file rather than run-wide, which is why it is one of the settings a folder may
+    /// carry - see <see cref="FolderConfig.PerFile"/>.
+    /// </remarks>
+    public IReadOnlyList<AbsBookMapping> AbsBookMappings => _absBookMappings;
+
+    private readonly List<AbsBookMapping> _absBookMappings = [];
+
+    /// <summary>
     /// The profile resolved at parse time: for an explicit --lang, this is used for every file;
     /// with <see cref="AutoLanguage"/>, it is the English fallback profile used only when a
     /// file's own detection is inconclusive or skipped - see <see cref="ResolveProfile"/>, which
@@ -1336,6 +1351,11 @@ public sealed class CliOptions
                 // the other three modes would still have something to do to.
                 $"abs={Abs}/{AbsPushOnly}/{AbsPush}/{AbsPull}/{AbsPullOnly}",
                 $"absserver={AbsServer?.Root}",
+                // In for the same reason the modes are: a mapping decides which book a file's marks
+                // reach, so an --abs-push run that could not match a file and one given the entry
+                // that names it are two different runs, and the second must not read the first's
+                // checkpoint as its own work.
+                $"absmap={string.Join('|', _absBookMappings.Select(m => $"{m.FileName}=>{m.Book?.Raw ?? AbsBookMap.NoBook}"))}",
                 $"runbefore={RunBefore?.Raw}", $"runafter={RunAfter?.Raw}",
                 $"set={string.Join('|', _tuningOverrides)}",
                 // --no-rename is deliberately absent, although it is a processing option
@@ -1640,7 +1660,7 @@ public sealed class CliOptions
                 "--cleanup works on folders on this machine and has nothing to do with an Audiobookshelf server.");
         if (!o.UsesAbs
             && ((o._absUrl ?? o._absKey ?? o._absUser ?? o._absPassword ?? o.AbsTemp) != null
-                || o._absRetrySet))
+                || o._absRetrySet || o._absBookMappings.Count > 0))
             throw new CliError(
                 "The --abs-... options describe an Audiobookshelf server, so one of the modes that "
                 + "talks to one has to be given as well: --abs (-A) works on books held by it, "
@@ -1681,6 +1701,17 @@ public sealed class CliOptions
                 "--backup keeps the file as it was beside the one it changed, which in ABS mode is a "
                 + "temporary download; it cannot be combined with --abs. The book on the server is "
                 + "left as it is until the run succeeds either way.");
+        // Refused rather than ignored: --abs works on books the selectors already named, so there is
+        // no local file to recognize and a mapping would be accepted and never consulted - which
+        // reads as a pairing being in force when none is. Only a command line can reach this; a
+        // folder's own mapping file is not read at all in a run that talks to no server, and --abs
+        // mode reads no per-folder settings in the first place.
+        if (o.Abs && o._absBookMappings.Count > 0)
+            throw new CliError(
+                "--abs-map says which Audiobookshelf book a local file is a copy of, and --abs (-A) "
+                + "works on the server's own books, which are named by the selectors instead. It is "
+                + "for the modes that run over local files: --abs-push, --abs-push-only, --abs-pull "
+                + "and --abs-pull-only.");
         // --max-chapters is on this list although it is not a detection setting and so is not
         // caught by the check below (the user's call, 2026-08-28). It decides two things - whether
         // a file's existing marks are bogus enough to discard, and, through
@@ -2082,6 +2113,7 @@ public sealed class CliOptions
             case "--abs-user": _absUser = nextParam(); return true;
             case "--abs-password": _absPassword = nextParam(); return true;
             case "--abs-temp": AbsTemp = ExpandHomeDirectory(nextParam()); return true;
+            case "--abs-map": _absBookMappings.AddRange(AbsBookMap.ParseFile(nextParam())); return true;
             case "--abs-retry": AbsRetryMinutes = ParseAbsRetry(nextParam()); _absRetrySet = true; return true;
             default: return false;
         }
@@ -2741,6 +2773,18 @@ public sealed class CliOptions
                                     is still missing, and leave file and server with the same
                                     list. Nothing else about it differs from writing the three
                                     out, so an error may name them instead.
+              --abs-map <path>      Say which Audiobookshelf book a local file is a copy of, for
+                                    the files nothing about them names one for. One entry per
+                                    line, "<file name> = <book>", where the book is "item:ID" or
+                                    a title; "none" (or nothing at all) means this file has no
+                                    book on the server and is to be passed over without a search.
+                                    The file name may be written with or without its extension.
+                                    Blank lines and lines starting with "#" are ignored, and a
+                                    later entry wins over an earlier one. A folder may carry its
+                                    own mapping as ".abchapterize-abs", read for the books in it
+                                    the way ".abchapterize-config" is. An entry says which book,
+                                    not that the two are the same recording: a book whose play
+                                    time is not the file's is refused as it would be otherwise.
               --abs-url <url>       Which server: "http://host:13378", "host:13378", or just
                                     "host" - http and Audiobookshelf's own port 13378 stand in
                                     for whatever you leave out. https and a reverse-proxy

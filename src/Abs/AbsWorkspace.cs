@@ -118,6 +118,12 @@ public sealed class AbsWorkspace : IDisposable
     public Task<IReadOnlyList<Chapter>> ChaptersOfAsync(AbsBook book, CancellationToken ct)
         => _catalog.LoadChaptersAsync(book, ct);
 
+    /// <inheritdoc cref="AbsCatalog.FileNamesOfAsync"/>
+    /// <param name="book">The book to look at.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public Task<IReadOnlyList<string>> FileNamesOfAsync(AbsBook book, CancellationToken ct)
+        => _catalog.FileNamesOfAsync(book, ct);
+
     /// <summary>
     /// Downloads one book's audio file into a folder of its own.
     /// </summary>

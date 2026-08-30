@@ -1045,7 +1045,9 @@ A folder may also carry its settings itself, with no option at all. Drop a file
 called `.abchapterize-config` into it — same format as above — and every book
 in that folder is processed with those options. A `.abchapterize-custom`
 alongside it is read as `--custom` mappings, one per line, exactly like
-`--custom-file`.
+`--custom-file`, and an `.abchapterize-abs` as
+[`--abs-map`](#saying-which-book-a-file-is) entries pairing that folder's files
+with Audiobookshelf books.
 
 ```
 D:\Audiobooks\
@@ -1053,6 +1055,7 @@ D:\Audiobooks\
     German SF\
         .abchapterize-config      # for this shelf
         .abchapterize-custom      # its Zeittafel mapping
+        .abchapterize-abs         # which book on the server each of these is
         Perry Rhodan 1.m4b
 ```
 
@@ -1067,7 +1070,7 @@ line gets its own folder's settings and nothing above it. Nothing outside what
 you asked the tool to process is ever read.
 
 **A per-folder file may change how a book is read, not what the run is.** The
-phrases and titles, `--custom`, `--lang`, `--mark-lead`, `--quick-marks`,
+phrases and titles, `--custom`, `--abs-map`, `--lang`, `--mark-lead`, `--quick-marks`,
 `--mark-before-jingle`, `--min-silence-length`, `--noise-floor`,
 `--early-abort`, `--expected-start-chapter`, `--chapter-count`,
 `--max-chapter-number`, `--named-mark-distance`, `--jingle-first`, `--no-denoise` and
@@ -1309,9 +1312,23 @@ book pushed, against a run that has just spent minutes listening to that book.
   named on the command line are matched against the server's libraries — by
   album tag, then title tag, then the folder the file sits in, then its file
   name, in that order, since a tag survives being copied about and a file name
-  is whatever the last tool to touch it decided. A file that matches nothing, or
-  matches several books, is skipped with a note; `--abs item:<id>` is how one
-  book is named exactly.
+  is whatever the last tool to touch it decided. Ahead of all four comes
+  anything you have said yourself in an
+  [`--abs-map` file](#saying-which-book-a-file-is).
+
+  If none of them names a book, one last thing is tried: the name
+  Audiobookshelf holds the book's *own* audio file under. That one is not in
+  the library listing and costs a request per book, so it is asked for only
+  about the books whose play time this file could be — usually none or one —
+  and only once everything free has come back empty-handed. A copy on your disk
+  is very often the server's own file, so this recognizes a book whose title
+  nobody ever wrote into the tags. It narrows by play time and still decides on
+  the name: two books can share a length, so being the only book of the right
+  length is not by itself a match.
+
+  A file that still matches nothing, or that matches several books, is skipped
+  with a note; an [`--abs-map` entry](#saying-which-book-a-file-is) settles
+  either case, and `--abs item:<id>` names one book exactly.
 
   A name alone is not enough: **the two must also be the same recording.** A
   book whose play time differs from the file's by more than a minute is passed
@@ -1342,6 +1359,68 @@ book pushed, against a run that has just spent minutes listening to that book.
   `--max-chapters` — the last of these decides whether a file's marks are worth
   keeping, and this mode is the one that sends them rather than judging them.
   `--dry-run` works and reports what would be sent.
+
+#### Saying which book a file is
+
+`--abs-map <path>`
+: Pair local files with Audiobookshelf books by hand — for the ones nothing
+  about them names a book for, or names too many of them. One entry per line, a
+  file name on the left and a book on the right:
+
+  ```
+  # the shelf I ripped myself, whose tags are a mess
+  Stalker.m4b           = item:0b5f1a2c-9d34-4e6b-8f10-2a7c5e9d41b8
+  Das Spiel des Laren   = Perry Rhodan Silber Edition 087: Das Spiel des Laren
+  Something I Never Uploaded.m4b = none
+  ```
+
+  **On the left, a file name** — with or without its extension, matched exactly
+  but without regard to case. A file this tool has parked under a
+  `.missing-marks` name still counts as the file it was, so an entry does not
+  stop working the moment a run leaves that book unfinished.
+
+  **On the right, either an item id or a title.** `item:ID` names one book
+  outright and is the way out of an ambiguity; the id is what Audiobookshelf's
+  own address for that book ends in. Anything without a prefix is read as a
+  title and matched the way a `title:` selector is — case and punctuation
+  ignored, part of the title enough — which is also why a title may contain a
+  colon of its own here. Writing `none`, or leaving the right-hand side empty,
+  says this file has no book on the server and is to be passed over without a
+  search: worth doing for the one or two files on a shelf you know are not
+  there, so that they stop being reported on every sweep. (A book genuinely
+  called *none* is still reachable, as `title:none`.)
+
+  Blank lines and lines starting with `#` are ignored. The first `=` on a line
+  is the separator, and a file name that contains one can be quoted:
+  `"E=mc2.m4b" = item:...`. Where two entries name the same file, the later one
+  wins. `--abs-map` may be given more than once and the entries add up.
+
+  **An entry says which book, not that the two are the same recording.** The
+  play-time test still applies exactly as it does to a book found by its tags:
+  one whose length is not this file's is refused, with a note giving both. A
+  typo here would otherwise write a whole book's chapter list into one part of
+  it, which is the mistake that test exists to prevent — and no less likely for
+  having been typed by hand.
+
+##### A mapping that lives with the books
+
+A folder can carry its mapping itself, as a file called `.abchapterize-abs`,
+picked up for the books in that folder exactly the way
+[`.abchapterize-config`](#settings-that-live-with-the-books) is picked up for
+their settings. Same format, no option needed:
+
+```
+D:\Audiobooks\
+    Perry Rhodan\
+        .abchapterize-abs
+        Stalker.m4b
+```
+
+Mappings layer from the outside in and add up rather than replacing each other,
+so a library-wide file and a shelf's own are both in force; where both name the
+same file, the nearer one wins, and an `--abs-map` on the command line wins over
+both. A run that talks to no server ignores these files completely, so leaving
+one lying about does not disturb an ordinary local run over the same folder.
 
 #### Taking the server's marks
 

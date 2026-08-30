@@ -3,6 +3,7 @@
 // MIT license - see the LICENSE file in the repository root.
 
 using Xunit;
+using ABChapterize.Abs;
 using ABChapterize.Cli;
 using ABChapterize.Errors;
 
@@ -156,5 +157,63 @@ public sealed class FolderConfigTests : IDisposable
         Assert.Equal([_root], FolderConfig.FoldersFor(TopBook, _root));
         // A directly named file is its own root, so nothing above it is in scope.
         Assert.Equal([Sub], FolderConfig.FoldersFor(SubBook, SubBook));
+    }
+
+    /// <summary>The run's options for a recursive push over the library root, which is the sort of
+    /// run a folder's own book mapping is for.</summary>
+    /// <param name="options">Extra options, in front of the connection and the target.</param>
+    private CliOptions PushingRun(params string[] options)
+        => CliOptions.Parse(
+            [.. options, "--abs-url", "host:9", "--abs-key", "k", "--abs-push", "--recurse", _root])!;
+
+    [Fact]
+    public void AFoldersOwnBookMap_AppliesToTheBooksInIt()
+    {
+        Write(Sub, FolderConfig.BookMapName, "buch.m4b = item:li_one");
+
+        var mapped = Assert.Single(
+            FolderConfig.ResolveForFile(PushingRun(), SubBook, _root).AbsBookMappings);
+
+        Assert.Equal("li_one", mapped.Book?.Value);
+        Assert.Equal(FolderConfig.BookMapName, mapped.Where);
+    }
+
+    /// <summary>Mappings accumulate the way <c>--custom</c> does, so a library-wide file and a
+    /// shelf's own are both in force - the shelf's last, and so winning where they collide.</summary>
+    [Fact]
+    public void BookMaps_LayerOutermostFolderFirst()
+    {
+        Write(_root, FolderConfig.BookMapName, "buch.m4b = item:library_wide");
+        Write(Sub, FolderConfig.BookMapName, "buch.m4b = item:this_shelf");
+
+        var options = FolderConfig.ResolveForFile(PushingRun(), SubBook, _root);
+
+        Assert.Equal(2, options.AbsBookMappings.Count);
+        Assert.Equal("this_shelf",
+            AbsBookMap.Find(options.AbsBookMappings, SubBook)?.Book?.Value);
+    }
+
+    /// <summary>
+    /// A folder's standing note about where its books live must not turn an ordinary local run over
+    /// that folder into a usage error - <c>--abs-map</c> describes a server, and a run without one
+    /// refuses it.
+    /// </summary>
+    [Fact]
+    public void AFoldersBookMap_IsLeftAloneByARunWithNoServer()
+    {
+        Write(Sub, FolderConfig.BookMapName, "buch.m4b = item:li_one");
+        var run = Run();
+
+        Assert.Same(run, FolderConfig.ResolveForFile(run, SubBook, _root));
+    }
+
+    /// <summary>Which book a file is belongs to the file, not to the run, so it is one of the
+    /// settings a folder may carry rather than one it is refused for.</summary>
+    [Fact]
+    public void ABookMap_IsNotARunWideSetting()
+    {
+        Write(Sub, FolderConfig.BookMapName, "buch.m4b = item:li_one");
+
+        Assert.NotSame(PushingRun(), FolderConfig.ResolveForFile(PushingRun(), SubBook, _root));
     }
 }

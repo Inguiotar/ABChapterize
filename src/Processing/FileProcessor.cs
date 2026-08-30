@@ -553,17 +553,13 @@ public sealed class FileProcessor
             foreach (var file in files)
             {
                 ct.ThrowIfCancellationRequested();
-                // A factory rather than a detector, because in ABS mode the path a folder's
-                // settings would be resolved from does not exist until the book has been fetched -
-                // which happens inside ProcessOneAsync, where the file has a progress block to
-                // download into.
+                // A factory rather than a detector, because a file's own settings are not known
+                // until its path is - which in ABS mode is only after the book has been fetched,
+                // inside ProcessOneAsync, where the file has a progress block to download into.
                 await ProcessOneAsync(file, ffmpeg, ResolveDetector, ct);
             }
-            ChapterDetector ResolveDetector(string file, string targetRoot)
-                // A book from a server sits in a temporary folder that no .abchapterize-config
-                // could sensibly be put in, so ABS mode takes the run's own options as they are.
-                => new(_options.Abs ? _options : FolderConfig.ResolveForFile(_options, file, targetRoot),
-                    ffmpeg, transcriber, vad, upgrade);
+            ChapterDetector ResolveDetector(CliOptions options)
+                => new(options, ffmpeg, transcriber, vad, upgrade);
         }
         finally
         {
@@ -908,8 +904,8 @@ public sealed class FileProcessor
     /// </summary>
     /// <param name="pending">The file to process and the checkpoint it belongs to.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
-    /// <param name="detectorFor">Builds the detector for this file once its path is known, or null
-    /// for a mode that detects nothing (--abs-push-only).</param>
+    /// <param name="detectorFor">Builds the detector from this file's own settings, or null for a
+    /// mode that detects nothing (--abs-push-only, --abs-pull-only).</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task ProcessOneAsync(
         PendingFile pending, FfmpegClient ffmpeg, DetectorFactory? detectorFor, CancellationToken ct)
@@ -934,9 +930,13 @@ public sealed class FileProcessor
                 copy = fetched;
                 pending = pending with { Path = fetched.Path };
             }
+            // Resolved here rather than inside the factory, because the two modes that build no
+            // detector have per-folder settings of their own to honour - an .abchapterize-abs
+            // saying which book each of a shelf's files is - and reading them off the detector
+            // left those modes with the run's options and the folder's file unread.
+            var options = OptionsFor(pending.Path, pending.TargetRoot);
             var renamedTo = await ProcessOneCoreAsync(
-                pending.Path, name, work, ffmpeg,
-                detectorFor?.Invoke(pending.Path, pending.TargetRoot), copy, ct);
+                pending.Path, name, work, ffmpeg, options, detectorFor?.Invoke(options), copy, ct);
             pending.Progress?.MarkDone(pending.Path, renamedTo);
         }
         catch (OperationCanceledException)
@@ -959,12 +959,26 @@ public sealed class FileProcessor
     }
 
     /// <summary>
-    /// Builds the detector for one file, once the run knows where that file is.
+    /// Builds the detector for one file, from the settings that file is to be detected under.
+    /// </summary>
+    /// <param name="options">The file's own options, as <see cref="OptionsFor"/> resolved them.</param>
+    private delegate ChapterDetector DetectorFactory(CliOptions options);
+
+    /// <summary>
+    /// The settings one file is processed under: the run's own, with any per-folder files along its
+    /// folder chain layered underneath.
     /// </summary>
     /// <param name="file">Path of the file about to be processed.</param>
     /// <param name="targetRoot">The command line target it was reached through, which the
     /// per-folder settings are resolved along.</param>
-    private delegate ChapterDetector DetectorFactory(string file, string targetRoot);
+    /// <remarks>
+    /// A book from a server sits in a temporary folder that no <c>.abchapterize-config</c> could
+    /// sensibly be put in, so ABS mode takes the run's own options as they are - and must, the
+    /// folder chain of a path that did not exist when the run started being nothing a user could
+    /// have written settings into.
+    /// </remarks>
+    private CliOptions OptionsFor(string file, string targetRoot)
+        => _options.Abs ? _options : FolderConfig.ResolveForFile(_options, file, targetRoot);
 
     /// <summary>
     /// The per-file pipeline's opening and closing: probe, decoder resolution, the two hooks, the
@@ -975,15 +989,17 @@ public sealed class FileProcessor
     /// <param name="name">Its bare file name, which every console line for it is prefixed with.</param>
     /// <param name="work">Its progress tracker, already started.</param>
     /// <param name="ffmpeg">The run's shared ffmpeg client.</param>
+    /// <param name="options">The settings this file is processed under; see
+    /// <see cref="OptionsFor"/>.</param>
     /// <param name="detector">This file's detector, or null for a mode that detects nothing
-    /// (--abs-push-only).</param>
+    /// (--abs-push-only, --abs-pull-only).</param>
     /// <param name="abs">The Audiobookshelf book this file was fetched for, or null.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The name the file was renamed to (a ".missing-marks" tag added or dropped), or
     /// null when it kept its own.</returns>
     private async Task<string?> ProcessOneCoreAsync(
-        string file, string name, WorkTracker work, FfmpegClient ffmpeg, ChapterDetector? detector,
-        AbsLocalCopy? abs, CancellationToken ct)
+        string file, string name, WorkTracker work, FfmpegClient ffmpeg, CliOptions options,
+        ChapterDetector? detector, AbsLocalCopy? abs, CancellationToken ct)
     {
         var watch = Stopwatch.StartNew();
         // The ordinary log sink; every message is prefixed with the file name.
@@ -992,7 +1008,6 @@ public sealed class FileProcessor
         // what the probe found - so the probe, the decoder resolution and --run-before log to the
         // ordinary sink alone. Nothing is lost by that: the header restates everything the first
         // two carry, and a log opened before the hook would describe a file the hook then replaced.
-        var options = detector?.Options ?? _options;
         if (await OpenAndPlanAsync(file, name, work, ffmpeg, log, options, abs, ct) is not { } opened)
             return null;
         var (probed, plan) = opened;
@@ -1151,7 +1166,7 @@ public sealed class FileProcessor
         }
         else if (_options.UsesAbsPull)
         {
-            pull = await _abs!.PullAsync(file, info, ct);
+            pull = await _abs!.PullAsync(file, info, options.AbsBookMappings, ct);
             log?.Invoke(pull.Value.Note);
             // Only where a book was settled on. A pull that found none - or refused the one it
             // found - has nothing to merge, and running the rule anyway would answer with "the
@@ -1244,7 +1259,8 @@ public sealed class FileProcessor
         var book = ctx.Abs?.Book;
         if (book == null)
         {
-            var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
+            var match = await _abs!.MatchAsync(
+                ctx.File, ctx.Info, ctx.Options.AbsBookMappings, ct);
             if (match.Book == null)
             {
                 ReportSkipped(ctx.Work, ctx.Name, match.Reason, hint: "");
@@ -2317,7 +2333,7 @@ public sealed class FileProcessor
 
         // Asked for even when the set has a gap, unlike before: what the server already holds is
         // the thing that decides whether a gapped set may be sent, and the book is what carries it.
-        var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ct);
+        var match = await _abs!.MatchAsync(ctx.File, ctx.Info, ctx.Options.AbsBookMappings, ct);
         if (match.Book == null)
             return PushResult.NotSent(match.Reason);
         if (WithholdPartialPush(chapters, complete, match.Book.ChapterCount, _options.EffectiveMaxChapters)

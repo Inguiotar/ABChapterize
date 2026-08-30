@@ -21,9 +21,12 @@ public sealed class AbsItemMatcherTests
     /// <param name="seconds">Play time as the library reports it. The default matches
     /// <see cref="Tagged"/>'s, so a test that is not about play times need not mention them.</param>
     /// <param name="audioFiles">How many files the item holds.</param>
+    /// <param name="itemId">Its identifier, which an <c>item:</c> mapping names it by. The title
+    /// by default, so a test that is not about identifiers need not invent one.</param>
     private static AbsBook Book(
-        string title, string relativePath = "", double seconds = 3600, int audioFiles = 1)
-        => new(title, title, null, relativePath, audioFiles, 0, seconds);
+        string title, string relativePath = "", double seconds = 3600, int audioFiles = 1,
+        string? itemId = null)
+        => new(itemId ?? title, title, null, relativePath, audioFiles, 0, seconds);
 
     /// <summary>A probe result carrying the given container tags.</summary>
     /// <param name="title">The title tag, or null.</param>
@@ -362,5 +365,265 @@ public sealed class AbsItemMatcherTests
 
         Assert.Null(match.Book);
         Assert.Contains("not the same recording", match.Reason);
+    }
+
+    /// <summary>One mapping entry, as a folder's own mapping file would have produced it.</summary>
+    /// <param name="fileName">The local file the entry names.</param>
+    /// <param name="book">The book selector, or null for "this file has no book on the server".</param>
+    private static AbsBookMapping Mapped(string fileName, string? book)
+        => new(fileName, book == null ? null : AbsSelector.Parse(book),
+               @"C:\books\.abchapterize-abs");
+
+    /// <summary>
+    /// Nothing about a file can be more trustworthy than the user saying which book it is, so a
+    /// mapping is tried ahead of the tags rather than after them.
+    /// </summary>
+    [Fact]
+    public void AMapping_OutranksEveryTag()
+    {
+        var books = new[] { Book("The Right Book"), Book("The Wrong Book") };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\Mort.m4b", Tagged(album: "The Wrong Book", title: "The Wrong Book"),
+            [Mapped("Mort.m4b", "The Right Book")]);
+
+        Assert.Equal("The Right Book", match.Book?.Title);
+        Assert.Contains("the mapping in \".abchapterize-abs\"", match.Reason);
+    }
+
+    /// <summary>
+    /// The one clue that is not a name. Looked up in the catalogue the run already fetched, so an
+    /// id this account cannot see is a plain "not one of your books" rather than a failure a
+    /// request later.
+    /// </summary>
+    [Fact]
+    public void AMappingByItemId_NamesThatBookExactly()
+    {
+        var books = new[]
+        {
+            Book("Stalker", itemId: "li_one"),
+            Book("Stalker gegen Stalker", itemId: "li_two"),
+        };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(title: "Stalker"), [Mapped("x.m4b", "item:li_two")]);
+
+        Assert.Equal("Stalker gegen Stalker", match.Book?.Title);
+    }
+
+    [Fact]
+    public void AMappingNamingAnItemThatIsNotThere_SaysSo()
+    {
+        var match = AbsItemMatcher.Find(
+            [Book("Mort", itemId: "li_one")], @"C:\books\x.m4b", Tagged(),
+            [Mapped("x.m4b", "item:li_nope")]);
+
+        Assert.Null(match.Book);
+        Assert.Contains("li_nope", match.Reason);
+        Assert.Contains("not a book on the server", match.Reason);
+    }
+
+    /// <summary>
+    /// The user's answer, wrong or right, is still an answer: falling through to the tags would
+    /// re-open a question they had already closed, and would hide the typo that caused it.
+    /// </summary>
+    [Fact]
+    public void AMappingNamingNoBook_StopsTheSearchRatherThanFallingBackToTheTags()
+    {
+        var books = new[] { Book("Maskerade") };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(album: "Maskerade"),
+            [Mapped("x.m4b", "A Book Nobody Has")]);
+
+        Assert.Null(match.Book);
+        Assert.Contains("matches no book on the server", match.Reason);
+        Assert.False(match.NoClueNamedABook);
+    }
+
+    /// <summary>
+    /// "none" is how a shelf records that one of its files is not on the server at all, so a
+    /// per-file note stops the run reporting the same unmatched book on every sweep.
+    /// </summary>
+    [Fact]
+    public void AMappingSayingNone_ReportsThatWithoutSearching()
+    {
+        var match = AbsItemMatcher.Find(
+            [Book("Mort")], @"C:\books\Mort.m4b", Tagged(album: "Mort"), [Mapped("Mort.m4b", null)]);
+
+        Assert.Null(match.Book);
+        Assert.Contains("has no book on the server", match.Reason);
+        Assert.False(match.NoClueNamedABook);
+    }
+
+    /// <summary>
+    /// The user's call, 2026-08-30, and the point of the whole design: a mapping supplies the one
+    /// thing the matcher could not work out - which book this is - and nothing else. A hand-written
+    /// line is still a name, and a typo pairing a file with the wrong book would put a whole book's
+    /// marks past a part's end exactly as an album tag would.
+    /// </summary>
+    [Fact]
+    public void AMappedBook_StillHasToBeTheSameRecording()
+    {
+        var books = new[] { Book("Wintersmith", seconds: 36000) };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\part003.m4b", Tagged(seconds: 300),
+            [Mapped("part003.m4b", "Wintersmith")]);
+
+        Assert.Null(match.Book);
+        Assert.Contains("not the same recording", match.Reason);
+    }
+
+    [Fact]
+    public void AMappingForAnotherFile_LeavesTheOrdinaryCluesToDecide()
+    {
+        var books = new[] { Book("Mort"), Book("Maskerade") };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\Mort.m4b", Tagged(album: "Mort"),
+            [Mapped("Maskerade.m4b", "Maskerade")]);
+
+        Assert.Equal("Mort", match.Book?.Title);
+        Assert.Contains("album tag", match.Reason);
+    }
+
+    /// <summary>
+    /// The flag that decides whether the server is worth a request; every other empty-handed
+    /// outcome is a stop, and looking further after one is the guess the clue order refuses.
+    /// </summary>
+    [Fact]
+    public void OnlyAClueThatNamedNothingAtAll_LeavesTheSearchOpen()
+    {
+        var books = new[] { Book("Discworld 1"), Book("Discworld 2") };
+
+        Assert.True(AbsItemMatcher.Find(books, @"C:\books\x.m4b", Tagged()).NoClueNamedABook);
+        Assert.False(AbsItemMatcher
+            .Find(books, @"C:\books\x.m4b", Tagged(album: "Discworld")).NoClueNamedABook);
+    }
+
+    /// <summary>The note points at the way out, the way an ambiguity points at "item:".</summary>
+    [Fact]
+    public void NoBookAtAll_PointsAtTheMappingFile()
+        => Assert.Contains(
+            "--abs-map", AbsItemMatcher.Find([Book("Mort")], @"C:\books\x.m4b", Tagged()).Reason);
+
+    /// <summary>
+    /// The narrowing that decides who is worth a request. A book the server reports no play time
+    /// for is left out here although the ordinary test keeps it: there the silence must not refuse a
+    /// book a name has already picked out, here it is the only evidence there is for spending a
+    /// request at all.
+    /// </summary>
+    [Fact]
+    public void PossibleRecordings_KeepsOnlyTheBooksOfThisLength()
+    {
+        var books = new[]
+        {
+            Book("Right Length", seconds: 36000),
+            Book("Wrong Length", seconds: 300),
+            Book("No Play Time", seconds: 0),
+        };
+
+        var possible = AbsItemMatcher.PossibleRecordings(books, Tagged(seconds: 36002));
+
+        Assert.Equal("Right Length", Assert.Single(possible).Title);
+    }
+
+    /// <summary>
+    /// The case the last-resort stage exists for: a local copy of the server's own file, whose tags
+    /// name nothing and whose name is nothing like the library title.
+    /// </summary>
+    [Fact]
+    public void AServerFileName_RecognizesAFileNoTagOrTitleNames()
+    {
+        var candidates = new[]
+        {
+            new AbsBookFiles(Book("Perry Rhodan Silber Edition 150: Stalker", seconds: 48474),
+                             ["PR-SE-150.m4b"]),
+            new AbsBookFiles(Book("Perry Rhodan Silber Edition 151: Anything", seconds: 48474),
+                             ["PR-SE-151.m4b"]),
+        };
+
+        var match = AbsItemMatcher.FindByServerFileName(
+            candidates, @"C:\books\PR-SE-150.m4b", Tagged(seconds: 48474));
+
+        Assert.Equal("Perry Rhodan Silber Edition 150: Stalker", match.Book?.Title);
+        Assert.Contains("against the file name on the server", match.Reason);
+    }
+
+    /// <summary>
+    /// A book split on the server but joined into one file locally is a book this tool works on, so
+    /// its file names have to be readable - the play time is what settles whether the joined file
+    /// really is the whole book.
+    /// </summary>
+    [Fact]
+    public void AServerFileName_IsMatchedWhicheverOfABooksFilesCarriesIt()
+    {
+        var candidates = new[]
+        {
+            new AbsBookFiles(Book("Wintersmith", seconds: 36000, audioFiles: 3),
+                             ["part001.m4b", "wintersmith-full.m4b", "part003.m4b"]),
+        };
+
+        var match = AbsItemMatcher.FindByServerFileName(
+            candidates, @"C:\books\wintersmith-full.m4b", Tagged(seconds: 36000));
+
+        Assert.Equal("Wintersmith", match.Book?.Title);
+    }
+
+    /// <summary>
+    /// The stage adds a name to agree with; it does not make the play time an identifier. Two books
+    /// of one length whose files are named alike are still two books.
+    /// </summary>
+    [Fact]
+    public void TwoServerFilesOfTheSameName_AreStillReportedRatherThanGuessedAt()
+    {
+        var candidates = new[]
+        {
+            new AbsBookFiles(Book("Volume One", seconds: 36000), ["audiobook.m4b"]),
+            new AbsBookFiles(Book("Volume Two", seconds: 36000), ["audiobook.m4b"]),
+        };
+
+        var match = AbsItemMatcher.FindByServerFileName(
+            candidates, @"C:\books\audiobook.m4b", Tagged(seconds: 36000));
+
+        Assert.Null(match.Book);
+        Assert.Contains("matches 2 books", match.Reason);
+    }
+
+    [Fact]
+    public void ServerFileNamesThatNameNothing_LeaveTheOriginalOutcomeToStand()
+    {
+        var candidates = new[]
+        {
+            new AbsBookFiles(Book("Something Else", seconds: 36000), ["something-else.m4b"]),
+        };
+
+        var match = AbsItemMatcher.FindByServerFileName(
+            candidates, @"C:\books\Mort.m4b", Tagged(seconds: 36000));
+
+        Assert.Null(match.Book);
+        Assert.True(match.NoClueNamedABook);
+    }
+
+    /// <summary>
+    /// Every clue names itself with its article, because the fifth source is a phrase that already
+    /// carries one. Found by a live run against the test server: a mapped title that came out
+    /// ambiguous read "the the mapping in ...".
+    /// </summary>
+    [Fact]
+    public void AMappedTitleThatIsAmbiguous_ReadsAsOneSentence()
+    {
+        // Neither is exactly "Stalker", so both survive to the containment tier and the mapping
+        // comes out ambiguous rather than settled.
+        var books = new[] { Book("Stalker Rises"), Book("Stalker Strikes Back") };
+
+        var match = AbsItemMatcher.Find(
+            books, @"C:\books\x.m4b", Tagged(), [Mapped("x.m4b", "Stalker")]);
+
+        Assert.Null(match.Book);
+        Assert.DoesNotContain("the the", match.Reason);
+        Assert.Contains(
+            "the mapping in \".abchapterize-abs\" \"Stalker\" matches 2 books", match.Reason);
     }
 }
