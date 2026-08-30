@@ -116,6 +116,37 @@ public class ProgressRendererTests
     }
 
     [Fact]
+    public void DrawnRows_AreTheBlockLines_WhileTheConsoleKeepsTheWidthItWasDrawnAt()
+    {
+        // The ordinary case, and the one ClearBar's cursor arithmetic was written for: every line
+        // is shorter than the window, so each takes one row.
+        Assert.Equal(
+            ProgressRenderer.BlockLines, ProgressRenderer.DrawnRows([Width, 38], Width + 1));
+    }
+
+    [Fact]
+    public void DrawnRows_CountTheExtraRows_WhenTheConsoleHasBeenNarrowedUnderTheBar()
+    {
+        // A 200-column bar line re-wraps into three rows at 80 columns, the short status line into
+        // one: erasing only BlockLines of the four is what leaves a strip of old bar on screen.
+        Assert.Equal(4, ProgressRenderer.DrawnRows([200, 38], 80));
+
+        // Exactly as wide as the window still fits on one row - the console's newline is absorbed
+        // by the pending wrap rather than opening a row of its own.
+        Assert.Equal(2, ProgressRenderer.DrawnRows([80, 38], 80));
+        Assert.Equal(3, ProgressRenderer.DrawnRows([81, 38], 80));
+    }
+
+    [Fact]
+    public void DrawnRows_FallBackToTheBlockLines_WhenNothingIsKnownAboutWhatWasDrawn()
+    {
+        // A console that reports no width, and the state right after construction: neither says
+        // anything about the screen, so the erase stays what it always was.
+        Assert.Equal(ProgressRenderer.BlockLines, ProgressRenderer.DrawnRows([200, 38], 0));
+        Assert.Equal(ProgressRenderer.BlockLines, ProgressRenderer.DrawnRows([], 80));
+    }
+
+    [Fact]
     public void BuildLine_ShowsPlaceholder_UntilTheFirstChapterIsFound()
     {
         // Before the first chapter is found (all of Analyze, the start of Probe) a chapter

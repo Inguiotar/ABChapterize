@@ -340,6 +340,16 @@ public sealed class ProgressRenderer : IDisposable
     /// whenever no bar is currently drawn - including right after <see cref="ClearBar"/> erased
     /// it.</summary>
     private string? _lastLine;
+
+    /// <summary>The console width the block on screen was drawn at, so a window resized underneath
+    /// a bar is noticed even where it leaves the block's text unchanged - the skipped redraw is a
+    /// claim about the screen, and a resize is exactly what makes that claim stale.</summary>
+    private int _drawnWidth;
+
+    /// <summary>The plain length of each line of the block on screen, which is what lets
+    /// <see cref="ClearBar"/> erase a block the console has re-wrapped underneath it; empty
+    /// whenever no bar is drawn.</summary>
+    private IReadOnlyList<int> _drawnLengths = [];
     private readonly Lock _lock = new();
 
     /// <summary>Creates the renderer; when the console is redirected no bar is drawn.</summary>
@@ -561,14 +571,15 @@ public sealed class ProgressRenderer : IDisposable
                 block = [.. block.Select(l => ConsoleColors.PlainText(l).Length > width
                     ? ConsoleColors.Truncate(l, width)
                     : l)];
-            var text = string.Join('\n', block.Select(ConsoleColors.PlainText));
+            var plain = block.Select(ConsoleColors.PlainText).ToArray();
+            var text = string.Join('\n', plain);
 
-            // Nothing to do when the identical block is already drawn. The comparison runs on the
-            // plain text, which is the whole reason colors are applied at write time: it stays a
-            // comparison of what the user actually sees. When the bar was erased by an interleaved
-            // log/summary line, _barDrawn is false, so this never wrongly skips the redraw needed
-            // to put the bar back.
-            if (_barDrawn && text == _lastLine)
+            // Nothing to do when the identical block is already drawn at the same width. The
+            // comparison runs on the plain text, which is the whole reason colors are applied at
+            // write time: it stays a comparison of what the user actually sees. When the bar was
+            // erased by an interleaved log/summary line, _barDrawn is false, so this never wrongly
+            // skips the redraw needed to put the bar back.
+            if (_barDrawn && width == _drawnWidth && text == _lastLine)
                 return;
 
             ClearBar();
@@ -576,6 +587,8 @@ public sealed class ProgressRenderer : IDisposable
                 WriteSpans(line);
             _barDrawn = true;
             _lastLine = text;
+            _drawnWidth = width;
+            _drawnLengths = [.. plain.Select(l => l.Length)];
         }
     }
 
@@ -1036,13 +1049,69 @@ public sealed class ProgressRenderer : IDisposable
     {
         if (!_interactive || !_barDrawn)
             return;
-        var blank = new string(' ', Math.Max(0, SafeWindowWidth() - 1));
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - BlockLines));
-        for (var i = 0; i < BlockLines; i++)
+        // The buffer width, not the window width: a console stores and wraps its lines at the
+        // former, and on Windows the two part company the moment the window is narrowed under a
+        // run. Blanking to the window then leaves everything the block wrote past the new right
+        // edge sitting in the buffer, to reappear whole the moment the window is widened again.
+        var width = SafeBufferWidth();
+        var rows = DrawnRows(_drawnLengths, width);
+        var blank = new string(' ', Math.Max(0, width - 1));
+        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - rows));
+        for (var i = 0; i < rows; i++)
             Console.WriteLine(blank);
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - BlockLines));
+        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - rows));
         _barDrawn = false;
         _lastLine = null;
+        _drawnLengths = [];
+    }
+
+    /// <summary>
+    /// How many console rows the block on screen occupies right now - <see cref="BlockLines"/>
+    /// while the console is the width it was drawn at, and more once it has been narrowed
+    /// underneath the bar. Internal for unit testing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A block is written as <see cref="BlockLines"/> lines each shorter than the console, so it
+    /// occupies that many rows and <see cref="ClearBar"/> can erase it by counting back from the
+    /// cursor. Narrow the console afterwards and it re-wraps what it has stored: the bar line,
+    /// which spans the full width by design, becomes two rows, and erasing
+    /// <see cref="BlockLines"/> of the three leaves the first one on screen. That orphan is what
+    /// waking a pair of monitors leaves behind, the desktop resizing the terminal down and back
+    /// within a couple of seconds; the surviving row keeps the console's wrap flag, so widening
+    /// re-joins it with the row below and the debris ends up in front of the live bar rather than
+    /// above it (reported 2026-08-30).
+    /// </para>
+    /// <para>
+    /// <paramref name="width"/> must be the width the console wraps at, which is
+    /// <see cref="SafeBufferWidth"/> and not the window - measured 2026-08-30 by driving this
+    /// renderer through 24 random width changes in a real console and reading the buffer back.
+    /// Counting rows at the window width instead over-erases wherever the two differ, and swallowed
+    /// two of six result lines above the bar; erasing the window's width rather than the buffer's
+    /// left bar debris beside four of the six.
+    /// </para>
+    /// <para>
+    /// A console that clips its buffer on a shrink rather than re-wrapping it would be over-erased
+    /// by the same arithmetic, one result line per wrapped row. Accepted rather than guarded: no
+    /// terminal this tool is run in behaves that way, and reading the screen back to find out is
+    /// not something <see cref="Console"/> offers.
+    /// </para>
+    /// <para>
+    /// Lengths are in characters rather than columns, as every other width decision here is - a
+    /// double-width glyph in a file name counts once. It costs at worst one un-erased row on a
+    /// resize, which the next one clears.
+    /// </para>
+    /// </remarks>
+    /// <param name="drawnLengths">The plain length of each line of the block as it was written.</param>
+    /// <param name="width">The console width to wrap those lines at.</param>
+    internal static int DrawnRows(IReadOnlyList<int> drawnLengths, int width)
+    {
+        if (width <= 0 || drawnLengths.Count == 0)
+            return BlockLines;
+        var rows = 0;
+        foreach (var length in drawnLengths)
+            rows += 1 + Math.Max(0, length - 1) / width;
+        return rows;
     }
 
     /// <summary>
@@ -1061,6 +1130,24 @@ public sealed class ProgressRenderer : IDisposable
     private static int SafeWindowWidth()
     {
         try { return Console.WindowWidth; } catch { return DefaultWidth; }
+    }
+
+    /// <summary>
+    /// Returns the width the console stores and wraps its lines at, tolerating consoles that do
+    /// not report one. This is what <see cref="ClearBar"/> erases against; drawing goes by
+    /// <see cref="SafeWindowWidth"/>, which is what the reader can see.
+    /// </summary>
+    /// <remarks>
+    /// The two are the same number in a terminal that keeps them in step - Windows Terminal, any
+    /// ConPTY host, and every Unix console, where .NET reports the window width for both. A classic
+    /// Windows console is the case they separate in: narrowing the window leaves the buffer as wide
+    /// as it was, so a bar drawn before the change is still there in full, merely scrolled out of
+    /// sight to the right. Never smaller than the window, so erasing against it is never the
+    /// narrower of the two.
+    /// </remarks>
+    private static int SafeBufferWidth()
+    {
+        try { return Math.Max(Console.BufferWidth, Console.WindowWidth); } catch { return DefaultWidth; }
     }
 
     /// <summary>Stops the refresh timer and restores the cursor hidden for the interactive run.

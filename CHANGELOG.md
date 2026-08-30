@@ -273,6 +273,13 @@ earn a round number.
 
 ### Fixed
 
+- **Resizing the terminal under a running job no longer leaves pieces of the old progress bar
+  behind.** A window that changes width — dragged, or resized for you when a monitor wakes up or
+  the desktop rearranges itself — used to strand a strip of bar on the line above the live one, or
+  a fragment on the end of a result line, where it stayed until the run finished. The bar is now
+  erased against what the console really holds rather than against what currently fits on screen,
+  so a resize is redrawn cleanly whichever way it goes.
+
 - **The confidence on a chapter mark is now measured on the announcement, not on the window that
   found it.** It used to come from the wide probe window — a segment that usually swallows the
   jingle and a few sentences of narration, so the number described those more than the words it was
