@@ -1045,21 +1045,43 @@ public sealed class ProgressRenderer : IDisposable
     /// <see cref="_lastLine"/> cache so <see cref="Render"/> treats the bar as gone and redraws it,
     /// rather than skipping on a stale content match.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Erases against <see cref="SafeBufferWidth"/> rather than the window: a console stores and
+    /// wraps its lines at the former, and on Windows the two part company the moment the window is
+    /// narrowed under a run. Blanking to the window then leaves everything the block wrote past the
+    /// new right edge sitting in the buffer, to reappear whole the moment the window is widened.
+    /// </para>
+    /// <para>
+    /// Every column is blanked, the last one included, which is the one thing the block itself never
+    /// writes (<see cref="Render"/> draws one column short so that a finished line does not wrap of
+    /// its own accord). A re-wrapped row does fill it, so leaving it out stranded exactly one
+    /// character per row - reported 2026-08-30 as single characters surviving below the bar and, in
+    /// the same run, as a stray "-" welded to the end of the live bar line, that being the last
+    /// column of the row the bar was redrawn into.
+    /// </para>
+    /// <para>
+    /// Written cell by cell with an explicit cursor position per row rather than as blank lines. A
+    /// full-width write ends the row exactly, and what a console does with the newline that would
+    /// follow it is the sort of thing that differs between hosts; positioning instead leaves nothing
+    /// to differ about. It also confines the erase to rows above the cursor, so no part of it can
+    /// scroll the buffer.
+    /// </para>
+    /// </remarks>
     private void ClearBar()
     {
         if (!_interactive || !_barDrawn)
             return;
-        // The buffer width, not the window width: a console stores and wraps its lines at the
-        // former, and on Windows the two part company the moment the window is narrowed under a
-        // run. Blanking to the window then leaves everything the block wrote past the new right
-        // edge sitting in the buffer, to reappear whole the moment the window is widened again.
         var width = SafeBufferWidth();
         var rows = DrawnRows(_drawnLengths, width);
-        var blank = new string(' ', Math.Max(0, width - 1));
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - rows));
-        for (var i = 0; i < rows; i++)
-            Console.WriteLine(blank);
-        Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - rows));
+        var top = Math.Max(0, Console.CursorTop - rows);
+        var blank = new string(' ', Math.Max(1, width));
+        for (var row = 0; row < rows; row++)
+        {
+            Console.SetCursorPosition(0, top + row);
+            Console.Write(blank);
+        }
+        Console.SetCursorPosition(0, top);
         _barDrawn = false;
         _lastLine = null;
         _drawnLengths = [];
