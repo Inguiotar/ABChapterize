@@ -289,6 +289,17 @@ earn a round number.
 
 ### Fixed
 
+- **A prologue, an epilogue or a `--custom` mark is now also found in a stretch read in full.**
+  Until now these could only be picked up by the pass that samples a book at its pauses and its
+  music; where a gap or the end of a book is transcribed completely instead, the transcript was
+  read for numbered chapters alone. So an epilogue the sampling pass had missed stayed missed even
+  though the audio it is announced in had just been read word for word — and the end of a book is
+  both where an epilogue belongs and the stretch most often read that way, while looking for one
+  more chapter above the last. Those announcements are now looked for there too, under the same
+  position rules, the same required pause and the same limits that apply anywhere else. It costs no
+  extra time, the audio being read either way, and an announcement already marked is not marked
+  twice.
+
 - **Resizing the terminal under a running job no longer leaves pieces of the old progress bar
   behind.** A window that changes width — dragged, or resized for you when a monitor wakes up or
   the desktop rearranges itself — used to strand a strip of bar on the line above the live one, or

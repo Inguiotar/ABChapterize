@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Externalized doc-comment notes for src\Detection\NamedMarkLedger.cs.
+     Measurements, dated case studies, rejected alternatives and removed-feature
+     histories live here; contract, behaviour and usage stay in the source. -->
+<doc>
+  <member name="NamedMarkLedger">
+    <para>
+    <b>Why this class exists at all: Scan was blind to named marks, and nobody had ever written down
+    why.</b> Until 2026-08-30 a prologue, an epilogue or a <c>--custom</c> mark could only ever be
+    found by Probe. <see cref="ABChapterize.Detection.RegionScanner"/> carried no reference to
+    <see cref="ABChapterize.Language.NamedPhrase"/> whatsoever, and the question "was that
+    deliberate?" was asked and could not be answered: the file's doc comments said nothing, there
+    was no notes file for it, the CHANGELOG and the manual said nothing, no TODO item mentioned it,
+    and none of the eight commits that had touched the file was about named marks. The memory file
+    <c>named-marks-have-no-safety-net</c> recorded the <em>mechanism</em> - every recovery path is
+    triggered by a discontinuity in the chapter numbering, and a named mark carries no number, so it
+    sits in no gap and nothing looks for it twice - and recorded the consequence as a hazard to work
+    around when weighing changes to primary-scan window geometry. It never argued that the exclusion
+    was correct. The blindness had fallen out of gaps being defined by numbers; it had not been
+    decided.
+    </para>
+    <para>
+    <b>The argument that would have justified it does not cover the tail.</b> The project had reasoned
+    carefully about what can be announced in a given stretch, in
+    <see cref="ABChapterize.Detection.JingleFirstScan"/>'s remarks: between two <em>consecutively</em>
+    numbered chapters no numbered chapter fits, the prologue's scope has closed and the epilogue's
+    has not opened, so only a <c>--custom</c> mapping could be there - and the jingle-first gate
+    handles exactly that case. That reasoning covers an interior gap. It fails for the trailing
+    region, because the epilogue's scope opens precisely there.
+    <see cref="ABChapterize.Cli.SpecTag"/> says so in as many words, about why "between-chapters" is
+    not offered as a keyword for <see cref="ABChapterize.Language.NamedPhraseScope.AfterFirstChapter"/>:
+    "that scope does not exclude the tail - it is exactly how the built-in epilogue uses it".
+    </para>
+    <para>
+    <b>The measurement, 2026-08-30.</b> Over all 179 <c>.debug.log</c> files then available - the
+    19 of the build-435 corpus run in <c>L:\Temp</c> plus the 160 of the Perry Rhodan Silber-Edition
+    library - <b>13 of the 14 books that have an epilogue at all have it inside the trailing
+    region</b>: Kampf gegen die Blues, Die letzte Bastion, OLD MAN, Ovaron, Finale für Pluto, Das
+    Tabora, Die Altmutanten, Das Erbe der Yulocs, Suche nach der Erde, Die Terra-Patrouille, Corsa
+    nello spazio, I Shall Wear Midnight and The Forever War - the last of these clearing the region
+    boundary by 2.5 s. The fourteenth is Raumschiff Erde, whose epilogue announcement sits mid-book
+    and is dropped at result-build time by
+    <see cref="ABChapterize.Language.NamedPhraseScope.AfterLastChapter"/>; it is the "not a
+    hypothetical" case <see cref="ABChapterize.Detection.ChapterDetector.ResolveEpiloguePlacement"/>
+    mentions. So the trailing scan re-reads, with the upgrade model, the one stretch where an
+    epilogue belongs - and could not see one.
+    </para>
+    <para>
+    <b>What this change does not fix, stated plainly.</b> The only <em>recorded</em> loss of a named
+    mark is Gruelfin's <c>Prolog</c> at build 280, and that is a prologue in the head of the file.
+    Scan reaches the head only when an expected start chapter is known, which comes either from
+    <c>--expected-start-chapter</c> or from a prologue having already been found - so the one failure
+    on record has a catch-22 of its own and is untouched by this. The case for the change rests on
+    the structural argument and the 13-of-14 measurement, not on a book anyone can point at where a
+    named mark was lost and this would have caught it. That is the "no known-bad cases" situation the
+    memory <c>evaluating-a-flag-without-known-bad-cases</c> describes, and it is why the change was
+    built to add marks only where Probe found none rather than to second-guess Probe anywhere.
+    </para>
+    <para>
+    <b>One deliberate behaviour change came with the move.</b> The once-per-phrase out-of-scope note
+    used to live in a <c>RegionProber</c> field, so it was per region rather than per file, and its
+    own doc comment admitted "a recovery pass over a gap may repeat it once". Moving the set onto
+    this per-file ledger makes the note genuinely once per phrase per file, which is what it always
+    claimed to be. Log-only; no mark moves because of it.
+    </para>
+  </member>
+</doc>

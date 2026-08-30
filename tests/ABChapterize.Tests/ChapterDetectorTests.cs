@@ -2057,6 +2057,68 @@ public sealed class ChapterDetectorTests : IDisposable
     }
 
     [Fact]
+    public async Task TrailingScan_FindsAnEpilogue_ProbeNeverReached()
+    {
+        // The case the whole named-marks-in-Scan change exists for: the epilogue is announced in the
+        // trailing region, which is where an epilogue belongs, and no probe window reaches it. Scan
+        // transcribes that stretch anyway to hunt a chapter above the last one - so before this it
+        // was reading the announcement's own audio and structurally unable to see it.
+        var result = await DetectAsync(
+            OptionsWithTrailingScan(),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1789.95, Seg(10, " Epilogue.")); // trailing chunk 2, phrase at 1799.95
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        AssertNamed([("epilogue", "Epilogue", 1799.7)], result);
+    }
+
+    [Fact]
+    public async Task TrailingScan_DoesNotMarkAnEpilogueTwice_WhenProbeAlreadyFoundIt()
+    {
+        // Probe marks the epilogue, and the trailing scan then re-reads the very same audio looking
+        // for a chapter above the last one. Both passes answer to one ledger, so the second sighting
+        // is dropped on its phrase time before any placement work is done - without that, every
+        // epilogue in the corpus would have gained a duplicate a second or two away.
+        var result = await DetectAsync(
+            OptionsWithTrailingScan(),
+            [new(595, 600), new(1195, 1200), new(1795, 1800)],
+            s =>
+            {
+                s.Add(600, Seg(0.3, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1800, Seg(0.4, " Epilogue."));
+            });
+
+        AssertChapters([new(1, 600.05), new(2, 1199.95)], result.Chapters);
+        AssertNamed([("epilogue", "Epilogue", 1800.15)], result);
+    }
+
+    [Fact]
+    public async Task TrailingScan_LeavesAPrologueAlone_WhereItCannotBelong()
+    {
+        // The scope rule is the ledger's and is asked here exactly as it is in Probe: "prologue"
+        // spoken in the tail is prose, since a prologue by definition has no chapter before it. The
+        // trailing region always has every chapter before it, so Scan can never mark one there.
+        var result = await DetectAsync(
+            OptionsWithTrailingScan(),
+            [new(595, 600), new(1195, 1200)],
+            s =>
+            {
+                s.Add(0, Seg(0.5, " Chapter one."));
+                s.Add(1200, Seg(0.2, " Chapter two."));
+                s.Add(1789.95, Seg(10, " Prologue."));
+            });
+
+        AssertChapters([new(1, 0.25), new(2, 1199.95)], result.Chapters);
+        Assert.Empty(result.NamedMarks);
+    }
+
+    [Fact]
     public async Task TrailingRegion_IsLeftAlone_WithoutTheOption()
     {
         // Same audio as above, minus the flag: chapters 1 and 2 form an unbroken sequence, so

@@ -54,6 +54,10 @@ namespace ABChapterize.Detection;
 /// accept loop to try a superseded reading in, so the every-reading form
 /// <see cref="ProbeEnvironment.FindCappedPhraseReadings"/> supplies would have nothing here to act
 /// on it.</param>
+/// <param name="Named">The file's named-mark ledger, shared with Probe. Scan appends to it directly
+/// rather than returning named marks the way it returns chapters, because a named mark takes no part
+/// in the chapter sequence its caller reconciles - and because sharing the ledger is what stops an
+/// announcement Probe already marked being marked a second time here.</param>
 internal sealed record ScanEnvironment(
     CliOptions Options,
     IAudioSource Audio,
@@ -65,7 +69,8 @@ internal sealed record ScanEnvironment(
         Task<List<TranscriptSegment>>> TranscribeCounting,
     Action<string, List<TranscriptSegment>> LogTranscript,
     Func<List<TranscriptSegment>, LanguageProfile, int?, BareNumberReading,
-        IEnumerable<PhraseMatch>> FindCappedPhraseMatches);
+        IEnumerable<PhraseMatch>> FindCappedPhraseMatches,
+    NamedMarkLedger Named);
 
 /// <summary>
 /// The measurements and bookkeeping of the file being scanned, constant across every region of it -
@@ -351,6 +356,11 @@ internal sealed class RegionScanner
                 await RecordGapChapterMatch(match, chunkTranscript, ct);
             }
 
+            // The same transcript, read again for the announcements that carry no number. Free -
+            // this chunk is already decoded and already matched - which is most of why the blindness
+            // here was worth ending: the audio where an epilogue lives is read by this pass anyway.
+            await ScanChunkForNamedMarksAsync(matchSegments, carried, chunkStart, chunkEnd, ct);
+
             // A chunk whose normal transcript still leaves some expected number(s) unaccounted
             // for gets one more look: long inner gaps that line up with a real silence/jingle
             // (not just an ordinary narration pause) are re-scanned in small chunks, the same
@@ -585,6 +595,142 @@ internal sealed class RegionScanner
                      await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
                      $"){LowConfidenceNote(confidence)}" +
                      MissingNote(missingNumbers));
+    }
+
+    /// <summary>
+    /// Reads a chunk's transcript for the announcements that carry no number - prologue, epilogue
+    /// and the user's <c>--custom</c> mappings - and marks the ones that may stand here.
+    /// <para>
+    /// Scan produced no named mark at all until 2026-08-30, and no reason for that was ever
+    /// recorded; the notes on <see cref="NamedMarkLedger"/> have the search and the measurement that
+    /// ended it. The short of it: every recovery path in the tool is opened by a hole in the chapter
+    /// <em>numbering</em>, a named mark carries no number and so sits in no hole, and the blindness
+    /// fell out of that rather than being decided. It matters most in the trailing region, which is
+    /// exactly where an epilogue belongs - 13 of the 14 books with an epilogue across the 179 debug
+    /// logs measured have it there - so this pass was re-reading, with the upgrade model, the one
+    /// stretch the announcement lives in, and could not see it.
+    /// </para>
+    /// <para>
+    /// Costs no audio: the chunk is decoded and its transcript already in hand for the chapter scan
+    /// above. What it can add is bounded by the same ledger Probe answers to, so a mark here is one
+    /// Probe did not already make - the two passes cannot both claim one announcement.
+    /// </para>
+    /// <para>
+    /// The carried tail needs no guard of its own, unlike the chapter loop's. A phrase wholly inside
+    /// it was offered to the previous chunk's own pass and either became a mark - in which case the
+    /// ledger's phrase-time dedupe drops this second sighting before any placement work is done - or
+    /// was refused for a reason that has not changed. A phrase straddling a snapped seam exists in
+    /// neither chunk alone and is genuinely news here, which is the case the bridge exists for.
+    /// </para>
+    /// </summary>
+    /// <param name="matchSegments">The chunk's transcript in absolute file time, bridged tail
+    /// included - the same list the chapter scan matched against.</param>
+    /// <param name="carried">The bridged tail carried in from the previous chunk, for the transcript
+    /// window's true earliest moment.</param>
+    /// <param name="chunkStart">Absolute start of the chunk just transcribed.</param>
+    /// <param name="chunkEnd">Absolute end of that chunk.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task ScanChunkForNamedMarksAsync(
+        List<TranscriptSegment> matchSegments, List<TranscriptSegment> carried,
+        double chunkStart, double chunkEnd, CancellationToken ct)
+    {
+        if (_ctx.Profile.NamedPhrases.Count == 0)
+            return;
+
+        var transcript = new TranscriptWindow(
+            matchSegments,
+            carried.Count > 0 ? Math.Min(chunkStart, carried.Min(s => s.StartSeconds)) : chunkStart,
+            chunkEnd);
+        foreach (var match in FindNamedMatches(matchSegments, _ctx.Profile))
+        {
+            var phraseAbs = match.PhraseStartSeconds;
+            if (!_env.Named.IsInScope(match.Phrase, phraseAbs, ChaptersBefore(phraseAbs), _env.Log))
+                continue;
+            if (_env.Named.ShouldDrop(match.Phrase, phraseAbs, _ctx.Profile, _env.Log))
+                continue;
+            await RecordGapNamedMatch(match, transcript, ct);
+        }
+    }
+
+    /// <summary>
+    /// How many chapters are known to sit <em>before</em> this position - Scan's half of the scope
+    /// question (<see cref="NamedMarkLedger.IsInScope"/>). Counted over everything already known
+    /// plus what this region has found, because a region is scanned with the rest of the book
+    /// settled around it: the tail is scanned knowing every chapter, and a scope that counted only
+    /// this region's own finds would hold the epilogue's scope shut for the whole pass.
+    /// <para>
+    /// Under <c>--ignore-chapter-numbers</c> the chapters live in the named list rather than the
+    /// numbered one, exactly as in <see cref="RegionProber"/>, and counting only the latter would
+    /// leave every after-the-first scope shut instead.
+    /// </para>
+    /// </summary>
+    /// <param name="phraseAbs">Absolute time the announcement being judged was heard at.</param>
+    private int ChaptersBefore(double phraseAbs) => _env.Options.IgnoreChapterNumbers
+        ? _env.Named.Marks.Count(m => m.Kind == _ctx.Profile.ChapterAnnouncement.Kind &&
+                                      m.TimeSeconds < phraseAbs)
+        : _knownChapters.Concat(_found).Count(c => c.TimeSeconds < phraseAbs);
+
+    /// <summary>
+    /// Places one named match found by a Scan chunk. The chapter path's twin
+    /// (<see cref="RecordGapChapterMatch"/>) and deliberately the same shape: a prologue, an epilogue
+    /// and a <c>--custom</c> phrase are announcements in exactly the sense a chapter phrase is, so
+    /// they get the same anchor resolution, the same placement and the same refinement. What differs
+    /// is only what a chapter has and they do not - there is no number, so no
+    /// <see cref="NumberCheck"/>, no sequence bookkeeping and no missing-number note.
+    /// </summary>
+    /// <param name="match">The named match, in absolute file time.</param>
+    /// <param name="transcript">The chunk's transcript window, for precise marking.</param>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task RecordGapNamedMatch(
+        NamedMatch match, TranscriptWindow transcript, CancellationToken ct)
+    {
+        var phraseAbs = match.PhraseStartSeconds;
+        double time;
+        Silence? statSilence = null;
+        NonSpeechRegion? statRegion = null;
+        if (_env.Vad != null)
+        {
+            var lookback = _ctx.JingleReachSeconds;
+            var (anchorSilence, vadRegion) = ResolveJingleAnchor(
+                phraseAbs, match.PhraseEndSeconds, phraseAbs - lookback, _ctx.AllSilences,
+                _ctx.NonSpeechRegions, candidateVadRegion: null, _ctx.SpeechSegments,
+                transcript.Segments);
+            time = RefineDefaultMark(
+                Math.Max(0, ResolveDefaultPhraseOnset(
+                                phraseAbs, vadRegion, anchorSilence, _ctx.SpeechSegments)
+                            - _env.Options.MarkLeadSeconds),
+                _ctx.SpeechSegments, _env.Options.MarkLeadSeconds);
+            (statSilence, statRegion) = (anchorSilence, vadRegion);
+        }
+        else
+        {
+            statSilence = FindRealAnchorSilence(
+                phraseAbs - PhraseLatestStartSeconds, phraseAbs, _ctx.AllSilences);
+            time = Math.Max(0, phraseAbs - _env.Options.MarkLeadSeconds);
+        }
+        var markCtx = new MarkContext(
+            _ctx.File, _ctx.Info.InputDecoder, match.Phrase.Pattern,
+            _ctx.AllSilences, _ctx.SpeechSegments, transcript, _ctx.Profile.Language);
+        // The same isolation the probing passes hold a named mark to, through the same helper, so a
+        // prologue is not admitted here on evidence Probe would have refused - see
+        // RegionProber.NamedIsolationFor for why the pause matters more for these than for a
+        // numbered chapter.
+        if (await _env.Marks.PlaceAsync(
+                null, time, phraseAbs, match.PhraseEndSeconds, statSilence, statRegion, markCtx,
+                RegionProber.NamedIsolationFor(match, phraseAbs), ct) is not { } placed)
+            return;
+        time = placed.TimeSeconds;
+        if (_env.Named.AlreadyPlacedAt(match.Phrase.Kind, time))
+            return;
+        _env.Named.Add(match, time, phraseAbs);
+        _ctx.Work.NamedMarks = _env.Named.Marks.Count;
+        _ctx.Work.ExtraMarks =
+            _env.Named.Marks.Count(m => m.Kind != _ctx.Profile.ChapterAnnouncement.Kind);
+        _env.Log?.Invoke(
+            $"{match.Phrase.Kind} found in gap (\"{match.Title}\"), mark placed at " +
+            $"{FormatTimestamp(time)} (confidence {match.Confidence:0.00}" +
+            await _env.Marks.LoudnessNoteAsync(time, markCtx, ct) +
+            $"){LowConfidenceNote(match.Confidence)}");
     }
 
     /// <summary>

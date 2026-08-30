@@ -110,10 +110,16 @@ public sealed class ChapterDetector
     private int _sequenceRestartSkips;
 
     /// <summary>The current file's named marks, as a live view rather than a snapshot: the very
-    /// list every <see cref="RegionProber"/> of the file appends to, so
-    /// <see cref="ExpectedStartChapter"/> answers with what is known at the moment it is asked. Set
-    /// per file, and empty until then.</summary>
+    /// list every <see cref="RegionProber"/> and <see cref="RegionScanner"/> of the file appends to,
+    /// so <see cref="ExpectedStartChapter"/> answers with what is known at the moment it is asked.
+    /// Set per file, and empty until then.</summary>
     private IReadOnlyList<DetectedMark> _namedMarks = [];
+
+    /// <summary>The current file's named-mark ledger - <see cref="_namedMarks"/>' owner, and the
+    /// rules for admitting another mark to it. Held as a field for the same reason the list is: the
+    /// Scan passes are built well after Probe's region loop has gone out of scope, and both must
+    /// answer to one ledger or the same announcement can be marked twice.</summary>
+    private NamedMarkLedger? _named;
 
     /// <summary>The chapter number this file's sequence is expected to start at - see
     /// <see cref="GapPlanning.ExpectedStartFor"/>, which is where the rule lives. Read instead of
@@ -403,10 +409,14 @@ public sealed class ChapterDetector
         var found = new List<DetectedChapter>(confirmedSeed);
         // The named marks travel alongside rather than inside `found`: they have no chapter number,
         // and everything below - gaps, sequence progress, Re-probe's targets - reasons in numbers.
-        var namedFound = new List<DetectedMark>(namedSeed);
+        // One ledger for the file, handed to every pass that can produce a named mark, so Probe and
+        // Scan share the scope rule, both dedupe passes and the two --custom caps rather than each
+        // keeping its own reading of them.
+        var named = new NamedMarkLedger(new List<DetectedMark>(namedSeed));
+        _named = named;
         // The list itself, not a copy: ExpectedStartChapter reads it whenever it is asked, and a
         // prologue found halfway through Probe has to count from that moment on.
-        _namedMarks = namedFound;
+        _namedMarks = named.Marks;
 
         // --early-abort (0 disables it): once Probe has probed this many minutes of play time
         // without finding a single chapter, further probing is pointless - give up rather than
@@ -467,7 +477,7 @@ public sealed class ChapterDetector
         // below has anything to do. Taken across regions rather than per region: it is a statement
         // about the narrator, and a region that found only one mark measured nothing at all.
         var scan = await ProbeRegionsAsync(
-            probeCtx, regions, found, namedFound, language,
+            probeCtx, regions, found, named, language,
             jingleFirst.Run ? ProbeShape.JinglesOnly
                 : descending.Run ? ProbeShape.SilencesDescending
                 : ProbeShape.Everything,
@@ -481,15 +491,15 @@ public sealed class ChapterDetector
         // GatherThenResolveAsync, and why it is one walk rather than two).
         if (jingleFirst.Run && !scan.EarlyAborted && scan.BelowExpectedStartNumber == null)
             scan = scan.And(await ProbePausesAfterJinglesAsync(
-                probeCtx, regions[0], found, namedFound, language, bytesPerSecond, ct));
+                probeCtx, regions[0], found, named, language, bytesPerSecond, ct));
 
         var (earlyAborted, belowExpectedStartNumber, measuredBreakSeconds) = scan;
 
         if (!earlyAborted && belowExpectedStartNumber == null && !_options.IgnoreChapterNumbers)
             await SweepAdaptiveSubFloorAsync(
-                probeCtx, found, namedFound, language, measuredBreakSeconds, ct);
+                probeCtx, found, named, language, measuredBreakSeconds, ct);
 
-        var chapters = await ReconcileSequenceAsync(found, namedFound, probeCtx, language.Profile, ct);
+        var chapters = await ReconcileSequenceAsync(found, named.Marks, probeCtx, language.Profile, ct);
         // The stage drops marks as well as renumbering them, and what it leaves is what gap planning
         // is about to measure the book against - so the bar should be showing that sequence and not
         // the one the last mark placement reported.
@@ -504,7 +514,7 @@ public sealed class ChapterDetector
         if (!_options.IgnoreChapterNumbers)
         {
             if (probeCompleted)
-                chapters = await RunReprobeAsync(file, info, work, chapters, namedFound,
+                chapters = await RunReprobeAsync(file, info, work, chapters, named,
                     allSilences, silences, nonSpeechRegions, speechSegments, jingles, bytesPerSecond,
                     language.Profile, ct);
 
@@ -516,7 +526,7 @@ public sealed class ChapterDetector
             // announcement, and two passes reading one announcement under two different numbers
             // leave two marks on top of each other that are only now both in the same list.
             chapters = await ReconcileCollidingMarksAsync(
-                chapters, namedFound, probeCtx, language.Profile, ct);
+                chapters, named.Marks, probeCtx, language.Profile, ct);
         }
         // Last of all, because settling a collision removes a mark and the numbers under it may
         // have become missing: nothing after this point reports progress, so without it the bar's
@@ -529,7 +539,7 @@ public sealed class ChapterDetector
         _denoiser = null;
 
         return BuildDetectionResult(
-            chapters, namedFound, speechSegments, language.Profile, language.DetectedLanguage,
+            chapters, named.Marks, speechSegments, language.Profile, language.DetectedLanguage,
             language.DetectedProbability, earlyAborted, belowExpectedStartNumber);
     }
 
@@ -567,20 +577,20 @@ public sealed class ChapterDetector
     /// <param name="ctx">The file's Probe context.</param>
     /// <param name="regions">The regions to probe, in file order.</param>
     /// <param name="found">Accumulator of confirmed chapters.</param>
-    /// <param name="namedFound">Accumulator of the file's named marks.</param>
+    /// <param name="named">Accumulator of the file's named marks.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="shape">Which of each region's candidates to walk; see <see cref="ProbeShape"/>.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<ProbeOutcome> ProbeRegionsAsync(
         ProbeContext ctx, IReadOnlyList<DetectionRegion> regions,
-        List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
+        List<DetectedChapter> found, NamedMarkLedger named, LanguageState language,
         ProbeShape shape, CancellationToken ct)
     {
         var outcome = new ProbeOutcome(false, null, null);
         foreach (var region in regions)
         {
             var prober = new RegionProber(
-                BuildProbeEnvironment(), ctx, region, found, namedFound, language, shape: shape);
+                BuildProbeEnvironment(), ctx, region, found, named, language, shape: shape);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
@@ -627,13 +637,13 @@ public sealed class ChapterDetector
     /// <param name="region">The region both halves walk - the whole file, this shape being
     /// restricted to a fresh run.</param>
     /// <param name="found">Accumulator of confirmed chapters, holding the jingle half's finds.</param>
-    /// <param name="namedFound">Accumulator of the file's named marks.</param>
+    /// <param name="named">Accumulator of the file's named marks.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="bytesPerSecond">The file's play time to progress-byte rate.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task<ProbeOutcome> ProbePausesAfterJinglesAsync(
         ProbeContext ctx, DetectionRegion region,
-        List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
+        List<DetectedChapter> found, NamedMarkLedger named, LanguageState language,
         double bytesPerSecond, CancellationToken ct)
     {
         var stretches = JingleFirstScan.UnsettledStretches(
@@ -660,7 +670,7 @@ public sealed class ChapterDetector
             BarSpans([.. stretches.Select(s => (s.FromSeconds, s.ToSeconds))],
                      ctx.Info.DurationSeconds, bytesPerSecond));
         return await ProbeRegionsAsync(
-            ctx, stretches, found, namedFound, language, ProbeShape.SilencesOnly, ct);
+            ctx, stretches, found, named, language, ProbeShape.SilencesOnly, ct);
     }
 
     /// <summary>
@@ -754,7 +764,7 @@ public sealed class ChapterDetector
     /// </summary>
     private ScanEnvironment BuildScanEnvironment()
         => new(_options, _audio, _vad, _log, _marks!, _upgradeTranscriber,
-            TranscribeCountingAsync, LogTranscript, FindCappedPhraseMatches);
+            TranscribeCountingAsync, LogTranscript, FindCappedPhraseMatches, _named!);
 
     /// <summary>
     /// The file's measurements as <see cref="RegionScanner"/> reads them, gathered once per Scan
@@ -763,10 +773,21 @@ public sealed class ChapterDetector
     /// <remarks>
     /// <see cref="ExpectedStartChapter"/> is a live property everywhere else, because a prologue
     /// found halfway through Probe has to count from that moment on (see <see cref="_namedMarks"/>).
-    /// Reading it into the context freezes it, which is sound only because every
-    /// <see cref="RegionProber"/> - the one thing that can accept a named mark - has finished by the
-    /// time Scan begins; Scan itself records numbered chapters and nothing else. Should a later pass
-    /// ever gain a named-mark route, this is the line that has to become live again.
+    /// Reading it into the context freezes it. That used to be sound because Probe was the only pass
+    /// that could accept a named mark at all; since 2026-08-30 Scan can too
+    /// (<see cref="RegionScanner.ScanChunkForNamedMarksAsync"/>), so the reason is now a narrower
+    /// one and worth stating exactly.
+    /// <para>
+    /// Only a <em>prologue</em> moves this value (<see cref="GapPlanning.ExpectedStartFor"/>), and
+    /// Scan cannot find one anywhere the frozen answer would be wrong. A prologue is scoped
+    /// <see cref="NamedPhraseScope.BeforeFirstChapter"/>, so it is out of scope in the tail and in
+    /// every interior gap - the only stretch it can be found in is a leading region, and
+    /// <see cref="GapPlanning.FindGaps"/> only builds one of those when an expected start chapter is
+    /// already known. Whichever way it got known - the option, which wins outright, or a prologue
+    /// Probe already found, which already made it 1 - a prologue found here leaves it exactly where
+    /// it stands. Should a named phrase ever become able to change this value from a stretch Scan
+    /// reads, this is still the line that has to become live again.
+    /// </para>
     /// </remarks>
     /// <param name="file">Path of the audio file.</param>
     /// <param name="info">Probe result of the file.</param>
@@ -1677,7 +1698,7 @@ public sealed class ChapterDetector
     /// <param name="info">Probe result of the file.</param>
     /// <param name="work">Progress tracker; begins its own "Re-probe" phase when there is work.</param>
     /// <param name="chapters">The chapters Probe found, in chronological order.</param>
-    /// <param name="namedFound">The file's prologue/epilogue accumulator, passed through so a
+    /// <param name="named">The file's prologue/epilogue accumulator, passed through so a
     /// re-probe on the better model can still notice an announcement Probe's model missed.</param>
     /// <param name="allSilences">Every silence from <see cref="RunAnalysisAsync"/>.</param>
     /// <param name="silences">The --min-silence-length subset - Probe's own candidates.</param>
@@ -1691,7 +1712,7 @@ public sealed class ChapterDetector
     /// <returns><paramref name="chapters"/> plus anything the re-probe recovered.</returns>
     private async Task<List<DetectedChapter>> RunReprobeAsync(
         string file, MediaInfo info, WorkTracker work, List<DetectedChapter> chapters,
-        List<DetectedMark> namedFound,
+        NamedMarkLedger named,
         List<Silence> allSilences, List<Silence> silences,
         List<NonSpeechRegion> nonSpeechRegions, List<SpeechSegment> speechSegments,
         List<Jingle> jingles, double bytesPerSecond, LanguageProfile profile, CancellationToken ct)
@@ -1745,13 +1766,13 @@ public sealed class ChapterDetector
             // expectations already came up empty on, so the one thing it must not do is apply them
             // a second time. Its value is the heavier model over the same audio, seen whole.
             var prober = new RegionProber(
-                env, ctx, region, found, namedFound,
+                env, ctx, region, found, named,
                 new LanguageState(profile, null, 0), recovery: true, hunting: missing);
             await prober.RunAsync(ct);
             _customLimitHit |= prober.CustomLimitHit;
             _sequenceRestartSkips += prober.SequenceRestartSkips;
             await SweepSubFloorSilencesAsync(
-                env, ctx, gap, missing, found, namedFound, profile, allSilences, ct);
+                env, ctx, gap, missing, found, named, profile, allSilences, ct);
             // The prober reports its position as it goes, but it stops at the last candidate rather
             // than at the gap's end, and a gap yielding no candidates at all reports nothing - so
             // the gap is booked as passed here, or the bar would sit behind the pass by up to a
@@ -1849,16 +1870,16 @@ public sealed class ChapterDetector
     /// <param name="gap">The gap being recovered.</param>
     /// <param name="missing">The chapter numbers that gap was expected to yield.</param>
     /// <param name="found">Accumulator of chapters, holding whatever the ordinary re-probe added.</param>
-    /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
+    /// <param name="named">The file's prologue/epilogue accumulator.</param>
     /// <param name="profile">The language profile resolved for this file.</param>
     /// <param name="allSilences">Every silence Analyze retained, which is where the bands come from.</param>
     /// <param name="ct">Cancellation token.</param>
     private Task SweepSubFloorSilencesAsync(
         ProbeEnvironment env, ProbeContext ctx, GapRegion gap, List<int> missing, List<DetectedChapter> found,
-        List<DetectedMark> namedFound, LanguageProfile profile, List<Silence> allSilences,
+        NamedMarkLedger named, LanguageProfile profile, List<Silence> allSilences,
         CancellationToken ct)
         => SweepGapBandsAsync(
-            env, ctx, gap, missing, found, namedFound, new LanguageState(profile, null, 0),
+            env, ctx, gap, missing, found, named, new LanguageState(profile, null, 0),
             allSilences, "Re-probe", ct);
 
     /// <summary>
@@ -1889,14 +1910,14 @@ public sealed class ChapterDetector
     /// <param name="gap">The gap being swept.</param>
     /// <param name="missing">The chapter numbers that gap was expected to yield.</param>
     /// <param name="found">Accumulator of chapters, added to in place.</param>
-    /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
+    /// <param name="named">The file's prologue/epilogue accumulator.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="allSilences">Every silence Analyze retained, which is where the bands come from.</param>
     /// <param name="phase">How the log lines name the pass this sweep belongs to.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task SweepGapBandsAsync(
         ProbeEnvironment env, ProbeContext ctx, GapRegion gap, List<int> missing,
-        List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
+        List<DetectedChapter> found, NamedMarkLedger named, LanguageState language,
         List<Silence> allSilences, string phase, CancellationToken ct)
     {
         var stillMissing = StillMissing(missing, found, gap.Sequence);
@@ -1937,7 +1958,7 @@ public sealed class ChapterDetector
             var region = new DetectionRegion(
                 gap.FromSeconds, gap.ToSeconds, stillMissing[0] - 1, stillMissing[^1] + 1, gap.Sequence);
             var prober = new RegionProber(
-                env, ctx with { Silences = band }, region, found, namedFound, language,
+                env, ctx with { Silences = band }, region, found, named, language,
                 sweepingSubFloorSilences: true, hunting: stillMissing);
             // Named for the length of the sweep itself and not a moment longer: the enclosing phase
             // is Probe or Re-probe, its bar is the one this walks over, and the name it was under is
@@ -2014,7 +2035,7 @@ public sealed class ChapterDetector
     /// <include file='../../notes/Detection/ChapterDetector.xml' path='doc/member[@name="SweepAdaptiveSubFloorAsync"]/*' /></remarks>
     /// <param name="ctx">Probe's probe context, whose silence list the band replaces.</param>
     /// <param name="found">The chapter accumulator, added to in place.</param>
-    /// <param name="namedFound">The file's prologue/epilogue accumulator.</param>
+    /// <param name="named">The file's prologue/epilogue accumulator.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="measuredBreakSeconds">The shortest chapter break Probe's marks measured, or
     /// null where none of them measured one at all. Reported and nothing more: the sweep looks
@@ -2022,7 +2043,7 @@ public sealed class ChapterDetector
     /// whether a shorter pause is worth a look inside a gap that is still missing a chapter.</param>
     /// <param name="ct">Cancellation token.</param>
     private async Task SweepAdaptiveSubFloorAsync(
-        ProbeContext ctx, List<DetectedChapter> found, List<DetectedMark> namedFound,
+        ProbeContext ctx, List<DetectedChapter> found, NamedMarkLedger named,
         LanguageState language, double? measuredBreakSeconds, CancellationToken ct)
     {
         if (SubFloorSweepBands(_options.MinSilenceSeconds, _options.AdaptiveFloorSeconds).Count == 0)
@@ -2049,7 +2070,7 @@ public sealed class ChapterDetector
 
         foreach (var (gap, missing) in work)
             await SweepGapBandsAsync(
-                env, ctx, gap, missing, found, namedFound, language, ctx.AllSilences, "Probe", ct);
+                env, ctx, gap, missing, found, named, language, ctx.AllSilences, "Probe", ct);
     }
 
     /// <summary>Which of <paramref name="expected"/> the accumulator still has no chapter for.</summary>

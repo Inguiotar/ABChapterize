@@ -344,8 +344,13 @@ internal sealed class RegionProber
     /// of which region contributed what.</summary>
     private readonly List<DetectedChapter> _found;
 
-    /// <summary>Accumulator of the file's non-numbered marks, shared across regions exactly as
-    /// <see cref="_found"/> is. Holds at most one mark per non-repeatable
+    /// <summary>The file's named marks and every rule about admitting another, shared across regions
+    /// exactly as <see cref="_found"/> is - and shared with Scan, which is what keeps one
+    /// announcement from being marked twice by two passes.</summary>
+    private readonly NamedMarkLedger _named;
+
+    /// <summary>Accumulator of the file's non-numbered marks - <see cref="NamedMarkLedger.Marks"/>
+    /// under the name the reading code here uses. Holds at most one mark per non-repeatable
     /// <see cref="NamedPhrase.Kind"/> (prologue, epilogue) and any number of repeatable ones
     /// (<c>--custom</c>) - see <see cref="AcceptNamedMatchAsync"/> for both rules.</summary>
     private readonly List<DetectedMark> _namedFound;
@@ -580,9 +585,11 @@ internal sealed class RegionProber
     /// detection was therefore abandoned for this file; null otherwise.</summary>
     internal int? BelowExpectedStartNumber { get; private set; }
 
-    /// <summary>Whether <see cref="DetectionTuning.MaxCustomMarksPerFile"/> was reached in this
-    /// region and further --custom matches were therefore dropped.</summary>
-    internal bool CustomLimitHit { get; private set; }
+    /// <summary>Whether <see cref="DetectionTuning.MaxCustomMarksPerFile"/> was reached and further
+    /// --custom matches were therefore dropped. Read off the file's shared ledger, so it answers for
+    /// the file rather than for this region - a cap reached in an earlier region, or by Scan, is
+    /// still reached here.</summary>
+    internal bool CustomLimitHit => _named.CustomLimitHit;
 
     /// <summary>
     /// Every announcement this region gave up on for sitting below the sequence, in the order they
@@ -703,7 +710,8 @@ internal sealed class RegionProber
     /// <param name="ctx">Region-loop-invariant Probe inputs.</param>
     /// <param name="region">The region to probe.</param>
     /// <param name="found">Accumulator of confirmed chapters across all regions.</param>
-    /// <param name="namedFound">Accumulator of the file's prologue/epilogue marks.</param>
+    /// <param name="named">The file's named-mark ledger - its prologue/epilogue/<c>--custom</c>
+    /// marks and the rules for admitting another, shared with Scan.</param>
     /// <param name="language">The file's settled language resolution.</param>
     /// <param name="sweepingSubFloorSilences">Whether this is a Re-probe sub-floor sweep; see
     /// <see cref="_sweeping"/>.</param>
@@ -714,7 +722,7 @@ internal sealed class RegionProber
     /// <param name="shape">Which of the region's candidates to walk; see <see cref="ProbeShape"/>.
     /// Defaults to all of them, which is every caller but a two-part Probe's halves.</param>
     internal RegionProber(ProbeEnvironment env, ProbeContext ctx, DetectionRegion region,
-        List<DetectedChapter> found, List<DetectedMark> namedFound, LanguageState language,
+        List<DetectedChapter> found, NamedMarkLedger named, LanguageState language,
         bool sweepingSubFloorSilences = false,
         bool recovery = false, IEnumerable<int>? hunting = null,
         ProbeShape shape = ProbeShape.Everything)
@@ -724,7 +732,8 @@ internal sealed class RegionProber
         _region = region;
         _mender = new SuspectNumberMender(env, ctx, region);
         _found = found;
-        _namedFound = namedFound;
+        _named = named;
+        _namedFound = named.Marks;
         _language = language;
         _sweeping = sweepingSubFloorSilences;
         _recovery = recovery || sweepingSubFloorSilences;
@@ -2519,50 +2528,14 @@ internal sealed class RegionProber
     }
 
     /// <summary>
-    /// Whether a named phrase may become a mark at this point of the file, judged purely by how
-    /// many chapters are known so far - see <see cref="NamedPhraseScope"/> for why that is the only
-    /// usable landmark, and why <see cref="NamedPhraseScope.AfterLastChapter"/> can only be
-    /// pre-filtered here and has to be applied properly at the end of the run
-    /// (<see cref="ChapterDetector.DropOutOfScopeNamedMarks"/>).
-    /// <para>
-    /// A rejection is noted once per phrase, not once per occurrence: "epilogue" turning up in the
-    /// middle of a book is an ordinary word in ordinary prose, and one line per match would drown
-    /// the log - but a mapping the user scoped by hand and then never sees a mark from is a support
-    /// question, so the fact that its matches are being dropped has to be visible somewhere.
-    /// </para>
+    /// Probe's half of the scope question: how many chapters sit before the announcement. The rule
+    /// itself is <see cref="NamedMarkLedger.IsInScope"/>, shared with Scan; only the count is a
+    /// per-pass matter, because the two passes read it off different lists.
     /// </summary>
     /// <param name="phrase">The phrase that matched.</param>
     /// <param name="phraseAbs">Absolute time the announcement was heard at, for the note.</param>
     private bool IsInScope(NamedPhrase phrase, double phraseAbs)
-    {
-        var inScope = phrase.Scope switch
-        {
-            NamedPhraseScope.Anywhere => true,
-            NamedPhraseScope.BeforeFirstChapter => ChaptersBefore(phraseAbs) == 0,
-            _ => ChaptersBefore(phraseAbs) > 0,
-        };
-        if (!inScope && _env.Log != null && _scopeDropsNoted.Add(phrase.Kind))
-            _env.Log($"{phrase.Kind} heard at {FormatTimestamp(phraseAbs)}, outside the " +
-                     $"\"{ScopeName(phrase.Scope)}\" position it is restricted to - not marked " +
-                     "(reported once per phrase)");
-        return inScope;
-    }
-
-    /// <summary>The keyword a scope is written as, for the log line above - the same word the user
-    /// typed, so that a note about a dropped match names something they can look up.</summary>
-    /// <param name="scope">The scope to name.</param>
-    private static string ScopeName(NamedPhraseScope scope) => scope switch
-    {
-        NamedPhraseScope.BeforeFirstChapter => "before-first-chapter",
-        NamedPhraseScope.AfterFirstChapter => "after-first-chapter",
-        NamedPhraseScope.AfterLastChapter => "after-last-chapter",
-        _ => "anywhere",
-    };
-
-    /// <summary>The phrase kinds <see cref="IsInScope"/> has already reported an out-of-scope match
-    /// for, so the note is made once rather than on every occurrence. Per region, which for an
-    /// ordinary run is per file - a recovery pass over a gap may repeat it once.</summary>
-    private readonly HashSet<string> _scopeDropsNoted = [];
+        => _named.IsInScope(phrase, phraseAbs, ChaptersBefore(phraseAbs), _env.Log);
 
     /// <summary>
     /// How many chapters are known to sit <em>before</em> this position in the file - the landmark
@@ -2654,16 +2627,12 @@ internal sealed class RegionProber
             return;
         time = placed.TimeSeconds;
 
-        // Second dedupe pass, now against the placed time. The pre-placement one compares phrase
-        // times, which two probes of the same announcement can easily disagree about by more than
-        // the dedupe window - overlapping windows are re-segmented by Whisper from scratch, so the
-        // same words can land in a segment starting seconds apart. Once both have been walked back
-        // to their anchor they coincide exactly, and that is the only reliable moment to notice.
-        // Confirmed on "Die Dritte Macht.m4b" 2026-07-28, where it produced four duplicate pairs
-        // (among them "Kapitel 6" and "Kapitel 7", the same announcement heard two ways, both at
-        // 2:46:06.53). Costs the placement work of the loser, which only a re-heard mark pays.
-        if (_namedFound.Any(m => m.Kind == match.Phrase.Kind &&
-                                 Math.Abs(m.TimeSeconds - time) < NamedMarkDedupeSeconds))
+        // Second dedupe pass, now against the placed time. See NamedMarkLedger.AlreadyPlacedAt for
+        // why the phrase-time pass above does not already cover this. Confirmed on
+        // "Die Dritte Macht.m4b" 2026-07-28, where it produced four duplicate pairs (among them
+        // "Kapitel 6" and "Kapitel 7", the same announcement heard two ways, both at 2:46:06.53).
+        // Costs the placement work of the loser, which only a re-heard mark pays.
+        if (_named.AlreadyPlacedAt(match.Phrase.Kind, time))
             return;
 
         if (teachesThreshold)
@@ -2671,11 +2640,7 @@ internal sealed class RegionProber
             ProposeThreshold(ThresholdSilenceFor(candidate, markSilence));
             AdoptProposedThreshold($"\"{match.Title}\"");
         }
-        if (!match.Phrase.Repeatable)
-            _namedFound.RemoveAll(m => m.Kind == match.Phrase.Kind);
-        _namedFound.Add(new DetectedMark(
-            match.Phrase.Kind, match.Title, time, match.Confidence, phraseAbs, match.Phrase.Repeatable,
-            match.Text));
+        _named.Add(match, time, phraseAbs);
         _ctx.Work.NamedMarks = _namedFound.Count;
         _ctx.Work.ExtraMarks = _namedFound.Count(m => m.Kind != ChapterKind);
         _env.Log?.Invoke($"{match.Phrase.Kind} detected (\"{match.Title}\"), mark placed at " +
@@ -2725,61 +2690,13 @@ internal sealed class RegionProber
     internal static BareNumberReading BareNumberReadingFor(bool wide)
         => wide ? BareNumberReading.LeadingASentence : BareNumberReading.SpokenAloneAtSegmentStart;
 
-    /// <summary>
-    /// Whether an in-scope named match is to be passed over without becoming a mark. Two reasons,
-    /// both of them specific to a phrase that takes no part in the chapter sequence and so has
-    /// nothing to be judged against:
-    /// <list type="bullet">
-    /// <item><description>the same announcement was already marked - overlapping probe windows
-    /// re-decode the same audio routinely, and without this every such overlap would yield a
-    /// duplicate mark a second or two from the first (see
-    /// <see cref="DetectionTuning.NamedMarkDedupeSeconds"/>);</description></item>
-    /// <item><description>a non-repeatable phrase already holds a mark from an announcement
-    /// <em>later</em> in the file - see <see cref="AcceptNamedMatchAsync"/> for why the last
-    /// announcement wins and why "last" cannot be read as "most recently
-    /// found";</description></item>
-    /// <item><description>this mapping has reached its own <c>max=&lt;n&gt;</c> cap (see
-    /// <see cref="NamedPhrase.MaxMarks"/>), which unlike the file-wide one below is something the
-    /// user stated about this phrase and so is reported as an ordinary log line rather than as a
-    /// file-level warning;</description></item>
-    /// <item><description>the file has reached its --custom mark cap (see
-    /// <see cref="DetectionTuning.MaxCustomMarksPerFile"/>), which is reported all the way out to
-    /// the file's summary line rather than only logged. Chapter announcements are exempt: under
-    /// --ignore-chapter-numbers they arrive through this same path, and a cap sized for structural
-    /// interludes would cut an omnibus off partway through.</description></item>
-    /// </list>
-    /// </summary>
+    /// <summary>Whether an in-scope named match is to be passed over without becoming a mark; the
+    /// rule and its four reasons are <see cref="NamedMarkLedger.ShouldDrop"/>, shared with
+    /// Scan.</summary>
     /// <param name="phrase">The phrase that matched.</param>
     /// <param name="phraseAbs">Absolute time the announcement was heard at.</param>
     private bool ShouldDropNamedMatch(NamedPhrase phrase, double phraseAbs)
-    {
-        if (_namedFound.Any(m => m.Kind == phrase.Kind &&
-                                 Math.Abs(m.PhraseTimeSeconds - phraseAbs) < NamedMarkDedupeSeconds))
-            return true;
-
-        if (!phrase.Repeatable)
-            return _namedFound.Any(m => m.Kind == phrase.Kind && m.PhraseTimeSeconds > phraseAbs);
-
-        if (phrase.Kind == ChapterKind)
-            return false;
-
-        if (phrase.MaxMarks is { } cap && _namedFound.Count(m => m.Kind == phrase.Kind) >= cap)
-        {
-            _env.Log?.Invoke(
-                $"skipped {phrase.Kind} at {FormatTimestamp(phraseAbs)} - this mapping's own " +
-                $"limit of {cap} mark(s) is reached");
-            return true;
-        }
-
-        if (_namedFound.Count(m => m.Repeatable && m.Kind != ChapterKind) < MaxCustomMarksPerFile)
-            return false;
-        if (!CustomLimitHit)
-            _env.Log?.Invoke($"WARNING - custom mark limit of {MaxCustomMarksPerFile} reached at " +
-                             $"{FormatTimestamp(phraseAbs)} - further --custom matches are ignored " +
-                             "for this file. Does the mapping match ordinary prose?");
-        CustomLimitHit = true;
-        return true;
-    }
+        => _named.ShouldDrop(phrase, phraseAbs, _language.Profile, _env.Log);
 
     /// <summary>
     /// The default-mode mark for a named match - the same <see cref="ResolveAnnouncementMark"/> a

@@ -482,7 +482,9 @@ If the detected chapter numbers have sequence gaps (…7, 9…), the regions
 where the missing chapters must be hiding are transcribed *completely*, in
 roughly 10-minute chunks. This catches announcements that were not preceded
 by a long-enough silence. Marks found here are placed the same way as in
-Probe. If a chunk still leaves an expected chapter unaccounted for, a
+Probe — and that includes a prologue, an epilogue or a `--custom` mark, which
+are looked for in everything this pass reads, under the same position rules
+and limits that apply anywhere else. If a chunk still leaves an expected chapter unaccounted for, a
 stored silence (or, when the VAD pre-pass ran, a VAD non-speech region)
 inside it that the chunk's own transcript skipped over entirely gets a
 second, closer look before the chapter is given up as missing — documented
@@ -612,6 +614,13 @@ mid-sentence;
 and within that window the last occurrence wins — front matter frequently lists
 what is coming ("read by …, contains a prologue") before the narrator actually
 announces it.
+
+Both are looked for in every stretch a run reads, not only in the sampling pass:
+where a gap or the file's tail is transcribed in full (see [Scan](#scan--reading-a-gap-in-full-only-when-needed)),
+that transcript is read for these announcements too. It costs no extra time — the
+audio is being read anyway — and it matters most at the end of a book, which is
+both where an epilogue belongs and a stretch a run often reads in full while
+looking for one more chapter. An announcement already marked is not marked twice.
 
 The epilogue is held to one more rule, checked once at the very end of the
 file: it has to **follow the book's last chapter**. Nothing else can be an
