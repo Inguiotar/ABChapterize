@@ -67,8 +67,9 @@ count is a release check - so if you add a diagram, nothing about the archives c
 
 The component diagram was derived mechanically from the `using ABChapterize.*` declarations of
 every source file, with one distinction applied: a `using` that exists only so a doc-comment
-`<see cref>` resolves is documentation, not a dependency, and is excluded. Fifteen such edges were
-found and dropped, which is the difference between a readable graph and a hairball.
+`<see cref>` resolves is documentation, not a dependency, and is excluded. Eighteen such `using`
+declarations were found and left out, which is the difference between a readable graph and a
+hairball.
 
 Everything else was written from the source and its doc comments. The diagrams state design
 decisions in the notes attached to them; where a decision has evidence behind it - a measurement,
